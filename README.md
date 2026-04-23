@@ -90,6 +90,68 @@ sqlite3 /opt/polymarket-live/live.db \
 grep "order=" /opt/polymarket-live/live.log | grep -v "order=sim" | tail -20
 ```
 
+## Testing in a virtual environment
+
+Use [uv](https://github.com/astral-sh/uv) to create an isolated test environment without touching the system Python or the production venv.
+
+**Install uv** (if not already installed):
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+**Create the venv and install dependencies:**
+
+```bash
+uv venv .venv --python 3.13
+uv pip install aiohttp websockets web3 py-clob-client --python .venv/bin/python3
+```
+
+**Syntax check:**
+
+```bash
+.venv/bin/python3 -m py_compile bot/live_bot.py && echo "SYNTAX OK"
+```
+
+**Import check** (verifies module-level code runs without errors):
+
+```bash
+.venv/bin/python3 -c "
+import sys; sys.path.insert(0, '.')
+import bot.live_bot as b
+print('CONFIG_PATH:', b.CONFIG_PATH)
+print('PRIVATE_KEY set:', bool(b.PRIVATE_KEY))
+print('SIGNAL_THRESHOLD:', b.SIGNAL_THRESHOLD)
+"
+```
+
+**Run the bot for 20 seconds** (no credentials needed — orders are simulated):
+
+```bash
+timeout 20 .venv/bin/python3 bot/live_bot.py
+```
+
+Then inspect the log:
+
+```bash
+cat /opt/polymarket-live/live.log
+```
+
+Expected output confirms the bot starts, connects to the Polymarket API, finds active BTC 5-min markets, subscribes to the WebSocket, and enters simulated mode:
+
+```
+[INFO] LIVE BOT v3 — Threshold=0.96 Stake=$10 MinAskVol=10
+[WARNING] POLY_PRIVATE_KEY non definie — ordres SIMULES
+[INFO] DB initialisee : /opt/polymarket-live/live.db
+[INFO] State : capital=$100.00 | 0 trades | WR=0.0%
+[INFO] Marches BTC 5-min : 2
+[INFO] Souscription 2 tokens...
+[INFO] WebSocket connecte
+```
+
+The `.venv/` directory is listed in `.gitignore` and should not be committed.
+
 ## Notes
 
 - WebSocket timeouts at ~90s during quiet periods are **normal** — the bot reconnects automatically
