@@ -12,6 +12,90 @@ Bot de trading automatisé pour les marchés de prédiction [Polymarket](https:/
 - Résolution : WIN si bid >= 0.99, LOSS si bid <= 0.01, ou à l'expiration du marché (bid >= 0.50 = WIN)
 - Stop-loss journalier : 30 $ | Mise par trade : 10 $ | Frais : 2%
 
+## Base de données
+
+Le bot utilise **SQLite** (`live.db`) en mode journal WAL, qui autorise la lecture concurrente pendant les écritures (le script de monitoring peut interroger la base pendant que le bot enregistre des trades). Le fichier se trouve dans `POLYMARKET_DIR/live.db` (par défaut : `/opt/polymarket-live/live.db`).
+
+### Table : `trades`
+
+Une ligne par trade. Toutes les conditions du signal au moment de l'entrée sont capturées avec le résultat de la résolution, ce qui permet une analyse complète après la session.
+
+| Colonne | Type | Description |
+|---|---|---|
+| `id` | INTEGER PK | Identifiant auto-incrémenté |
+| `market_id` | TEXT | Condition ID Polymarket |
+| `token_id` | TEXT | Token souscrit (UP ou DOWN) |
+| `direction` | TEXT | `"UP"` ou `"DOWN"` |
+| `question` | TEXT | Titre du marché (tronqué à 80 caractères) |
+| `signal_ts_ms` | INTEGER | Horodatage Unix (ms) du signal |
+| `signal_seconds_elapsed` | REAL | Secondes écoulées depuis l'ouverture du marché |
+| `signal_secs_remaining` | REAL | Secondes restantes avant la clôture |
+| `signal_best_bid` | REAL | Meilleure offre d'achat au moment du signal |
+| `signal_best_ask` | REAL | Meilleure offre de vente (= prix d'entrée) |
+| `signal_spread` | REAL | Spread à l'entrée |
+| `signal_ask_vol` | REAL | Liquidité côté ask à l'entrée (USD) |
+| `signal_obi` | REAL | Déséquilibre du carnet d'ordres à l'entrée (−1 à +1) |
+| `entry_ts_ms` | INTEGER | Horodatage Unix (ms) de la soumission de l'ordre |
+| `entry_price` | REAL | Prix limite soumis |
+| `clob_order_id` | TEXT | Identifiant de l'ordre retourné par l'API CLOB |
+| `stake` | REAL | USD engagés |
+| `tokens_bought` | REAL | Quantité de tokens = stake / entry_price |
+| `fee` | REAL | Frais protocole (2% × min(p, 1−p) × tokens) |
+| `cost_total` | REAL | stake + fee |
+| `resolved` | INTEGER | 0 = ouvert, 1 = résolu |
+| `resolution_ts_ms` | INTEGER | Horodatage Unix (ms) de la résolution |
+| `resolution_bid` | REAL | Meilleure offre d'achat au moment de la résolution |
+| `outcome` | TEXT | `"WIN"` ou `"LOSS"` |
+| `pnl_gross` | REAL | PnL brut avant frais |
+| `pnl_net` | REAL | PnL net après frais protocole et gas |
+| `pnl_roi_pct` | REAL | ROI en pourcentage de la mise |
+| `capital_before` | REAL | Capital avant ce trade |
+| `capital_after` | REAL | Capital après la résolution |
+| `created_at` | INTEGER | Horodatage de création de la ligne (ms) |
+
+### Table : `snapshots`
+
+Snapshots de prix sauvegardés toutes les 5 secondes par token suivi, utilisés pour le graphisme et l'analyse de la stratégie après session.
+
+| Colonne | Type | Description |
+|---|---|---|
+| `id` | INTEGER PK | Auto-incrémenté |
+| `ts_ms` | INTEGER | Horodatage du snapshot (ms) |
+| `market_id` | TEXT | Condition ID Polymarket |
+| `token_id` | TEXT | Identifiant du token |
+| `direction` | TEXT | `"UP"` ou `"DOWN"` |
+| `secs_remaining` | REAL | Secondes restantes avant clôture |
+| `best_bid` | REAL | Meilleure offre d'achat |
+| `best_ask` | REAL | Meilleure offre de vente |
+| `spread` | REAL | Spread |
+| `ask_vol` | REAL | Profondeur ask top-5 (USD) |
+| `obi` | REAL | Déséquilibre du carnet d'ordres |
+| `has_open_trade` | INTEGER | 1 si un trade était ouvert à cet instant |
+
+### Requêtes utiles
+
+```bash
+# Derniers trades
+sqlite3 live.db "SELECT id, direction, outcome, pnl_net, capital_after
+                 FROM trades ORDER BY id DESC LIMIT 10;"
+
+# Résumé de session
+sqlite3 live.db "SELECT COUNT(*) total,
+                        SUM(CASE WHEN outcome='WIN' THEN 1 END) wins,
+                        SUM(CASE WHEN outcome='LOSS' THEN 1 END) losses,
+                        ROUND(SUM(pnl_net), 2) net_pnl
+                 FROM trades WHERE resolved=1;"
+
+# Positions ouvertes
+sqlite3 live.db "SELECT id, market_id, direction, entry_price, signal_ts_ms
+                 FROM trades WHERE resolved=0;"
+
+# Historique de prix d'un token
+sqlite3 live.db "SELECT ts_ms, best_bid, best_ask, obi
+                 FROM snapshots WHERE token_id='<id>'
+                 ORDER BY ts_ms DESC LIMIT 100;"
+```
+
 ## Installation
 
 Voir **[INSTALL.fr](INSTALL.fr)** pour le guide d'installation complet : prérequis, dépendances, configuration du wallet, lancement, monitoring, et comment tester dans un environnement virtuel.

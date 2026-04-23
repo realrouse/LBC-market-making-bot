@@ -12,6 +12,90 @@ Automated trading bot for [Polymarket](https://polymarket.com) prediction market
 - Resolves WIN at bid >= 0.99, LOSS at bid <= 0.01, or at market expiry (bid >= 0.50 = WIN)
 - Daily stop-loss: $30 | Stake per trade: $10 | Fee: 2%
 
+## Database
+
+The bot uses **SQLite** (`live.db`) with WAL journal mode for concurrent read access (the monitor script can query while the bot writes). The database file is stored at `POLYMARKET_DIR/live.db` (default: `/opt/polymarket-live/live.db`).
+
+### Table: `trades`
+
+One row per trade entry. All signal conditions at the moment of entry are captured alongside the resolution outcome, enabling full post-session analysis.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | INTEGER PK | Auto-incremented trade ID |
+| `market_id` | TEXT | Polymarket condition ID |
+| `token_id` | TEXT | Token subscribed (UP or DOWN) |
+| `direction` | TEXT | `"UP"` or `"DOWN"` |
+| `question` | TEXT | Market title (truncated to 80 chars) |
+| `signal_ts_ms` | INTEGER | Unix timestamp (ms) when signal fired |
+| `signal_seconds_elapsed` | REAL | Seconds since market open at entry |
+| `signal_secs_remaining` | REAL | Seconds until market close at entry |
+| `signal_best_bid` | REAL | Best bid at signal time |
+| `signal_best_ask` | REAL | Best ask (= entry price) |
+| `signal_spread` | REAL | Spread at entry |
+| `signal_ask_vol` | REAL | Ask-side liquidity at entry (USD) |
+| `signal_obi` | REAL | Order book imbalance at entry (−1 to +1) |
+| `entry_ts_ms` | INTEGER | Unix timestamp (ms) of order submission |
+| `entry_price` | REAL | Limit price submitted |
+| `clob_order_id` | TEXT | Order ID returned by the CLOB API |
+| `stake` | REAL | USD committed |
+| `tokens_bought` | REAL | Tokens quantity = stake / entry_price |
+| `fee` | REAL | Protocol fee (2% of min(p, 1−p) × tokens) |
+| `cost_total` | REAL | stake + fee |
+| `resolved` | INTEGER | 0 = open, 1 = resolved |
+| `resolution_ts_ms` | INTEGER | Unix timestamp (ms) of resolution |
+| `resolution_bid` | REAL | Best bid at resolution time |
+| `outcome` | TEXT | `"WIN"` or `"LOSS"` |
+| `pnl_gross` | REAL | Gross P&L before fees |
+| `pnl_net` | REAL | Net P&L after protocol fee and gas |
+| `pnl_roi_pct` | REAL | ROI as percentage of stake |
+| `capital_before` | REAL | Capital before this trade |
+| `capital_after` | REAL | Capital after resolution |
+| `created_at` | INTEGER | Row creation timestamp (ms) |
+
+### Table: `snapshots`
+
+Price snapshots saved every 5 seconds per tracked token, used for post-session charting and strategy analysis.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | INTEGER PK | Auto-incremented |
+| `ts_ms` | INTEGER | Snapshot timestamp (ms) |
+| `market_id` | TEXT | Polymarket condition ID |
+| `token_id` | TEXT | Token ID |
+| `direction` | TEXT | `"UP"` or `"DOWN"` |
+| `secs_remaining` | REAL | Seconds until market close |
+| `best_bid` | REAL | Best bid at snapshot time |
+| `best_ask` | REAL | Best ask at snapshot time |
+| `spread` | REAL | Spread |
+| `ask_vol` | REAL | Top-5 ask depth (USD) |
+| `obi` | REAL | Order book imbalance |
+| `has_open_trade` | INTEGER | 1 if a trade was open at this moment |
+
+### Useful queries
+
+```bash
+# Recent trades
+sqlite3 live.db "SELECT id, direction, outcome, pnl_net, capital_after
+                 FROM trades ORDER BY id DESC LIMIT 10;"
+
+# Session summary
+sqlite3 live.db "SELECT COUNT(*) total,
+                        SUM(CASE WHEN outcome='WIN' THEN 1 END) wins,
+                        SUM(CASE WHEN outcome='LOSS' THEN 1 END) losses,
+                        ROUND(SUM(pnl_net), 2) net_pnl
+                 FROM trades WHERE resolved=1;"
+
+# Open positions
+sqlite3 live.db "SELECT id, market_id, direction, entry_price, signal_ts_ms
+                 FROM trades WHERE resolved=0;"
+
+# Price history for a token
+sqlite3 live.db "SELECT ts_ms, best_bid, best_ask, obi
+                 FROM snapshots WHERE token_id='<id>'
+                 ORDER BY ts_ms DESC LIMIT 100;"
+```
+
 ## Installation
 
 See **[INSTALL](INSTALL)** for the full installation guide, including requirements, dependencies, wallet setup, configuration, running, monitoring, and how to test in a virtual environment.
