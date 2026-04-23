@@ -11,7 +11,7 @@ Usage:
     python3 setup.py 0xTA_PRIVATE_KEY_ICI
 """
 
-import sys, os
+import sys, os, json
 
 if len(sys.argv) < 2:
     print("Usage: python3 setup.py 0xTA_PRIVATE_KEY")
@@ -19,6 +19,7 @@ if len(sys.argv) < 2:
 
 PRIVATE_KEY = sys.argv[1]
 RPC = "https://polygon.drpc.org"
+CONFIG_PATH = "/opt/polymarket-live/config.json"
 
 # Contrats Polygon
 USDC_E       = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"  # USDC.e (requis par Polymarket)
@@ -125,15 +126,26 @@ client = ClobClient("https://clob.polymarket.com",
 creds = client.create_or_derive_api_creds()
 print(f"✅ Clés dérivées depuis ta clé privée")
 
+config = {
+    "private_key":  PRIVATE_KEY,
+    "api_key":      creds.api_key,
+    "api_secret":   creds.api_secret,
+    "api_passphrase": creds.api_passphrase,
+}
+os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+with open(CONFIG_PATH, "w") as f:
+    json.dump(config, f, indent=2)
+os.chmod(CONFIG_PATH, 0o600)
+
 print(f"\n{'='*60}")
-print(f"  VARIABLES D'ENVIRONNEMENT À EXPORTER")
+print(f"  CONFIG ÉCRITE → {CONFIG_PATH}")
 print(f"{'='*60}")
-print(f"export POLY_PRIVATE_KEY={PRIVATE_KEY}")
-print(f"export POLY_API_KEY={creds.api_key}")
-print(f"export POLY_API_SECRET={creds.api_secret}")
-print(f"export POLY_PASSPHRASE={creds.api_passphrase}")
+print(f"  private_key    : {PRIVATE_KEY[:6]}...{PRIVATE_KEY[-4:]}")
+print(f"  api_key        : {creds.api_key}")
+print(f"  api_secret     : {creds.api_secret[:8]}...")
+print(f"  api_passphrase : {creds.api_passphrase[:8]}...")
 print(f"\n{'='*60}")
 print(f"  LANCEMENT")
 print(f"{'='*60}")
-print(f"nohup python3 /opt/polymarket-live/live_bot.py > /dev/null 2>&1 &")
+print(f"bash scripts/start_bot.sh")
 print(f"tail -f /opt/polymarket-live/live.log")

@@ -16,11 +16,8 @@ PRÉREQUIS WALLET :
 - API keys Polymarket dérivées via py_clob_client (voir setup.py)
 
 LANCEMENT :
-  export POLY_PRIVATE_KEY=0x...
-  export POLY_API_KEY=...
-  export POLY_API_SECRET=...
-  export POLY_PASSPHRASE=...
-  nohup python3 live_bot.py > /dev/null 2>&1 &
+  python3 scripts/setup.py 0xTA_PRIVATE_KEY  # génère /opt/polymarket-live/config.json
+  bash scripts/start_bot.sh
 """
 
 import asyncio, hashlib, hmac, json, logging, os, sqlite3, time, uuid
@@ -29,8 +26,9 @@ from typing import Optional
 import aiohttp, websockets
 
 # ─── PATHS ───────────────────────────────────────────────────────────────────
-DB_PATH  = "/opt/polymarket-live/live.db"
-LOG_PATH = "/opt/polymarket-live/live.log"
+DB_PATH     = "/opt/polymarket-live/live.db"
+LOG_PATH    = "/opt/polymarket-live/live.log"
+CONFIG_PATH = "/opt/polymarket-live/config.json"
 
 # ─── CAPITAL & FEES ──────────────────────────────────────────────────────────
 CAPITAL_START = 100.0
@@ -63,11 +61,25 @@ SNAPSHOT_INTERVAL  = 5
 DASHBOARD_INTERVAL = 300
 MARKET_REFRESH     = 90
 
-# ─── CREDENTIALS (via env vars) ──────────────────────────────────────────────
-PRIVATE_KEY    = os.environ.get("POLY_PRIVATE_KEY", "")
-API_KEY        = os.environ.get("POLY_API_KEY", "")
-API_SECRET     = os.environ.get("POLY_API_SECRET", "")
-API_PASSPHRASE = os.environ.get("POLY_PASSPHRASE", "")
+# ─── CREDENTIALS (config.json, fallback to env vars) ─────────────────────────
+def load_config():
+    if os.path.exists(CONFIG_PATH):
+        with open(CONFIG_PATH) as f:
+            cfg = json.load(f)
+        return (
+            cfg.get("private_key", ""),
+            cfg.get("api_key", ""),
+            cfg.get("api_secret", ""),
+            cfg.get("api_passphrase", ""),
+        )
+    return (
+        os.environ.get("POLY_PRIVATE_KEY", ""),
+        os.environ.get("POLY_API_KEY", ""),
+        os.environ.get("POLY_API_SECRET", ""),
+        os.environ.get("POLY_PASSPHRASE", ""),
+    )
+
+PRIVATE_KEY, API_KEY, API_SECRET, API_PASSPHRASE = load_config()
 
 # ─── INIT ────────────────────────────────────────────────────────────────────
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)

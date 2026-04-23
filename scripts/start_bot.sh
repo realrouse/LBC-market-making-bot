@@ -1,19 +1,16 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════
 #  POLYMARKET LIVE BOT v3 — Lancement
-#  Remplir les clés ci-dessous AVANT de lancer
-#  (obtenues via : python3 scripts/setup.py 0xTA_PRIVATE_KEY)
+#  Prérequis : python3 scripts/setup.py 0xTA_PRIVATE_KEY
+#  (génère /opt/polymarket-live/config.json)
 # ═══════════════════════════════════════════════════════════════════
 
-export POLY_PRIVATE_KEY="0xTA_PRIVATE_KEY_ICI"
-export POLY_API_KEY="TON_API_KEY_ICI"
-export POLY_API_SECRET="TON_API_SECRET_ICI"
-export POLY_PASSPHRASE="TON_PASSPHRASE_ICI"
+CONFIG="/opt/polymarket-live/config.json"
 
 # ── Vérification ──────────────────────────────────────────────────
-if [ "$POLY_PRIVATE_KEY" = "0xTA_PRIVATE_KEY_ICI" ]; then
-    echo "❌ ERREUR : Remplis les clés dans start_bot.sh d'abord"
-    echo "   Lance : python3 scripts/setup.py 0xTA_PRIVATE_KEY"
+if [ ! -f "$CONFIG" ]; then
+    echo "❌ ERREUR : config.json introuvable"
+    echo "   Lance d'abord : python3 scripts/setup.py 0xTA_PRIVATE_KEY"
     exit 1
 fi
 

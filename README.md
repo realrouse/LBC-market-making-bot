@@ -41,22 +41,17 @@ Run `setup.py` once with your Polygon private key. It will:
 - Check USDC.e and USDC native balances
 - Swap USDC native → USDC.e via Uniswap V3 if needed
 - Approve CTF Exchange allowance
-- Derive and display your Polymarket API credentials
+- Derive your Polymarket API credentials and write them to `/opt/polymarket-live/config.json`
 
 ```bash
 python3 scripts/setup.py 0xYOUR_PRIVATE_KEY
 ```
 
-Copy the output values into `scripts/start_bot.sh`:
+The bot reads credentials from `config.json` at startup (falls back to env vars `POLY_PRIVATE_KEY`, `POLY_API_KEY`, `POLY_API_SECRET`, `POLY_PASSPHRASE` if the file is absent).
 
-```bash
-export POLY_PRIVATE_KEY="0x..."
-export POLY_API_KEY="..."
-export POLY_API_SECRET="..."
-export POLY_PASSPHRASE="..."
-```
+See `config.json.example` for the expected structure.
 
-> **Never commit your private key or API credentials.** These variables are set at runtime only.
+> **Never commit `config.json`.** It is listed in `.gitignore`.
 
 ## Running
 

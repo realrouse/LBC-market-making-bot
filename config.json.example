@@ -1,0 +1,6 @@
+{
+  "private_key": "0xYOUR_PRIVATE_KEY",
+  "api_key": "YOUR_API_KEY",
+  "api_secret": "YOUR_API_SECRET",
+  "api_passphrase": "YOUR_PASSPHRASE"
+}
