@@ -6,6 +6,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **tradinebotte** is a Polymarket prediction market trading bot targeting Bitcoin Up/Down 5-minute markets on Polygon. It uses a quantitative signal-based strategy (best_bid >= 0.96 threshold) backtested at 98.3% win rate across 1663 trades.
 
+## Documentation bilingue — règle obligatoire
+
+Ce projet maintient quatre fichiers de documentation en deux langues :
+
+| Anglais | Français |
+|---|---|
+| `README.md` | `README.fr.md` |
+| `CHANGELOG.md` | `CHANGELOG.fr.md` |
+
+**Les quatre fichiers doivent être mis à jour dans le même commit.** Ne jamais modifier l'un sans mettre à jour son équivalent dans l'autre langue. Un hook Claude Code (`.claude/settings.json`) rappelle cette règle après chaque `git commit`.
+
 ## Commands
 
 **Install dependencies** (creates venv at `/opt/polymarket-live/venv`):

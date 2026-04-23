@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git commit*)",
+            "command": "echo '{\"hookSpecificOutput\": {\"hookEventName\": \"PostToolUse\", \"additionalContext\": \"REMINDER: If this commit modifies README.md, README.fr.md, CHANGELOG.md, or CHANGELOG.fr.md — ensure ALL FOUR files are updated and committed together. Both language versions (EN + FR) must always be kept in sync.\"}}'",
+            "statusMessage": "Vérification synchronisation EN/FR..."
+          }
+        ]
+      }
+    ]
+  }
+}

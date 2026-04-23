@@ -1,5 +1,7 @@
 # tradinebotte
 
+> 🇫🇷 [Version française](README.fr.md)
+
 Automated trading bot for [Polymarket](https://polymarket.com) prediction markets, targeting Bitcoin Up/Down 5-minute markets on Polygon. Uses a quantitative signal strategy (`best_bid >= 0.96`) backtested at **98.3% win rate** across 1663 trades (April 2026).
 
 ## Strategy
@@ -47,7 +49,7 @@ Run `setup.py` once with your Polygon private key. It will:
 python3 scripts/setup.py
 ```
 
-La clé privée est saisie de manière interactive (stdin masqué, non visible dans `ps aux` ni dans l'historique shell).
+The private key is entered interactively (masked stdin — not visible in `ps aux` or shell history).
 
 The bot reads credentials from `config.json` at startup (falls back to env vars `POLY_PRIVATE_KEY`, `POLY_API_KEY`, `POLY_API_SECRET`, `POLY_PASSPHRASE` if the file is absent).
 
