@@ -8,6 +8,14 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Feature
+- `POLYMARKET_DIR` environment variable now controls the install path across all scripts and the bot itself, defaulting to `/opt/polymarket-live`
+- `scripts/install.sh` — accepts install directory as a positional argument or via `POLYMARKET_DIR`; generates a `run.sh` wrapper in the install dir with the path pre-set
+- `scripts/start_bot.sh` — reads `POLYMARKET_DIR`, exports it when launching the bot
+- `scripts/monitor.sh` — reads `POLYMARKET_DIR` for log and database paths
+- `scripts/setup.py` — reads `POLYMARKET_DIR` for `config.json` path and venv site-packages; also fixes hardcoded Python 3.12 venv path (uses `sysconfig` like the bot)
+- `bot/live_bot.py` — `DB_PATH`, `LOG_PATH`, `CONFIG_PATH` and venv lookup all derived from `POLYMARKET_DIR`
+
 ### Documentation
 - `INSTALL` — new English installation guide extracted from README.md (requirements, dependencies, wallet setup, configuration, running, monitoring, virtual environment testing)
 - `INSTALL.fr` — French translation of the installation guide

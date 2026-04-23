@@ -26,19 +26,46 @@ dans un virtualenv situé dans /opt/polymarket-live/venv/ :
   py-clob-client
 
 
+Répertoire d'installation
+--------------------------
+
+Tous les scripts lisent la variable d'environnement POLYMARKET_DIR pour
+déterminer où installer et exécuter le bot. Si elle n'est pas définie,
+la valeur par défaut est :
+
+  /opt/polymarket-live
+
+Exemples :
+
+  # Par défaut (système, nécessite root)
+  bash scripts/install.sh
+
+  # Chemin personnalisé en argument
+  bash scripts/install.sh ~/polymarket
+
+  # Chemin personnalisé via variable d'environnement
+  POLYMARKET_DIR=~/polymarket bash scripts/install.sh
+
+La même variable doit être définie de manière cohérente pour le setup,
+le lancement et le monitoring :
+
+  export POLYMARKET_DIR=~/polymarket
+
+
 Installation
 ------------
 
 Exécuter le script d'installation depuis la racine du dépôt :
 
-  bash scripts/install.sh
+  bash scripts/install.sh [répertoire_installation]
 
 Ce script va :
   - Installer les packages système (python3, pip, venv, sqlite3)
-  - Créer le répertoire /opt/polymarket-live/
-  - Copier bot/live_bot.py vers /opt/polymarket-live/live_bot.py
-  - Créer un virtualenv dans /opt/polymarket-live/venv/
+  - Créer le répertoire d'installation
+  - Copier bot/live_bot.py vers <POLYMARKET_DIR>/live_bot.py
+  - Créer un virtualenv dans <POLYMARKET_DIR>/venv/
   - Installer les dépendances Python dans le virtualenv
+  - Générer <POLYMARKET_DIR>/run.sh (wrapper avec POLYMARKET_DIR pré-défini)
   - Vérifier la syntaxe du bot
 
 
@@ -51,9 +78,9 @@ Exécuter setup.py une seule fois avec votre wallet Polygon. Il va :
   - Effectuer le swap USDC natif -> USDC.e via Uniswap V3 si nécessaire
   - Approuver l'allowance CTF Exchange
   - Dériver les credentials API Polymarket
-  - Écrire les credentials dans /opt/polymarket-live/config.json (chmod 600)
+  - Écrire les credentials dans <POLYMARKET_DIR>/config.json (chmod 600)
 
-  python3 scripts/setup.py
+  POLYMARKET_DIR=~/polymarket python3 scripts/setup.py
 
 La clé privée est saisie de manière interactive et n'est jamais visible
 dans ps aux ni dans l'historique shell.
@@ -70,15 +97,19 @@ ATTENTION : Ne jamais commiter config.json. Il est listé dans .gitignore.
 Lancement
 ---------
 
-  bash scripts/start_bot.sh
+  POLYMARKET_DIR=~/polymarket bash scripts/start_bot.sh
+
+Ou via le wrapper généré (POLYMARKET_DIR déjà intégré) :
+
+  ~/polymarket/run.sh
 
 Vérifier que le bot tourne :
 
   pgrep -fa live_bot.py
 
 Une seule instance doit tourner à la fois.
-Logs   : /opt/polymarket-live/live.log
-Trades : /opt/polymarket-live/live.db (SQLite)
+Logs   : <POLYMARKET_DIR>/live.log
+Trades : <POLYMARKET_DIR>/live.db (SQLite)
 
 
 Monitoring
@@ -86,27 +117,27 @@ Monitoring
 
 Dashboard en temps réel :
 
-  bash scripts/monitor.sh
+  POLYMARKET_DIR=~/polymarket bash scripts/monitor.sh
 
 Suivre les logs en direct :
 
-  tail -f /opt/polymarket-live/live.log
+  tail -f ~/polymarket/live.log
 
 Trades récents :
 
-  sqlite3 /opt/polymarket-live/live.db \
+  sqlite3 ~/polymarket/live.db \
     "SELECT id, direction, entry_price, outcome, ROUND(pnl_net,3), capital_after \
      FROM trades ORDER BY id DESC LIMIT 10;"
 
 Stats du jour :
 
-  sqlite3 /opt/polymarket-live/live.db \
+  sqlite3 ~/polymarket/live.db \
     "SELECT COUNT(*), SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END), ROUND(SUM(pnl_net),2) \
      FROM trades WHERE resolved=1 AND created_at > (strftime('%s','now')-86400)*1000;"
 
 Confirmer les ordres réels on-chain (pas simulés) :
 
-  grep "order=" /opt/polymarket-live/live.log | grep -v "order=sim" | tail -20
+  grep "order=" ~/polymarket/live.log | grep -v "order=sim" | tail -20
 
 
 Tester dans un environnement virtuel

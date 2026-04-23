@@ -1,14 +1,17 @@
 #!/bin/bash
-echo "=== STATUS ==="
+INSTALL_DIR="${POLYMARKET_DIR:-/opt/polymarket-live}"
+INSTALL_DIR="$(eval echo "$INSTALL_DIR")"
+
+echo "=== STATUS ($INSTALL_DIR) ==="
 pgrep -fa live_bot.py && echo "✅ BOT EN COURS" || echo "❌ BOT ARRETE"
 
 echo ""
 echo "=== DERNIERS LOGS ==="
-tail -15 /opt/polymarket-live/live.log
+tail -15 "$INSTALL_DIR/live.log"
 
 echo ""
 echo "=== STATS GLOBALES ==="
-sqlite3 /opt/polymarket-live/live.db "
+sqlite3 "$INSTALL_DIR/live.db" "
 SELECT
   COUNT(*) as trades,
   SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) as wins,
@@ -21,7 +24,7 @@ FROM trades WHERE resolved=1;
 
 echo ""
 echo "=== DERNIERS TRADES ==="
-sqlite3 /opt/polymarket-live/live.db "
+sqlite3 "$INSTALL_DIR/live.db" "
 SELECT id, direction, ROUND(entry_price,4), outcome, ROUND(pnl_net,3), ROUND(capital_after,2)
 FROM trades ORDER BY id DESC LIMIT 10;
 "

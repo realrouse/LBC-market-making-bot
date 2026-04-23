@@ -26,19 +26,44 @@ into a virtualenv at /opt/polymarket-live/venv/:
   py-clob-client
 
 
+Installation directory
+----------------------
+
+All scripts read the POLYMARKET_DIR environment variable to determine
+where to install and run the bot. If unset, it defaults to:
+
+  /opt/polymarket-live
+
+Examples:
+
+  # Default (system-wide, requires root)
+  bash scripts/install.sh
+
+  # Custom path as argument
+  bash scripts/install.sh ~/polymarket
+
+  # Custom path via environment variable
+  POLYMARKET_DIR=~/polymarket bash scripts/install.sh
+
+The same variable must be set consistently for setup, start, and monitor:
+
+  export POLYMARKET_DIR=~/polymarket
+
+
 Installation
 ------------
 
 Run the install script from the repository root:
 
-  bash scripts/install.sh
+  bash scripts/install.sh [install_dir]
 
 This will:
   - Install system packages (python3, pip, venv, sqlite3)
-  - Create /opt/polymarket-live/
-  - Copy bot/live_bot.py to /opt/polymarket-live/live_bot.py
-  - Create a virtualenv at /opt/polymarket-live/venv/
+  - Create the install directory
+  - Copy bot/live_bot.py to <POLYMARKET_DIR>/live_bot.py
+  - Create a virtualenv at <POLYMARKET_DIR>/venv/
   - Install Python dependencies into the virtualenv
+  - Generate <POLYMARKET_DIR>/run.sh (wrapper with POLYMARKET_DIR pre-set)
   - Verify bot syntax
 
 
@@ -51,9 +76,9 @@ Run setup.py once with your Polygon wallet. It will:
   - Swap USDC native -> USDC.e via Uniswap V3 if needed
   - Approve CTF Exchange allowance
   - Derive your Polymarket API credentials
-  - Write credentials to /opt/polymarket-live/config.json (chmod 600)
+  - Write credentials to <POLYMARKET_DIR>/config.json (chmod 600)
 
-  python3 scripts/setup.py
+  POLYMARKET_DIR=~/polymarket python3 scripts/setup.py
 
 The private key is entered interactively and is never visible in ps aux
 or shell history.
@@ -70,15 +95,19 @@ WARNING: Never commit config.json. It is listed in .gitignore.
 Running
 -------
 
-  bash scripts/start_bot.sh
+  POLYMARKET_DIR=~/polymarket bash scripts/start_bot.sh
+
+Or using the generated wrapper (POLYMARKET_DIR already embedded):
+
+  ~/polymarket/run.sh
 
 Verify the bot is running:
 
   pgrep -fa live_bot.py
 
 Only one instance should run at a time.
-Logs  : /opt/polymarket-live/live.log
-Trades: /opt/polymarket-live/live.db (SQLite)
+Logs  : <POLYMARKET_DIR>/live.log
+Trades: <POLYMARKET_DIR>/live.db (SQLite)
 
 
 Monitoring
@@ -86,27 +115,27 @@ Monitoring
 
 Live dashboard:
 
-  bash scripts/monitor.sh
+  POLYMARKET_DIR=~/polymarket bash scripts/monitor.sh
 
 Follow logs in real time:
 
-  tail -f /opt/polymarket-live/live.log
+  tail -f ~/polymarket/live.log
 
 Recent trades:
 
-  sqlite3 /opt/polymarket-live/live.db \
+  sqlite3 ~/polymarket/live.db \
     "SELECT id, direction, entry_price, outcome, ROUND(pnl_net,3), capital_after \
      FROM trades ORDER BY id DESC LIMIT 10;"
 
 Today's stats:
 
-  sqlite3 /opt/polymarket-live/live.db \
+  sqlite3 ~/polymarket/live.db \
     "SELECT COUNT(*), SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END), ROUND(SUM(pnl_net),2) \
      FROM trades WHERE resolved=1 AND created_at > (strftime('%s','now')-86400)*1000;"
 
 Confirm real on-chain orders (not simulated):
 
-  grep "order=" /opt/polymarket-live/live.log | grep -v "order=sim" | tail -20
+  grep "order=" ~/polymarket/live.log | grep -v "order=sim" | tail -20
 
 
 Testing in a Virtual Environment

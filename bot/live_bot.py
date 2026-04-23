@@ -26,9 +26,10 @@ from typing import Optional
 import aiohttp, websockets
 
 # ─── PATHS ───────────────────────────────────────────────────────────────────
-DB_PATH     = "/opt/polymarket-live/live.db"
-LOG_PATH    = "/opt/polymarket-live/live.log"
-CONFIG_PATH = "/opt/polymarket-live/config.json"
+INSTALL_DIR = os.environ.get("POLYMARKET_DIR", "/opt/polymarket-live")
+DB_PATH     = os.path.join(INSTALL_DIR, "live.db")
+LOG_PATH    = os.path.join(INSTALL_DIR, "live.log")
+CONFIG_PATH = os.path.join(INSTALL_DIR, "config.json")
 
 # ─── CAPITAL & FEES ──────────────────────────────────────────────────────────
 CAPITAL_START = 100.0
@@ -241,7 +242,8 @@ async def place_limit_order(session, token_id, price, size_usdc):
         return f"sim_{uuid.uuid4().hex[:12]}"
     try:
         import sys as _sys, sysconfig as _sc
-        _site = _sc.get_path("purelib", vars={"platbase": "/opt/polymarket-live/venv", "base": "/opt/polymarket-live/venv"})
+        _venv = os.path.join(INSTALL_DIR, "venv")
+        _site = _sc.get_path("purelib", vars={"platbase": _venv, "base": _venv})
         _sys.path.insert(0, _site)
         from py_clob_client.client import ClobClient
         from py_clob_client.constants import POLYGON

@@ -12,14 +12,16 @@ Usage:
     python3 setup.py
 """
 
-import sys, os, json, getpass
+import sys, os, json, getpass, sysconfig
+
+INSTALL_DIR = os.environ.get("POLYMARKET_DIR", "/opt/polymarket-live")
+RPC         = "https://polygon.drpc.org"
+CONFIG_PATH = os.path.join(INSTALL_DIR, "config.json")
 
 PRIVATE_KEY = getpass.getpass("Clé privée Polygon (0x...): ").strip()
 if not PRIVATE_KEY.startswith("0x") or len(PRIVATE_KEY) != 66:
     print("❌ Format invalide — attendu : 0x suivi de 64 caractères hex")
     sys.exit(1)
-RPC = "https://polygon.drpc.org"
-CONFIG_PATH = "/opt/polymarket-live/config.json"
 
 # Contrats Polygon
 USDC_E       = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"  # USDC.e (requis par Polymarket)
@@ -27,7 +29,9 @@ USDC_NATIVE  = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"  # USDC natif
 CTF_EXCHANGE = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"  # Polymarket CTF Exchange
 UNISWAP_V3   = "0xE592427A0AEce92De3Edee1F18E0157C05861564"  # Pour swap si nécessaire
 
-sys.path.insert(0, '/opt/polymarket-live/venv/lib/python3.12/site-packages')
+_venv = os.path.join(INSTALL_DIR, "venv")
+_site = sysconfig.get_path("purelib", vars={"platbase": _venv, "base": _venv})
+sys.path.insert(0, _site)
 
 from web3 import Web3
 from eth_account import Account
