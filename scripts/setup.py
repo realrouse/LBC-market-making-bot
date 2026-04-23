@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 """
-SETUP WALLET — À exécuter UNE SEULE FOIS avant de lancer le bot.
-Ce script :
-1. Lit la clé privée de manière sécurisée (stdin masqué)
-2. Dérive les API keys Polymarket depuis la clé privée
-3. Vérifie les balances USDC
-4. Approuve l'allowance USDC.e pour le contrat Polymarket
-5. Écrit /opt/polymarket-live/config.json (chmod 600)
+Polymarket wallet setup — run ONCE before starting the bot.
+
+Steps performed:
+  1. Read the Polygon private key securely via masked stdin (getpass),
+     so it never appears in process listings (ps aux) or shell history.
+  2. Check MATIC, USDC.e, and native USDC balances on Polygon mainnet.
+  3. If the wallet holds native USDC but no USDC.e, auto-swap via Uniswap V3
+     (Polymarket only accepts the bridged USDC.e variant).
+  4. If the CTF Exchange allowance is zero, approve it for the current balance
+     (exact amount — not an unlimited approval, to limit smart-contract risk).
+  5. Derive Polymarket API keys deterministically from the private key via ECDSA.
+  6. Write all credentials to POLYMARKET_DIR/config.json with chmod 600.
 
 Usage:
-    python3 setup.py
+  python3 scripts/setup.py
+  POLYMARKET_DIR=~/polymarket python3 scripts/setup.py
 """
 
 import sys, os, json, getpass, sysconfig
@@ -18,17 +24,22 @@ INSTALL_DIR = os.environ.get("POLYMARKET_DIR", "/opt/polymarket-live")
 RPC         = "https://polygon.drpc.org"
 CONFIG_PATH = os.path.join(INSTALL_DIR, "config.json")
 
-PRIVATE_KEY = getpass.getpass("Clé privée Polygon (0x...): ").strip()
+# getpass reads from /dev/tty so the key is never echoed to the terminal,
+# never stored in readline history, and never visible in `ps aux` arguments.
+PRIVATE_KEY = getpass.getpass("Polygon private key (0x...): ").strip()
 if not PRIVATE_KEY.startswith("0x") or len(PRIVATE_KEY) != 66:
-    print("❌ Format invalide — attendu : 0x suivi de 64 caractères hex")
+    print("Invalid format — expected: 0x followed by 64 hex characters")
     sys.exit(1)
 
-# Contrats Polygon
-USDC_E       = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"  # USDC.e (requis par Polymarket)
-USDC_NATIVE  = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"  # USDC natif
-CTF_EXCHANGE = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"  # Polymarket CTF Exchange
-UNISWAP_V3   = "0xE592427A0AEce92De3Edee1F18E0157C05861564"  # Pour swap si nécessaire
+# ── Polygon contract addresses ─────────────────────────────────────────────────
+USDC_E       = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"  # bridged USDC.e — Polymarket only accepts this variant
+USDC_NATIVE  = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"  # native USDC (Circle's newer Polygon issuance)
+CTF_EXCHANGE = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"  # Polymarket CTF Exchange — needs allowance to take funds
+UNISWAP_V3   = "0xE592427A0AEce92De3Edee1F18E0157C05861564"  # Uniswap V3 SwapRouter — used for the native→bridged swap
 
+# sysconfig resolves the correct site-packages path for whatever Python version
+# is currently running. This avoids a hardcoded "python3.12" substring that
+# would break silently on Python 3.11 or any future 3.13+ install.
 _venv = os.path.join(INSTALL_DIR, "venv")
 _site = sysconfig.get_path("purelib", vars={"platbase": _venv, "base": _venv})
 sys.path.insert(0, _site)
@@ -38,18 +49,19 @@ from eth_account import Account
 from py_clob_client.client import ClobClient
 from py_clob_client.constants import POLYGON
 
-w3 = Web3(Web3.HTTPProvider(RPC))
+w3   = Web3(Web3.HTTPProvider(RPC))
 acct = Account.from_key(PRIVATE_KEY)
 WALLET = acct.address
 
 print(f"\n{'='*60}")
 print(f"  SETUP POLYMARKET LIVE BOT")
 print(f"{'='*60}")
-print(f"Wallet   : {WALLET}")
-print(f"Connecté : {w3.is_connected()}")
-print(f"Block    : {w3.eth.block_number}")
+print(f"Wallet    : {WALLET}")
+print(f"Connected : {w3.is_connected()}")
+print(f"Block     : {w3.eth.block_number}")
 
-# ── Vérification balances ─────────────────────────────────────────────────
+# ── ERC-20 minimal ABI ────────────────────────────────────────────────────────
+# Only includes the three functions we need: balanceOf, allowance, approve.
 abi = [
     {"inputs":[{"name":"account","type":"address"}],"name":"balanceOf","outputs":[{"name":"","type":"uint256"}],"type":"function"},
     {"inputs":[{"name":"owner","type":"address"},{"name":"spender","type":"address"}],"name":"allowance","outputs":[{"name":"","type":"uint256"}],"type":"function"},
@@ -65,22 +77,27 @@ allow = usdc_e.functions.allowance(Web3.to_checksum_address(WALLET), Web3.to_che
 matic = w3.eth.get_balance(Web3.to_checksum_address(WALLET))
 
 print(f"\n── BALANCES ──")
-print(f"MATIC    : {matic/1e18:.4f} MATIC {'✅' if matic > 0.01*1e18 else '❌ INSUFFISANT'}")
-print(f"USDC.e   : {bal_e/1e6:.2f} USDC {'✅' if bal_e > 0 else '⚠️  Besoin de swap'}")
+print(f"MATIC    : {matic/1e18:.4f} MATIC {'✅' if matic > 0.01*1e18 else '❌ INSUFFICIENT'}")
+print(f"USDC.e   : {bal_e/1e6:.2f} USDC {'✅' if bal_e > 0 else '⚠️  Swap needed'}")
 print(f"USDC nat : {bal_n/1e6:.2f} USDC")
-print(f"Allowance: {min(allow/1e6, 999999):.0f}+ USDC {'✅' if allow > 0 else '❌ À approuver'}")
+print(f"Allowance: {min(allow/1e6, 999999):.0f}+ USDC {'✅' if allow > 0 else '❌ Needs approval'}")
 
-# ── Swap USDC natif → USDC.e si nécessaire ───────────────────────────────
+# ── Swap USDC native → USDC.e if needed ───────────────────────────────────────
 if bal_e == 0 and bal_n > 0:
-    print(f"\n⚠️  Pas de USDC.e mais {bal_n/1e6:.2f} USDC natif détecté.")
-    print("   Swap automatique USDC natif → USDC.e en cours...")
+    print(f"\n⚠️  No USDC.e but {bal_n/1e6:.2f} native USDC detected.")
+    print("   Auto-swapping native USDC → USDC.e...")
     import time
 
-    amount_in = bal_n - int(1e6)  # garde 1 USDC natif
+    # Keep 1 USDC native as dust reserve; swap everything else.
+    amount_in = bal_n - int(1e6)
+
+    # Step 1: approve the Uniswap V3 router to spend exactly amount_in.
+    # Using the exact amount instead of 2**256-1 limits the blast radius if
+    # the Uniswap router were ever exploited after this transaction.
     usdc_native_contract = w3.eth.contract(address=Web3.to_checksum_address(USDC_NATIVE), abi=abi)
     nonce = w3.eth.get_transaction_count(Web3.to_checksum_address(WALLET))
     tx = usdc_native_contract.functions.approve(
-        Web3.to_checksum_address(UNISWAP_V3), amount_in  # montant exact, pas illimité
+        Web3.to_checksum_address(UNISWAP_V3), amount_in
     ).build_transaction({'from': Web3.to_checksum_address(WALLET), 'nonce': nonce,
                          'gas': 100000, 'gasPrice': w3.eth.gas_price, 'chainId': 137})
     signed = w3.eth.account.sign_transaction(tx, PRIVATE_KEY)
@@ -88,6 +105,10 @@ if bal_e == 0 and bal_n > 0:
     w3.eth.wait_for_transaction_receipt(txh, timeout=60)
     print(f"   Approve OK")
 
+    # Step 2: call exactInputSingle on the Uniswap V3 SwapRouter.
+    # fee=100 selects the 0.01% fee tier — the cheapest pool for stablecoin-to-stablecoin swaps.
+    # amountOutMinimum = amount_in × 0.995 enforces a 0.5% max slippage guard.
+    # sqrtPriceLimitX96=0 means no on-chain price cap (the slippage guard is enough here).
     router_abi = [{"inputs":[{"components":[
         {"name":"tokenIn","type":"address"},{"name":"tokenOut","type":"address"},
         {"name":"fee","type":"uint24"},{"name":"recipient","type":"address"},
@@ -98,9 +119,14 @@ if bal_e == 0 and bal_n > 0:
     router = w3.eth.contract(address=Web3.to_checksum_address(UNISWAP_V3), abi=router_abi)
     nonce = w3.eth.get_transaction_count(Web3.to_checksum_address(WALLET))
     tx = router.functions.exactInputSingle((
-        Web3.to_checksum_address(USDC_NATIVE), Web3.to_checksum_address(USDC_E),
-        100, Web3.to_checksum_address(WALLET), int(time.time())+300,
-        amount_in, int(amount_in*0.995), 0
+        Web3.to_checksum_address(USDC_NATIVE),
+        Web3.to_checksum_address(USDC_E),
+        100,                              # 0.01% fee tier (cheapest stable pool)
+        Web3.to_checksum_address(WALLET),
+        int(time.time()) + 300,           # 5-minute deadline
+        amount_in,
+        int(amount_in * 0.995),           # minimum output: 0.5% max slippage
+        0                                 # no price limit
     )).build_transaction({'from': Web3.to_checksum_address(WALLET), 'nonce': nonce,
                           'gas': 300000, 'gasPrice': w3.eth.gas_price, 'chainId': 137})
     signed = w3.eth.account.sign_transaction(tx, PRIVATE_KEY)
@@ -110,12 +136,15 @@ if bal_e == 0 and bal_n > 0:
     bal_e = usdc_e.functions.balanceOf(Web3.to_checksum_address(WALLET)).call()
     print(f"   USDC.e balance: {bal_e/1e6:.2f}")
 
-# ── Approve CTF Exchange si nécessaire ───────────────────────────────────
+# ── Approve CTF Exchange to spend USDC.e ─────────────────────────────────────
 if allow == 0 and bal_e > 0:
-    print(f"\n⚠️  Allowance non accordée. Approbation en cours...")
+    print(f"\n⚠️  No allowance set. Approving CTF Exchange...")
     nonce = w3.eth.get_transaction_count(Web3.to_checksum_address(WALLET))
+    # Approve the exact current balance rather than 2**256-1 (unlimited).
+    # If CTF Exchange were ever exploited, the attacker could only drain the
+    # balance at approval time, not all future deposits into the wallet.
     tx = usdc_e.functions.approve(
-        Web3.to_checksum_address(CTF_EXCHANGE), bal_e  # solde actuel, pas illimité
+        Web3.to_checksum_address(CTF_EXCHANGE), bal_e
     ).build_transaction({'from': Web3.to_checksum_address(WALLET), 'nonce': nonce,
                          'gas': 100000, 'gasPrice': w3.eth.gas_price, 'chainId': 137})
     signed = w3.eth.account.sign_transaction(tx, PRIVATE_KEY)
@@ -123,32 +152,37 @@ if allow == 0 and bal_e > 0:
     receipt = w3.eth.wait_for_transaction_receipt(txh, timeout=60)
     print(f"   Allowance {'OK' if receipt.status==1 else 'FAILED'} — TX: {txh.hex()}")
 
-# ── Dérivation API keys ───────────────────────────────────────────────────
+# ── Derive Polymarket API keys ─────────────────────────────────────────────────
+# create_or_derive_api_creds signs a deterministic message with the wallet's
+# ECDSA key. The result is reproducible — re-running this script produces the
+# same API keys, so no separate secret needs to be stored beyond the private key.
 print(f"\n── API KEYS POLYMARKET ──")
 client = ClobClient("https://clob.polymarket.com",
     key=PRIVATE_KEY, chain_id=POLYGON, signature_type=0)
 creds = client.create_or_derive_api_creds()
-print(f"✅ Clés dérivées depuis ta clé privée")
+print(f"✅ Keys derived from private key")
 
+# ── Write config.json ─────────────────────────────────────────────────────────
 config = {
-    "private_key":  PRIVATE_KEY,
-    "api_key":      creds.api_key,
-    "api_secret":   creds.api_secret,
+    "private_key":    PRIVATE_KEY,
+    "api_key":        creds.api_key,
+    "api_secret":     creds.api_secret,
     "api_passphrase": creds.api_passphrase,
 }
 os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
 with open(CONFIG_PATH, "w") as f:
     json.dump(config, f, indent=2)
+# 0o600: owner read+write only — prevents other OS users from reading the file.
 os.chmod(CONFIG_PATH, 0o600)
 
 print(f"\n{'='*60}")
-print(f"  CONFIG ÉCRITE → {CONFIG_PATH}")
+print(f"  CONFIG WRITTEN → {CONFIG_PATH}")
 print(f"{'='*60}")
-print(f"  Wallet         : {WALLET}")
-print(f"  Clés dérivées  : OK")
-print(f"  Permissions    : chmod 600")
+print(f"  Wallet        : {WALLET}")
+print(f"  Keys derived  : OK")
+print(f"  Permissions   : chmod 600")
 print(f"\n{'='*60}")
-print(f"  LANCEMENT")
+print(f"  LAUNCH")
 print(f"{'='*60}")
 print(f"bash scripts/start_bot.sh")
-print(f"tail -f /opt/polymarket-live/live.log")
+print(f"tail -f {os.path.join(INSTALL_DIR, 'live.log')}")

@@ -8,6 +8,10 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Documentation
+- `bot/live_bot.py` — module docstring translated to English; docstrings added to all functions and classes; inline comments explain non-obvious invariants: temporal filter rationale, all 8 signal guards (including `ask_vol=0` initialization guard and expired-market `best_ask>=1.0` guard), OBI formula, PnL calculation, sysconfig path resolution, lazy ClobClient import, exponential backoff, expired-market cleanup, WAL mode rationale
+- `scripts/setup.py` — module docstring translated to English; inline comments explain the security decisions (getpass, exact-amount ERC-20 approvals), Uniswap V3 swap parameters (fee tier 100, 0.5% slippage guard, 5-min deadline), sysconfig dynamic path, API key ECDSA derivation, and chmod 600 rationale
+
 ### Feature
 - `POLYMARKET_DIR` environment variable now controls the install path across all scripts and the bot itself, defaulting to `/opt/polymarket-live`
 - `scripts/install.sh` — accepts install directory as a positional argument or via `POLYMARKET_DIR`; generates a `run.sh` wrapper in the install dir with the path pre-set
