@@ -240,8 +240,9 @@ async def place_limit_order(session, token_id, price, size_usdc):
         logger.warning("POLY_PRIVATE_KEY non definie — ordre simule")
         return f"sim_{uuid.uuid4().hex[:12]}"
     try:
-        import sys as _sys
-        _sys.path.insert(0, '/opt/polymarket-live/venv/lib/python3.12/site-packages')
+        import sys as _sys, sysconfig as _sc
+        _site = _sc.get_path("purelib", vars={"platbase": "/opt/polymarket-live/venv", "base": "/opt/polymarket-live/venv"})
+        _sys.path.insert(0, _site)
         from py_clob_client.client import ClobClient
         from py_clob_client.constants import POLYGON
         from py_clob_client.clob_types import OrderArgs
@@ -540,7 +541,7 @@ async def _run_ws(state, session):
             except asyncio.TimeoutError:
                 logger.warning("WS timeout — reconnexion")
                 break
-          except:
+            except:
                 break
 
             now = time.time()
