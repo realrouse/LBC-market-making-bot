@@ -6,6 +6,16 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [Non publié]
+
+### Documentation
+- `INSTALL` — nouveau guide d'installation en anglais extrait du README.md (prérequis, dépendances, configuration du wallet, lancement, monitoring, test en environnement virtuel)
+- `INSTALL.fr` — traduction française du guide d'installation
+- `README.md` — sections d'installation remplacées par une référence au fichier INSTALL
+- `README.fr.md` — sections d'installation remplacées par une référence au fichier INSTALL.fr
+
+---
+
 ## [2026-04-23]
 
 ### Sécurité — `9e6247c`

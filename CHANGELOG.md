@@ -6,6 +6,16 @@ All notable changes to this project are documented here.
 
 ---
 
+## [Unreleased]
+
+### Documentation
+- `INSTALL` — new English installation guide extracted from README.md (requirements, dependencies, wallet setup, configuration, running, monitoring, virtual environment testing)
+- `INSTALL.fr` — French translation of the installation guide
+- `README.md` — installation sections replaced by a reference to INSTALL
+- `README.fr.md` — installation sections replaced by a reference to INSTALL.fr
+
+---
+
 ## [2026-04-23]
 
 ### Security — `9e6247c`
