@@ -44,8 +44,10 @@ Run `setup.py` once with your Polygon private key. It will:
 - Derive your Polymarket API credentials and write them to `/opt/polymarket-live/config.json`
 
 ```bash
-python3 scripts/setup.py 0xYOUR_PRIVATE_KEY
+python3 scripts/setup.py
 ```
+
+La clé privée est saisie de manière interactive (stdin masqué, non visible dans `ps aux` ni dans l'historique shell).
 
 The bot reads credentials from `config.json` at startup (falls back to env vars `POLY_PRIVATE_KEY`, `POLY_API_KEY`, `POLY_API_SECRET`, `POLY_PASSPHRASE` if the file is absent).
 

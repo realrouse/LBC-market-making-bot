@@ -2,22 +2,22 @@
 """
 SETUP WALLET — À exécuter UNE SEULE FOIS avant de lancer le bot.
 Ce script :
-1. Dérive les API keys Polymarket depuis ta clé privée
-2. Vérifie les balances USDC
-3. Approuve l'allowance USDC.e pour le contrat Polymarket
-4. Affiche les variables d'environnement à exporter
+1. Lit la clé privée de manière sécurisée (stdin masqué)
+2. Dérive les API keys Polymarket depuis la clé privée
+3. Vérifie les balances USDC
+4. Approuve l'allowance USDC.e pour le contrat Polymarket
+5. Écrit /opt/polymarket-live/config.json (chmod 600)
 
 Usage:
-    python3 setup.py 0xTA_PRIVATE_KEY_ICI
+    python3 setup.py
 """
 
-import sys, os, json
+import sys, os, json, getpass
 
-if len(sys.argv) < 2:
-    print("Usage: python3 setup.py 0xTA_PRIVATE_KEY")
+PRIVATE_KEY = getpass.getpass("Clé privée Polygon (0x...): ").strip()
+if not PRIVATE_KEY.startswith("0x") or len(PRIVATE_KEY) != 66:
+    print("❌ Format invalide — attendu : 0x suivi de 64 caractères hex")
     sys.exit(1)
-
-PRIVATE_KEY = sys.argv[1]
 RPC = "https://polygon.drpc.org"
 CONFIG_PATH = "/opt/polymarket-live/config.json"
 
@@ -72,10 +72,11 @@ if bal_e == 0 and bal_n > 0:
     print("   Swap automatique USDC natif → USDC.e en cours...")
     import time
 
+    amount_in = bal_n - int(1e6)  # garde 1 USDC natif
     usdc_native_contract = w3.eth.contract(address=Web3.to_checksum_address(USDC_NATIVE), abi=abi)
     nonce = w3.eth.get_transaction_count(Web3.to_checksum_address(WALLET))
     tx = usdc_native_contract.functions.approve(
-        Web3.to_checksum_address(UNISWAP_V3), 2**256-1
+        Web3.to_checksum_address(UNISWAP_V3), amount_in  # montant exact, pas illimité
     ).build_transaction({'from': Web3.to_checksum_address(WALLET), 'nonce': nonce,
                          'gas': 100000, 'gasPrice': w3.eth.gas_price, 'chainId': 137})
     signed = w3.eth.account.sign_transaction(tx, PRIVATE_KEY)
@@ -91,7 +92,6 @@ if bal_e == 0 and bal_n > 0:
     ],"name":"params","type":"tuple"}],"name":"exactInputSingle",
     "outputs":[{"name":"amountOut","type":"uint256"}],"type":"function"}]
     router = w3.eth.contract(address=Web3.to_checksum_address(UNISWAP_V3), abi=router_abi)
-    amount_in = bal_n - int(1e6)  # garde 1 USDC natif
     nonce = w3.eth.get_transaction_count(Web3.to_checksum_address(WALLET))
     tx = router.functions.exactInputSingle((
         Web3.to_checksum_address(USDC_NATIVE), Web3.to_checksum_address(USDC_E),
@@ -111,7 +111,7 @@ if allow == 0 and bal_e > 0:
     print(f"\n⚠️  Allowance non accordée. Approbation en cours...")
     nonce = w3.eth.get_transaction_count(Web3.to_checksum_address(WALLET))
     tx = usdc_e.functions.approve(
-        Web3.to_checksum_address(CTF_EXCHANGE), 2**256-1
+        Web3.to_checksum_address(CTF_EXCHANGE), bal_e  # solde actuel, pas illimité
     ).build_transaction({'from': Web3.to_checksum_address(WALLET), 'nonce': nonce,
                          'gas': 100000, 'gasPrice': w3.eth.gas_price, 'chainId': 137})
     signed = w3.eth.account.sign_transaction(tx, PRIVATE_KEY)
@@ -140,10 +140,9 @@ os.chmod(CONFIG_PATH, 0o600)
 print(f"\n{'='*60}")
 print(f"  CONFIG ÉCRITE → {CONFIG_PATH}")
 print(f"{'='*60}")
-print(f"  private_key    : {PRIVATE_KEY[:6]}...{PRIVATE_KEY[-4:]}")
-print(f"  api_key        : {creds.api_key}")
-print(f"  api_secret     : {creds.api_secret[:8]}...")
-print(f"  api_passphrase : {creds.api_passphrase[:8]}...")
+print(f"  Wallet         : {WALLET}")
+print(f"  Clés dérivées  : OK")
+print(f"  Permissions    : chmod 600")
 print(f"\n{'='*60}")
 print(f"  LANCEMENT")
 print(f"{'='*60}")
