@@ -8,6 +8,10 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Feature
+- `config.json` / `config.json.example` — new optional key `db_mmap_mb` (integer, default `0`): when set to a non-zero value, activates `PRAGMA mmap_size` so SQLite memory-maps the database file via the kernel page cache; set to e.g. `256` for 256 MB
+- `bot/live_bot.py` — `load_config()` refactored to return the full config dict (extensible for future options); `DB_MMAP_MB` derived from config at startup; `init_db()` applies the pragma and logs a confirmation line when mmap is active
+
 ### Documentation
 - `README.md` — new "Database" section: SQLite/WAL rationale, full `trades` table schema (29 columns with type and description), `snapshots` table schema, and 4 annotated query examples
 - `README.fr.md` — French translation of the new Database section

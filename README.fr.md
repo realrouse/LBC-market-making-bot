@@ -72,6 +72,14 @@ Snapshots de prix sauvegardés toutes les 5 secondes par token suivi, utilisés 
 | `obi` | REAL | Déséquilibre du carnet d'ordres |
 | `has_open_trade` | INTEGER | 1 si un trade était ouvert à cet instant |
 
+### Options de configuration
+
+Les clés optionnelles suivantes peuvent être ajoutées à `config.json` :
+
+| Clé | Type | Défaut | Description |
+|---|---|---|---|
+| `db_mmap_mb` | entier | `0` | Mappe le fichier de base de données en mémoire pour des lectures plus rapides. `0` = désactivé. Mettre à ex. `256` pour mapper jusqu'à 256 Mo via le page cache du kernel. Le système garde déjà le fichier en RAM pour cette charge de travail — option facultative. |
+
 ### Requêtes utiles
 
 ```bash

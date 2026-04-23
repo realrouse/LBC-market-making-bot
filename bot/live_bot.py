@@ -70,32 +70,32 @@ SNAPSHOT_INTERVAL  = 5    # seconds between SQLite price snapshots per token
 DASHBOARD_INTERVAL = 300  # seconds between log dashboard prints
 MARKET_REFRESH     = 90   # seconds between Gamma API polls to discover new markets
 
-# ─── CREDENTIALS ─────────────────────────────────────────────────────────────
+# ─── CONFIGURATION ───────────────────────────────────────────────────────────
 
 def load_config():
     """
-    Load Polymarket credentials from config.json if it exists, otherwise fall
-    back to environment variables. Config file takes priority so that the bot
-    can run without polluting the shell environment with secrets.
+    Load all configuration from config.json if it exists, returning the raw
+    dict. Returns an empty dict if the file is absent so callers can fall back
+    to environment variables for individual keys.
     """
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH) as f:
-            cfg = json.load(f)
-        return (
-            cfg.get("private_key", ""),
-            cfg.get("api_key", ""),
-            cfg.get("api_secret", ""),
-            cfg.get("api_passphrase", ""),
-        )
-    # Fallback: useful for container deployments where env vars are injected.
-    return (
-        os.environ.get("POLY_PRIVATE_KEY", ""),
-        os.environ.get("POLY_API_KEY", ""),
-        os.environ.get("POLY_API_SECRET", ""),
-        os.environ.get("POLY_PASSPHRASE", ""),
-    )
+            return json.load(f)
+    return {}
 
-PRIVATE_KEY, API_KEY, API_SECRET, API_PASSPHRASE = load_config()
+_cfg = load_config()
+
+# Credentials: config.json first, env vars as fallback for container deployments.
+PRIVATE_KEY    = _cfg.get("private_key",    os.environ.get("POLY_PRIVATE_KEY", ""))
+API_KEY        = _cfg.get("api_key",        os.environ.get("POLY_API_KEY", ""))
+API_SECRET     = _cfg.get("api_secret",     os.environ.get("POLY_API_SECRET", ""))
+API_PASSPHRASE = _cfg.get("api_passphrase", os.environ.get("POLY_PASSPHRASE", ""))
+
+# Database options (optional — safe to omit from config.json).
+# db_mmap_mb: memory-map the DB file for faster reads (0 = disabled).
+# The OS page cache already keeps the file in RAM for this workload,
+# so this is optional. Set to e.g. 256 to explicitly map 256 MB.
+DB_MMAP_MB = int(_cfg.get("db_mmap_mb", 0))
 
 # ─── LOGGING & DB INIT ───────────────────────────────────────────────────────
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -143,6 +143,12 @@ def init_db():
     # the connection is only ever accessed from the event loop.
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.executescript(SCHEMA)
+    if DB_MMAP_MB > 0:
+        # Memory-map the DB file so SQLite accesses it via RAM pages managed
+        # by the kernel rather than read() syscalls. Effective for read-heavy
+        # workloads; for this bot the gain is marginal but harmless.
+        conn.execute(f"PRAGMA mmap_size = {DB_MMAP_MB * 1024 * 1024};")
+        logger.info("DB mmap active : %d MB", DB_MMAP_MB)
     conn.commit()
     logger.info("DB initialisee : %s", DB_PATH)
     return conn

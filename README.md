@@ -72,6 +72,14 @@ Price snapshots saved every 5 seconds per tracked token, used for post-session c
 | `obi` | REAL | Order book imbalance |
 | `has_open_trade` | INTEGER | 1 if a trade was open at this moment |
 
+### Configuration options
+
+The following optional keys can be added to `config.json`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `db_mmap_mb` | integer | `0` | Memory-map the database file for faster reads. `0` = disabled. Set to e.g. `256` to map up to 256 MB via the kernel page cache. The OS already keeps the file in RAM for this workload, so this is optional. |
+
 ### Useful queries
 
 ```bash
