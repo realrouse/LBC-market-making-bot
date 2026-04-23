@@ -1,0 +1,651 @@
+"""
+Automated tests for bot/live_bot.py
+
+Run with:
+    bash scripts/run_tests.sh
+    # or directly:
+    POLYMARKET_DIR=/tmp/polymarket-test .venv/bin/python3 -m unittest discover tests/ -v
+"""
+
+import os, sys, time, sqlite3, unittest
+from datetime import datetime, timezone, timedelta
+
+# Redirect all bot I/O to /tmp before importing live_bot, so it never tries
+# to create /opt/polymarket-live or open files outside the project tree.
+os.environ["POLYMARKET_DIR"] = "/tmp/polymarket-test"
+os.makedirs("/tmp/polymarket-test", exist_ok=True)
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bot"))
+import live_bot as bot
+
+
+# ── Test helpers ──────────────────────────────────────────────────────────────
+
+def make_db():
+    """In-memory SQLite database with the production schema applied."""
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    conn.executescript(bot.SCHEMA)
+    conn.commit()
+    return conn
+
+
+def make_state():
+    """BotState backed by an in-memory database."""
+    return bot.BotState(make_db())
+
+
+def make_token(
+    market_id="mkt1",
+    token_id="tok1",
+    direction="UP",
+    secs_remaining=90,
+    best_bid=0.97,
+    best_ask=0.975,
+    ask_vol=50.0,
+    obi=0.20,
+):
+    """
+    Return a TokenState whose fields satisfy ALL signal conditions by default.
+    Individual tests override the one field they want to test.
+    """
+    now_ms  = time.time() * 1000
+    end_ms  = now_ms + secs_remaining * 1000
+    ts = bot.TokenState(
+        token_id, market_id, direction, "BTC UP/DOWN test",
+        now_ms - 200_000, end_ms,
+    )
+    ts.best_bid = best_bid
+    ts.best_ask = best_ask
+    ts.bid_vol  = ask_vol
+    ts.ask_vol  = ask_vol
+    ts.obi      = obi
+    ts.spread   = round(best_ask - best_bid, 4)
+    return ts
+
+
+def insert_trade(conn, market_id="mkt1", token_id="tok1", direction="UP",
+                 stake=10.0, best_ask=0.975):
+    """Insert an open trade row and return its rowid."""
+    tokens_bought = stake / best_ask
+    fee = bot.compute_fee(best_ask, tokens_bought)
+    cur = conn.execute(
+        "INSERT INTO trades "
+        "(market_id, token_id, direction, stake, tokens_bought, fee, capital_before, resolved) "
+        "VALUES (?,?,?,?,?,?,?,0)",
+        (market_id, token_id, direction, stake, tokens_bought, fee, 100.0),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+# ── compute_fee ───────────────────────────────────────────────────────────────
+
+class TestComputeFee(unittest.TestCase):
+
+    def test_known_value_at_96(self):
+        # fee = 0.02 × min(0.96, 0.04) × 10 = 0.02 × 0.04 × 10 = 0.008
+        self.assertAlmostEqual(bot.compute_fee(0.96, 10), 0.008)
+
+    def test_symmetric_around_half(self):
+        # fee at price p should equal fee at price (1−p)
+        self.assertAlmostEqual(
+            bot.compute_fee(0.30, 100),
+            bot.compute_fee(0.70, 100),
+        )
+
+    def test_maximum_at_half(self):
+        # fee per token is highest when the price is closest to 0.5
+        self.assertGreater(bot.compute_fee(0.50, 10), bot.compute_fee(0.96, 10))
+
+    def test_zero_tokens(self):
+        self.assertAlmostEqual(bot.compute_fee(0.96, 0), 0.0)
+
+
+# ── parse_book_message ────────────────────────────────────────────────────────
+
+class TestParseBookMessage(unittest.TestCase):
+
+    def _msg(self, event_type="book", asset_id="tok1",
+             bids=None, asks=None):
+        return {
+            "event_type": event_type,
+            "asset_id":   asset_id,
+            "bids": bids if bids is not None else [{"price": "0.96", "size": "100"}],
+            "asks": asks if asks is not None else [{"price": "0.97", "size": "200"}],
+        }
+
+    def test_parses_book_event(self):
+        r = bot.parse_book_message(self._msg())
+        self.assertIsNotNone(r)
+        self.assertEqual(r["token_id"], "tok1")
+        self.assertAlmostEqual(r["best_bid"], 0.96)
+        self.assertAlmostEqual(r["best_ask"], 0.97)
+
+    def test_parses_price_change_event(self):
+        self.assertIsNotNone(bot.parse_book_message(self._msg(event_type="price_change")))
+
+    def test_parses_last_trade_price_event(self):
+        self.assertIsNotNone(bot.parse_book_message(self._msg(event_type="last_trade_price")))
+
+    def test_ignores_unknown_event_type(self):
+        self.assertIsNone(bot.parse_book_message(self._msg(event_type="tick")))
+
+    def test_ignores_missing_asset_id(self):
+        msg = {"event_type": "book", "bids": [], "asks": []}
+        self.assertIsNone(bot.parse_book_message(msg))
+
+    def test_ignores_empty_book(self):
+        self.assertIsNone(bot.parse_book_message(self._msg(bids=[], asks=[])))
+
+    def test_spread_computed_correctly(self):
+        r = bot.parse_book_message(self._msg(
+            bids=[{"price": "0.95", "size": "10"}],
+            asks=[{"price": "0.97", "size": "10"}],
+        ))
+        self.assertAlmostEqual(r["spread"], 0.02)
+
+    def test_obi_balanced_book(self):
+        r = bot.parse_book_message(self._msg(
+            bids=[{"price": "0.95", "size": "100"}],
+            asks=[{"price": "0.96", "size": "100"}],
+        ))
+        self.assertAlmostEqual(r["obi"], 0.0)
+
+    def test_obi_bid_heavy(self):
+        # OBI = (300 − 100) / (300 + 100) = 0.5
+        r = bot.parse_book_message(self._msg(
+            bids=[{"price": "0.95", "size": "300"}],
+            asks=[{"price": "0.96", "size": "100"}],
+        ))
+        self.assertAlmostEqual(r["obi"], 0.5)
+
+    def test_obi_ask_heavy(self):
+        # OBI = (100 − 300) / (100 + 300) = -0.5
+        r = bot.parse_book_message(self._msg(
+            bids=[{"price": "0.95", "size": "100"}],
+            asks=[{"price": "0.96", "size": "300"}],
+        ))
+        self.assertAlmostEqual(r["obi"], -0.5)
+
+    def test_depth_capped_at_top_5_levels(self):
+        # 10 bid levels × 10 USD each; only top 5 should count
+        bids = [{"price": str(round(0.95 - i * 0.01, 2)), "size": "10"} for i in range(10)]
+        asks = [{"price": str(round(0.96 + i * 0.01, 2)), "size": "10"} for i in range(10)]
+        r = bot.parse_book_message(self._msg(bids=bids, asks=asks))
+        self.assertAlmostEqual(r["bid_vol"], 50.0)
+        self.assertAlmostEqual(r["ask_vol"], 50.0)
+
+    def test_list_format_price_levels(self):
+        # Some Polymarket API versions send [price, size] arrays instead of dicts
+        msg = {
+            "event_type": "book",
+            "asset_id":   "tok1",
+            "bids": [["0.95", "100"]],
+            "asks": [["0.96", "200"]],
+        }
+        r = bot.parse_book_message(msg)
+        self.assertIsNotNone(r)
+        self.assertAlmostEqual(r["best_bid"], 0.95)
+
+    def test_bids_sorted_descending(self):
+        # Best bid = highest price, regardless of order in message
+        r = bot.parse_book_message(self._msg(
+            bids=[
+                {"price": "0.90", "size": "10"},
+                {"price": "0.95", "size": "10"},
+                {"price": "0.92", "size": "10"},
+            ],
+            asks=[{"price": "0.97", "size": "10"}],
+        ))
+        self.assertAlmostEqual(r["best_bid"], 0.95)
+
+    def test_asks_sorted_ascending(self):
+        # Best ask = lowest price, regardless of order in message
+        r = bot.parse_book_message(self._msg(
+            bids=[{"price": "0.93", "size": "10"}],
+            asks=[
+                {"price": "0.99", "size": "10"},
+                {"price": "0.96", "size": "10"},
+                {"price": "0.98", "size": "10"},
+            ],
+        ))
+        self.assertAlmostEqual(r["best_ask"], 0.96)
+
+
+# ── Market metadata helpers ───────────────────────────────────────────────────
+
+class TestMarketHelpers(unittest.TestCase):
+
+    def _market(self):
+        return {
+            "conditionId":   "mkt1",
+            "endDate":       "2026-04-23T20:00:00Z",
+            "startDate":     "2026-04-23T19:55:00Z",
+            "clobTokenIds":  ["up_tok", "down_tok"],
+        }
+
+    def test_end_ts_from_endDate(self):
+        self.assertGreater(bot.get_market_end_ts_ms(self._market()), 0)
+
+    def test_end_ts_missing_returns_zero(self):
+        self.assertEqual(bot.get_market_end_ts_ms({}), 0.0)
+
+    def test_end_ts_tries_fallback_keys(self):
+        market = {"end_date": "2026-04-23T20:00:00Z"}
+        self.assertGreater(bot.get_market_end_ts_ms(market), 0)
+
+    def test_up_token_from_clobTokenIds(self):
+        self.assertEqual(bot.get_up_token_id(self._market()), "up_tok")
+
+    def test_down_token_from_clobTokenIds(self):
+        self.assertEqual(bot.get_down_token_id(self._market()), "down_tok")
+
+    def test_up_token_from_tokens_array(self):
+        market = {"tokens": [
+            {"token_id": "yes_tok", "outcome": "Yes"},
+            {"token_id": "no_tok",  "outcome": "No"},
+        ]}
+        self.assertEqual(bot.get_up_token_id(market), "yes_tok")
+
+    def test_down_token_from_tokens_array(self):
+        market = {"tokens": [
+            {"token_id": "yes_tok", "outcome": "Yes"},
+            {"token_id": "no_tok",  "outcome": "No"},
+        ]}
+        self.assertEqual(bot.get_down_token_id(market), "no_tok")
+
+    def test_up_token_missing_returns_none(self):
+        self.assertIsNone(bot.get_up_token_id({}))
+
+    def test_down_token_missing_returns_none(self):
+        self.assertIsNone(bot.get_down_token_id({}))
+
+
+# ── TokenState computed properties ────────────────────────────────────────────
+
+class TestTokenState(unittest.TestCase):
+
+    def test_secs_remaining_future(self):
+        end_ms = (time.time() + 120) * 1000
+        ts = bot.TokenState("t", "m", "UP", "q", 0, end_ms)
+        self.assertAlmostEqual(ts.secs_remaining, 120, delta=2)
+
+    def test_secs_remaining_past_is_zero(self):
+        end_ms = (time.time() - 10) * 1000
+        ts = bot.TokenState("t", "m", "UP", "q", 0, end_ms)
+        self.assertEqual(ts.secs_remaining, 0.0)
+
+    def test_secs_remaining_no_end_time(self):
+        ts = bot.TokenState("t", "m", "UP", "q", 0, 0)
+        self.assertEqual(ts.secs_remaining, 9999.0)
+
+    def test_market_ended_false_for_future(self):
+        end_ms = (time.time() + 60) * 1000
+        ts = bot.TokenState("t", "m", "UP", "q", 0, end_ms)
+        self.assertFalse(ts.market_ended)
+
+    def test_market_ended_true_past_grace(self):
+        # 10 s past end time, well beyond the 5 s grace period
+        end_ms = (time.time() - 10) * 1000
+        ts = bot.TokenState("t", "m", "UP", "q", 0, end_ms)
+        self.assertTrue(ts.market_ended)
+
+    def test_market_ended_false_within_grace(self):
+        # 3 s past end time — still within the 5 s grace period
+        end_ms = (time.time() - 3) * 1000
+        ts = bot.TokenState("t", "m", "UP", "q", 0, end_ms)
+        self.assertFalse(ts.market_ended)
+
+    def test_seconds_elapsed(self):
+        start_ms = (time.time() - 60) * 1000
+        ts = bot.TokenState("t", "m", "UP", "q", start_ms, 0)
+        self.assertAlmostEqual(ts.seconds_elapsed, 60, delta=2)
+
+
+# ── register_market ───────────────────────────────────────────────────────────
+
+class TestRegisterMarket(unittest.TestCase):
+
+    def _market(self, offset_min=3):
+        """Return a market ending in `offset_min` minutes."""
+        now = datetime.now(timezone.utc)
+        return {
+            "conditionId":  "mkt1",
+            "endDate":   (now + timedelta(minutes=offset_min)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "startDate": (now - timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "clobTokenIds": ["up_tok", "down_tok"],
+            "question":     "BTC up or down?",
+        }
+
+    def test_registers_up_and_down_tokens(self):
+        state  = make_state()
+        new_ids = bot.register_market(state, self._market())
+        self.assertEqual(len(new_ids), 2)
+        self.assertIn("up_tok",   state.tokens)
+        self.assertIn("down_tok", state.tokens)
+
+    def test_direction_assigned_correctly(self):
+        state = make_state()
+        bot.register_market(state, self._market())
+        self.assertEqual(state.tokens["up_tok"].direction,   "UP")
+        self.assertEqual(state.tokens["down_tok"].direction, "DOWN")
+
+    def test_no_duplicate_registration(self):
+        state  = make_state()
+        market = self._market()
+        bot.register_market(state, market)
+        new_ids = bot.register_market(state, market)   # second call
+        self.assertEqual(len(new_ids), 0)              # already tracked
+
+    def test_skips_expired_market(self):
+        state  = make_state()
+        market = self._market(offset_min=-10)           # ended 10 min ago
+        new_ids = bot.register_market(state, market)
+        self.assertEqual(len(new_ids), 0)
+
+    def test_skips_market_without_condition_id(self):
+        state  = make_state()
+        market = self._market()
+        del market["conditionId"]
+        new_ids = bot.register_market(state, market)
+        self.assertEqual(len(new_ids), 0)
+
+
+# ── check_signal guards ───────────────────────────────────────────────────────
+
+class TestCheckSignal(unittest.IsolatedAsyncioTestCase):
+
+    async def test_fires_when_all_conditions_met(self):
+        state = make_state()
+        ts    = make_token()
+        await bot.check_signal(state, ts)
+        self.assertIn("mkt1", state.signalled)
+        self.assertEqual(state.total_trades, 1)
+
+    async def test_blocked_already_signalled(self):
+        state = make_state()
+        state.signalled.add("mkt1")
+        ts = make_token()
+        await bot.check_signal(state, ts)
+        self.assertEqual(state.total_trades, 0)  # no duplicate entry
+
+    async def test_blocked_market_ended(self):
+        state = make_state()
+        ts = make_token()
+        ts.market_end_ms = (time.time() - 10) * 1000   # ended 10 s ago
+        await bot.check_signal(state, ts)
+        self.assertNotIn("mkt1", state.signalled)
+
+    async def test_blocked_bid_below_threshold(self):
+        state = make_state()
+        ts    = make_token(best_bid=0.95)               # below SIGNAL_THRESHOLD=0.96
+        await bot.check_signal(state, ts)
+        self.assertNotIn("mkt1", state.signalled)
+
+    async def test_blocked_bid_above_entry_max(self):
+        state = make_state()
+        ts    = make_token(best_bid=0.999, best_ask=0.999)
+        await bot.check_signal(state, ts)
+        self.assertNotIn("mkt1", state.signalled)
+
+    async def test_blocked_ask_at_settlement_price(self):
+        # best_ask >= 1.0 means the market has already resolved
+        state = make_state()
+        ts    = make_token(best_ask=1.0)
+        await bot.check_signal(state, ts)
+        self.assertNotIn("mkt1", state.signalled)
+
+    async def test_blocked_insufficient_time_remaining(self):
+        state = make_state()
+        ts    = make_token(secs_remaining=30)            # below MIN_SECS_REMAINING=45
+        await bot.check_signal(state, ts)
+        self.assertNotIn("mkt1", state.signalled)
+
+    async def test_blocked_obi_too_negative(self):
+        state = make_state()
+        ts    = make_token(obi=-0.6)                    # below OBI_REJECT_THRESH=-0.50
+        await bot.check_signal(state, ts)
+        self.assertNotIn("mkt1", state.signalled)
+
+    async def test_blocked_thin_ask_volume(self):
+        state = make_state()
+        ts    = make_token(ask_vol=5.0)                 # below MIN_ASK_VOL=10
+        await bot.check_signal(state, ts)
+        self.assertNotIn("mkt1", state.signalled)
+
+    async def test_blocked_insufficient_capital(self):
+        state = make_state()
+        state.capital = 5.0                             # below STAKE=10
+        ts = make_token()
+        await bot.check_signal(state, ts)
+        self.assertNotIn("mkt1", state.signalled)
+
+    async def test_blocked_daily_stop_loss(self):
+        state = make_state()
+        # Simulate a big loss earlier today
+        today_ms = int(
+            datetime.now(timezone.utc)
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            .timestamp() * 1000
+        )
+        state.conn.execute(
+            "INSERT INTO trades "
+            "(market_id, token_id, direction, stake, capital_before, resolved, pnl_net, signal_ts_ms) "
+            "VALUES ('old','tok','UP',10,100,1,-35.0,?)",
+            (today_ms + 1000,),
+        )
+        state.conn.commit()
+        ts = make_token()
+        await bot.check_signal(state, ts)
+        self.assertNotIn("mkt1", state.signalled)
+
+    async def test_at_threshold_bid_fires(self):
+        state = make_state()
+        ts    = make_token(best_bid=0.96)               # exactly at SIGNAL_THRESHOLD
+        await bot.check_signal(state, ts)
+        self.assertIn("mkt1", state.signalled)
+
+    async def test_at_min_secs_remaining_blocked(self):
+        state = make_state()
+        ts    = make_token(secs_remaining=44)           # one second below the limit
+        await bot.check_signal(state, ts)
+        self.assertNotIn("mkt1", state.signalled)
+
+    async def test_above_min_secs_remaining_fires(self):
+        # secs_remaining is computed live from time.time(), so use a value
+        # safely above the 45 s limit rather than testing the exact boundary.
+        state = make_state()
+        ts    = make_token(secs_remaining=60)
+        await bot.check_signal(state, ts)
+        self.assertIn("mkt1", state.signalled)
+
+
+# ── check_resolution ─────────────────────────────────────────────────────────
+
+class TestCheckResolution(unittest.TestCase):
+
+    def _state_with_open_trade(self, direction="UP"):
+        state = make_state()
+        tid   = insert_trade(state.conn, direction=direction)
+        state.open_trades["mkt1"]      = tid
+        state.traded_direction["mkt1"] = direction
+        return state, tid
+
+    def test_win_on_high_bid(self):
+        state, tid = self._state_with_open_trade()
+        ts = make_token(best_bid=bot.WIN_THRESHOLD)
+        bot.check_resolution(state, ts)
+        row = state.conn.execute("SELECT outcome FROM trades WHERE id=?", (tid,)).fetchone()
+        self.assertEqual(row[0], "WIN")
+
+    def test_loss_on_low_bid(self):
+        state, tid = self._state_with_open_trade()
+        ts = make_token(best_bid=bot.LOSS_THRESHOLD)
+        bot.check_resolution(state, ts)
+        row = state.conn.execute("SELECT outcome FROM trades WHERE id=?", (tid,)).fetchone()
+        self.assertEqual(row[0], "LOSS")
+
+    def test_no_resolution_mid_market(self):
+        state, _ = self._state_with_open_trade()
+        ts = make_token(best_bid=0.50)
+        bot.check_resolution(state, ts)
+        self.assertIn("mkt1", state.open_trades)  # still open
+
+    def test_skips_wrong_direction(self):
+        # We traded UP but this token is DOWN — must not trigger resolution
+        state, _ = self._state_with_open_trade(direction="UP")
+        ts = make_token(best_bid=bot.WIN_THRESHOLD, direction="DOWN")
+        bot.check_resolution(state, ts)
+        self.assertIn("mkt1", state.open_trades)  # should remain open
+
+    def test_skips_market_with_no_open_trade(self):
+        state = make_state()                        # no open trades
+        ts    = make_token(best_bid=bot.WIN_THRESHOLD)
+        bot.check_resolution(state, ts)             # should not crash
+        self.assertEqual(len(state.open_trades), 0)
+
+    def test_win_at_market_expiry_above_half(self):
+        state, tid = self._state_with_open_trade()
+        ts = make_token(best_bid=0.60)
+        ts.market_end_ms = (time.time() - 10) * 1000   # past end + grace
+        bot.check_resolution(state, ts)
+        row = state.conn.execute("SELECT outcome FROM trades WHERE id=?", (tid,)).fetchone()
+        self.assertEqual(row[0], "WIN")
+
+    def test_loss_at_market_expiry_below_half(self):
+        state, tid = self._state_with_open_trade()
+        ts = make_token(best_bid=0.40)
+        ts.market_end_ms = (time.time() - 10) * 1000
+        bot.check_resolution(state, ts)
+        row = state.conn.execute("SELECT outcome FROM trades WHERE id=?", (tid,)).fetchone()
+        self.assertEqual(row[0], "LOSS")
+
+
+# ── close_trade PnL ───────────────────────────────────────────────────────────
+
+class TestCloseTrade(unittest.TestCase):
+
+    def _setup(self, direction="UP"):
+        state = make_state()
+        tid   = insert_trade(state.conn, direction=direction)
+        state.open_trades["mkt1"]      = tid
+        state.traded_direction["mkt1"] = direction
+        return state, tid
+
+    def test_win_increases_capital(self):
+        state, _ = self._setup()
+        before = state.capital
+        ts = make_token(best_bid=bot.WIN_THRESHOLD)
+        bot.check_resolution(state, ts)
+        self.assertGreater(state.capital, before)
+
+    def test_loss_decreases_capital(self):
+        state, _ = self._setup()
+        before = state.capital
+        ts = make_token(best_bid=bot.LOSS_THRESHOLD)
+        bot.check_resolution(state, ts)
+        self.assertLess(state.capital, before)
+
+    def test_win_increments_wins_counter(self):
+        state, _ = self._setup()
+        ts = make_token(best_bid=bot.WIN_THRESHOLD)
+        bot.check_resolution(state, ts)
+        self.assertEqual(state.wins, 1)
+        self.assertEqual(state.losses, 0)
+
+    def test_loss_increments_losses_counter(self):
+        state, _ = self._setup()
+        ts = make_token(best_bid=bot.LOSS_THRESHOLD)
+        bot.check_resolution(state, ts)
+        self.assertEqual(state.losses, 1)
+        self.assertEqual(state.wins, 0)
+
+    def test_trade_removed_from_open_trades(self):
+        state, _ = self._setup()
+        ts = make_token(best_bid=bot.WIN_THRESHOLD)
+        bot.check_resolution(state, ts)
+        self.assertNotIn("mkt1", state.open_trades)
+
+    def test_pnl_net_stored_in_db(self):
+        state, tid = self._setup()
+        ts = make_token(best_bid=bot.WIN_THRESHOLD)
+        bot.check_resolution(state, ts)
+        row = state.conn.execute(
+            "SELECT pnl_net, capital_after FROM trades WHERE id=?", (tid,)
+        ).fetchone()
+        self.assertIsNotNone(row[0])
+        self.assertAlmostEqual(row[1], state.capital)
+
+
+# ── restore_state_from_db ─────────────────────────────────────────────────────
+
+class TestRestoreState(unittest.TestCase):
+
+    def test_restores_open_trade(self):
+        state = make_state()
+        insert_trade(state.conn)
+        state.conn.execute(
+            "UPDATE trades SET market_id='mkt1', direction='UP' WHERE 1"
+        )
+        state.conn.commit()
+        fresh = bot.BotState(state.conn)
+        bot.restore_state_from_db(fresh)
+        self.assertIn("mkt1", fresh.open_trades)
+        self.assertIn("mkt1", fresh.signalled)  # prevents re-entry after restart
+
+    def test_open_trade_in_traded_direction(self):
+        state = make_state()
+        insert_trade(state.conn, direction="DOWN")
+        state.conn.execute("UPDATE trades SET market_id='mkt2' WHERE 1")
+        state.conn.commit()
+        fresh = bot.BotState(state.conn)
+        bot.restore_state_from_db(fresh)
+        self.assertEqual(fresh.traded_direction.get("mkt2"), "DOWN")
+
+    def test_capital_rebuilt_from_pnl(self):
+        state = make_state()
+        state.conn.execute(
+            "INSERT INTO trades "
+            "(market_id, token_id, direction, stake, capital_before, resolved, outcome, pnl_net) "
+            "VALUES ('mkt1','tok1','UP',10,100,1,'WIN',5.0)"
+        )
+        state.conn.commit()
+        fresh = bot.BotState(state.conn)
+        bot.restore_state_from_db(fresh)
+        self.assertAlmostEqual(fresh.capital, bot.CAPITAL_START + 5.0)
+
+    def test_win_loss_counters_restored(self):
+        state = make_state()
+        state.conn.executemany(
+            "INSERT INTO trades "
+            "(market_id, token_id, direction, stake, capital_before, resolved, outcome, pnl_net) "
+            "VALUES (?,?,?,10,100,1,?,?)",
+            [
+                ("mkt1", "tok1", "UP",   "WIN",  2.5),
+                ("mkt2", "tok2", "DOWN", "WIN",  2.5),
+                ("mkt3", "tok3", "UP",   "LOSS", -10.0),
+            ],
+        )
+        state.conn.commit()
+        fresh = bot.BotState(state.conn)
+        bot.restore_state_from_db(fresh)
+        self.assertEqual(fresh.wins,   2)
+        self.assertEqual(fresh.losses, 1)
+
+    def test_win_rate_after_restore(self):
+        state = make_state()
+        state.conn.executemany(
+            "INSERT INTO trades "
+            "(market_id, token_id, direction, stake, capital_before, resolved, outcome, pnl_net) "
+            "VALUES (?,?,?,10,100,1,?,?)",
+            [(f"m{i}", "t", "UP", "WIN", 1.0) for i in range(3)]
+            + [("m9", "t", "UP", "LOSS", -10.0)],
+        )
+        state.conn.commit()
+        fresh = bot.BotState(state.conn)
+        bot.restore_state_from_db(fresh)
+        self.assertAlmostEqual(fresh.win_rate, 75.0)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

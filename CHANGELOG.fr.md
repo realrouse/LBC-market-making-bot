@@ -9,6 +9,8 @@ Toutes les modifications notables de ce projet sont documentées ici.
 ## [Non publié]
 
 ### Fonctionnalité
+- `tests/test_bot.py` — suite de tests automatisés (71 tests, aucun service externe requis) : `TestComputeFee` (4), `TestParseBookMessage` (14), `TestMarketHelpers` (9), `TestTokenState` (7), `TestRegisterMarket` (5), `TestCheckSignal` (13 gardes dont les 8 conditions d'entrée, le stop-loss journalier et la prévention des doublons), `TestCheckResolution` (7), `TestCloseTrade` (6), `TestRestoreState` (5) ; tous les tests utilisent une base SQLite en mémoire et un `POLYMARKET_DIR=/tmp/polymarket-test` fixe pour ne jamais toucher les fichiers de production
+- `scripts/run_tests.sh` — script de lancement des tests : détecte automatiquement le `.venv` du projet ou le venv de production, fixe `POLYMARKET_DIR` sur `/tmp`, lance `unittest discover`
 - `config.json` / `config.json.example` — nouvelle clé optionnelle `db_mmap_mb` (entier, défaut `0`) : quand elle est non nulle, active `PRAGMA mmap_size` pour que SQLite mappe le fichier de base de données via le page cache du kernel ; mettre à ex. `256` pour 256 Mo
 - `bot/live_bot.py` — `load_config()` refactorisée pour retourner le dict de config complet (extensible pour de futures options) ; `DB_MMAP_MB` dérivé de la config au démarrage ; `init_db()` applique le pragma et enregistre une ligne de confirmation dans les logs quand le mmap est actif
 

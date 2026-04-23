@@ -9,6 +9,8 @@ All notable changes to this project are documented here.
 ## [Unreleased]
 
 ### Feature
+- `tests/test_bot.py` — automated test suite (71 tests, zero external services required): `TestComputeFee` (4), `TestParseBookMessage` (14), `TestMarketHelpers` (9), `TestTokenState` (7), `TestRegisterMarket` (5), `TestCheckSignal` (13 guards including all 8 entry conditions, daily stop-loss, and duplicate-entry prevention), `TestCheckResolution` (7), `TestCloseTrade` (6), `TestRestoreState` (5); all tests use an in-memory SQLite database and a fixed `POLYMARKET_DIR=/tmp/polymarket-test` so they never touch production files
+- `scripts/run_tests.sh` — test runner script: auto-detects project `.venv` or production venv, sets `POLYMARKET_DIR` to `/tmp`, runs `unittest discover`
 - `config.json` / `config.json.example` — new optional key `db_mmap_mb` (integer, default `0`): when set to a non-zero value, activates `PRAGMA mmap_size` so SQLite memory-maps the database file via the kernel page cache; set to e.g. `256` for 256 MB
 - `bot/live_bot.py` — `load_config()` refactored to return the full config dict (extensible for future options); `DB_MMAP_MB` derived from config at startup; `init_db()` applies the pragma and logs a confirmation line when mmap is active
 

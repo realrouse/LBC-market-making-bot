@@ -108,6 +108,14 @@ sqlite3 live.db "SELECT ts_ms, best_bid, best_ask, obi
 
 Voir **[INSTALL.fr](INSTALL.fr)** pour le guide d'installation complet : prérequis, dépendances, configuration du wallet, lancement, monitoring, et comment tester dans un environnement virtuel.
 
+## Tests
+
+```bash
+bash scripts/run_tests.sh
+```
+
+La suite exécute 71 tests couvrant : le calcul des frais, le parsing des messages WebSocket, le calcul de l'OBI, l'enregistrement des marchés, les 8 gardes d'entrée du signal (dont le stop-loss journalier), la résolution des trades (WIN/LOSS/expiration), le calcul du PnL et la restauration d'état après un crash. Aucun accès réseau ni credentials nécessaires — une base SQLite en mémoire est utilisée pour chaque test.
+
 ## Notes
 
 - Les timeouts WebSocket (~90s) en période calme sont **normaux** — le bot se reconnecte automatiquement

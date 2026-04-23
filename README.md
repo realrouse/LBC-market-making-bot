@@ -108,6 +108,14 @@ sqlite3 live.db "SELECT ts_ms, best_bid, best_ask, obi
 
 See **[INSTALL](INSTALL)** for the full installation guide, including requirements, dependencies, wallet setup, configuration, running, monitoring, and how to test in a virtual environment.
 
+## Tests
+
+```bash
+bash scripts/run_tests.sh
+```
+
+The suite runs 71 tests covering: fee calculation, WebSocket message parsing, OBI computation, market registration, all 8 signal entry guards (including the daily stop-loss), trade resolution (WIN/LOSS/expiry), PnL calculation, and crash-recovery state restore. No network access or credentials are required — an in-memory SQLite database is used for every test.
+
 ## Notes
 
 - WebSocket timeouts at ~90s during quiet periods are **normal** — the bot reconnects automatically
