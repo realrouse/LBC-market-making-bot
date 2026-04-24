@@ -12,6 +12,13 @@ Requirements
 - MATIC > 0.1 (gas fees)
 - USDC.e > $10 on Polygon (0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174)
   Note: NOT USDC native (0x3c499c...) — setup.py handles the swap automatically
+- sqlite3 CLI (optional but recommended for monitoring queries)
+  The bot uses Python's built-in sqlite3 module and works without the CLI.
+  Install on Debian/Ubuntu: sudo apt install sqlite3
+  Without sudo, use the Python alternative:
+    ~/polymarket/venv/bin/python3 -c \
+      "import sqlite3; c=sqlite3.connect('live.db'); \
+       print(c.execute('SELECT COUNT(*) FROM snapshots').fetchone()[0])"
 
 
 Dependencies

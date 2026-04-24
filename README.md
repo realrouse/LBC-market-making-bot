@@ -151,6 +151,8 @@ POLYMARKET_DIR=~/mybot python3 scripts/backtest.py # custom database path
 
 ## Notes
 
+- The `sqlite3` CLI is optional — the bot uses Python's built-in module. Install it (`sudo apt install sqlite3`) only if you want to run manual DB queries. Without sudo, use: `~/polymarket/venv/bin/python3 -c "import sqlite3; c=sqlite3.connect('live.db'); print(c.execute('SELECT COUNT(*) FROM snapshots').fetchone()[0])"`
+
 - WebSocket recv timeouts at ~30s during quiet periods are **normal** — `ping_interval=20` keepalives maintain the connection; the bot reconnects only when all tracked markets have expired
 - Market refresh (Gamma API polling every 90s) runs as a **background async task** so WebSocket message processing is never blocked during HTTP calls
 - The Gamma API query uses `tag_id=102892` (the `5M` tag) to pre-filter server-side to 5-minute markets only, reducing each poll from potentially thousands of markets to ~12–20 in a **single API call** (no pagination)

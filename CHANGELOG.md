@@ -8,6 +8,9 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Documentation
+- `INSTALL` / `INSTALL.fr` — sqlite3 CLI added to prerequisites with note that the bot works without it; Python fallback command provided for hosts without sudo
+
 ### Feature
 - `strategies/polymarket_BTC5M.json` — new strategy file: all backtested signal and capital parameters (`signal_threshold`, `entry_max`, `min_secs_remaining`, `min_ask_vol`, `win_threshold`, `loss_threshold`, `obi_reject_thresh`, `daily_stop_loss`, `stake`, `capital_start`, `gas_fee_usd`) extracted from hardcoded constants into a versioned JSON file; add `"strategy": "<path>"` in `config.json` to switch strategies
 - `bot/live_bot.py` — `load_strategy()` loads the JSON file at startup; parameters override hardcoded defaults; falls back silently to defaults if file absent (dev/tests); strategy name logged at startup
