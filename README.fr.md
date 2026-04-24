@@ -4,6 +4,20 @@
 
 Bot de trading automatisé pour les marchés de prédiction [Polymarket](https://polymarket.com), ciblant les marchés Bitcoin Hausse/Baisse 5 minutes sur Polygon. Utilise une stratégie quantitative basée sur un signal (`best_bid >= 0.96`) backtestée à **98,3% de taux de victoire** sur 1663 trades (avril 2026).
 
+## Fonctionnalités
+
+- **Stratégie quantitative** — entrée sur `best_bid >= 0.96`, backtestée à 98,3% de victoires sur 1663 trades
+- **Flux WebSocket temps réel** — souscrit aux carnets d'ordres Polymarket ; traite chaque mise à jour bid/ask avec une latence inférieure à la seconde
+- **Découverte automatique des marchés** — interroge l'API Gamma toutes les 90 s en tâche de fond ; ne suit que les marchés expirant dans ±6 minutes pour éviter les prix figés
+- **Résolution automatique des trades** — clôture les positions automatiquement en WIN (bid ≥ 0.99), LOSS (bid ≤ 0.01), ou à l'expiration du marché
+- **Stop-loss journalier** — suspend le trading dès 30 $ de perte nette sur la journée ; reprend à la session suivante
+- **Persistance SQLite** (mode WAL) — tous les trades et les snapshots de prix toutes les 5 s sont stockés ; l'état survit aux crashs et redémarrages
+- **Reprise après crash** — restaure les trades non résolus depuis la base de données au démarrage ; reconstruit le capital à partir du PnL historique
+- **Moteur de backtest** — rejoue les données `snapshots` avec n'importe quel jeu de paramètres ; supporte la recherche en grille sur 135 combinaisons
+- **Suite de 99 tests** — couvre les gardes du signal, les chemins de résolution, le calcul des frais, le parsing WebSocket et la restauration d'état ; aucun réseau ni credentials requis
+- **Page de statut HTML optionnelle** — le bot écrit une page auto-rafraîchissante (chemin configurable, authentification HTTP Basic Auth optionnelle)
+- **Mode simulation** — si `POLY_PRIVATE_KEY` n'est pas défini, les ordres sont simulés sans aucune exécution on-chain
+
 ## Stratégie
 
 - Surveille les marchés "Bitcoin Up or Down — 5 minutes" dont `endDate` est dans une fenêtre de ±6 minutes

@@ -4,6 +4,20 @@
 
 Automated trading bot for [Polymarket](https://polymarket.com) prediction markets, targeting Bitcoin Up/Down 5-minute markets on Polygon. Uses a quantitative signal strategy (`best_bid >= 0.96`) backtested at **98.3% win rate** across 1663 trades (April 2026).
 
+## Features
+
+- **Quantitative signal strategy** — entry on `best_bid >= 0.96`, backtested at 98.3% win rate across 1663 trades
+- **Real-time WebSocket feed** — subscribes to Polymarket order books; processes every bid/ask update with sub-second latency
+- **Automatic market discovery** — polls the Gamma API every 90 s in a background task; tracks only markets expiring within ±6 minutes to avoid stale prices
+- **Automated trade resolution** — closes positions automatically on WIN (bid ≥ 0.99), LOSS (bid ≤ 0.01), or market expiry
+- **Daily stop-loss** — halts trading for the day after a $30 net loss; resumes the next session
+- **SQLite persistence** (WAL mode) — all trades and 5-second price snapshots are stored; state survives crashes and restarts
+- **Crash recovery** — restores unresolved trades from the database on startup; rebuilds capital from historical PnL
+- **Backtest engine** — replays `snapshots` data against any parameter set; supports grid search across 135 combinations
+- **99-test suite** — covers signal guards, resolution paths, fee calculation, WebSocket parsing, and state restore; no network or credentials required
+- **Optional HTML status page** — bot writes a self-refreshing page (configurable path, optional HTTP Basic Auth)
+- **Simulation mode** — if `POLY_PRIVATE_KEY` is unset, orders are simulated without any on-chain execution
+
 ## Strategy
 
 - Monitors "Bitcoin Up or Down — 5 minutes" markets with `endDate` within ±6 minutes of now
