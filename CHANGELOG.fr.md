@@ -8,6 +8,11 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ## [Non publié]
 
+### Fonctionnalité
+- `bot/live_bot.py` — nouvelle page de statut web : si `webstatuspage_html` vaut `true` dans `config.json`, le bot écrit une page HTML autonome en thème sombre affichant le capital, le PnL total et journalier, le taux de victoire, les positions ouvertes et les 10 derniers trades résolus ; la page est écrite toutes les `DASHBOARD_INTERVAL` secondes (5 min) et immédiatement après chaque résolution de trade ; le répertoire est créé automatiquement ; la page inclut un `<meta http-equiv="refresh" content="60">` pour le rechargement automatique dans le navigateur
+- `bot/live_bot.py` — protection `.htaccess` / `.htpasswd` Basic Auth : si `webstatus_password` est défini, `setup_htaccess()` écrit un `.htpasswd` (format Apache `{SHA}`, sans dépendance externe) dans `POLYMARKET_DIR` (hors de la racine web) et un `.htaccess` pointant vers lui dans le répertoire de la page HTML ; les changements de mot de passe sont appliqués à la prochaine écriture de la page ; le `.htaccess` n'est écrit qu'une fois et non écrasé s'il existe déjà pour préserver les modifications manuelles
+- `config.json.example` — quatre nouvelles clés optionnelles : `webstatuspage_html` (booléen, défaut `false`), `webstatuspage_path` (chaîne, défaut `~/public_html/tradinebot_status.html`), `webstatus_user` (chaîne, défaut `"tradinebot"`), `webstatus_password` (chaîne, défaut `""`)
+
 ### Performance
 - `bot/live_bot.py` — `_market_refresh_loop()` extrait en tâche `asyncio.Task` de fond : le polling de l'API Gamma (jusqu'à 15 s de timeout HTTP toutes les 90 s) ne bloque plus le traitement des messages WebSocket ; la boucle `recv()` et la découverte des marchés s'exécutent désormais en concurrence dans le même event loop
 - `bot/live_bot.py` — `_run_ws()` : timeout recv réduit de 90 s à 30 s ; `TimeoutError` déclenche maintenant `continue` au lieu d'une reconnexion complète — les keepalives `ping_interval=20` / `ping_timeout=10` détectent les connexions mortes ; la reconnexion ne s'active que lorsque tous les marchés suivis ont expiré ; le bloc `finally` garantit l'annulation de la tâche de refresh à toute déconnexion WebSocket

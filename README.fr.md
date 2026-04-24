@@ -79,6 +79,10 @@ Les clés optionnelles suivantes peuvent être ajoutées à `config.json` :
 | Clé | Type | Défaut | Description |
 |---|---|---|---|
 | `db_mmap_mb` | entier | `0` | Mappe le fichier de base de données en mémoire pour des lectures plus rapides. `0` = désactivé. Mettre à ex. `256` pour mapper jusqu'à 256 Mo via le page cache du kernel. Le système garde déjà le fichier en RAM pour cette charge de travail — option facultative. |
+| `webstatuspage_html` | booléen | `false` | Active la page de statut HTML statique. Si `true`, le bot écrit la page dans `webstatuspage_path` toutes les 5 minutes et après chaque résolution de trade. |
+| `webstatuspage_path` | chaîne | `~/public_html/tradinebot_status.html` | Chemin sur le système de fichiers pour la page HTML. `~` est développé en répertoire personnel. Le répertoire est créé automatiquement s'il n'existe pas. |
+| `webstatus_user` | chaîne | `"tradinebot"` | Identifiant pour la protection HTTP Basic Auth via `.htaccess`. |
+| `webstatus_password` | chaîne | `""` | Mot de passe HTTP Basic Auth. Si vide, aucun `.htaccess` n'est créé et la page est publiquement accessible. Le fichier `.htpasswd` est stocké dans `POLYMARKET_DIR` (hors de la racine web). |
 
 ### Requêtes utiles
 

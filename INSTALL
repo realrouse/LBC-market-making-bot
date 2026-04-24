@@ -92,6 +92,26 @@ See config.json.example for the expected file structure.
 WARNING: Never commit config.json. It is listed in .gitignore.
 
 
+Web Status Page (optional)
+--------------------------
+
+The bot can publish a static HTML status page readable in any browser.
+Enable it by adding these keys to config.json:
+
+  "webstatuspage_html": true,
+  "webstatuspage_path": "~/public_html/tradinebot_status.html",
+  "webstatus_user":     "tradinebot",
+  "webstatus_password": "yourpassword"
+
+The page displays capital, total and daily PnL, win rate, open positions,
+and the 10 most recent resolved trades. It auto-refreshes every 60 s.
+
+The directory is created automatically. If webstatus_password is set, the
+bot generates a .htaccess in the HTML directory and a .htpasswd in
+POLYMARKET_DIR (outside the web root). For the protection to work, Apache
+or nginx must be configured to honour .htaccess files in that directory.
+
+
 Running
 -------
 

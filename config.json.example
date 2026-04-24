@@ -4,5 +4,10 @@
   "api_secret":     "YOUR_API_SECRET",
   "api_passphrase": "YOUR_PASSPHRASE",
 
-  "db_mmap_mb": 0
+  "db_mmap_mb": 0,
+
+  "webstatuspage_html": false,
+  "webstatuspage_path": "~/public_html/tradinebot_status.html",
+  "webstatus_user":     "tradinebot",
+  "webstatus_password": ""
 }

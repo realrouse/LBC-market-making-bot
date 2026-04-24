@@ -8,6 +8,11 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Feature
+- `bot/live_bot.py` — new web status page: when `webstatuspage_html` is `true` in `config.json`, the bot writes a self-contained dark-themed HTML status page showing capital, total/daily PnL, win rate, open positions, and the 10 most recent resolved trades; the page is written every `DASHBOARD_INTERVAL` seconds (5 min) and immediately after each trade resolution; the directory is created automatically; the page carries a `<meta http-equiv="refresh" content="60">` tag for browser auto-refresh
+- `bot/live_bot.py` — `.htaccess` / `.htpasswd` Basic Auth protection: if `webstatus_password` is set, `setup_htaccess()` writes a `.htpasswd` (Apache `{SHA}` format, no external dependencies) to `POLYMARKET_DIR` (outside the web root) and a `.htaccess` referencing it in the HTML page directory; password changes are applied on the next page write; `.htaccess` is written once and not overwritten if already present to preserve manual edits
+- `config.json.example` — four new optional keys: `webstatuspage_html` (bool, default `false`), `webstatuspage_path` (string, default `~/public_html/tradinebot_status.html`), `webstatus_user` (string, default `"tradinebot"`), `webstatus_password` (string, default `""`)
+
 ### Performance
 - `bot/live_bot.py` — `_market_refresh_loop()` extracted as a background `asyncio.Task`: Gamma API polling (up to 15 s HTTP timeout every 90 s) no longer blocks WebSocket message processing; the `recv()` loop and market discovery now run concurrently within the single event loop
 - `bot/live_bot.py` — `_run_ws()`: recv timeout reduced from 90 s to 30 s; `TimeoutError` now triggers `continue` instead of a full reconnect — `ping_interval=20` / `ping_timeout=10` keepalives detect dead connections; reconnect only fires when all tracked markets have expired; `finally` block guarantees cancellation of the refresh task on any WS disconnect
