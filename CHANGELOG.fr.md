@@ -8,6 +8,10 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ## [Non publié]
 
+### Documentation
+- `INSTALL` / `INSTALL.fr` — section "Page de statut web" développée avec les prérequis Apache pas-à-pas : `a2enmod userdir auth_basic authn_file`, directive `AllowOverride AuthConfig`, deux options pour donner au processus `www-data` l'accès en lecture au `.htpasswd` (`chmod o+r` ou `usermod -aG`) ; note nginx expliquant que `.htaccess` n'est pas traité et montrant le bloc server équivalent avec `auth_basic` / `auth_basic_user_file` ; note sur les chemins personnalisés en dehors de `~/public_html`
+- `README.md` / `README.fr.md` — entrées du tableau de configuration `webstatuspage_*` mises à jour pour mentionner les modules Apache requis, `AllowOverride AuthConfig`, les permissions `www-data`, et la configuration manuelle nginx dans la colonne description
+
 ### Fonctionnalité
 - `bot/live_bot.py` — nouvelle page de statut web : si `webstatuspage_html` vaut `true` dans `config.json`, le bot écrit une page HTML autonome en thème sombre affichant le capital, le PnL total et journalier, le taux de victoire, les positions ouvertes et les 10 derniers trades résolus ; la page est écrite toutes les `DASHBOARD_INTERVAL` secondes (5 min) et immédiatement après chaque résolution de trade ; le répertoire est créé automatiquement ; la page inclut un `<meta http-equiv="refresh" content="60">` pour le rechargement automatique dans le navigateur
 - `bot/live_bot.py` — protection `.htaccess` / `.htpasswd` Basic Auth : si `webstatus_password` est défini, `setup_htaccess()` écrit un `.htpasswd` (format Apache `{SHA}`, sans dépendance externe) dans `POLYMARKET_DIR` (hors de la racine web) et un `.htaccess` pointant vers lui dans le répertoire de la page HTML ; les changements de mot de passe sont appliqués à la prochaine écriture de la page ; le `.htaccess` n'est écrit qu'une fois et non écrasé s'il existe déjà pour préserver les modifications manuelles

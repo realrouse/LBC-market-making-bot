@@ -79,10 +79,10 @@ Les clés optionnelles suivantes peuvent être ajoutées à `config.json` :
 | Clé | Type | Défaut | Description |
 |---|---|---|---|
 | `db_mmap_mb` | entier | `0` | Mappe le fichier de base de données en mémoire pour des lectures plus rapides. `0` = désactivé. Mettre à ex. `256` pour mapper jusqu'à 256 Mo via le page cache du kernel. Le système garde déjà le fichier en RAM pour cette charge de travail — option facultative. |
-| `webstatuspage_html` | booléen | `false` | Active la page de statut HTML statique. Si `true`, le bot écrit la page dans `webstatuspage_path` toutes les 5 minutes et après chaque résolution de trade. |
-| `webstatuspage_path` | chaîne | `~/public_html/tradinebot_status.html` | Chemin sur le système de fichiers pour la page HTML. `~` est développé en répertoire personnel. Le répertoire est créé automatiquement s'il n'existe pas. |
-| `webstatus_user` | chaîne | `"tradinebot"` | Identifiant pour la protection HTTP Basic Auth via `.htaccess`. |
-| `webstatus_password` | chaîne | `""` | Mot de passe HTTP Basic Auth. Si vide, aucun `.htaccess` n'est créé et la page est publiquement accessible. Le fichier `.htpasswd` est stocké dans `POLYMARKET_DIR` (hors de la racine web). |
+| `webstatuspage_html` | booléen | `false` | Active la page de statut HTML statique. Si `true`, le bot écrit la page dans `webstatuspage_path` toutes les 5 minutes et après chaque résolution de trade. Nécessite un serveur web pointant vers le répertoire HTML — voir `INSTALL.fr` pour les prérequis complets. |
+| `webstatuspage_path` | chaîne | `~/public_html/tradinebot_status.html` | Chemin sur le système de fichiers pour la page HTML. `~` est développé en répertoire personnel. Le répertoire est créé automatiquement s'il n'existe pas. Pour le chemin par défaut `~/public_html`, le module Apache `mod_userdir` doit être activé. |
+| `webstatus_user` | chaîne | `"tradinebot"` | Identifiant pour la protection HTTP Basic Auth via `.htaccess`. Utilisé uniquement si `webstatus_password` est défini. |
+| `webstatus_password` | chaîne | `""` | Mot de passe HTTP Basic Auth. Si vide, aucun `.htaccess` n'est créé et la page est publiquement accessible. Si défini, le bot écrit un `.htaccess` dans le répertoire HTML et un `.htpasswd` (format Apache `{SHA}`) dans `POLYMARKET_DIR/.webstatus_htpasswd` (hors de la racine web). **Prérequis Apache :** modules `mod_auth_basic` + `mod_authn_file` activés, `AllowOverride AuthConfig` sur le répertoire HTML, et permission de lecture sur le `.htpasswd` pour le processus Apache (`www-data`). **nginx :** ne traite pas les `.htaccess` — configurer `auth_basic` manuellement dans le bloc server en pointant vers le même fichier `.htpasswd`. |
 
 ### Requêtes utiles
 

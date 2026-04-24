@@ -79,10 +79,10 @@ The following optional keys can be added to `config.json`:
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `db_mmap_mb` | integer | `0` | Memory-map the database file for faster reads. `0` = disabled. Set to e.g. `256` to map up to 256 MB via the kernel page cache. The OS already keeps the file in RAM for this workload, so this is optional. |
-| `webstatuspage_html` | boolean | `false` | Enable the static HTML status page. When `true`, the bot writes a page to `webstatuspage_path` every 5 minutes and after each trade resolution. |
-| `webstatuspage_path` | string | `~/public_html/tradinebot_status.html` | Filesystem path for the HTML status page. `~` is expanded to the home directory. The directory is created automatically if it does not exist. |
-| `webstatus_user` | string | `"tradinebot"` | Username for HTTP Basic Auth protection via `.htaccess`. |
-| `webstatus_password` | string | `""` | Password for HTTP Basic Auth. If empty, no `.htaccess` is created and the page is publicly accessible. The `.htpasswd` file is stored in `POLYMARKET_DIR` (outside the web root). |
+| `webstatuspage_html` | boolean | `false` | Enable the static HTML status page. When `true`, the bot writes a page to `webstatuspage_path` every 5 minutes and after each trade resolution. Requires a web server pointed at the HTML directory — see `INSTALL` for full prerequisites. |
+| `webstatuspage_path` | string | `~/public_html/tradinebot_status.html` | Filesystem path for the HTML status page. `~` is expanded to the home directory. The directory is created automatically if it does not exist. If using the default `~/public_html` path, Apache `mod_userdir` must be enabled. |
+| `webstatus_user` | string | `"tradinebot"` | Username for HTTP Basic Auth protection via `.htaccess`. Only used when `webstatus_password` is set. |
+| `webstatus_password` | string | `""` | Password for HTTP Basic Auth. If empty, no `.htaccess` is created and the page is publicly accessible. When set, the bot writes a `.htaccess` in the HTML directory and a `.htpasswd` (Apache `{SHA}` format) at `POLYMARKET_DIR/.webstatus_htpasswd` (outside the web root). **Apache prerequisites:** `mod_auth_basic` + `mod_authn_file` enabled, `AllowOverride AuthConfig` on the HTML directory, and read permission on the `.htpasswd` file for the Apache process (`www-data`). **nginx:** does not process `.htaccess` — configure `auth_basic` manually in your server block pointing to the same `.htpasswd` file. |
 
 ### Useful queries
 

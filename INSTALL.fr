@@ -109,11 +109,63 @@ La page affiche le capital, le PnL total et journalier, le taux de
 victoire, les positions ouvertes et les 10 derniers trades résolus.
 Elle se recharge automatiquement toutes les 60 s.
 
-Le répertoire est créé automatiquement. Si webstatus_password est
-défini, le bot génère un .htaccess dans le répertoire HTML et un
-.htpasswd dans POLYMARKET_DIR (hors de la racine web). Pour que la
-protection soit effective, Apache ou nginx doit être configuré pour
-respecter les fichiers .htaccess dans ce répertoire.
+Le bot crée le répertoire HTML automatiquement et y écrit un .htaccess.
+Le fichier .htpasswd est stocké dans POLYMARKET_DIR/.webstatus_htpasswd
+(hors de la racine web).
+
+Prérequis — Apache
+..................
+
+1. Activer les modules nécessaires (Debian/Ubuntu) :
+
+     sudo a2enmod userdir       # sert ~/public_html — ignorer si le
+                                #   chemin est déjà sous le DocumentRoot
+     sudo a2enmod auth_basic    # support HTTP Basic Auth
+     sudo a2enmod authn_file    # lit les credentials depuis .htpasswd
+     sudo systemctl reload apache2
+
+2. Autoriser les overrides .htaccess dans le répertoire HTML.
+   Éditer /etc/apache2/mods-enabled/userdir.conf (ou le VirtualHost) :
+
+     <Directory /home/*/public_html>
+         AllowOverride AuthConfig
+         Options Indexes FollowSymLinks
+         Require all granted
+     </Directory>
+
+   Puis recharger : sudo systemctl reload apache2
+
+3. Donner au processus Apache accès en lecture au fichier .htpasswd.
+   Le fichier est écrit en chmod 640 (lecture propriétaire + groupe).
+   Apache tourne en www-data et doit pouvoir le lire :
+
+     # Option A — lisible par tous (plus simple, expose le hash aux
+     #            utilisateurs locaux)
+     chmod o+r POLYMARKET_DIR/.webstatus_htpasswd
+
+     # Option B — ajouter www-data au groupe principal de l'utilisateur
+     #            bot (plus sûr)
+     sudo usermod -aG $(id -gn $USER) www-data
+     sudo systemctl reload apache2
+
+Prérequis — nginx
+.................
+
+nginx ne traite pas les fichiers .htaccess. Le bot écrit toujours la
+page sur le disque, mais la protection par mot de passe n'a aucun
+effet. Configurer la Basic Auth directement dans le bloc server nginx :
+
+  location /tradinebot_status.html {
+      auth_basic "Tradinebot Status";
+      auth_basic_user_file /chemin/vers/.webstatus_htpasswd;
+  }
+
+Le .htpasswd généré par le bot utilise le format Apache {SHA},
+également supporté par nginx. Utiliser le chemin
+POLYMARKET_DIR/.webstatus_htpasswd.
+
+Si webstatuspage_path pointe en dehors de ~/public_html, s'assurer
+que le serveur web est configuré pour servir ce répertoire.
 
 
 Lancement
