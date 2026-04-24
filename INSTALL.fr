@@ -62,7 +62,7 @@ Exécuter le script d'installation depuis la racine du dépôt :
 Ce script va :
   - Installer les packages système (python3, pip, venv, sqlite3)
   - Créer le répertoire d'installation
-  - Copier bot/live_bot.py vers <POLYMARKET_DIR>/live_bot.py
+  - Copier bot/live_bot.py et bot/api_polymarket.py vers <POLYMARKET_DIR>/
   - Créer un virtualenv dans <POLYMARKET_DIR>/venv/
   - Installer les dépendances Python dans le virtualenv
   - Générer <POLYMARKET_DIR>/run.sh (wrapper avec POLYMARKET_DIR pré-défini)
