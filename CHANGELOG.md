@@ -9,6 +9,10 @@ All notable changes to this project are documented here.
 ## [Unreleased]
 
 ### Feature
+- `strategies/polymarket_BTC5M.json` — new strategy file: all backtested signal and capital parameters (`signal_threshold`, `entry_max`, `min_secs_remaining`, `min_ask_vol`, `win_threshold`, `loss_threshold`, `obi_reject_thresh`, `daily_stop_loss`, `stake`, `capital_start`, `gas_fee_usd`) extracted from hardcoded constants into a versioned JSON file; add `"strategy": "<path>"` in `config.json` to switch strategies
+- `bot/live_bot.py` — `load_strategy()` loads the JSON file at startup; parameters override hardcoded defaults; falls back silently to defaults if file absent (dev/tests); strategy name logged at startup
+- `config.json.example` — new optional key `strategy` pointing to the strategy file
+- `scripts/install.sh` — copies `strategies/*.json` to the install directory
 - `scripts/install.sh` — new `--with-tests` flag: copies `tests/` and `scripts/backtest.py` to the install directory and runs the full 99-test suite immediately after installation; works with any install path; usage: `bash scripts/install.sh ~/polymarket --with-tests`
 - `INSTALL` / `INSTALL.fr` — `--with-tests` option documented
 

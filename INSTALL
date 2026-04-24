@@ -65,6 +65,7 @@ This will:
   - Install system packages (python3, pip, venv, sqlite3)
   - Create the install directory
   - Copy bot/live_bot.py and bot/api_polymarket.py to <POLYMARKET_DIR>/
+  - Copy strategies/*.json to <POLYMARKET_DIR>/strategies/
   - Create a virtualenv at <POLYMARKET_DIR>/venv/
   - Install Python dependencies into the virtualenv
   - Generate <POLYMARKET_DIR>/run.sh (wrapper with POLYMARKET_DIR pre-set)

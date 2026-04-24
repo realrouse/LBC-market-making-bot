@@ -37,6 +37,8 @@ mkdir -p "$INSTALL_DIR"
 echo "=== Copie du bot ==="
 cp bot/live_bot.py       "$INSTALL_DIR/live_bot.py"
 cp bot/api_polymarket.py "$INSTALL_DIR/api_polymarket.py"
+mkdir -p "$INSTALL_DIR/strategies"
+cp strategies/*.json     "$INSTALL_DIR/strategies/"
 
 echo "=== Création de l'environnement virtuel ==="
 python3 -m venv "$INSTALL_DIR/venv"

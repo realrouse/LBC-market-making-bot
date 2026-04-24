@@ -17,6 +17,7 @@ Automated trading bot for [Polymarket](https://polymarket.com) prediction market
 - **99-test suite** — covers signal guards, resolution paths, fee calculation, WebSocket parsing, and state restore; no network or credentials required; deployable to any target with `--with-tests`
 - **Optional HTML status page** — bot writes a self-refreshing page (configurable path, optional HTTP Basic Auth) — [see preview](docs/status_example.html)
 - **Pluggable exchange API** — all Polymarket-specific code lives in `bot/api_polymarket.py`; swapping exchanges requires only a new adapter file and a single import change in `live_bot.py`
+- **JSON strategy files** — signal and capital parameters live in `strategies/polymarket_BTC5M.json`; switch strategies by pointing `"strategy"` in `config.json` to any file
 - **Simulation mode** — if `POLY_PRIVATE_KEY` is unset, orders are simulated without any on-chain execution
 
 ## Strategy

@@ -1,0 +1,16 @@
+{
+    "_name": "Polymarket BTC 5-minute Up/Down",
+    "_description": "Backtested at 98.3% win rate across 1663 trades (April 2026). Do not modify thresholds without re-running the full backtest.",
+
+    "signal_threshold":   0.96,
+    "entry_max":          0.998,
+    "min_secs_remaining": 45,
+    "min_ask_vol":        10.0,
+    "win_threshold":      0.99,
+    "loss_threshold":     0.01,
+    "obi_reject_thresh":  -0.50,
+    "daily_stop_loss":    30.0,
+    "stake":              10.0,
+    "capital_start":      100.0,
+    "gas_fee_usd":        0.03
+}

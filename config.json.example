@@ -4,6 +4,8 @@
   "api_secret":     "YOUR_API_SECRET",
   "api_passphrase": "YOUR_PASSPHRASE",
 
+  "strategy": "strategies/polymarket_BTC5M.json",
+
   "db_mmap_mb": 0,
 
   "webstatuspage_html": false,

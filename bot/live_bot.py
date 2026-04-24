@@ -44,23 +44,20 @@ import sys as _sys
 _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import api_polymarket as api
 
-# ─── CAPITAL & FEES ──────────────────────────────────────────────────────────
-CAPITAL_START = 100.0   # starting capital in USD (restored from DB on restart)
-STAKE         = 10.0    # USD risked per trade
-GAS_FEE_USD   = 0.03    # estimated Polygon gas cost per order
-
-# ─── SIGNAL PARAMETERS — DO NOT MODIFY (backtested on 1663 trades) ───────────
-# These values were tuned on historical data and must not be changed without
-# re-running the full backtest. 98.3% win rate at these exact thresholds.
+# ─── STRATEGY (defaults) ─────────────────────────────────────────────────────
+# Hardcoded defaults — overridden below once config.json is loaded.
 # FEE_RATE (2%) lives in api_polymarket.py as it is exchange-specific.
-SIGNAL_THRESHOLD   = 0.96   # minimum best_bid to trigger a trade entry
-ENTRY_MAX          = 0.998  # reject if ask is already at settlement price
-MIN_SECS_REMAINING = 45     # refuse entry if the market ends in under 45s
-MIN_ASK_VOL        = 10.0   # minimum ask-side liquidity in USD (avoids thin books)
-WIN_THRESHOLD      = 0.99   # bid at or above this → market resolving YES/UP
-LOSS_THRESHOLD     = 0.01   # bid at or below this → market resolving NO/DOWN
-OBI_REJECT_THRESH  = -0.50  # reject if asks dominate bids by more than 50%
-DAILY_STOP_LOSS    = 30.0   # halt trading for the day if net PnL < -$30
+CAPITAL_START      = 100.0
+STAKE              = 10.0
+GAS_FEE_USD        = 0.03
+SIGNAL_THRESHOLD   = 0.96
+ENTRY_MAX          = 0.998
+MIN_SECS_REMAINING = 45.0
+MIN_ASK_VOL        = 10.0
+WIN_THRESHOLD      = 0.99
+LOSS_THRESHOLD     = 0.01
+OBI_REJECT_THRESH  = -0.50
+DAILY_STOP_LOSS    = 30.0
 
 # ─── TIMING ──────────────────────────────────────────────────────────────────
 SNAPSHOT_INTERVAL  = 5    # seconds between SQLite price snapshots per token
@@ -81,6 +78,35 @@ def load_config():
     return {}
 
 _cfg = load_config()
+
+
+def load_strategy(path):
+    """Load strategy parameters from a JSON file. Returns None if not found."""
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        return json.load(f)
+
+
+_strategy_path = _cfg.get("strategy", os.path.join(INSTALL_DIR, "strategies", "polymarket_BTC5M.json"))
+_strategy_path = os.path.expanduser(_strategy_path)
+if not os.path.isabs(_strategy_path):
+    _strategy_path = os.path.join(INSTALL_DIR, _strategy_path)
+_strat = load_strategy(_strategy_path) or {}
+_strategy_loaded = _strategy_path if _strat else None
+
+if _strat:
+    CAPITAL_START      = float(_strat.get("capital_start",      CAPITAL_START))
+    STAKE              = float(_strat.get("stake",               STAKE))
+    GAS_FEE_USD        = float(_strat.get("gas_fee_usd",         GAS_FEE_USD))
+    SIGNAL_THRESHOLD   = float(_strat.get("signal_threshold",    SIGNAL_THRESHOLD))
+    ENTRY_MAX          = float(_strat.get("entry_max",           ENTRY_MAX))
+    MIN_SECS_REMAINING = float(_strat.get("min_secs_remaining",  MIN_SECS_REMAINING))
+    MIN_ASK_VOL        = float(_strat.get("min_ask_vol",         MIN_ASK_VOL))
+    WIN_THRESHOLD      = float(_strat.get("win_threshold",       WIN_THRESHOLD))
+    LOSS_THRESHOLD     = float(_strat.get("loss_threshold",      LOSS_THRESHOLD))
+    OBI_REJECT_THRESH  = float(_strat.get("obi_reject_thresh",   OBI_REJECT_THRESH))
+    DAILY_STOP_LOSS    = float(_strat.get("daily_stop_loss",     DAILY_STOP_LOSS))
 
 # Credentials: config.json first, env vars as fallback for container deployments.
 PRIVATE_KEY    = _cfg.get("private_key",    os.environ.get("POLY_PRIVATE_KEY", ""))
@@ -763,6 +789,10 @@ async def main():
     logger.info("=" * 65)
     logger.info("  LIVE BOT v3 — Threshold=%.2f Stake=$%.0f MinAskVol=%.0f",
                 SIGNAL_THRESHOLD, STAKE, MIN_ASK_VOL)
+    if _strategy_loaded:
+        logger.info("  Strategie : %s", os.path.basename(_strategy_loaded))
+    else:
+        logger.warning("  Strategie : fichier absent — parametres par defaut")
     if not PRIVATE_KEY:
         logger.warning("  POLY_PRIVATE_KEY non definie — ordres SIMULES")
     logger.info("=" * 65)
