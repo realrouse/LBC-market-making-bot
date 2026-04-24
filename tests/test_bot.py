@@ -7,7 +7,11 @@ Run with:
     POLYMARKET_DIR=/tmp/polymarket-test .venv/bin/python3 -m unittest discover tests/ -v
 """
 
-import os, sys, time, sqlite3, unittest
+import os, sys, time, sqlite3, unittest, warnings
+
+# In-memory SQLite connections are garbage-collected cleanly; suppress the
+# ResourceWarning Python 3.13 emits when they aren't explicitly closed.
+warnings.filterwarnings("ignore", category=ResourceWarning)
 from datetime import datetime, timezone, timedelta
 
 # Redirect all bot I/O to /tmp before importing live_bot, so it never tries

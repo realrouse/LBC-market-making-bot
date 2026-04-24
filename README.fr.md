@@ -114,11 +114,26 @@ Voir **[INSTALL.fr](INSTALL.fr)** pour le guide d'installation complet : préreq
 bash scripts/run_tests.sh
 ```
 
-La suite exécute 71 tests couvrant : le calcul des frais, le parsing des messages WebSocket, le calcul de l'OBI, l'enregistrement des marchés, les 8 gardes d'entrée du signal (dont le stop-loss journalier), la résolution des trades (WIN/LOSS/expiration), le calcul du PnL et la restauration d'état après un crash. Aucun accès réseau ni credentials nécessaires — une base SQLite en mémoire est utilisée pour chaque test.
+La suite exécute 99 tests (71 pour le bot live, 28 pour le moteur de backtest) couvrant : le calcul des frais, le parsing des messages WebSocket, le calcul de l'OBI, l'enregistrement des marchés, les 8 gardes d'entrée du signal (dont le stop-loss journalier), la résolution des trades (WIN/LOSS/expiration), le calcul du PnL, la restauration d'état après un crash, et tous les chemins signal/résolution/paramètres du backtest. Aucun accès réseau ni credentials nécessaires — une base SQLite en mémoire est utilisée pour chaque test.
+
+## Backtest
+
+Rejouer les données `snapshots` historiques avec des paramètres de stratégie configurables :
+
+```bash
+python3 scripts/backtest.py                        # paramètres par défaut
+python3 scripts/backtest.py --threshold 0.95       # seuil personnalisé
+python3 scripts/backtest.py --detail               # tableau trade par trade
+python3 scripts/backtest.py --compare              # comparaison avec les trades réels
+python3 scripts/backtest.py --sweep                # recherche en grille (135 combinaisons)
+POLYMARKET_DIR=~/mybot python3 scripts/backtest.py # chemin de base de données personnalisé
+```
 
 ## Notes
 
-- Les timeouts WebSocket (~90s) en période calme sont **normaux** — le bot se reconnecte automatiquement
+- Les timeouts recv WebSocket (~30s) en période calme sont **normaux** — les keepalives `ping_interval=20` maintiennent la connexion ; le bot ne se reconnecte que si tous les marchés suivis ont expiré
+- Le refresh des marchés (polling de l'API Gamma toutes les 90s) s'exécute en **tâche async de fond**, de sorte que le traitement des messages WebSocket n'est jamais bloqué pendant les appels HTTP
+- La requête API Gamma utilise `tag_id=102892` (le tag `5M`) pour pré-filtrer côté serveur aux seuls marchés 5 minutes, réduisant chaque poll de potentiellement des milliers de marchés à ~12–20 en **un seul appel API** (sans pagination)
 - Si `POLY_PRIVATE_KEY` n'est pas défini, les ordres sont simulés (aucune exécution on-chain)
 - Les signaux peuvent être rares en période de faible volatilité BTC — c'est attendu
 - Ne pas modifier `SIGNAL_THRESHOLD` (0.96) sans relancer le backtest complet

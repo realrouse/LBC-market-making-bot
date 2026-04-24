@@ -8,9 +8,17 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Performance
+- `bot/live_bot.py` — `_market_refresh_loop()` extracted as a background `asyncio.Task`: Gamma API polling (up to 15 s HTTP timeout every 90 s) no longer blocks WebSocket message processing; the `recv()` loop and market discovery now run concurrently within the single event loop
+- `bot/live_bot.py` — `_run_ws()`: recv timeout reduced from 90 s to 30 s; `TimeoutError` now triggers `continue` instead of a full reconnect — `ping_interval=20` / `ping_timeout=10` keepalives detect dead connections; reconnect only fires when all tracked markets have expired; `finally` block guarantees cancellation of the refresh task on any WS disconnect
+- `bot/live_bot.py` — `fetch_markets()`: `tag_id=102892` (Polymarket `5M` tag) added to `POLY_GAMMA_PARAMS` for server-side pre-filtering; the ±6-minute temporal window now returns ~12–20 markets instead of potentially thousands; pagination loop (up to 20 requests × 100 markets) replaced by a single API call; `BTC_5M_KEYWORDS` Python filter retained as a safety net
+- `README.md` / `README.fr.md` — Notes section updated to reflect the 30 s timeout, background refresh task, and Gamma API tag filter
+
 ### Feature
+- `scripts/backtest.py` — standalone backtest engine: replays `snapshots` table chronologically, applies configurable signal logic, and produces simulated trade statistics; supports `--sweep` grid-search mode (5×3×3×3 = 135 parameter combinations sorted by win rate), `--detail` per-trade table, and `--compare` to show actual bot results alongside the simulation; configurable via `Params` dataclass (`signal_threshold`, `entry_max`, `min_secs_remaining`, `min_ask_vol`, `win_threshold`, `loss_threshold`, `obi_reject_thresh`, `stake`, `daily_stop_loss`)
+- `tests/test_backtest.py` — 28 tests for the backtest engine: `TestFeeHelper` (2), `TestRunBacktestBasic` (14, covering all signal guards and resolution paths), `TestRunBacktestMultiMarket` (4, independent markets, direction isolation, expiry resolution), `TestRunBacktestDailyStopLoss` (1), `TestRunBacktestParams` (3, threshold/win/loss sensitivity), `TestSummarize` (6, drawdown, win rate, open trade counting)
 - `tests/test_bot.py` — automated test suite (71 tests, zero external services required): `TestComputeFee` (4), `TestParseBookMessage` (14), `TestMarketHelpers` (9), `TestTokenState` (7), `TestRegisterMarket` (5), `TestCheckSignal` (13 guards including all 8 entry conditions, daily stop-loss, and duplicate-entry prevention), `TestCheckResolution` (7), `TestCloseTrade` (6), `TestRestoreState` (5); all tests use an in-memory SQLite database and a fixed `POLYMARKET_DIR=/tmp/polymarket-test` so they never touch production files
-- `scripts/run_tests.sh` — test runner script: auto-detects project `.venv` or production venv, sets `POLYMARKET_DIR` to `/tmp`, runs `unittest discover`
+- `scripts/run_tests.sh` — test runner now suppresses Python 3.13 `ResourceWarning` for unclosed in-memory SQLite connections (`-W ignore::ResourceWarning`); total suite: 99 tests
 - `config.json` / `config.json.example` — new optional key `db_mmap_mb` (integer, default `0`): when set to a non-zero value, activates `PRAGMA mmap_size` so SQLite memory-maps the database file via the kernel page cache; set to e.g. `256` for 256 MB
 - `bot/live_bot.py` — `load_config()` refactored to return the full config dict (extensible for future options); `DB_MMAP_MB` derived from config at startup; `init_db()` applies the pragma and logs a confirmation line when mmap is active
 

@@ -29,4 +29,4 @@ export POLYMARKET_DIR="/tmp/polymarket-test"
 echo "Python : $PYTHON ($("$PYTHON" --version))"
 echo "Tests  : $PROJECT_DIR/tests/"
 echo ""
-"$PYTHON" -m unittest discover -s tests/ -p "test_*.py" -v
+"$PYTHON" -W ignore::ResourceWarning -m unittest discover -s tests/ -p "test_*.py" -v

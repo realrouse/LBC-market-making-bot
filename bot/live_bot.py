@@ -45,7 +45,7 @@ GAS_FEE_USD   = 0.03    # estimated Polygon gas cost per order
 # ─── API ENDPOINTS ───────────────────────────────────────────────────────────
 POLY_GAMMA_URL     = "https://gamma-api.polymarket.com/markets"
 POLY_GAMMA_HEADERS = {"User-Agent": "Mozilla/5.0"}
-POLY_GAMMA_PARAMS  = {"closed": "false", "limit": 100}
+POLY_GAMMA_PARAMS  = {"closed": "false", "limit": 100, "tag_id": 102892}  # 102892 = "5M" tag
 POLY_CLOB_URL      = "https://clob.polymarket.com"
 POLY_WS_URL        = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 
@@ -592,38 +592,33 @@ async def fetch_markets(session):
     Fetch active BTC 5-minute markets from the Polymarket Gamma API.
 
     CRITICAL: The ±6-minute temporal window filter is mandatory.
-    Without it, the Gamma API returns hundreds of expired markets whose
-    order books still show stale prices from their final seconds of trading.
-    Those stale prices routinely exceed 0.96, producing false signals.
-    With the filter, we only subscribe to markets that are currently live.
+    Without it, the Gamma API returns expired markets whose order books
+    still show stale prices that falsely trigger the signal.
+
+    tag_id=102892 ("5M") pre-filters server-side to 5-minute markets only,
+    reducing the response from potentially thousands of markets to ~12-20
+    (BTC/ETH/XRP/SOL for the current ±6 min window). A single API call
+    suffices — pagination is no longer needed.
+    BTC_5M_KEYWORDS is kept as a safety net for other 5M assets.
     """
-    results = []
-    offset = 0
-    limit = 100
     try:
-        for _ in range(20):  # max 2000 markets per refresh cycle
-            params = dict(POLY_GAMMA_PARAMS)
-            now_utc = datetime.now(timezone.utc)
-            # Accept markets ending anywhere from 6 minutes ago to 6 minutes
-            # from now. The 6-minute past window catches markets that started
-            # slightly before the bot's last refresh cycle.
-            params["end_date_min"] = (now_utc - timedelta(minutes=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
-            params["end_date_max"] = (now_utc + timedelta(minutes=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
-            params["offset"] = offset
-            async with session.get(
-                POLY_GAMMA_URL, headers=POLY_GAMMA_HEADERS, params=params,
-                timeout=aiohttp.ClientTimeout(total=15)
-            ) as resp:
-                if resp.status != 200: break
-                data = await resp.json(content_type=None)
-            batch = data if isinstance(data, list) else data.get("data", data.get("markets", []))
-            if not batch: break
-            results.extend([
-                m for m in batch
-                if any(kw in m.get("question", "").lower() for kw in BTC_5M_KEYWORDS)
-            ])
-            if len(batch) < limit: break
-            offset += limit
+        params = dict(POLY_GAMMA_PARAMS)
+        now_utc = datetime.now(timezone.utc)
+        params["end_date_min"] = (now_utc - timedelta(minutes=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        params["end_date_max"] = (now_utc + timedelta(minutes=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        async with session.get(
+            POLY_GAMMA_URL, headers=POLY_GAMMA_HEADERS, params=params,
+            timeout=aiohttp.ClientTimeout(total=15)
+        ) as resp:
+            if resp.status != 200:
+                logger.warning("Gamma API erreur : %d", resp.status)
+                return []
+            data = await resp.json(content_type=None)
+        batch = data if isinstance(data, list) else data.get("data", data.get("markets", []))
+        results = [
+            m for m in batch
+            if any(kw in m.get("question", "").lower() for kw in BTC_5M_KEYWORDS)
+        ]
         logger.info("Marches BTC 5-min : %d", len(results))
         return results
     except Exception as e:
@@ -673,20 +668,55 @@ async def ws_loop(state, session):
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60)
 
+async def _market_refresh_loop(state, session, ws):
+    """
+    Background task: polls the Gamma API every MARKET_REFRESH seconds and
+    subscribes newly discovered tokens while the main recv loop continues
+    processing messages uninterrupted.
+    """
+    while True:
+        await asyncio.sleep(MARKET_REFRESH)
+        try:
+            nm = await fetch_markets(session)
+            ni = []
+            for m in nm:
+                ni.extend(register_market(state, m))
+            if ni:
+                for i in range(0, len(ni), 50):
+                    await ws.send(json.dumps({
+                        "type": "subscribe", "channel": "market",
+                        "assets_ids": ni[i:i + 50]
+                    }))
+                logger.info("Nouveaux tokens : %d", len(ni))
+
+            # Purge expired markets so the token dict doesn't grow indefinitely.
+            expired = [tid for tid, ts in list(state.tokens.items())
+                       if ts.market_ended and ts.market_id not in state.open_trades]
+            for tid in expired:
+                ts = state.tokens.pop(tid, None)
+                if ts:
+                    state.market_tokens.pop(ts.market_id, None)
+                    state.signalled.discard(ts.market_id)
+            if expired:
+                logger.info("Tokens expires purges : %d", len(expired))
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("Refresh marches erreur : %s", e)
+
+
 async def _run_ws(state, session):
     """
     One WebSocket session: fetch markets, subscribe to their tokens, then
-    process messages until the connection drops or a refresh cycle triggers
-    a clean reconnect.
+    process messages until the connection drops.
 
-    The 90-second recv() timeout is intentional and expected: during quiet
-    market periods (between 5-minute candles) no messages arrive for tens of
-    seconds. A timeout here triggers a clean reconnect, not an error.
+    Market discovery runs in _market_refresh_loop (background task) so the
+    recv loop is never blocked during the Gamma API HTTP poll.
 
-    Every MARKET_REFRESH seconds we re-poll the Gamma API to discover newly
-    created markets and subscribe any new tokens without dropping the existing
-    connection. Expired markets (>5s past end time) are cleaned up to keep the
-    token dict from growing indefinitely across a long session.
+    The recv() timeout is 30s with continue rather than break: ping_interval=20
+    / ping_timeout=10 already detects dead connections via WebSocket ping/pong,
+    so a recv timeout just means no market messages arrived — normal between
+    5-minute candles. We only reconnect if all tracked markets have expired.
     """
     markets = await fetch_markets(session)
     if not markets:
@@ -713,69 +743,48 @@ async def _run_ws(state, session):
     logger.info("Souscription %d tokens...", len(all_token_ids))
 
     async with websockets.connect(POLY_WS_URL, ping_interval=20, ping_timeout=10) as ws:
-        # The WebSocket API caps subscriptions at 50 tokens per message.
         for i in range(0, len(all_token_ids), 50):
             await ws.send(json.dumps({
                 "type": "subscribe", "channel": "market",
                 "assets_ids": all_token_ids[i:i + 50]
             }))
-        lr = ld = time.time()  # timestamps of last refresh and last dashboard print
+        ld = time.time()
         logger.info("WebSocket connecte")
+        refresh_task = asyncio.create_task(_market_refresh_loop(state, session, ws))
 
-        while True:
-            try:
-                raw = await asyncio.wait_for(ws.recv(), timeout=90)
-            except asyncio.TimeoutError:
-                # Expected during calm market periods. Reconnect to refresh subscriptions.
-                logger.warning("WS timeout — reconnexion")
-                break
-            except:
-                break
-
-            now = time.time()
-
-            # Periodic market refresh: discover new markets and clean up expired ones.
-            if now - lr >= MARKET_REFRESH:
-                lr = now
-                nm = await fetch_markets(session)
-                ni = []
-                for m in nm:
-                    ni.extend(register_market(state, m))
-                if ni:
-                    # Subscribe only the newly discovered tokens; existing ones are already active.
-                    for i in range(0, len(ni), 50):
-                        await ws.send(json.dumps({
-                            "type": "subscribe", "channel": "market",
-                            "assets_ids": ni[i:i + 50]
-                        }))
-                    logger.info("Nouveaux tokens : %d", len(ni))
-
-                # Remove expired markets that have no open trade so state doesn't grow forever.
-                for tid in [t for t, ts in list(state.tokens.items())
-                            if ts.market_ended and ts.market_id not in state.open_trades]:
-                    ts = state.tokens.pop(tid, None)
-                    if ts:
-                        state.market_tokens.pop(ts.market_id, None)
-                        state.signalled.discard(ts.market_id)
-
-                if not [t for t in state.tokens.values() if not t.market_ended]:
-                    logger.warning("Aucun token actif — reconnexion")
-                    await asyncio.sleep(15)
+        try:
+            while True:
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=30)
+                except asyncio.TimeoutError:
+                    # Normal during quiet periods — ping/pong handles keepalive.
+                    if not any(not t.market_ended for t in state.tokens.values()):
+                        logger.warning("Aucun token actif — reconnexion")
+                        break
+                    continue
+                except:
                     break
 
-            if now - ld >= DASHBOARD_INTERVAL:
-                ld = now
-                print_dashboard(state)
+                now = time.time()
+                if now - ld >= DASHBOARD_INTERVAL:
+                    ld = now
+                    print_dashboard(state)
 
+                try:
+                    msgs = json.loads(raw)
+                    if isinstance(msgs, dict): msgs = [msgs]
+                except:
+                    continue
+
+                for msg in msgs:
+                    p = parse_book_message(msg)
+                    if p: await handle_book_update(state, p)
+        finally:
+            refresh_task.cancel()
             try:
-                msgs = json.loads(raw)
-                if isinstance(msgs, dict): msgs = [msgs]
-            except:
-                continue
-
-            for msg in msgs:
-                p = parse_book_message(msg)
-                if p: await handle_book_update(state, p)
+                await refresh_task
+            except asyncio.CancelledError:
+                pass
 
 
 # ─── STARTUP ─────────────────────────────────────────────────────────────────

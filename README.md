@@ -114,11 +114,26 @@ See **[INSTALL](INSTALL)** for the full installation guide, including requiremen
 bash scripts/run_tests.sh
 ```
 
-The suite runs 71 tests covering: fee calculation, WebSocket message parsing, OBI computation, market registration, all 8 signal entry guards (including the daily stop-loss), trade resolution (WIN/LOSS/expiry), PnL calculation, and crash-recovery state restore. No network access or credentials are required — an in-memory SQLite database is used for every test.
+The suite runs 99 tests (71 for the live bot, 28 for the backtest engine) covering: fee calculation, WebSocket message parsing, OBI computation, market registration, all 8 signal entry guards (including the daily stop-loss), trade resolution (WIN/LOSS/expiry), PnL calculation, crash-recovery state restore, and all backtest signal/resolution/parameter paths. No network access or credentials are required — an in-memory SQLite database is used for every test.
+
+## Backtest
+
+Replay historical `snapshots` data against configurable strategy parameters:
+
+```bash
+python3 scripts/backtest.py                        # default parameters
+python3 scripts/backtest.py --threshold 0.95       # custom threshold
+python3 scripts/backtest.py --detail               # print per-trade table
+python3 scripts/backtest.py --compare              # compare vs actual bot trades
+python3 scripts/backtest.py --sweep                # grid search (135 combinations)
+POLYMARKET_DIR=~/mybot python3 scripts/backtest.py # custom database path
+```
 
 ## Notes
 
-- WebSocket timeouts at ~90s during quiet periods are **normal** — the bot reconnects automatically
+- WebSocket recv timeouts at ~30s during quiet periods are **normal** — `ping_interval=20` keepalives maintain the connection; the bot reconnects only when all tracked markets have expired
+- Market refresh (Gamma API polling every 90s) runs as a **background async task** so WebSocket message processing is never blocked during HTTP calls
+- The Gamma API query uses `tag_id=102892` (the `5M` tag) to pre-filter server-side to 5-minute markets only, reducing each poll from potentially thousands of markets to ~12–20 in a **single API call** (no pagination)
 - If `POLY_PRIVATE_KEY` is not set, orders are simulated (no on-chain execution)
 - Signals can be infrequent during low-volatility BTC periods — this is expected
 - Do not modify `SIGNAL_THRESHOLD` (0.96) without re-running the full backtest
