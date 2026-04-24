@@ -57,7 +57,11 @@ Installation
 
 Exécuter le script d'installation depuis la racine du dépôt :
 
-  bash scripts/install.sh [répertoire_installation]
+  bash scripts/install.sh [répertoire_installation] [--with-tests]
+
+Options :
+  --with-tests   Copie aussi tests/ et scripts/backtest.py, puis lance
+                 la suite complète de tests (99 tests) juste après l'installation.
 
 Ce script va :
   - Installer les packages système (python3, pip, venv, sqlite3)

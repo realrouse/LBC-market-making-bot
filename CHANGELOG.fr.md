@@ -8,6 +8,10 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ## [Non publié]
 
+### Fonctionnalité
+- `scripts/install.sh` — nouveau flag `--with-tests` : copie `tests/` et `scripts/backtest.py` dans le répertoire d'installation et lance immédiatement la suite complète de 99 tests ; fonctionne avec n'importe quel chemin d'installation ; usage : `bash scripts/install.sh ~/polymarket --with-tests`
+- `INSTALL` / `INSTALL.fr` — option `--with-tests` documentée
+
 ### Refactorisation
 - `bot/api_polymarket.py` — nouvel adaptateur API Polymarket : tout le code spécifique à l'exchange extrait de `live_bot.py` dans un module dédié (`get_markets`, `post_order`, `parse_book_update`, `compute_fee`, `get_market_id/question/end_ts/start_ts/up_token/down_token`, `make_subscribe_msg`, `WS_URL`, `WS_BATCH_SIZE`, `FEE_RATE`). Pour cibler un autre exchange à l'avenir, il suffira de créer `api_<exchange>.py` avec la même interface publique et de modifier l'unique ligne d'import dans `live_bot.py`.
 - `bot/live_bot.py` — importe `api_polymarket as api` ; toutes les constantes et fonctions spécifiques Polymarket remplacées par des appels `api.xxx()` ; `register_market` utilise `api.get_market_id/question/etc.` ; `enter_live_trade` appelle `api.compute_fee` et `api.post_order` ; la boucle WebSocket utilise `api.WS_URL`, `api.WS_BATCH_SIZE`, `api.make_subscribe_msg`, `api.get_markets`, `api.parse_book_update` ; imports de haut niveau inutilisés supprimés (`hashlib`, `hmac`, `uuid`)

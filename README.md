@@ -14,7 +14,7 @@ Automated trading bot for [Polymarket](https://polymarket.com) prediction market
 - **SQLite persistence** (WAL mode) — all trades and 5-second price snapshots are stored; state survives crashes and restarts
 - **Crash recovery** — restores unresolved trades from the database on startup; rebuilds capital from historical PnL
 - **Backtest engine** — replays `snapshots` data against any parameter set; supports grid search across 135 combinations
-- **99-test suite** — covers signal guards, resolution paths, fee calculation, WebSocket parsing, and state restore; no network or credentials required
+- **99-test suite** — covers signal guards, resolution paths, fee calculation, WebSocket parsing, and state restore; no network or credentials required; deployable to any target with `--with-tests`
 - **Optional HTML status page** — bot writes a self-refreshing page (configurable path, optional HTTP Basic Auth) — [see preview](docs/status_example.html)
 - **Pluggable exchange API** — all Polymarket-specific code lives in `bot/api_polymarket.py`; swapping exchanges requires only a new adapter file and a single import change in `live_bot.py`
 - **Simulation mode** — if `POLY_PRIVATE_KEY` is unset, orders are simulated without any on-chain execution

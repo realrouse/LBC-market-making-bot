@@ -6,10 +6,23 @@
 #    1. Argument positionnel : bash scripts/install.sh ~/polymarket
 #    2. Variable d'environnement : POLYMARKET_DIR=~/polymarket bash scripts/install.sh
 #    3. Valeur par défaut : /opt/polymarket-live
+#
+#  Options :
+#    --with-tests   copie aussi tests/ et scripts/backtest.py
 # ═══════════════════════════════════════════════════════════════════
 set -e
 
-INSTALL_DIR="${1:-${POLYMARKET_DIR:-/opt/polymarket-live}}"
+WITH_TESTS=0
+ARGS=()
+for arg in "$@"; do
+    if [ "$arg" = "--with-tests" ]; then
+        WITH_TESTS=1
+    else
+        ARGS+=("$arg")
+    fi
+done
+
+INSTALL_DIR="${ARGS[0]:-${POLYMARKET_DIR:-/opt/polymarket-live}}"
 INSTALL_DIR="$(eval echo "$INSTALL_DIR")"   # développe ~ si présent
 
 echo "=== Répertoire d'installation : $INSTALL_DIR ==="
@@ -45,9 +58,28 @@ echo "=== Vérification syntaxe ==="
 "$INSTALL_DIR/venv/bin/python3" -c "import ast; ast.parse(open('$INSTALL_DIR/live_bot.py').read()); print('live_bot.py : SYNTAXE OK')"
 "$INSTALL_DIR/venv/bin/python3" -c "import ast; ast.parse(open('$INSTALL_DIR/api_polymarket.py').read()); print('api_polymarket.py : SYNTAXE OK')"
 
+if [ "$WITH_TESTS" = "1" ]; then
+    echo "=== Copie des fichiers de test ==="
+    mkdir -p "$INSTALL_DIR/tests" "$INSTALL_DIR/scripts"
+    cp tests/test_bot.py      "$INSTALL_DIR/tests/test_bot.py"
+    cp tests/test_backtest.py "$INSTALL_DIR/tests/test_backtest.py"
+    cp scripts/backtest.py    "$INSTALL_DIR/scripts/backtest.py"
+    cp scripts/run_tests.sh   "$INSTALL_DIR/scripts/run_tests.sh"
+    echo "=== Lancement des tests ==="
+    cd "$INSTALL_DIR"
+    POLYMARKET_DIR="$INSTALL_DIR" "$INSTALL_DIR/venv/bin/python3" \
+        -W ignore::ResourceWarning -m unittest discover tests/ -v
+    cd - > /dev/null
+fi
+
 echo ""
 echo "=== Installation terminée dans $INSTALL_DIR ==="
 echo ""
 echo "ÉTAPES SUIVANTES :"
 echo "1. Prépare ton wallet : POLYMARKET_DIR=\"$INSTALL_DIR\" python3 scripts/setup.py"
 echo "2. Lance le bot      : POLYMARKET_DIR=\"$INSTALL_DIR\" bash scripts/start_bot.sh"
+if [ "$WITH_TESTS" = "1" ]; then
+echo ""
+echo "Tests : cd \"$INSTALL_DIR\" && POLYMARKET_DIR=\"$INSTALL_DIR\" venv/bin/python3 -W ignore::ResourceWarning -m unittest discover tests/ -v"
+echo "Backtest : cd \"$INSTALL_DIR\" && POLYMARKET_DIR=\"$INSTALL_DIR\" venv/bin/python3 scripts/backtest.py"
+fi

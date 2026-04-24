@@ -55,7 +55,11 @@ Installation
 
 Run the install script from the repository root:
 
-  bash scripts/install.sh [install_dir]
+  bash scripts/install.sh [install_dir] [--with-tests]
+
+Options:
+  --with-tests   Also copy tests/ and scripts/backtest.py, then run the
+                 full test suite (99 tests) immediately after installation.
 
 This will:
   - Install system packages (python3, pip, venv, sqlite3)
