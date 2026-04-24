@@ -15,7 +15,7 @@ Automated trading bot for [Polymarket](https://polymarket.com) prediction market
 - **Crash recovery** — restores unresolved trades from the database on startup; rebuilds capital from historical PnL
 - **Backtest engine** — replays `snapshots` data against any parameter set; supports grid search across 135 combinations
 - **99-test suite** — covers signal guards, resolution paths, fee calculation, WebSocket parsing, and state restore; no network or credentials required
-- **Optional HTML status page** — bot writes a self-refreshing page (configurable path, optional HTTP Basic Auth)
+- **Optional HTML status page** — bot writes a self-refreshing page (configurable path, optional HTTP Basic Auth) — [see preview](docs/status_example.html)
 - **Simulation mode** — if `POLY_PRIVATE_KEY` is unset, orders are simulated without any on-chain execution
 
 ## Strategy

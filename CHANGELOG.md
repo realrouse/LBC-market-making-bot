@@ -9,6 +9,10 @@ All notable changes to this project are documented here.
 ## [Unreleased]
 
 ### Documentation
+- `docs/status_example.html` — static HTML preview of the web status page; illustrates the dark-themed layout, metric cards (capital, PnL, win rate, trades, daily stats, open positions), and resolved-trade table with WIN/LOSS colour coding
+- `README.md` / `README.fr.md` — link to `docs/status_example.html` added to the "Optional HTML status page" feature bullet
+- `INSTALL` / `INSTALL.fr` — reference to `docs/status_example.html` added in the "Web Status Page" section
+- `README.md` / `README.fr.md` — Features section added listing all 11 bot capabilities with one-line descriptions
 - `INSTALL` / `INSTALL.fr` — expanded "Web Status Page" section with step-by-step Apache prerequisites: `a2enmod userdir auth_basic authn_file`, `AllowOverride AuthConfig` directive, two options for granting the `www-data` process read access to `.htpasswd` (`chmod o+r` vs `usermod -aG`); nginx note explaining that `.htaccess` is not processed and showing the equivalent `auth_basic` / `auth_basic_user_file` server block; note about custom paths outside `~/public_html`
 - `README.md` / `README.fr.md` — `webstatuspage_*` config table entries updated to mention required Apache modules, `AllowOverride AuthConfig`, `www-data` permissions, and nginx manual configuration in the description column
 

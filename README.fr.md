@@ -15,7 +15,7 @@ Bot de trading automatisé pour les marchés de prédiction [Polymarket](https:/
 - **Reprise après crash** — restaure les trades non résolus depuis la base de données au démarrage ; reconstruit le capital à partir du PnL historique
 - **Moteur de backtest** — rejoue les données `snapshots` avec n'importe quel jeu de paramètres ; supporte la recherche en grille sur 135 combinaisons
 - **Suite de 99 tests** — couvre les gardes du signal, les chemins de résolution, le calcul des frais, le parsing WebSocket et la restauration d'état ; aucun réseau ni credentials requis
-- **Page de statut HTML optionnelle** — le bot écrit une page auto-rafraîchissante (chemin configurable, authentification HTTP Basic Auth optionnelle)
+- **Page de statut HTML optionnelle** — le bot écrit une page auto-rafraîchissante (chemin configurable, authentification HTTP Basic Auth optionnelle) — [aperçu visuel](docs/status_example.html)
 - **Mode simulation** — si `POLY_PRIVATE_KEY` n'est pas défini, les ordres sont simulés sans aucune exécution on-chain
 
 ## Stratégie

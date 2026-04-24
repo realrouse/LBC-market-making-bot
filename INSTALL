@@ -105,6 +105,7 @@ Enable it by adding these keys to config.json:
 
 The page displays capital, total and daily PnL, win rate, open positions,
 and the 10 most recent resolved trades. It auto-refreshes every 60 s.
+A static preview of the rendered page is available at docs/status_example.html.
 
 The bot creates the HTML directory automatically and writes a .htaccess in
 it. The .htpasswd file is stored at POLYMARKET_DIR/.webstatus_htpasswd
