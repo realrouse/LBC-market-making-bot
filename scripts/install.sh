@@ -22,7 +22,8 @@ echo "=== Création des répertoires ==="
 mkdir -p "$INSTALL_DIR"
 
 echo "=== Copie du bot ==="
-cp bot/live_bot.py "$INSTALL_DIR/live_bot.py"
+cp bot/live_bot.py       "$INSTALL_DIR/live_bot.py"
+cp bot/api_polymarket.py "$INSTALL_DIR/api_polymarket.py"
 
 echo "=== Création de l'environnement virtuel ==="
 python3 -m venv "$INSTALL_DIR/venv"
@@ -41,7 +42,8 @@ EOF
 chmod +x "$INSTALL_DIR/run.sh"
 
 echo "=== Vérification syntaxe ==="
-"$INSTALL_DIR/venv/bin/python3" -c "import ast; ast.parse(open('$INSTALL_DIR/live_bot.py').read()); print('SYNTAXE OK')"
+"$INSTALL_DIR/venv/bin/python3" -c "import ast; ast.parse(open('$INSTALL_DIR/live_bot.py').read()); print('live_bot.py : SYNTAXE OK')"
+"$INSTALL_DIR/venv/bin/python3" -c "import ast; ast.parse(open('$INSTALL_DIR/api_polymarket.py').read()); print('api_polymarket.py : SYNTAXE OK')"
 
 echo ""
 echo "=== Installation terminée dans $INSTALL_DIR ==="

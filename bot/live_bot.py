@@ -23,7 +23,7 @@ Launch:
   bash scripts/start_bot.sh     # starts the bot in the background
 """
 
-import asyncio, hashlib, hmac, json, logging, os, sqlite3, time, uuid
+import asyncio, json, logging, os, sqlite3, time
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 import aiohttp, websockets
@@ -36,26 +36,23 @@ DB_PATH     = os.path.join(INSTALL_DIR, "live.db")
 LOG_PATH    = os.path.join(INSTALL_DIR, "live.log")
 CONFIG_PATH = os.path.join(INSTALL_DIR, "config.json")
 
+# ─── EXCHANGE API ─────────────────────────────────────────────────────────────
+# sys.path insert finds api_polymarket.py in the same directory as this file,
+# whether running standalone from INSTALL_DIR or imported as bot.live_bot from
+# the project root. To target a different exchange, replace the import below.
+import sys as _sys
+_sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import api_polymarket as api
+
 # ─── CAPITAL & FEES ──────────────────────────────────────────────────────────
 CAPITAL_START = 100.0   # starting capital in USD (restored from DB on restart)
 STAKE         = 10.0    # USD risked per trade
-FEE_RATE      = 0.02    # Polymarket taker fee (2%)
 GAS_FEE_USD   = 0.03    # estimated Polygon gas cost per order
-
-# ─── API ENDPOINTS ───────────────────────────────────────────────────────────
-POLY_GAMMA_URL     = "https://gamma-api.polymarket.com/markets"
-POLY_GAMMA_HEADERS = {"User-Agent": "Mozilla/5.0"}
-POLY_GAMMA_PARAMS  = {"closed": "false", "limit": 100, "tag_id": 102892}  # 102892 = "5M" tag
-POLY_CLOB_URL      = "https://clob.polymarket.com"
-POLY_WS_URL        = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
-
-# ─── MARKET FILTER ───────────────────────────────────────────────────────────
-# Both forms appear in Polymarket's question text depending on the API version.
-BTC_5M_KEYWORDS = ("bitcoin up or down", "btc up or down")
 
 # ─── SIGNAL PARAMETERS — DO NOT MODIFY (backtested on 1663 trades) ───────────
 # These values were tuned on historical data and must not be changed without
 # re-running the full backtest. 98.3% win rate at these exact thresholds.
+# FEE_RATE (2%) lives in api_polymarket.py as it is exchange-specific.
 SIGNAL_THRESHOLD   = 0.96   # minimum best_bid to trigger a trade entry
 ENTRY_MAX          = 0.998  # reject if ask is already at settlement price
 MIN_SECS_REMAINING = 45     # refuse entry if the market ends in under 45s
@@ -164,77 +161,6 @@ def init_db():
     logger.info("DB initialisee : %s", DB_PATH)
     return conn
 
-# ─── MARKET METADATA HELPERS ─────────────────────────────────────────────────
-# The Gamma API uses several different field names across API versions.
-# These helpers try all known variants so the bot works with older responses too.
-
-def get_market_end_ts_ms(market):
-    """Return market end time as Unix milliseconds, or 0.0 if not found."""
-    for key in ("endDate", "end_time", "end_date_iso", "end_date"):
-        val = market.get(key)
-        if val:
-            try:
-                return datetime.fromisoformat(str(val).replace("Z", "+00:00")).timestamp() * 1000
-            except:
-                pass
-    return 0.0
-
-def get_market_start_ts_ms(market):
-    """Return market start time as Unix milliseconds, or 0.0 if not found."""
-    for key in ("startDate", "start_time", "start_date_iso", "start_date"):
-        val = market.get(key)
-        if val:
-            try:
-                return datetime.fromisoformat(str(val).replace("Z", "+00:00")).timestamp() * 1000
-            except:
-                pass
-    return 0.0
-
-def get_up_token_id(market):
-    """
-    Extract the UP/YES token ID from a market object.
-    clobTokenIds[0] is always the YES/UP token per Polymarket convention.
-    Falls back to scanning the tokens array by outcome label.
-    """
-    clob = market.get("clobTokenIds")
-    if clob:
-        ids = json.loads(clob) if isinstance(clob, str) else clob
-        if ids: return str(ids[0])
-    tokens = market.get("tokens") or []
-    for t in tokens:
-        if isinstance(t, dict) and t.get("outcome", "").lower() in ("yes", "up"):
-            return t.get("token_id")
-    if tokens:
-        t = tokens[0]
-        return t.get("token_id") if isinstance(t, dict) else str(t)
-    return None
-
-def get_down_token_id(market):
-    """
-    Extract the DOWN/NO token ID from a market object.
-    clobTokenIds[1] is always the NO/DOWN token per Polymarket convention.
-    """
-    clob = market.get("clobTokenIds")
-    if clob:
-        ids = json.loads(clob) if isinstance(clob, str) else clob
-        if len(ids) > 1: return str(ids[1])
-    tokens = market.get("tokens") or []
-    for t in tokens:
-        if isinstance(t, dict) and t.get("outcome", "").lower() in ("no", "down"):
-            return t.get("token_id")
-    if len(tokens) > 1:
-        t = tokens[1]
-        return t.get("token_id") if isinstance(t, dict) else str(t)
-    return None
-
-def compute_fee(ep, tb):
-    """
-    Polymarket taker fee: 2% of min(price, 1-price) × token_count.
-    The fee is charged on the closer leg to 0.5 to avoid double-charging
-    near-certain outcomes. At entry_price=0.97, fee ≈ 2% × 0.03 × tokens.
-    """
-    return FEE_RATE * min(ep, 1.0 - ep) * tb
-
 
 # ─── STATE CLASSES ────────────────────────────────────────────────────────────
 
@@ -314,105 +240,7 @@ class BotState:
         return (self.wins / t * 100) if t else 0.0
 
 
-# ─── ORDER PLACEMENT ─────────────────────────────────────────────────────────
-
-async def place_limit_order(session, token_id, price, size_usdc):
-    """
-    Submit a LIMIT BUY order to the Polymarket CLOB.
-
-    py_clob_client is imported lazily here rather than at module level for two
-    reasons:
-      1. The library is only installed inside the venv, not system Python.
-      2. Importing it forces an sysconfig path injection that should happen as
-         late as possible, after logging and DB are already initialized.
-
-    Returns the order ID string on success, a "sim_..." string if running
-    without a private key (dry-run mode), or None on error.
-    """
-    if not PRIVATE_KEY:
-        logger.warning("POLY_PRIVATE_KEY non definie — ordre simule")
-        return f"sim_{uuid.uuid4().hex[:12]}"
-    try:
-        import sys as _sys, sysconfig as _sc
-        _venv = os.path.join(INSTALL_DIR, "venv")
-        # Resolve the site-packages path dynamically so the bot works on any
-        # Python version (3.11, 3.12, 3.13…) without hardcoding the minor version.
-        _site = _sc.get_path("purelib", vars={"platbase": _venv, "base": _venv})
-        _sys.path.insert(0, _site)
-        from py_clob_client.client import ClobClient
-        from py_clob_client.constants import POLYGON
-        from py_clob_client.clob_types import OrderArgs
-        _client = ClobClient(POLY_CLOB_URL, key=PRIVATE_KEY, chain_id=POLYGON,
-                            signature_type=0)
-        _client.set_api_creds(_client.create_or_derive_api_creds())
-        size_tokens = round(size_usdc / price, 4)
-        _order = _client.create_order(OrderArgs(
-            token_id=token_id, price=round(price, 4),
-            size=size_tokens, side="BUY"))
-        _resp = _client.post_order(_order)
-        oid = str(_resp.get("orderID") or _resp.get("id") or "")
-        if oid: return oid
-        logger.warning("CLOB resp sans orderID: %s", _resp)
-        return None
-    except Exception as e:
-        logger.error("Erreur CLOB : %s", e)
-        return None
-
-
-# ─── WEBSOCKET MESSAGE PARSING ────────────────────────────────────────────────
-
-def parse_book_message(msg):
-    """
-    Parse a Polymarket WebSocket message into a normalized price snapshot.
-
-    The feed emits three event types we care about:
-      "book"             — full order book snapshot (sent on subscribe)
-      "price_change"     — incremental update when a level changes
-      "last_trade_price" — last executed trade price
-
-    OBI (Order Book Imbalance) = (bid_vol - ask_vol) / (bid_vol + ask_vol)
-    Computed over the top 5 levels on each side. A negative OBI means the
-    ask side is heavier, indicating sell pressure — we reject entries where
-    OBI < OBI_REJECT_THRESH (-0.50).
-
-    Returns a dict with token_id, best_bid, best_ask, spread, bid_vol,
-    ask_vol, obi, or None if the message is irrelevant or malformed.
-    """
-    event_type = msg.get("event_type") or msg.get("type", "")
-    if event_type not in ("book", "price_change", "last_trade_price"):
-        return None
-    token_id = str(msg.get("asset_id") or "")
-    if not token_id: return None
-
-    def pl(lst):
-        """Parse a list of price-level entries into (price, size) tuples."""
-        r = []
-        for item in lst:
-            try:
-                if isinstance(item, dict):
-                    p, s = float(item.get("price", 0)), float(item.get("size", 0))
-                elif isinstance(item, (list, tuple)) and len(item) >= 2:
-                    p, s = float(item[0]), float(item[1])
-                else:
-                    continue
-                if p > 0 and s > 0: r.append((p, s))
-            except:
-                continue
-        return r
-
-    bids = sorted(pl(msg.get("bids") or []), reverse=True)  # highest price first
-    asks = sorted(pl(msg.get("asks") or []))                 # lowest price first
-    if not bids and not asks: return None
-    bb = bids[0][0] if bids else 0.0
-    ba = asks[0][0] if asks else 1.0
-    bv = sum(s for _, s in bids[:5])  # aggregate top-5 bid depth
-    av = sum(s for _, s in asks[:5])  # aggregate top-5 ask depth
-    tv = bv + av
-    obi = (bv - av) / tv if tv > 0 else 0.0
-    return {
-        "token_id": token_id, "best_bid": bb, "best_ask": ba,
-        "spread": max(0.0, ba - bb), "bid_vol": bv, "ask_vol": av, "obi": obi
-    }
+# ─── WEBSOCKET MESSAGE HANDLING ───────────────────────────────────────────────
 
 async def handle_book_update(state, parsed):
     """Apply a parsed book update to the token's state, then check for signals."""
@@ -492,11 +320,14 @@ async def enter_live_trade(state, ts):
     now_ms = int(time.time() * 1000)
     ep = ts.best_ask                        # entry price = best available ask
     tb = STAKE / ep if ep > 0 else 0        # tokens bought at this price
-    fee = compute_fee(ep, tb)
+    fee = api.compute_fee(ep, tb)
     cost = STAKE + fee
     oid = None
     if state.session:
-        oid = await place_limit_order(state.session, ts.token_id, ep, STAKE)
+        oid = await api.post_order(
+            state.session, ts.token_id, ep, STAKE,
+            private_key=PRIVATE_KEY, install_dir=INSTALL_DIR,
+        )
     cur = state.conn.execute(
         "INSERT INTO trades ("
         "market_id, token_id, direction, question, "
@@ -741,60 +572,21 @@ def write_web_status(state):
 
 # ─── MARKET DISCOVERY ─────────────────────────────────────────────────────────
 
-async def fetch_markets(session):
-    """
-    Fetch active BTC 5-minute markets from the Polymarket Gamma API.
-
-    CRITICAL: The ±6-minute temporal window filter is mandatory.
-    Without it, the Gamma API returns expired markets whose order books
-    still show stale prices that falsely trigger the signal.
-
-    tag_id=102892 ("5M") pre-filters server-side to 5-minute markets only,
-    reducing the response from potentially thousands of markets to ~12-20
-    (BTC/ETH/XRP/SOL for the current ±6 min window). A single API call
-    suffices — pagination is no longer needed.
-    BTC_5M_KEYWORDS is kept as a safety net for other 5M assets.
-    """
-    try:
-        params = dict(POLY_GAMMA_PARAMS)
-        now_utc = datetime.now(timezone.utc)
-        params["end_date_min"] = (now_utc - timedelta(minutes=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        params["end_date_max"] = (now_utc + timedelta(minutes=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        async with session.get(
-            POLY_GAMMA_URL, headers=POLY_GAMMA_HEADERS, params=params,
-            timeout=aiohttp.ClientTimeout(total=15)
-        ) as resp:
-            if resp.status != 200:
-                logger.warning("Gamma API erreur : %d", resp.status)
-                return []
-            data = await resp.json(content_type=None)
-        batch = data if isinstance(data, list) else data.get("data", data.get("markets", []))
-        results = [
-            m for m in batch
-            if any(kw in m.get("question", "").lower() for kw in BTC_5M_KEYWORDS)
-        ]
-        logger.info("Marches BTC 5-min : %d", len(results))
-        return results
-    except Exception as e:
-        logger.warning("Fetch erreur : %s", e)
-        return []
-
 def register_market(state, market):
     """
     Add a market's UP and DOWN tokens to the state if not already tracked.
     Skips markets that have already ended. Returns a list of newly added token IDs
     so the caller can subscribe them to the WebSocket.
     """
-    mid = (market.get("conditionId") or market.get("condition_id") or
-           market.get("market_id") or market.get("id") or "")
+    mid = api.get_market_id(market)
     if not mid: return []
-    up = get_up_token_id(market)
-    dn = get_down_token_id(market)
+    up = api.get_up_token_id(market)
+    dn = api.get_down_token_id(market)
     if not up or not dn: return []
-    sm = get_market_start_ts_ms(market)
-    em = get_market_end_ts_ms(market)
+    sm = api.get_market_start_ts_ms(market)
+    em = api.get_market_end_ts_ms(market)
     if em and time.time() * 1000 > em: return []
-    q = market.get("question", "")[:80]
+    q = api.get_market_question(market)[:80]
     new = []
     for tid, d in ((up, "UP"), (dn, "DOWN")):
         if tid not in state.tokens:
@@ -824,23 +616,20 @@ async def ws_loop(state, session):
 
 async def _market_refresh_loop(state, session, ws):
     """
-    Background task: polls the Gamma API every MARKET_REFRESH seconds and
+    Background task: polls the exchange API every MARKET_REFRESH seconds and
     subscribes newly discovered tokens while the main recv loop continues
     processing messages uninterrupted.
     """
     while True:
         await asyncio.sleep(MARKET_REFRESH)
         try:
-            nm = await fetch_markets(session)
+            nm = await api.get_markets(session)
             ni = []
             for m in nm:
                 ni.extend(register_market(state, m))
             if ni:
-                for i in range(0, len(ni), 50):
-                    await ws.send(json.dumps({
-                        "type": "subscribe", "channel": "market",
-                        "assets_ids": ni[i:i + 50]
-                    }))
+                for i in range(0, len(ni), api.WS_BATCH_SIZE):
+                    await ws.send(api.make_subscribe_msg(ni[i:i + api.WS_BATCH_SIZE]))
                 logger.info("Nouveaux tokens : %d", len(ni))
 
             # Purge expired markets so the token dict doesn't grow indefinitely.
@@ -865,14 +654,14 @@ async def _run_ws(state, session):
     process messages until the connection drops.
 
     Market discovery runs in _market_refresh_loop (background task) so the
-    recv loop is never blocked during the Gamma API HTTP poll.
+    recv loop is never blocked during the exchange API HTTP poll.
 
     The recv() timeout is 30s with continue rather than break: ping_interval=20
     / ping_timeout=10 already detects dead connections via WebSocket ping/pong,
     so a recv timeout just means no market messages arrived — normal between
     5-minute candles. We only reconnect if all tracked markets have expired.
     """
-    markets = await fetch_markets(session)
+    markets = await api.get_markets(session)
     if not markets:
         logger.warning("Aucun marche — attente 30s")
         await asyncio.sleep(30)
@@ -896,12 +685,9 @@ async def _run_ws(state, session):
     state.session = session
     logger.info("Souscription %d tokens...", len(all_token_ids))
 
-    async with websockets.connect(POLY_WS_URL, ping_interval=20, ping_timeout=10) as ws:
-        for i in range(0, len(all_token_ids), 50):
-            await ws.send(json.dumps({
-                "type": "subscribe", "channel": "market",
-                "assets_ids": all_token_ids[i:i + 50]
-            }))
+    async with websockets.connect(api.WS_URL, ping_interval=20, ping_timeout=10) as ws:
+        for i in range(0, len(all_token_ids), api.WS_BATCH_SIZE):
+            await ws.send(api.make_subscribe_msg(all_token_ids[i:i + api.WS_BATCH_SIZE]))
         ld = time.time()
         logger.info("WebSocket connecte")
         refresh_task = asyncio.create_task(_market_refresh_loop(state, session, ws))
@@ -916,7 +702,7 @@ async def _run_ws(state, session):
                         logger.warning("Aucun token actif — reconnexion")
                         break
                     continue
-                except:
+                except Exception:
                     break
 
                 now = time.time()
@@ -927,11 +713,11 @@ async def _run_ws(state, session):
                 try:
                     msgs = json.loads(raw)
                     if isinstance(msgs, dict): msgs = [msgs]
-                except:
+                except Exception:
                     continue
 
                 for msg in msgs:
-                    p = parse_book_message(msg)
+                    p = api.parse_book_update(msg)
                     if p: await handle_book_update(state, p)
         finally:
             refresh_task.cancel()

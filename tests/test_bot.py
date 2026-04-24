@@ -21,6 +21,7 @@ os.makedirs("/tmp/polymarket-test", exist_ok=True)
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bot"))
 import live_bot as bot
+import api_polymarket as api_poly
 
 
 # ── Test helpers ──────────────────────────────────────────────────────────────
@@ -71,7 +72,7 @@ def insert_trade(conn, market_id="mkt1", token_id="tok1", direction="UP",
                  stake=10.0, best_ask=0.975):
     """Insert an open trade row and return its rowid."""
     tokens_bought = stake / best_ask
-    fee = bot.compute_fee(best_ask, tokens_bought)
+    fee = api_poly.compute_fee(best_ask, tokens_bought)
     cur = conn.execute(
         "INSERT INTO trades "
         "(market_id, token_id, direction, stake, tokens_bought, fee, capital_before, resolved) "
@@ -88,21 +89,21 @@ class TestComputeFee(unittest.TestCase):
 
     def test_known_value_at_96(self):
         # fee = 0.02 × min(0.96, 0.04) × 10 = 0.02 × 0.04 × 10 = 0.008
-        self.assertAlmostEqual(bot.compute_fee(0.96, 10), 0.008)
+        self.assertAlmostEqual(api_poly.compute_fee(0.96, 10), 0.008)
 
     def test_symmetric_around_half(self):
         # fee at price p should equal fee at price (1−p)
         self.assertAlmostEqual(
-            bot.compute_fee(0.30, 100),
-            bot.compute_fee(0.70, 100),
+            api_poly.compute_fee(0.30, 100),
+            api_poly.compute_fee(0.70, 100),
         )
 
     def test_maximum_at_half(self):
         # fee per token is highest when the price is closest to 0.5
-        self.assertGreater(bot.compute_fee(0.50, 10), bot.compute_fee(0.96, 10))
+        self.assertGreater(api_poly.compute_fee(0.50, 10), api_poly.compute_fee(0.96, 10))
 
     def test_zero_tokens(self):
-        self.assertAlmostEqual(bot.compute_fee(0.96, 0), 0.0)
+        self.assertAlmostEqual(api_poly.compute_fee(0.96, 0), 0.0)
 
 
 # ── parse_book_message ────────────────────────────────────────────────────────
@@ -119,37 +120,37 @@ class TestParseBookMessage(unittest.TestCase):
         }
 
     def test_parses_book_event(self):
-        r = bot.parse_book_message(self._msg())
+        r = api_poly.parse_book_update(self._msg())
         self.assertIsNotNone(r)
         self.assertEqual(r["token_id"], "tok1")
         self.assertAlmostEqual(r["best_bid"], 0.96)
         self.assertAlmostEqual(r["best_ask"], 0.97)
 
     def test_parses_price_change_event(self):
-        self.assertIsNotNone(bot.parse_book_message(self._msg(event_type="price_change")))
+        self.assertIsNotNone(api_poly.parse_book_update(self._msg(event_type="price_change")))
 
     def test_parses_last_trade_price_event(self):
-        self.assertIsNotNone(bot.parse_book_message(self._msg(event_type="last_trade_price")))
+        self.assertIsNotNone(api_poly.parse_book_update(self._msg(event_type="last_trade_price")))
 
     def test_ignores_unknown_event_type(self):
-        self.assertIsNone(bot.parse_book_message(self._msg(event_type="tick")))
+        self.assertIsNone(api_poly.parse_book_update(self._msg(event_type="tick")))
 
     def test_ignores_missing_asset_id(self):
         msg = {"event_type": "book", "bids": [], "asks": []}
-        self.assertIsNone(bot.parse_book_message(msg))
+        self.assertIsNone(api_poly.parse_book_update(msg))
 
     def test_ignores_empty_book(self):
-        self.assertIsNone(bot.parse_book_message(self._msg(bids=[], asks=[])))
+        self.assertIsNone(api_poly.parse_book_update(self._msg(bids=[], asks=[])))
 
     def test_spread_computed_correctly(self):
-        r = bot.parse_book_message(self._msg(
+        r = api_poly.parse_book_update(self._msg(
             bids=[{"price": "0.95", "size": "10"}],
             asks=[{"price": "0.97", "size": "10"}],
         ))
         self.assertAlmostEqual(r["spread"], 0.02)
 
     def test_obi_balanced_book(self):
-        r = bot.parse_book_message(self._msg(
+        r = api_poly.parse_book_update(self._msg(
             bids=[{"price": "0.95", "size": "100"}],
             asks=[{"price": "0.96", "size": "100"}],
         ))
@@ -157,7 +158,7 @@ class TestParseBookMessage(unittest.TestCase):
 
     def test_obi_bid_heavy(self):
         # OBI = (300 − 100) / (300 + 100) = 0.5
-        r = bot.parse_book_message(self._msg(
+        r = api_poly.parse_book_update(self._msg(
             bids=[{"price": "0.95", "size": "300"}],
             asks=[{"price": "0.96", "size": "100"}],
         ))
@@ -165,7 +166,7 @@ class TestParseBookMessage(unittest.TestCase):
 
     def test_obi_ask_heavy(self):
         # OBI = (100 − 300) / (100 + 300) = -0.5
-        r = bot.parse_book_message(self._msg(
+        r = api_poly.parse_book_update(self._msg(
             bids=[{"price": "0.95", "size": "100"}],
             asks=[{"price": "0.96", "size": "300"}],
         ))
@@ -175,7 +176,7 @@ class TestParseBookMessage(unittest.TestCase):
         # 10 bid levels × 10 USD each; only top 5 should count
         bids = [{"price": str(round(0.95 - i * 0.01, 2)), "size": "10"} for i in range(10)]
         asks = [{"price": str(round(0.96 + i * 0.01, 2)), "size": "10"} for i in range(10)]
-        r = bot.parse_book_message(self._msg(bids=bids, asks=asks))
+        r = api_poly.parse_book_update(self._msg(bids=bids, asks=asks))
         self.assertAlmostEqual(r["bid_vol"], 50.0)
         self.assertAlmostEqual(r["ask_vol"], 50.0)
 
@@ -187,13 +188,13 @@ class TestParseBookMessage(unittest.TestCase):
             "bids": [["0.95", "100"]],
             "asks": [["0.96", "200"]],
         }
-        r = bot.parse_book_message(msg)
+        r = api_poly.parse_book_update(msg)
         self.assertIsNotNone(r)
         self.assertAlmostEqual(r["best_bid"], 0.95)
 
     def test_bids_sorted_descending(self):
         # Best bid = highest price, regardless of order in message
-        r = bot.parse_book_message(self._msg(
+        r = api_poly.parse_book_update(self._msg(
             bids=[
                 {"price": "0.90", "size": "10"},
                 {"price": "0.95", "size": "10"},
@@ -205,7 +206,7 @@ class TestParseBookMessage(unittest.TestCase):
 
     def test_asks_sorted_ascending(self):
         # Best ask = lowest price, regardless of order in message
-        r = bot.parse_book_message(self._msg(
+        r = api_poly.parse_book_update(self._msg(
             bids=[{"price": "0.93", "size": "10"}],
             asks=[
                 {"price": "0.99", "size": "10"},
@@ -229,40 +230,40 @@ class TestMarketHelpers(unittest.TestCase):
         }
 
     def test_end_ts_from_endDate(self):
-        self.assertGreater(bot.get_market_end_ts_ms(self._market()), 0)
+        self.assertGreater(api_poly.get_market_end_ts_ms(self._market()), 0)
 
     def test_end_ts_missing_returns_zero(self):
-        self.assertEqual(bot.get_market_end_ts_ms({}), 0.0)
+        self.assertEqual(api_poly.get_market_end_ts_ms({}), 0.0)
 
     def test_end_ts_tries_fallback_keys(self):
         market = {"end_date": "2026-04-23T20:00:00Z"}
-        self.assertGreater(bot.get_market_end_ts_ms(market), 0)
+        self.assertGreater(api_poly.get_market_end_ts_ms(market), 0)
 
     def test_up_token_from_clobTokenIds(self):
-        self.assertEqual(bot.get_up_token_id(self._market()), "up_tok")
+        self.assertEqual(api_poly.get_up_token_id(self._market()), "up_tok")
 
     def test_down_token_from_clobTokenIds(self):
-        self.assertEqual(bot.get_down_token_id(self._market()), "down_tok")
+        self.assertEqual(api_poly.get_down_token_id(self._market()), "down_tok")
 
     def test_up_token_from_tokens_array(self):
         market = {"tokens": [
             {"token_id": "yes_tok", "outcome": "Yes"},
             {"token_id": "no_tok",  "outcome": "No"},
         ]}
-        self.assertEqual(bot.get_up_token_id(market), "yes_tok")
+        self.assertEqual(api_poly.get_up_token_id(market), "yes_tok")
 
     def test_down_token_from_tokens_array(self):
         market = {"tokens": [
             {"token_id": "yes_tok", "outcome": "Yes"},
             {"token_id": "no_tok",  "outcome": "No"},
         ]}
-        self.assertEqual(bot.get_down_token_id(market), "no_tok")
+        self.assertEqual(api_poly.get_down_token_id(market), "no_tok")
 
     def test_up_token_missing_returns_none(self):
-        self.assertIsNone(bot.get_up_token_id({}))
+        self.assertIsNone(api_poly.get_up_token_id({}))
 
     def test_down_token_missing_returns_none(self):
-        self.assertIsNone(bot.get_down_token_id({}))
+        self.assertIsNone(api_poly.get_down_token_id({}))
 
 
 # ── TokenState computed properties ────────────────────────────────────────────

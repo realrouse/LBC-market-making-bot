@@ -1,0 +1,267 @@
+"""
+Polymarket API adapter — implements the generic exchange interface used by the
+live bot: get_markets, post_order, parse_book_update, compute_fee, and market
+metadata helpers.
+
+To add a new exchange in the future, create api_<exchange>.py with the same
+public API surface and change the single import line in live_bot.py.
+"""
+
+import json, logging, os, uuid
+from datetime import datetime, timezone, timedelta
+import aiohttp
+
+logger = logging.getLogger("live")
+
+# ─── ENDPOINTS ───────────────────────────────────────────────────────────────
+GAMMA_URL     = "https://gamma-api.polymarket.com/markets"
+GAMMA_HEADERS = {"User-Agent": "Mozilla/5.0"}
+GAMMA_PARAMS  = {"closed": "false", "limit": 100, "tag_id": 102892}  # 102892 = "5M" tag
+CLOB_URL      = "https://clob.polymarket.com"
+WS_URL        = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+WS_BATCH_SIZE = 50  # max token IDs per WebSocket subscribe message
+
+# BTC 5-minute market keyword filter (safety net after server-side tag filter)
+BTC_5M_KEYWORDS = ("bitcoin up or down", "btc up or down")
+
+# ─── FEE ─────────────────────────────────────────────────────────────────────
+# CRITICAL — backtested parameter (98.3% WR on 1663 trades). Do not modify
+# without re-running the full backtest.
+FEE_RATE = 0.02  # Polymarket taker fee: 2% of min(price, 1-price) × tokens
+
+
+def compute_fee(entry_price, tokens_bought):
+    """
+    Polymarket taker fee: 2% of min(price, 1-price) × token_count.
+    The fee is charged on the closer leg to 0.5 to avoid double-charging
+    near-certain outcomes. At entry_price=0.97, fee ≈ 2% × 0.03 × tokens.
+    """
+    return FEE_RATE * min(entry_price, 1.0 - entry_price) * tokens_bought
+
+
+# ─── MARKET METADATA ─────────────────────────────────────────────────────────
+# Polymarket uses several field names across API versions; each helper tries
+# all known variants so the bot works with older responses too.
+
+def get_market_id(market):
+    """Return the canonical market condition ID."""
+    return (market.get("conditionId") or market.get("condition_id") or
+            market.get("market_id") or market.get("id") or "")
+
+
+def get_market_question(market):
+    """Return the market question / title string."""
+    return market.get("question", "")
+
+
+def get_market_end_ts_ms(market):
+    """Return market end time as Unix milliseconds, or 0.0 if not found."""
+    for key in ("endDate", "end_time", "end_date_iso", "end_date"):
+        val = market.get(key)
+        if val:
+            try:
+                return datetime.fromisoformat(str(val).replace("Z", "+00:00")).timestamp() * 1000
+            except Exception:
+                pass
+    return 0.0
+
+
+def get_market_start_ts_ms(market):
+    """Return market start time as Unix milliseconds, or 0.0 if not found."""
+    for key in ("startDate", "start_time", "start_date_iso", "start_date"):
+        val = market.get(key)
+        if val:
+            try:
+                return datetime.fromisoformat(str(val).replace("Z", "+00:00")).timestamp() * 1000
+            except Exception:
+                pass
+    return 0.0
+
+
+def get_up_token_id(market):
+    """
+    Extract the UP/YES token ID from a market object.
+    clobTokenIds[0] is always the YES/UP token per Polymarket convention.
+    Falls back to scanning the tokens array by outcome label.
+    """
+    clob = market.get("clobTokenIds")
+    if clob:
+        ids = json.loads(clob) if isinstance(clob, str) else clob
+        if ids:
+            return str(ids[0])
+    tokens = market.get("tokens") or []
+    for t in tokens:
+        if isinstance(t, dict) and t.get("outcome", "").lower() in ("yes", "up"):
+            return t.get("token_id")
+    if tokens:
+        t = tokens[0]
+        return t.get("token_id") if isinstance(t, dict) else str(t)
+    return None
+
+
+def get_down_token_id(market):
+    """
+    Extract the DOWN/NO token ID from a market object.
+    clobTokenIds[1] is always the NO/DOWN token per Polymarket convention.
+    """
+    clob = market.get("clobTokenIds")
+    if clob:
+        ids = json.loads(clob) if isinstance(clob, str) else clob
+        if len(ids) > 1:
+            return str(ids[1])
+    tokens = market.get("tokens") or []
+    for t in tokens:
+        if isinstance(t, dict) and t.get("outcome", "").lower() in ("no", "down"):
+            return t.get("token_id")
+    if len(tokens) > 1:
+        t = tokens[1]
+        return t.get("token_id") if isinstance(t, dict) else str(t)
+    return None
+
+
+# ─── WEBSOCKET ────────────────────────────────────────────────────────────────
+
+def make_subscribe_msg(token_ids):
+    """Return a JSON string to subscribe to a batch of Polymarket token IDs."""
+    return json.dumps({"type": "subscribe", "channel": "market", "assets_ids": token_ids})
+
+
+# ─── ORDER BOOK ───────────────────────────────────────────────────────────────
+
+def parse_book_update(msg):
+    """
+    Parse a Polymarket WebSocket message into a normalized price snapshot.
+
+    The feed emits three event types we care about:
+      "book"             — full order book snapshot (sent on subscribe)
+      "price_change"     — incremental update when a level changes
+      "last_trade_price" — last executed trade price
+
+    OBI (Order Book Imbalance) = (bid_vol - ask_vol) / (bid_vol + ask_vol)
+    Computed over the top 5 levels on each side. A negative OBI means the
+    ask side is heavier, indicating sell pressure — entries are rejected when
+    OBI < OBI_REJECT_THRESH (-0.50).
+
+    Returns a dict with token_id, best_bid, best_ask, spread, bid_vol,
+    ask_vol, obi, or None if the message is irrelevant or malformed.
+    """
+    event_type = msg.get("event_type") or msg.get("type", "")
+    if event_type not in ("book", "price_change", "last_trade_price"):
+        return None
+    token_id = str(msg.get("asset_id") or "")
+    if not token_id:
+        return None
+
+    def pl(lst):
+        """Parse a list of price-level entries into (price, size) tuples."""
+        r = []
+        for item in lst:
+            try:
+                if isinstance(item, dict):
+                    p, s = float(item.get("price", 0)), float(item.get("size", 0))
+                elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                    p, s = float(item[0]), float(item[1])
+                else:
+                    continue
+                if p > 0 and s > 0:
+                    r.append((p, s))
+            except Exception:
+                continue
+        return r
+
+    bids = sorted(pl(msg.get("bids") or []), reverse=True)  # highest price first
+    asks = sorted(pl(msg.get("asks") or []))                 # lowest price first
+    if not bids and not asks:
+        return None
+    bb = bids[0][0] if bids else 0.0
+    ba = asks[0][0] if asks else 1.0
+    bv = sum(s for _, s in bids[:5])  # aggregate top-5 bid depth
+    av = sum(s for _, s in asks[:5])  # aggregate top-5 ask depth
+    tv = bv + av
+    obi = (bv - av) / tv if tv > 0 else 0.0
+    return {
+        "token_id": token_id, "best_bid": bb, "best_ask": ba,
+        "spread": max(0.0, ba - bb), "bid_vol": bv, "ask_vol": av, "obi": obi,
+    }
+
+
+# ─── MARKET DISCOVERY ─────────────────────────────────────────────────────────
+
+async def get_markets(session):
+    """
+    Fetch active BTC 5-minute markets from the Polymarket Gamma API.
+
+    CRITICAL: The ±6-minute temporal window filter is mandatory.
+    Without it, the Gamma API returns expired markets whose order books
+    still show stale prices that falsely trigger the signal.
+
+    tag_id=102892 ("5M") pre-filters server-side to 5-minute markets only,
+    reducing the response from potentially thousands of markets to ~12-20.
+    A single API call suffices — pagination is not needed.
+    BTC_5M_KEYWORDS is kept as a safety net for other 5M assets.
+    """
+    try:
+        params = dict(GAMMA_PARAMS)
+        now_utc = datetime.now(timezone.utc)
+        params["end_date_min"] = (now_utc - timedelta(minutes=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        params["end_date_max"] = (now_utc + timedelta(minutes=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        async with session.get(
+            GAMMA_URL, headers=GAMMA_HEADERS, params=params,
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as resp:
+            if resp.status != 200:
+                logger.warning("Gamma API erreur : %d", resp.status)
+                return []
+            data = await resp.json(content_type=None)
+        batch = data if isinstance(data, list) else data.get("data", data.get("markets", []))
+        results = [
+            m for m in batch
+            if any(kw in m.get("question", "").lower() for kw in BTC_5M_KEYWORDS)
+        ]
+        logger.info("Marches BTC 5-min : %d", len(results))
+        return results
+    except Exception as e:
+        logger.warning("Fetch erreur : %s", e)
+        return []
+
+
+# ─── ORDER PLACEMENT ──────────────────────────────────────────────────────────
+
+async def post_order(session, token_id, price, size_usdc, *, private_key, install_dir):
+    """
+    Submit a LIMIT BUY order to the Polymarket CLOB.
+
+    py_clob_client is imported lazily: the library is only installed inside
+    the venv, not system Python, and its import forces an sysconfig path
+    injection that should happen as late as possible.
+
+    Returns the order ID string on success, a "sim_..." string in dry-run
+    mode (no private key), or None on error.
+    """
+    if not private_key:
+        logger.warning("POLY_PRIVATE_KEY non definie — ordre simule")
+        return f"sim_{uuid.uuid4().hex[:12]}"
+    try:
+        import sys as _sys, sysconfig as _sc
+        _venv = os.path.join(install_dir, "venv")
+        # Resolve site-packages dynamically to support any Python minor version.
+        _site = _sc.get_path("purelib", vars={"platbase": _venv, "base": _venv})
+        _sys.path.insert(0, _site)
+        from py_clob_client.client import ClobClient
+        from py_clob_client.constants import POLYGON
+        from py_clob_client.clob_types import OrderArgs
+        _client = ClobClient(CLOB_URL, key=private_key, chain_id=POLYGON, signature_type=0)
+        _client.set_api_creds(_client.create_or_derive_api_creds())
+        size_tokens = round(size_usdc / price, 4)
+        _order = _client.create_order(OrderArgs(
+            token_id=token_id, price=round(price, 4),
+            size=size_tokens, side="BUY"))
+        _resp = _client.post_order(_order)
+        oid = str(_resp.get("orderID") or _resp.get("id") or "")
+        if oid:
+            return oid
+        logger.warning("CLOB resp sans orderID: %s", _resp)
+        return None
+    except Exception as e:
+        logger.error("Erreur CLOB : %s", e)
+        return None

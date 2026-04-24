@@ -8,6 +8,12 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ## [Non publié]
 
+### Refactorisation
+- `bot/api_polymarket.py` — nouvel adaptateur API Polymarket : tout le code spécifique à l'exchange extrait de `live_bot.py` dans un module dédié (`get_markets`, `post_order`, `parse_book_update`, `compute_fee`, `get_market_id/question/end_ts/start_ts/up_token/down_token`, `make_subscribe_msg`, `WS_URL`, `WS_BATCH_SIZE`, `FEE_RATE`). Pour cibler un autre exchange à l'avenir, il suffira de créer `api_<exchange>.py` avec la même interface publique et de modifier l'unique ligne d'import dans `live_bot.py`.
+- `bot/live_bot.py` — importe `api_polymarket as api` ; toutes les constantes et fonctions spécifiques Polymarket remplacées par des appels `api.xxx()` ; `register_market` utilise `api.get_market_id/question/etc.` ; `enter_live_trade` appelle `api.compute_fee` et `api.post_order` ; la boucle WebSocket utilise `api.WS_URL`, `api.WS_BATCH_SIZE`, `api.make_subscribe_msg`, `api.get_markets`, `api.parse_book_update` ; imports de haut niveau inutilisés supprimés (`hashlib`, `hmac`, `uuid`)
+- `tests/test_bot.py` — `TestComputeFee`, `TestParseBookMessage`, `TestMarketHelpers` importent désormais depuis `api_polymarket` directement ; l'utilitaire `insert_trade` utilise `api_poly.compute_fee`
+- `scripts/install.sh` — copie `bot/api_polymarket.py` aux côtés de `live_bot.py` ; vérification syntaxique étendue aux deux fichiers
+
 ### Documentation
 - `docs/status_example.html` — aperçu HTML statique de la page de statut web ; illustre la mise en page en thème sombre, les cartes de métriques (capital, PnL, taux de victoire, trades, stats journalières, positions ouvertes) et le tableau des trades résolus avec coloration WIN/LOSS
 - `README.md` / `README.fr.md` — lien vers `docs/status_example.html` ajouté dans la ligne de fonctionnalité "Page de statut HTML optionnelle"
