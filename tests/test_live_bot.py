@@ -141,7 +141,7 @@ class TestCheckSignal(unittest.IsolatedAsyncioTestCase):
 
     def _signal_token(self, **kw) -> lb.TokenState:
         """Token that passes all entry guards under default parameters."""
-        defaults = dict(bid=0.97, ask=0.975, ask_vol=50.0, obi=0.0, end_offset_secs=60)
+        defaults = {"bid": 0.97, "ask": 0.975, "ask_vol": 50.0, "obi": 0.0, "end_offset_secs": 60}
         defaults.update(kw)
         return _make_token(**defaults)
 
