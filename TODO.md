@@ -3,7 +3,7 @@
 ## Roadmap v0.3
 
 ### Opérationnel / infrastructure
-- **systemd unit** — fichier `.service` pour redémarrage automatique du bot après reboot VPS
+- ~~**systemd unit**~~ — ✅ done (`scripts/tradinebotte.service` + `scripts/install_service.sh`)
 - **Notifications Telegram** — alerte sur chaque trade, déclenchement du stop-loss journalier, reconnexion WebSocket
 - **Health-check HTTP** — mini serveur local (ex. port 9090) répondant avec les stats brutes ; monitorable depuis un reverse proxy ou un cron externe
 

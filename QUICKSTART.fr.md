@@ -62,8 +62,19 @@ Tous les fichiers sont isolés dans `/tmp/tradinebotte-sim`. Aucun ordre n'est p
 
 ---
 
+## Redémarrage automatique au reboot (systemd)
+
+```bash
+bash scripts/install_service.sh   # génère le fichier d'unité et affiche les commandes
+```
+
+Puis suivre les commandes `sudo` affichées pour activer le service.
+
+---
+
 ## Arrêter le bot
 
 ```bash
-pkill -f live_bot.py
+pkill -f live_bot.py                    # si lancé manuellement
+sudo systemctl stop tradinebotte        # si lancé via systemd
 ```

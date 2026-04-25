@@ -205,6 +205,38 @@ your web server is configured to serve that directory.
 TRADINEBOTTE_DIR=~/tradinebotte bash scripts/start_bot.sh
 ```
 
+### Auto-start with systemd (recommended for VPS)
+
+Run the generator script once after installation:
+
+```bash
+TRADINEBOTTE_DIR=~/tradinebotte bash scripts/install_service.sh
+```
+
+It validates the install, writes a ready-to-use unit file to `/tmp/tradinebotte.service`,
+and prints the exact commands to enable it:
+
+```bash
+sudo cp /tmp/tradinebotte.service /etc/systemd/system/tradinebotte.service
+sudo systemctl daemon-reload
+sudo systemctl enable tradinebotte   # start on boot
+sudo systemctl start tradinebotte    # start now
+```
+
+Useful systemd commands:
+
+```bash
+sudo systemctl status tradinebotte
+sudo systemctl stop tradinebotte
+sudo systemctl restart tradinebotte
+journalctl -u tradinebotte -f        # live systemd logs
+tail -f ~/tradinebotte/live.log      # bot application logs
+```
+
+The service restarts automatically on failure (`Restart=on-failure`, 30 s delay,
+max 5 restarts per 5 minutes). On reboot the bot comes back up once the network
+is online (`After=network-online.target`).
+
 **Flags:**
 - *(no flag)* — normal mode: log writes are asynchronous (daemon thread, never blocks the event loop)
 - `--no-log` — suppress the log file entirely for minimum disk I/O; SQLite DB (trades + snapshots) is unaffected; combine with `--simulate` to keep stdout output

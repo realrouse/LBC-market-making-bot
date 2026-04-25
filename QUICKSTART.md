@@ -62,8 +62,19 @@ All file I/O goes to `/tmp/tradinebotte-sim`. No orders are placed on-chain.
 
 ---
 
+## Auto-restart on reboot (systemd)
+
+```bash
+bash scripts/install_service.sh   # generates unit file and prints install commands
+```
+
+Then follow the printed `sudo` commands to enable the service.
+
+---
+
 ## Stop the bot
 
 ```bash
-pkill -f live_bot.py
+pkill -f live_bot.py        # if running manually
+sudo systemctl stop tradinebotte  # if running via systemd
 ```
