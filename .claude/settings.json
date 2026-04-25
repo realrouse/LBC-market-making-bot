@@ -7,7 +7,7 @@
           {
             "type": "command",
             "if": "Bash(git commit*)",
-            "command": "echo '{\"hookSpecificOutput\": {\"hookEventName\": \"PostToolUse\", \"additionalContext\": \"REMINDER: This project maintains 6 bilingual files that must always be updated together in the same commit: README.md + README.fr.md, CHANGELOG.md + CHANGELOG.fr.md, INSTALL + INSTALL.fr. Never modify one without updating its counterpart.\"}}'",
+            "command": "echo '{\"hookSpecificOutput\": {\"hookEventName\": \"PostToolUse\", \"additionalContext\": \"REMINDER: This project maintains 6 bilingual files that must always be updated together in the same commit: README.md + README.fr.md, CHANGELOG.md + CHANGELOG.fr.md, INSTALL.md + INSTALL.fr.md. Never modify one without updating its counterpart.\"}}'",
             "statusMessage": "Vérification synchronisation EN/FR..."
           }
         ]
