@@ -78,7 +78,7 @@ bash scripts/install.sh [install_dir] [--with-tests]
 **Options:**
 - `--with-tests` — Also copy `tests/`, `scripts/backtest.py`, and
   `data/backtest_sample_btc5m_range_2026.db`, then run the
-  full test suite (99 tests) immediately after installation.
+  full test suite (108 tests) immediately after installation.
   The backtest uses `live.db` only if it contains ≥ 100 snapshots;
   otherwise it falls back to the bundled sample dataset automatically.
 

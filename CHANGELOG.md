@@ -15,8 +15,8 @@ All notable changes to this project are documented here.
 
 ### Code Quality
 - `bot/live_bot.py` — full type annotations: all 28 functions and class methods now carry parameter and return type hints (`dict[str, Any]`, `list[str]`, `Optional[float]`, `sqlite3.Connection`, `aiohttp.ClientSession`, etc.); the websocket `ws` parameter uses `Any` to stay version-agnostic across websockets releases
-- `tests/test_live_bot.py` — 30 new unit tests covering `TokenState` properties, `BotState.win_rate`, all 11 `check_signal` guards (including daily stop-loss via in-memory DB), `check_resolution` (WIN/LOSS/expiry), `close_trade` (capital, DB flag, counters, pnl_net), `restore_state_from_db`, `_htpasswd_sha1`, `generate_status_html`, and `handle_book_update` integration; uses in-memory SQLite and `unittest.IsolatedAsyncioTestCase` — no network or credentials required
-- `.github/workflows/tests.yml` — new CI workflow: runs `unittest discover` on Python 3.10, 3.11, and 3.12 on every push
+- `tests/test_bot.py` — 9 new tests added (71 → 80): `TestHtpasswd` (SHA1 prefix, known value, collision), `TestGenerateStatusHtml` (capital, table, win rate, empty state), `TestHandleBookUpdate` (state update from parsed message, unknown token ignored); uses in-memory SQLite and `unittest.IsolatedAsyncioTestCase` — no network or credentials required
+- `.github/workflows/tests.yml` — new CI workflow: runs `unittest discover` on Python 3.10, 3.11, and 3.12 on every push; total suite: 108 tests (80 bot + 28 backtest)
 
 ### Feature
 - `bot/live_bot.py` — latency tracking: each trade emits a `[LATENCY]` log line with `signal_ms` (WebSocket message received → order decision, includes all signal guards and daily-PnL SQLite query) and `order_rtt_ms` (CLOB API HTTP round-trip); timestamps use `time.monotonic()` and are passed as an optional `_t_ws` parameter through `handle_book_update` → `check_signal` → `enter_live_trade`; zero overhead on non-trade messages
