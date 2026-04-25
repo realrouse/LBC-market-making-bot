@@ -1,0 +1,59 @@
+[FORMAT]
+# 100 chars (pylint default) is tight for async code with long identifiers.
+max-line-length=120
+
+[MESSAGES CONTROL]
+disable=
+    # ── Naming ────────────────────────────────────────────────────────────────
+    # UPPER_CASE is standard Python convention for module-level constants
+    # (SIGNAL_THRESHOLD, STAKE, etc.); pylint expects snake_case for everything.
+    C0103,
+
+    # ── Import style ──────────────────────────────────────────────────────────
+    # "import a, b, c" on one line is intentional to keep the header compact.
+    C0410,
+    # api_polymarket is imported after sys.path.insert — wrong-import-position
+    # is a false positive when path manipulation must precede the import.
+    C0413,
+    # Lazy imports inside functions (py_clob_client) avoid the startup cost of
+    # loading the full Polymarket SDK on every bot invocation, including tests.
+    C0415,
+
+    # ── Line / statement style ────────────────────────────────────────────────
+    # "if x: return" one-liners are intentional; they keep signal-guard chains
+    # visually tight and easy to scan.
+    C0321,
+    # Parentheses around multi-line expressions sometimes improve readability.
+    C0325,
+
+    # ── Class / function complexity ───────────────────────────────────────────
+    # BotState and TokenState are state-machine data holders; they legitimately
+    # carry more than 7 attributes.
+    R0902,
+    # Pure data holder classes (TokenState) have few public methods by design.
+    R0903,
+    # Several async functions take more than 5 arguments; splitting them would
+    # hurt readability without improving correctness.
+    R0913,
+    R0914,
+    R0917,
+
+    # ── Exception handling ────────────────────────────────────────────────────
+    # The WebSocket/HTTP retry loops catch broad exceptions intentionally:
+    # network code raises many different exception types and we want the bot
+    # to reconnect rather than crash on any unexpected error.
+    W0718,
+    # try: ... except CancelledError: raise  is the correct asyncio pattern to
+    # let task cancellation propagate; pylint sees it as a pointless re-raise.
+    W0706,
+
+    # ── Unused arguments ─────────────────────────────────────────────────────
+    # Adapter functions (api_polymarket.post_order, backtest summarise) keep
+    # unused parameters to maintain a uniform interface across exchange adapters
+    # and backtest configurations.
+    W0613,
+
+    # ── Test-specific ────────────────────────────────────────────────────────
+    # Tests legitimately access private helpers (_fee, _live_db_usable) to
+    # verify internal logic without exposing it as part of the public API.
+    W0212,

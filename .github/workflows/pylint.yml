@@ -20,8 +20,10 @@ jobs:
         python -m pip install --upgrade pip
         # Install pylint and the bot's runtime dependencies so pylint can
         # resolve all imports (aiohttp, websockets, web3, py_clob_client).
-        # py-clob-client depends on web3 and pulls it in automatically.
-        pip install pylint aiohttp websockets py-clob-client
+        # web3 is listed explicitly because scripts/setup.py imports it
+        # directly; py-clob-client also depends on it but may not always
+        # pull it in as a top-level resolvable package.
+        pip install pylint aiohttp websockets web3 py-clob-client
     - name: Analysing the code with pylint
       run: |
         pylint $(git ls-files '*.py')

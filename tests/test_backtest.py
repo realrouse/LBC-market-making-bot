@@ -5,8 +5,8 @@ Builds synthetic snapshot rows in memory to exercise the replay engine
 without requiring a real live.db.
 """
 
-import os, sys, sqlite3, time, unittest
-from datetime import datetime, timezone, timedelta
+import os, sys, time, unittest
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 import backtest as bt

@@ -24,7 +24,7 @@ Launch:
 """
 
 import asyncio, json, logging, logging.handlers, os, queue, sqlite3, sys, time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Optional
 import aiohttp, websockets
 
@@ -83,7 +83,7 @@ def load_config():
     to environment variables for individual keys.
     """
     if os.path.exists(CONFIG_PATH):
-        with open(CONFIG_PATH) as f:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
             return json.load(f)
     return {}
 
@@ -94,7 +94,7 @@ def load_strategy(path):
     """Load strategy parameters from a JSON file. Returns None if not found."""
     if not os.path.exists(path):
         return None
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -550,12 +550,12 @@ def setup_htaccess(html_path):
     htpasswd_path = os.path.join(INSTALL_DIR, ".webstatus_htpasswd")
     htaccess_path = os.path.join(os.path.dirname(html_path), ".htaccess")
     # Always refresh .htpasswd so password changes take effect.
-    with open(htpasswd_path, "w") as f:
+    with open(htpasswd_path, "w", encoding="utf-8") as f:
         f.write(f"{WEBSTATUS_USER}:{_htpasswd_sha1(WEBSTATUS_PASSWORD)}\n")
     os.chmod(htpasswd_path, 0o640)
     # Write .htaccess only if absent; editing it manually should be preserved.
     if not os.path.exists(htaccess_path):
-        with open(htaccess_path, "w") as f:
+        with open(htaccess_path, "w", encoding="utf-8") as f:
             f.write(
                 f'AuthType Basic\n'
                 f'AuthName "Tradinebot Status"\n'
@@ -601,7 +601,7 @@ def generate_status_html(state):
         "COUNT(*) FROM trades WHERE resolved=1 AND signal_ts_ms>=?",
         (today_ms,)
     ).fetchone()
-    daily_pnl, daily_wins, daily_count = daily_row
+    daily_pnl, _, daily_count = daily_row  # daily_wins not displayed in current template
 
     open_count  = len(state.open_trades)
     trade_rows  = _status_html_trade_rows(state.conn)

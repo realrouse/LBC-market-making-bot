@@ -18,7 +18,7 @@ Usage:
 """
 
 import os, re, sys
-from statistics import mean, median, quantiles
+from statistics import mean, quantiles
 
 # ── Resolve log path ──────────────────────────────────────────────────────────
 if len(sys.argv) > 1:
@@ -38,7 +38,7 @@ _PATTERN = re.compile(
 
 records = []
 try:
-    with open(LOG_PATH) as f:
+    with open(LOG_PATH, encoding="utf-8") as f:
         for line in f:
             m = _PATTERN.search(line)
             if m:

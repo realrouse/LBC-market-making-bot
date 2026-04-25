@@ -170,7 +170,7 @@ config = {
     "api_passphrase": creds.api_passphrase,
 }
 os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
-with open(CONFIG_PATH, "w") as f:
+with open(CONFIG_PATH, "w", encoding="utf-8") as f:
     json.dump(config, f, indent=2)
 # 0o600: owner read+write only — prevents other OS users from reading the file.
 os.chmod(CONFIG_PATH, 0o600)
