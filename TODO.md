@@ -18,8 +18,8 @@
 - **Collecte automatique de snapshots** — en mode `--simulate`, enregistrer les snapshots en continu pour enrichir le dataset de backtest
 
 ### Qualité de code
-- **Fermeture des connexions SQLite dans les tests** — corriger les `ResourceWarning` émis lors du dernier run
-- **mypy strict** — les type hints sont en place ; activer la vérification statique en CI est la prochaine étape naturelle
+- ~~**Fermeture des connexions SQLite dans les tests**~~ — ✅ done (setUp/tearDown + addCleanup sur toutes les classes)
+- ~~**mypy strict**~~ — ✅ done (0 erreur, workflow CI `.github/workflows/mypy.yml`)
 
 ---
 
