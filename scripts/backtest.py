@@ -6,16 +6,18 @@ The snapshots table records price data every 5 seconds per tracked token.
 This script replays those snapshots chronologically, applies the signal logic
 with configurable parameters, and produces simulated trade statistics.
 
-Database resolution (first match wins):
+Database resolution when no --db / --all flag is given (first match wins):
     1. $TRADINEBOTTE_DIR/live.db  (or ~/tradinebotte/live.db by default)
     2. data/backtest_sample_btc5m_range_2026.db  (bundled sample dataset)
 
 Usage:
-    python3 scripts/backtest.py                          # default parameters
-    python3 scripts/backtest.py --threshold 0.95         # custom threshold
-    python3 scripts/backtest.py --threshold 0.95 --min-secs 30 --detail
-    python3 scripts/backtest.py --sweep                  # grid search
-    TRADINEBOTTE_DIR=~/tradinebotte python3 scripts/backtest.py
+    python3 scripts/backtest.py                              # default DB
+    python3 scripts/backtest.py --db ~/tradinebotte/live.db  # explicit file
+    python3 scripts/backtest.py --db data/session_a.db data/session_b.db
+    python3 scripts/backtest.py --db data/*.db               # shell glob
+    python3 scripts/backtest.py --all                        # all data/*.db + live.db
+    python3 scripts/backtest.py --all --threshold 0.95 --detail
+    python3 scripts/backtest.py --sweep                      # grid search
 """
 
 import argparse, os, sqlite3, sys
@@ -44,6 +46,32 @@ def _live_db_usable(path: str) -> bool:
         return False
 
 DB_PATH = _live_db if _live_db_usable(_live_db) else _sample_db
+
+def _collect_dbs(db_args: Optional[List[str]], scan_all: bool) -> List[str]:
+    """
+    Resolve the ordered list of database files to replay.
+
+    Priority:
+      --all              → all .db files in data/, then live.db if usable
+      --db path [path…]  → exactly those paths (shell expands globs)
+      (neither)          → default DB_PATH (live.db → sample fallback)
+    """
+    if scan_all:
+        data_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data"
+        )
+        found = sorted(
+            os.path.join(data_dir, f)
+            for f in os.listdir(data_dir)
+            if f.endswith(".db")
+        ) if os.path.isdir(data_dir) else []
+        # Prepend live.db when it has enough data so it appears first.
+        if _live_db_usable(_live_db) and _live_db not in found:
+            found = [_live_db] + found
+        return found
+    if db_args:
+        return list(db_args)
+    return [DB_PATH]
 
 FEE_RATE    = 0.02    # Polymarket taker fee rate
 GAS_FEE_USD = 0.03    # estimated gas cost per order
@@ -252,6 +280,39 @@ def print_detail(trades: List[SimTrade]) -> None:
               f"  ${t.pnl_net:>+6.2f}")
 
 
+def print_aggregate(results: List[dict]) -> None:
+    """
+    Print a cross-file summary after replaying multiple databases.
+
+    Each file's capital starts at params.capital_start (independent sessions).
+    Win rate is computed over all resolved trades across all files combined.
+    Max drawdown shown is the worst single-session drawdown (not global).
+    """
+    n_files       = len(results)
+    total_snaps   = sum(r["n_snapshots"] for r in results)
+    total_wins    = sum(r["stats"]["wins"] for r in results)
+    total_losses  = sum(r["stats"]["losses"] for r in results)
+    total_open    = sum(r["stats"]["open"] for r in results)
+    total_pnl     = sum(r["stats"]["total_pnl"] for r in results)
+    resolved      = total_wins + total_losses
+    win_rate      = (total_wins / resolved * 100) if resolved else 0.0
+    worst_dd      = max((r["stats"]["max_drawdown"] for r in results), default=0.0)
+
+    print("=" * 62)
+    print(f"  AGGREGATE — {n_files} file(s)  {total_snaps:,} snapshots")
+    print("  (capital reset per file — independent sessions)")
+    print("=" * 62)
+    print(f"  Trades   : {resolved + total_open}")
+    print(f"  Wins     : {total_wins}")
+    print(f"  Losses   : {total_losses}")
+    if total_open:
+        print(f"  Open     : {total_open}  (unresolved at end of data)")
+    print(f"  Win rate : {win_rate:.1f}%")
+    print(f"  Total PnL: ${total_pnl:+.2f}")
+    print(f"  Worst DD : ${worst_dd:.2f}  (worst single session)")
+    print("=" * 62)
+
+
 def print_actual(conn: sqlite3.Connection, params: Params, n_snapshots: int) -> None:
     """Print actual bot performance from the trades table for comparison."""
     row = conn.execute(
@@ -306,11 +367,13 @@ def load_rows(conn: sqlite3.Connection) -> list:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Backtest strategy parameters against live.db snapshots.",
+        description="Backtest strategy parameters against snapshot databases.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--db",         default=DB_PATH,  metavar="PATH",
-                        help="path to live.db")
+    parser.add_argument("--db", nargs="+", default=None, metavar="PATH",
+                        help="one or more .db files to replay (the shell expands globs)")
+    parser.add_argument("--all",        action="store_true",
+                        help="replay all .db files in data/ and live.db if usable")
     parser.add_argument("--threshold",  type=float, default=0.96,
                         help="entry signal threshold (best_bid >= X)")
     parser.add_argument("--min-secs",   type=float, default=45.0,
@@ -324,74 +387,94 @@ def main():
     parser.add_argument("--detail",     action="store_true",
                         help="print individual simulated trade table")
     parser.add_argument("--compare",    action="store_true",
-                        help="show actual bot results alongside backtest")
+                        help="show actual bot results alongside backtest (single file only)")
     parser.add_argument("--sweep",      action="store_true",
                         help="grid search over multiple parameter combinations")
     args = parser.parse_args()
 
-    if not os.path.exists(args.db):
-        print(f"ERROR: database not found: {args.db}")
-        print("The bot must run at least one session to populate snapshots.")
+    db_paths = _collect_dbs(args.db, args.all)
+    if not db_paths:
+        print("No database files found. Use --db PATH, --all, or run the bot first.")
         sys.exit(1)
 
-    db_label = "(sample)" if args.db == _sample_db else "(live)"
-    print(f"DB: {args.db} {db_label}")
-    conn = sqlite3.connect(args.db)
-    n_snapshots = conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
+    multi = len(db_paths) > 1
 
-    if n_snapshots == 0:
-        print("No snapshots in database. Run the bot first to collect data.")
-        conn.close()
-        sys.exit(1)
+    # Strategy parameters shared across all files.
+    p = Params(
+        signal_threshold=args.threshold,
+        min_secs_remaining=args.min_secs,
+        min_ask_vol=args.min_ask,
+        obi_reject_thresh=args.obi,
+        stake=args.stake,
+    )
 
-    rows = load_rows(conn)
+    file_results: List[dict] = []  # accumulate for aggregate summary
 
-    if args.sweep:
-        # Grid search over the four most impactful parameters.
-        thresholds = [0.94, 0.95, 0.96, 0.97, 0.98]
-        min_secs   = [30,   45,   60]
-        min_asks   = [5,    10,   20]
-        obi_vals   = [-0.75, -0.50, -0.25]
-        combos     = len(thresholds) * len(min_secs) * len(min_asks) * len(obi_vals)
+    for db_path in db_paths:
+        if not os.path.exists(db_path):
+            print(f"WARNING: not found, skipping: {db_path}")
+            continue
 
-        print(f"Grid search: {len(thresholds)}×{len(min_secs)}×{len(min_asks)}"
-              f"×{len(obi_vals)} = {combos} combinations")
-        print(f"Snapshots  : {n_snapshots:,}")
+        tag = "(sample)" if db_path == _sample_db else ("(live)" if db_path == _live_db else "")
+        print(f"DB: {db_path} {tag}".rstrip())
 
-        results = []
-        for thr, secs, ask, obi in product(thresholds, min_secs, min_asks, obi_vals):
-            p = Params(signal_threshold=thr, min_secs_remaining=secs,
-                       min_ask_vol=ask, obi_reject_thresh=obi, stake=args.stake)
+        conn        = sqlite3.connect(db_path)
+        n_snapshots = conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
+
+        if n_snapshots == 0:
+            print("  No snapshots — skipping.")
+            conn.close()
+            continue
+
+        rows = load_rows(conn)
+
+        if args.sweep:
+            # Grid search — run per file; no cross-file aggregate for sweep.
+            thresholds = [0.94, 0.95, 0.96, 0.97, 0.98]
+            min_secs   = [30,   45,   60]
+            min_asks   = [5,    10,   20]
+            obi_vals   = [-0.75, -0.50, -0.25]
+            combos     = len(thresholds) * len(min_secs) * len(min_asks) * len(obi_vals)
+            print(f"Grid search: {len(thresholds)}×{len(min_secs)}×{len(min_asks)}"
+                  f"×{len(obi_vals)} = {combos} combinations")
+            print(f"Snapshots  : {n_snapshots:,}")
+
+            sweep_results = []
+            for thr, secs, ask, obi in product(thresholds, min_secs, min_asks, obi_vals):
+                sp = Params(signal_threshold=thr, min_secs_remaining=secs,
+                            min_ask_vol=ask, obi_reject_thresh=obi, stake=args.stake)
+                trades, capital_final = run_backtest(rows, sp)
+                stats = summarize(trades, sp, capital_final)
+                sweep_results.append((sp, stats))
+            print_sweep_table(sweep_results)
+
+        else:
             trades, capital_final = run_backtest(rows, p)
             stats = summarize(trades, p, capital_final)
-            results.append((p, stats))
+            # Show filename in label when replaying multiple files.
+            label = f"BACKTEST — {os.path.basename(db_path)}" if multi else "BACKTEST"
+            print(_stat_block(label, p, stats, n_snapshots))
 
-        print_sweep_table(results)
+            if args.detail:
+                print_detail(trades)
 
-        if args.compare:
-            print()
-            print_actual(conn, Params(), n_snapshots)
+            # --compare only makes sense for a single file (needs a trades table).
+            if args.compare and not multi:
+                print()
+                print_actual(conn, p, n_snapshots)
 
-    else:
-        p = Params(
-            signal_threshold=args.threshold,
-            min_secs_remaining=args.min_secs,
-            min_ask_vol=args.min_ask,
-            obi_reject_thresh=args.obi,
-            stake=args.stake,
-        )
-        trades, capital_final = run_backtest(rows, p)
-        stats = summarize(trades, p, capital_final)
-        print(_stat_block("BACKTEST", p, stats, n_snapshots))
+            file_results.append({
+                "label":       os.path.basename(db_path),
+                "stats":       stats,
+                "n_snapshots": n_snapshots,
+            })
 
-        if args.detail:
-            print_detail(trades)
+        conn.close()
 
-        if args.compare:
-            print()
-            print_actual(conn, p, n_snapshots)
-
-    conn.close()
+    # Print cross-file aggregate when more than one file was replayed.
+    if multi and len(file_results) > 1 and not args.sweep:
+        print()
+        print_aggregate(file_results)
 
 
 if __name__ == "__main__":
