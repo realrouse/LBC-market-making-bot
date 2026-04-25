@@ -30,7 +30,7 @@ Automated trading bot for [Polymarket](https://polymarket.com) prediction market
 
 ## Database
 
-The bot uses **SQLite** (`live.db`) with WAL journal mode for concurrent read access (the monitor script can query while the bot writes). The database file is stored at `POLYMARKET_DIR/live.db` (default: `/opt/polymarket-live/live.db`).
+The bot uses **SQLite** (`live.db`) with WAL journal mode for concurrent read access (the monitor script can query while the bot writes). The database file is stored at `POLYMARKET_DIR/live.db` (default: `~/polymarket/live.db`).
 
 ### Table: `trades`
 

@@ -5,7 +5,7 @@
 #  Répertoire d'installation (par ordre de priorité) :
 #    1. Argument positionnel : bash scripts/install.sh ~/polymarket
 #    2. Variable d'environnement : POLYMARKET_DIR=~/polymarket bash scripts/install.sh
-#    3. Valeur par défaut : /opt/polymarket-live
+#    3. Valeur par défaut : ~/polymarket (aucun accès root requis)
 #
 #  Options :
 #    --with-tests   copie aussi tests/ et scripts/backtest.py
@@ -22,7 +22,7 @@ for arg in "$@"; do
     fi
 done
 
-INSTALL_DIR="${ARGS[0]:-${POLYMARKET_DIR:-/opt/polymarket-live}}"
+INSTALL_DIR="${ARGS[0]:-${POLYMARKET_DIR:-$HOME/polymarket}}"
 INSTALL_DIR="$(eval echo "$INSTALL_DIR")"   # développe ~ si présent
 
 echo "=== Répertoire d'installation : $INSTALL_DIR ==="

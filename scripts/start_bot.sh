@@ -6,10 +6,10 @@
 #
 #  Répertoire d'installation (par ordre de priorité) :
 #    1. Variable d'environnement : POLYMARKET_DIR=~/polymarket bash scripts/start_bot.sh
-#    2. Valeur par défaut : /opt/polymarket-live
+#    2. Valeur par défaut : ~/polymarket (aucun accès root requis)
 # ═══════════════════════════════════════════════════════════════════
 
-INSTALL_DIR="${POLYMARKET_DIR:-/opt/polymarket-live}"
+INSTALL_DIR="${POLYMARKET_DIR:-$HOME/polymarket}"
 INSTALL_DIR="$(eval echo "$INSTALL_DIR")"
 CONFIG="$INSTALL_DIR/config.json"
 

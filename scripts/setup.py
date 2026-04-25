@@ -20,7 +20,7 @@ Usage:
 
 import sys, os, json, getpass, sysconfig
 
-INSTALL_DIR = os.environ.get("POLYMARKET_DIR", "/opt/polymarket-live")
+INSTALL_DIR = os.path.expanduser(os.environ.get("POLYMARKET_DIR", "~/polymarket"))
 RPC         = "https://polygon.drpc.org"
 CONFIG_PATH = os.path.join(INSTALL_DIR, "config.json")
 

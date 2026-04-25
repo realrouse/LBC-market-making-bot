@@ -9,6 +9,9 @@ All notable changes to this project are documented here.
 ## [Unreleased]
 
 ### Bugfix
+- All scripts and `bot/live_bot.py` — default install path changed from `/opt/polymarket-live` (requires root) to `~/polymarket` (no root needed); `POLYMARKET_DIR` still overrides as before; historical CHANGELOG entries referencing `/opt/polymarket-live` reflect the old default and are left unchanged
+
+### Bugfix
 - `scripts/backtest.py` — fallback to sample dataset now requires `live.db` to have at least 100 snapshots (previously any non-empty file was accepted, causing a stale 16-snapshot test artifact to shadow the bundled dataset); also prints which database is selected (`(live)` vs `(sample)`) at startup
 
 ### Feature

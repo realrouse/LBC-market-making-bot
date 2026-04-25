@@ -37,8 +37,8 @@ if _SIMULATE:
 
 # ─── PATHS ───────────────────────────────────────────────────────────────────
 # All paths derive from a single env var so the bot can run anywhere, not just
-# /opt/polymarket-live. Set POLYMARKET_DIR=~/polymarket for a user install.
-INSTALL_DIR = os.environ.get("POLYMARKET_DIR", "/opt/polymarket-live")
+# ~/polymarket by default — no root required. Override with POLYMARKET_DIR.
+INSTALL_DIR = os.path.expanduser(os.environ.get("POLYMARKET_DIR", "~/polymarket"))
 DB_PATH     = os.path.join(INSTALL_DIR, "live.db")
 LOG_PATH    = os.path.join(INSTALL_DIR, "live.log")
 CONFIG_PATH = os.path.join(INSTALL_DIR, "config.json")

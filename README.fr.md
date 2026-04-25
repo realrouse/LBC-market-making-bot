@@ -30,7 +30,7 @@ Bot de trading automatisé pour les marchés de prédiction [Polymarket](https:/
 
 ## Base de données
 
-Le bot utilise **SQLite** (`live.db`) en mode journal WAL, qui autorise la lecture concurrente pendant les écritures (le script de monitoring peut interroger la base pendant que le bot enregistre des trades). Le fichier se trouve dans `POLYMARKET_DIR/live.db` (par défaut : `/opt/polymarket-live/live.db`).
+Le bot utilise **SQLite** (`live.db`) en mode journal WAL, qui autorise la lecture concurrente pendant les écritures (le script de monitoring peut interroger la base pendant que le bot enregistre des trades). Le fichier se trouve dans `POLYMARKET_DIR/live.db` (par défaut : `~/polymarket/live.db`).
 
 ### Table : `trades`
 

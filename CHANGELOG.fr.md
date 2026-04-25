@@ -9,6 +9,9 @@ Toutes les modifications notables de ce projet sont documentées ici.
 ## [Non publié]
 
 ### Correction de bug
+- Tous les scripts et `bot/live_bot.py` — chemin d'installation par défaut changé de `/opt/polymarket-live` (nécessitait root) vers `~/polymarket` (aucun root requis) ; `POLYMARKET_DIR` reste prioritaire comme avant ; les entrées historiques du CHANGELOG référençant `/opt/polymarket-live` reflètent l'ancien défaut et sont conservées
+
+### Correction de bug
 - `scripts/backtest.py` — le fallback vers le dataset embarqué exige désormais que `live.db` contienne au moins 100 snapshots (auparavant, tout fichier non vide était accepté, ce qui permettait à un artefact de test périmé de 16 snapshots de masquer le dataset embarqué) ; affiche également quel fichier est sélectionné (`(live)` ou `(sample)`) au démarrage
 
 ### Fonctionnalité

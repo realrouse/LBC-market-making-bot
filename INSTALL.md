@@ -24,7 +24,7 @@
 ## Dependencies
 
 The following Python packages are installed automatically by `scripts/install.sh`
-into a virtualenv at `/opt/polymarket-live/venv/`:
+into a virtualenv at `~/polymarket/venv/`:
 
 - `aiohttp`
 - `websockets`
@@ -38,13 +38,15 @@ All scripts read the `POLYMARKET_DIR` environment variable to determine
 where to install and run the bot. If unset, it defaults to:
 
 ```
-/opt/polymarket-live
+~/polymarket
 ```
+
+No root access required — the default is in the user's home directory.
 
 Examples:
 
 ```bash
-# Default (system-wide, requires root)
+# Default (installs in ~/polymarket, no root needed)
 bash scripts/install.sh
 
 # Custom path as argument

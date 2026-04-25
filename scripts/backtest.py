@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from itertools import product
 from typing import List, Optional, Tuple
 
-INSTALL_DIR = os.environ.get("POLYMARKET_DIR", "/opt/polymarket-live")
+INSTALL_DIR = os.path.expanduser(os.environ.get("POLYMARKET_DIR", "~/polymarket"))
 _live_db    = os.path.join(INSTALL_DIR, "live.db")
 _sample_db  = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             "data", "backtest_sample_btc5m_range_2026.db")
