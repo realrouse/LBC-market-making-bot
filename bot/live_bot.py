@@ -298,6 +298,7 @@ class BotState:
 
 async def handle_book_update(state, parsed):
     """Apply a parsed book update to the token's state, then check for signals."""
+    t_ws = time.monotonic()          # timestamp for latency tracking — passed through
     ts = state.tokens.get(parsed["token_id"])
     if not ts: return
     ts.best_bid  = parsed["best_bid"]
@@ -307,7 +308,7 @@ async def handle_book_update(state, parsed):
     ts.ask_vol   = parsed["ask_vol"]
     ts.obi       = parsed["obi"]
     ts.last_update_ts = time.time()
-    await check_signal(state, ts)
+    await check_signal(state, ts, _t_ws=t_ws)
     check_resolution(state, ts)
     now = time.time()
     if now - ts.last_snapshot_ts >= SNAPSHOT_INTERVAL:
@@ -317,7 +318,7 @@ async def handle_book_update(state, parsed):
 
 # ─── SIGNAL & TRADE LOGIC ─────────────────────────────────────────────────────
 
-async def check_signal(state, ts):
+async def check_signal(state, ts, _t_ws=None):
     """
     Evaluate all entry conditions for the given token and enter a trade if met.
 
@@ -363,9 +364,9 @@ async def check_signal(state, ts):
     if pnl < -DAILY_STOP_LOSS: return
 
     state.signalled.add(ts.market_id)
-    await enter_live_trade(state, ts)
+    await enter_live_trade(state, ts, _t_ws=_t_ws)
 
-async def enter_live_trade(state, ts):
+async def enter_live_trade(state, ts, _t_ws=None):
     """
     Record the trade in the DB, submit the CLOB order, and update bot state.
     The DB insert happens even if the CLOB order fails so we always have an
@@ -377,11 +378,14 @@ async def enter_live_trade(state, ts):
     fee = api.compute_fee(ep, tb)
     cost = STAKE + fee
     oid = None
+    t_signal_ms = (time.monotonic() - _t_ws) * 1000 if _t_ws is not None else None
+    t_pre_order = time.monotonic()
     if state.session:
         oid = await api.post_order(
             state.session, ts.token_id, ep, STAKE,
             private_key=PRIVATE_KEY, install_dir=INSTALL_DIR,
         )
+    order_rtt_ms = (time.monotonic() - t_pre_order) * 1000
     cur = state.conn.execute(
         "INSERT INTO trades ("
         "market_id, token_id, direction, question, "
@@ -404,6 +408,13 @@ async def enter_live_trade(state, ts):
         tid, ts.direction, ts.market_id[:12], ep, ts.best_bid,
         ts.secs_remaining, oid or "sim"
     )
+    if t_signal_ms is not None:
+        total_ms = t_signal_ms + order_rtt_ms
+        logger.info(
+            "[LATENCY] signal_ms=%.2f order_rtt_ms=%.2f total_ms=%.2f"
+            " direction=%s market=%s",
+            t_signal_ms, order_rtt_ms, total_ms, ts.direction, ts.market_id[:12],
+        )
 
 def check_resolution(state, ts):
     """

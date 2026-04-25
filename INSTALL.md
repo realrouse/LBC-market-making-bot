@@ -227,6 +227,34 @@ pkill -f live_bot.py
 - Trades: `<TRADINEBOTTE_DIR>/live.db` (SQLite)
 
 
+## Latency analysis
+
+Each trade emits one `[LATENCY]` line in `live.log`. Run the analysis tool after a trading session:
+
+```bash
+python3 scripts/latency.py                           # default path
+python3 scripts/latency.py ~/tradinebotte/live.log   # explicit path
+TRADINEBOTTE_DIR=~/tradinebotte python3 scripts/latency.py
+```
+
+Example output:
+```
+==============================================================
+  LATENCY REPORT — /home/botte/tradinebotte/live.log
+  Trades: 42  (UP=27  DOWN=15)
+==============================================================
+  Metric             min    mean     p50     p90     p99     max
+  ----------------------------------------------------------
+  signal (ms)        1.2     2.1     1.9     3.4     5.1     6.0
+  order RTT (ms)    98.3   143.2   138.7   201.4   310.2   340.5
+  total (ms)        99.8   145.3   140.9   204.1   314.8   345.0
+==============================================================
+```
+
+- **signal_ms** — time from WebSocket message received to order decision (includes all signal guards + daily-PnL SQLite query)
+- **order_rtt_ms** — CLOB API HTTP round-trip
+- **total_ms** — end-to-end: WebSocket message → order confirmed
+
 ## Monitoring
 
 Live dashboard:

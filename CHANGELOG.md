@@ -9,6 +9,10 @@ All notable changes to this project are documented here.
 ## [Unreleased]
 
 ### Feature
+- `bot/live_bot.py` — latency tracking: each trade emits a `[LATENCY]` log line with `signal_ms` (WebSocket message received → order decision, includes all signal guards and daily-PnL SQLite query) and `order_rtt_ms` (CLOB API HTTP round-trip); timestamps use `time.monotonic()` and are passed as an optional `_t_ws` parameter through `handle_book_update` → `check_signal` → `enter_live_trade`; zero overhead on non-trade messages
+- `scripts/latency.py` — new analysis tool: parses `[LATENCY]` lines from `live.log` and prints min / mean / p50 / p90 / p99 / max for signal_ms, order_rtt_ms, and total_ms; usage: `python3 scripts/latency.py [logfile]`
+
+### Feature
 - `bot/live_bot.py` — log writes are now fully asynchronous: a `QueueListener` daemon thread drains the log queue to disk so the asyncio event loop is never blocked by file I/O; no behaviour change for existing deployments
 - `bot/live_bot.py` — new `--no-log` flag: suppresses the log file entirely (`NullHandler`); the SQLite DB (trades + snapshots) is unaffected; combine with `--simulate` to keep stdout output; intended for production deployments where minimum disk I/O is critical
 
