@@ -30,6 +30,9 @@ venv/
 # Credentials — never commit
 config.json
 
+# Claude Code internal files
+.claude/scheduled_tasks.lock
+
 # Runtime artifacts
 *.log
 *.db
