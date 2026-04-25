@@ -14,7 +14,7 @@ Ce projet maintient six fichiers de documentation en deux langues :
 |---|---|
 | `README.md` | `README.fr.md` |
 | `CHANGELOG.md` | `CHANGELOG.fr.md` |
-| `INSTALL` | `INSTALL.fr` |
+| `INSTALL.md` | `INSTALL.fr.md` |
 
 **Les six fichiers doivent être mis à jour dans le même commit.** Ne jamais modifier l'un sans mettre à jour son équivalent dans l'autre langue. Un hook Claude Code (`.claude/settings.json`) rappelle cette règle après chaque `git commit`.
 

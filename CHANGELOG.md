@@ -16,7 +16,7 @@ All notable changes to this project are documented here.
 - `bot/live_bot.py` — `MARKET_REFRESH` reduced from 90 s to 30 s: the bot now discovers new markets at most 30 s after they enter the ±6-minute window, instead of up to 90 s; the Gamma API call remains a single request (tag_id=102892 filter, no pagination) so the overhead is negligible
 
 ### Documentation
-- `INSTALL` / `INSTALL.fr` — sqlite3 CLI added to prerequisites with note that the bot works without it; Python fallback command provided for hosts without sudo
+- `INSTALL.md` / `INSTALL.fr.md` — sqlite3 CLI added to prerequisites with note that the bot works without it; Python fallback command provided for hosts without sudo
 
 ### Feature
 - `strategies/polymarket_BTC5M.json` — new strategy file: all backtested signal and capital parameters (`signal_threshold`, `entry_max`, `min_secs_remaining`, `min_ask_vol`, `win_threshold`, `loss_threshold`, `obi_reject_thresh`, `daily_stop_loss`, `stake`, `capital_start`, `gas_fee_usd`) extracted from hardcoded constants into a versioned JSON file; add `"strategy": "<path>"` in `config.json` to switch strategies
@@ -24,7 +24,7 @@ All notable changes to this project are documented here.
 - `config.json.example` — new optional key `strategy` pointing to the strategy file
 - `scripts/install.sh` — copies `strategies/*.json` to the install directory
 - `scripts/install.sh` — new `--with-tests` flag: copies `tests/` and `scripts/backtest.py` to the install directory and runs the full 99-test suite immediately after installation; works with any install path; usage: `bash scripts/install.sh ~/polymarket --with-tests`
-- `INSTALL` / `INSTALL.fr` — `--with-tests` option documented
+- `INSTALL.md` / `INSTALL.fr.md` — `--with-tests` option documented
 
 ### Refactoring
 - `bot/api_polymarket.py` — new Polymarket API adapter: all exchange-specific code extracted from `live_bot.py` into a dedicated module (`get_markets`, `post_order`, `parse_book_update`, `compute_fee`, `get_market_id/question/end_ts/start_ts/up_token/down_token`, `make_subscribe_msg`, `WS_URL`, `WS_BATCH_SIZE`, `FEE_RATE`). To target a different exchange in the future, create `api_<exchange>.py` with the same public interface and change the single import line in `live_bot.py`.
@@ -35,9 +35,9 @@ All notable changes to this project are documented here.
 ### Documentation
 - `docs/status_example.html` — static HTML preview of the web status page; illustrates the dark-themed layout, metric cards (capital, PnL, win rate, trades, daily stats, open positions), and resolved-trade table with WIN/LOSS colour coding
 - `README.md` / `README.fr.md` — link to `docs/status_example.html` added to the "Optional HTML status page" feature bullet
-- `INSTALL` / `INSTALL.fr` — reference to `docs/status_example.html` added in the "Web Status Page" section
+- `INSTALL.md` / `INSTALL.fr.md` — reference to `docs/status_example.html` added in the "Web Status Page" section
 - `README.md` / `README.fr.md` — Features section added listing all 11 bot capabilities with one-line descriptions
-- `INSTALL` / `INSTALL.fr` — expanded "Web Status Page" section with step-by-step Apache prerequisites: `a2enmod userdir auth_basic authn_file`, `AllowOverride AuthConfig` directive, two options for granting the `www-data` process read access to `.htpasswd` (`chmod o+r` vs `usermod -aG`); nginx note explaining that `.htaccess` is not processed and showing the equivalent `auth_basic` / `auth_basic_user_file` server block; note about custom paths outside `~/public_html`
+- `INSTALL.md` / `INSTALL.fr.md` — expanded "Web Status Page" section with step-by-step Apache prerequisites: `a2enmod userdir auth_basic authn_file`, `AllowOverride AuthConfig` directive, two options for granting the `www-data` process read access to `.htpasswd` (`chmod o+r` vs `usermod -aG`); nginx note explaining that `.htaccess` is not processed and showing the equivalent `auth_basic` / `auth_basic_user_file` server block; note about custom paths outside `~/public_html`
 - `README.md` / `README.fr.md` — `webstatuspage_*` config table entries updated to mention required Apache modules, `AllowOverride AuthConfig`, `www-data` permissions, and nginx manual configuration in the description column
 
 ### Feature

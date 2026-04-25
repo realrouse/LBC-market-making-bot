@@ -126,7 +126,7 @@ sqlite3 live.db "SELECT ts_ms, best_bid, best_ask, obi
 
 ## Installation
 
-Voir **[INSTALL.fr](INSTALL.fr)** pour le guide d'installation complet : prérequis, dépendances, configuration du wallet, lancement, monitoring, et comment tester dans un environnement virtuel.
+Voir **[INSTALL.fr.md](INSTALL.fr.md)** pour le guide d'installation complet : prérequis, dépendances, configuration du wallet, lancement, monitoring, et comment tester dans un environnement virtuel.
 
 ## Tests
 

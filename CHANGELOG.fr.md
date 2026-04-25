@@ -16,7 +16,7 @@ Toutes les modifications notables de ce projet sont documentées ici.
 - `bot/live_bot.py` — `MARKET_REFRESH` réduit de 90 s à 30 s : le bot découvre désormais les nouveaux marchés au plus 30 s après leur entrée dans la fenêtre ±6 minutes, au lieu de 90 s maximum ; l'appel Gamma API reste une requête unique (filtre tag_id=102892, sans pagination), la surcharge est négligeable
 
 ### Documentation
-- `INSTALL` / `INSTALL.fr` — CLI sqlite3 ajouté aux prérequis avec note indiquant que le bot fonctionne sans lui ; commande Python de remplacement fournie pour les hôtes sans sudo
+- `INSTALL.md` / `INSTALL.fr.md` — CLI sqlite3 ajouté aux prérequis avec note indiquant que le bot fonctionne sans lui ; commande Python de remplacement fournie pour les hôtes sans sudo
 
 ### Fonctionnalité
 - `strategies/polymarket_BTC5M.json` — nouveau fichier de stratégie : tous les paramètres de signal et de capital backtestés (`signal_threshold`, `entry_max`, `min_secs_remaining`, `min_ask_vol`, `win_threshold`, `loss_threshold`, `obi_reject_thresh`, `daily_stop_loss`, `stake`, `capital_start`, `gas_fee_usd`) extraits des constantes en dur vers un fichier JSON versionné ; ajouter `"strategy": "<chemin>"` dans `config.json` pour changer de stratégie
@@ -24,7 +24,7 @@ Toutes les modifications notables de ce projet sont documentées ici.
 - `config.json.example` — nouvelle clé optionnelle `strategy` pointant vers le fichier de stratégie
 - `scripts/install.sh` — copie `strategies/*.json` dans le répertoire d'installation
 - `scripts/install.sh` — nouveau flag `--with-tests` : copie `tests/` et `scripts/backtest.py` dans le répertoire d'installation et lance immédiatement la suite complète de 99 tests ; fonctionne avec n'importe quel chemin d'installation ; usage : `bash scripts/install.sh ~/polymarket --with-tests`
-- `INSTALL` / `INSTALL.fr` — option `--with-tests` documentée
+- `INSTALL.md` / `INSTALL.fr.md` — option `--with-tests` documentée
 
 ### Refactorisation
 - `bot/api_polymarket.py` — nouvel adaptateur API Polymarket : tout le code spécifique à l'exchange extrait de `live_bot.py` dans un module dédié (`get_markets`, `post_order`, `parse_book_update`, `compute_fee`, `get_market_id/question/end_ts/start_ts/up_token/down_token`, `make_subscribe_msg`, `WS_URL`, `WS_BATCH_SIZE`, `FEE_RATE`). Pour cibler un autre exchange à l'avenir, il suffira de créer `api_<exchange>.py` avec la même interface publique et de modifier l'unique ligne d'import dans `live_bot.py`.
@@ -35,9 +35,9 @@ Toutes les modifications notables de ce projet sont documentées ici.
 ### Documentation
 - `docs/status_example.html` — aperçu HTML statique de la page de statut web ; illustre la mise en page en thème sombre, les cartes de métriques (capital, PnL, taux de victoire, trades, stats journalières, positions ouvertes) et le tableau des trades résolus avec coloration WIN/LOSS
 - `README.md` / `README.fr.md` — lien vers `docs/status_example.html` ajouté dans la ligne de fonctionnalité "Page de statut HTML optionnelle"
-- `INSTALL` / `INSTALL.fr` — référence à `docs/status_example.html` ajoutée dans la section "Page de statut web"
+- `INSTALL.md` / `INSTALL.fr.md` — référence à `docs/status_example.html` ajoutée dans la section "Page de statut web"
 - `README.md` / `README.fr.md` — section Fonctionnalités ajoutée listant les 11 capacités du bot avec descriptions en une ligne
-- `INSTALL` / `INSTALL.fr` — section "Page de statut web" développée avec les prérequis Apache pas-à-pas : `a2enmod userdir auth_basic authn_file`, directive `AllowOverride AuthConfig`, deux options pour donner au processus `www-data` l'accès en lecture au `.htpasswd` (`chmod o+r` ou `usermod -aG`) ; note nginx expliquant que `.htaccess` n'est pas traité et montrant le bloc server équivalent avec `auth_basic` / `auth_basic_user_file` ; note sur les chemins personnalisés en dehors de `~/public_html`
+- `INSTALL.md` / `INSTALL.fr.md` — section "Page de statut web" développée avec les prérequis Apache pas-à-pas : `a2enmod userdir auth_basic authn_file`, directive `AllowOverride AuthConfig`, deux options pour donner au processus `www-data` l'accès en lecture au `.htpasswd` (`chmod o+r` ou `usermod -aG`) ; note nginx expliquant que `.htaccess` n'est pas traité et montrant le bloc server équivalent avec `auth_basic` / `auth_basic_user_file` ; note sur les chemins personnalisés en dehors de `~/public_html`
 - `README.md` / `README.fr.md` — entrées du tableau de configuration `webstatuspage_*` mises à jour pour mentionner les modules Apache requis, `AllowOverride AuthConfig`, les permissions `www-data`, et la configuration manuelle nginx dans la colonne description
 
 ### Fonctionnalité

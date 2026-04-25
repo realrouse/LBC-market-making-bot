@@ -126,7 +126,7 @@ sqlite3 live.db "SELECT ts_ms, best_bid, best_ask, obi
 
 ## Installation
 
-See **[INSTALL](INSTALL)** for the full installation guide, including requirements, dependencies, wallet setup, configuration, running, monitoring, and how to test in a virtual environment.
+See **[INSTALL.md](INSTALL.md)** for the full installation guide, including requirements, dependencies, wallet setup, configuration, running, monitoring, and how to test in a virtual environment.
 
 ## Tests
 
