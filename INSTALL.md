@@ -259,6 +259,30 @@ Example output:
 - **order_rtt_ms** — CLOB API HTTP round-trip
 - **total_ms** — end-to-end: WebSocket message → order confirmed
 
+## Backtesting
+
+Run the backtest engine to replay recorded snapshots against any parameter set:
+
+```bash
+# Single file (default: live.db, or bundled sample if live.db has < 100 snapshots)
+python3 scripts/backtest.py
+
+# One or more explicit files (shell glob supported)
+python3 scripts/backtest.py --db ~/tradinebotte/live.db
+python3 scripts/backtest.py --db data/session1.db data/session2.db
+python3 scripts/backtest.py --db data/*.db
+
+# Scan data/ automatically (includes live.db if it has ≥ 100 snapshots)
+python3 scripts/backtest.py --all
+
+# Grid search across 135 threshold/stake combinations
+python3 scripts/backtest.py --sweep
+python3 scripts/backtest.py --all --sweep
+```
+
+When more than one file is processed, each file runs with capital reset to `capital_start` (independent simulation), and an AGGREGATE block summarises combined wins, losses, PnL, win rate, and worst drawdown across all files.
+
+
 ## Monitoring
 
 Live dashboard:

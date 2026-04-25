@@ -13,7 +13,7 @@ Automated trading bot for [Polymarket](https://polymarket.com) prediction market
 - **Daily stop-loss** — halts trading for the day after a $30 net loss; resumes the next session
 - **SQLite persistence** (WAL mode) — all trades and 5-second price snapshots are stored; state survives crashes and restarts
 - **Crash recovery** — restores unresolved trades from the database on startup; rebuilds capital from historical PnL
-- **Backtest engine** — replays `snapshots` data against any parameter set; supports grid search across 135 combinations; falls back to the bundled sample dataset (`data/backtest_sample_btc5m_range_2026.db`) when no live database is present
+- **Backtest engine** — replays `snapshots` data against any parameter set; supports grid search across 135 combinations; `--db file1.db file2.db` or `--db data/*.db` runs independent capital simulations across multiple snapshot files; `--all` auto-scans `data/` and prepends `live.db` when usable; aggregate win-rate and PnL printed across all files; falls back to the bundled sample dataset (`data/backtest_sample_btc5m_range_2026.db`) when no live database is present
 - **108-test suite** — covers signal guards, resolution paths, fee calculation, WebSocket parsing, HTML status page, and state restore; no network or credentials required; deployable to any target with `--with-tests`
 - **Optional HTML status page** — bot writes a self-refreshing page (configurable path, optional HTTP Basic Auth) — [see preview](docs/status_example.html)
 - **Pluggable exchange API** — all Polymarket-specific code lives in `bot/api_polymarket.py`; swapping exchanges requires only a new adapter file and a single import change in `live_bot.py`

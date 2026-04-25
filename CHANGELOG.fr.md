@@ -8,6 +8,9 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ## [Non publié]
 
+### Fonctionnalité
+- `scripts/backtest.py` — backtest multi-fichiers : `--db` accepte désormais un ou plusieurs chemins (expansion de glob shell, ex. `--db data/*.db`) ; nouveau flag `--all` qui scanne le répertoire `data/` pour tous les fichiers `.db` et ajoute `live.db` en tête s'il contient ≥ 100 snapshots ; le capital se réinitialise à `capital_start` indépendamment par fichier ; le bloc BACKTEST par fichier affiche le nom du fichier quand plusieurs fichiers sont traités ; un bloc AGGREGATE (wins/losses/PnL/taux de victoire/pire drawdown combinés) est affiché après tous les fichiers lorsqu'il y en a plus d'un et que `--sweep` n'est pas actif
+
 ### Sécurité
 - `requirements.txt` / `requirements-dev.txt` — manifestes de dépendances : toutes les dépendances runtime (`aiohttp`, `websockets`, `web3`, `py-clob-client`) et dev (`pylint`, `pip-audit`) sont désormais déclarées dans des fichiers versionnés ; tous les workflows CI installent depuis ces fichiers plutôt que de lister les paquets en dur
 - `.github/workflows/audit.yml` — nouveau workflow CI : exécute `pip-audit -r requirements.txt` à chaque push et chaque lundi à 06 h 00 UTC pour détecter les CVE connus dans les dépendances runtime avant qu'elles n'atteignent la production
