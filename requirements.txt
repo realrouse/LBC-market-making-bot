@@ -1,0 +1,4 @@
+aiohttp
+websockets
+web3
+py-clob-client

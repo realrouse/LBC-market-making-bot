@@ -20,7 +20,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install aiohttp websockets web3 py-clob-client
+        pip install -r requirements.txt
     - name: Run tests
       run: |
         python -m unittest discover -s tests -p "test_*.py" -v
