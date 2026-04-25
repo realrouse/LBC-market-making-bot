@@ -7,17 +7,21 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.8", "3.9", "3.10"]
+        # 3.8 and 3.9 are EOL; test against actively supported versions.
+        python-version: ["3.10", "3.11", "3.12"]
     steps:
     - uses: actions/checkout@v4
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v3
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pylint
+        # Install pylint and the bot's runtime dependencies so pylint can
+        # resolve all imports (aiohttp, websockets, web3, py_clob_client).
+        # py-clob-client depends on web3 and pulls it in automatically.
+        pip install pylint aiohttp websockets py-clob-client
     - name: Analysing the code with pylint
       run: |
         pylint $(git ls-files '*.py')
