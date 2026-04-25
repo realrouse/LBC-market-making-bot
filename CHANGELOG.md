@@ -9,6 +9,9 @@ All notable changes to this project are documented here.
 ## [Unreleased]
 
 ### Feature
+- **Hour/day filter** — new `hour_filter` block in `strategies/polymarket_BTC5M.json` (disabled by default). When enabled, restricts entries to configurable UTC hour ranges per weekday/weekend, with special handling for the US weekly open (Monday before 13:30 UTC) and close (Friday from 20:00 UTC). Applied identically in the live bot (`is_trading_hour()` guard in `check_signal()`) and in the backtest engine (`_is_trading_hour()` in `run_backtest()`). 15 new unit tests.
+
+### Previous
 - `scripts/tradinebotte.service` — systemd unit template: `After=network-online.target`, `Restart=on-failure`, `RestartSec=30`, `StartLimitBurst=5` (max 5 restarts per 5 min); placeholders `__USER__` and `__TRADINEBOTTE_DIR__` are substituted at install time
 - `scripts/install_service.sh` — generator script: reads `TRADINEBOTTE_DIR` (or defaults to `~/tradinebotte`), validates the install exists, substitutes placeholders with `sed`, writes to `/tmp/tradinebotte.service`, and prints the four `sudo` commands needed to enable the service
 

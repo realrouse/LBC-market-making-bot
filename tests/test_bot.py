@@ -711,5 +711,92 @@ class TestHandleBookUpdate(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.state.open_trades), 0)
 
 
+class TestIsTradingHour(unittest.TestCase):
+    """Tests for is_trading_hour() with various UTC times and filter configs."""
+
+    def _enable(self, weekday=None, weekend=None, us_open=True, us_close=True):
+        bot.HOUR_FILTER_ENABLED  = True
+        bot.WEEKDAY_UTC_RANGES   = weekday if weekday is not None else [(0, 8), (13, 22)]
+        bot.WEEKEND_UTC_RANGES   = weekend if weekend is not None else []
+        bot.US_WEEKLY_OPEN       = us_open
+        bot.US_WEEKLY_CLOSE      = us_close
+
+    def tearDown(self):
+        bot.HOUR_FILTER_ENABLED  = False
+        bot.WEEKDAY_UTC_RANGES   = []
+        bot.WEEKEND_UTC_RANGES   = []
+        bot.US_WEEKLY_OPEN       = True
+        bot.US_WEEKLY_CLOSE      = True
+
+    def _ts(self, iso: str) -> int:
+        return int(datetime.fromisoformat(iso).replace(tzinfo=timezone.utc).timestamp() * 1000)
+
+    def test_disabled_always_true(self):
+        # Filter off → all times allowed regardless of config
+        self.assertTrue(bot.is_trading_hour(self._ts("2026-04-27 03:00:00")))  # Monday 3h
+
+    def test_weekday_in_range(self):
+        self._enable()
+        self.assertTrue(bot.is_trading_hour(self._ts("2026-04-28 06:00:00")))  # Tuesday 6h
+
+    def test_weekday_outside_range(self):
+        self._enable()
+        self.assertFalse(bot.is_trading_hour(self._ts("2026-04-28 10:00:00")))  # Tuesday 10h
+
+    def test_monday_before_us_open_blocked(self):
+        self._enable()
+        self.assertFalse(bot.is_trading_hour(self._ts("2026-04-27 12:00:00")))  # Monday 12h
+
+    def test_monday_before_us_open_minute_precision(self):
+        self._enable()
+        self.assertFalse(bot.is_trading_hour(self._ts("2026-04-27 13:29:00")))  # Monday 13h29
+
+    def test_monday_after_us_open_allowed(self):
+        self._enable()
+        self.assertTrue(bot.is_trading_hour(self._ts("2026-04-27 14:00:00")))   # Monday 14h
+
+    def test_friday_after_us_close_blocked(self):
+        self._enable()
+        self.assertFalse(bot.is_trading_hour(self._ts("2026-05-01 21:00:00")))  # Friday 21h
+
+    def test_friday_before_us_close_allowed(self):
+        self._enable()
+        self.assertTrue(bot.is_trading_hour(self._ts("2026-05-01 15:00:00")))   # Friday 15h
+
+    def test_weekend_blocked_by_default(self):
+        self._enable(weekend=[])
+        self.assertFalse(bot.is_trading_hour(self._ts("2026-04-26 15:00:00")))  # Saturday
+
+    def test_weekend_allowed_when_configured(self):
+        self._enable(weekend=[(13, 20)])
+        self.assertTrue(bot.is_trading_hour(self._ts("2026-04-26 15:00:00")))   # Saturday 15h
+
+    def test_weekend_outside_range_blocked(self):
+        self._enable(weekend=[(13, 20)])
+        self.assertFalse(bot.is_trading_hour(self._ts("2026-04-26 10:00:00")))  # Saturday 10h
+
+    def test_empty_weekday_ranges_allows_all_hours(self):
+        self._enable(weekday=[])
+        self.assertTrue(bot.is_trading_hour(self._ts("2026-04-28 10:00:00")))   # Tuesday 10h
+
+    def test_us_open_flag_disabled(self):
+        # Monday 7h is in range (0-8) but would be blocked by US_WEEKLY_OPEN=True.
+        # With us_open=False the special Monday constraint is lifted → allowed.
+        self._enable(us_open=False)
+        self.assertTrue(bot.is_trading_hour(self._ts("2026-04-27 07:00:00")))   # Monday 7h ok
+
+    def test_us_close_flag_disabled(self):
+        self._enable(us_close=False)
+        self.assertTrue(bot.is_trading_hour(self._ts("2026-05-01 21:00:00")))   # Friday 21h ok
+
+    def test_now_uses_current_time(self):
+        bot.HOUR_FILTER_ENABLED = True
+        bot.WEEKDAY_UTC_RANGES  = []
+        bot.WEEKEND_UTC_RANGES  = []
+        # No ts_ms → uses datetime.now() — just check it doesn't crash
+        result = bot.is_trading_hour()
+        self.assertIsInstance(result, bool)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

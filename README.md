@@ -141,7 +141,7 @@ Full guide (requirements, wallet setup, web status page, monitoring, testing): *
 bash scripts/run_tests.sh
 ```
 
-The suite runs 108 tests (80 for the live bot, 28 for the backtest engine) covering: fee calculation, WebSocket message parsing, OBI computation, market registration, all 11 signal entry guards (including the daily stop-loss), trade resolution (WIN/LOSS/expiry), PnL calculation, crash-recovery state restore, htpasswd SHA1 hashing, HTML status page rendering, async book-update state, and all backtest signal/resolution/parameter paths. No network access or credentials are required — an in-memory SQLite database is used for every test.
+The suite runs 123 tests (80 for the live bot, 28 for the backtest engine) covering: fee calculation, WebSocket message parsing, OBI computation, market registration, all 11 signal entry guards (including the daily stop-loss), trade resolution (WIN/LOSS/expiry), PnL calculation, crash-recovery state restore, htpasswd SHA1 hashing, HTML status page rendering, async book-update state, and all backtest signal/resolution/parameter paths. No network access or credentials are required — an in-memory SQLite database is used for every test.
 
 ## Backtest
 

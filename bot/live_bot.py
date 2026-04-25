@@ -69,6 +69,13 @@ LOSS_THRESHOLD     = 0.01
 OBI_REJECT_THRESH  = -0.50
 DAILY_STOP_LOSS    = 30.0
 
+# ─── HOUR FILTER (defaults — overridden by strategy JSON) ────────────────────
+HOUR_FILTER_ENABLED:    bool                  = False
+WEEKDAY_UTC_RANGES:     list[tuple[int, int]] = []
+WEEKEND_UTC_RANGES:     list[tuple[int, int]] = []
+US_WEEKLY_OPEN:         bool                  = True   # block Mon before 13:30 UTC
+US_WEEKLY_CLOSE:        bool                  = True   # block Fri from 20:00 UTC
+
 # ─── TIMING ──────────────────────────────────────────────────────────────────
 SNAPSHOT_INTERVAL  = 5    # seconds between SQLite price snapshots per token
 DASHBOARD_INTERVAL = 300  # seconds between log dashboard prints
@@ -117,6 +124,13 @@ if _strat:
     LOSS_THRESHOLD     = float(_strat.get("loss_threshold",      LOSS_THRESHOLD))
     OBI_REJECT_THRESH  = float(_strat.get("obi_reject_thresh",   OBI_REJECT_THRESH))
     DAILY_STOP_LOSS    = float(_strat.get("daily_stop_loss",     DAILY_STOP_LOSS))
+
+    _hf = _strat.get("hour_filter", {})
+    HOUR_FILTER_ENABLED = bool(_hf.get("enabled", False))
+    WEEKDAY_UTC_RANGES  = [tuple(r) for r in _hf.get("weekday_utc_ranges", [])]
+    WEEKEND_UTC_RANGES  = [tuple(r) for r in _hf.get("weekend_utc_ranges", [])]
+    US_WEEKLY_OPEN      = bool(_hf.get("us_weekly_open", True))
+    US_WEEKLY_CLOSE     = bool(_hf.get("us_weekly_close", True))
 
 # Credentials: config.json first, env vars as fallback for container deployments.
 PRIVATE_KEY    = _cfg.get("private_key",    os.environ.get("POLY_PRIVATE_KEY", ""))
@@ -341,6 +355,45 @@ async def handle_book_update(state: BotState, parsed: dict[str, Any]) -> None:
 
 # ─── SIGNAL & TRADE LOGIC ─────────────────────────────────────────────────────
 
+def is_trading_hour(ts_ms: Optional[int] = None) -> bool:
+    """
+    Return True if the given timestamp (or now) falls within the configured
+    trading window. Always returns True when HOUR_FILTER_ENABLED is False.
+
+    Window logic:
+      - Weekends (Sat/Sun): allowed only if WEEKEND_UTC_RANGES is non-empty.
+      - Weekdays (Mon–Fri): allowed by WEEKDAY_UTC_RANGES (empty = all hours).
+      - Monday before 13:30 UTC: blocked when US_WEEKLY_OPEN is True
+        (US markets have not yet opened for the week).
+      - Friday from 20:00 UTC: blocked when US_WEEKLY_CLOSE is True
+        (US markets have closed for the week).
+    """
+    if not HOUR_FILTER_ENABLED:
+        return True
+    dt     = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc) if ts_ms is not None \
+             else datetime.now(timezone.utc)
+    dow    = dt.weekday()   # 0=Mon … 6=Sun
+    hour   = dt.hour
+    minute = dt.minute
+
+    if dow >= 5:                             # weekend
+        if not WEEKEND_UTC_RANGES:
+            return False
+        return any(s <= hour < e for s, e in WEEKEND_UTC_RANGES)
+
+    # Weekday special constraints
+    if dow == 0 and US_WEEKLY_OPEN:          # Monday — wait for US weekly open
+        if hour < 13 or (hour == 13 and minute < 30):
+            return False
+    if dow == 4 and US_WEEKLY_CLOSE:         # Friday — stop at US weekly close
+        if hour >= 20:
+            return False
+
+    if not WEEKDAY_UTC_RANGES:               # empty = all weekday hours allowed
+        return True
+    return any(s <= hour < e for s, e in WEEKDAY_UTC_RANGES)
+
+
 async def check_signal(state: BotState, ts: TokenState, _t_ws: Optional[float] = None) -> None:
     """
     Evaluate all entry conditions for the given token and enter a trade if met.
@@ -369,6 +422,7 @@ async def check_signal(state: BotState, ts: TokenState, _t_ws: Optional[float] =
     """
     if ts.market_id in state.signalled: return
     if ts.market_ended: return
+    if not is_trading_hour(): return
     if ts.best_bid < SIGNAL_THRESHOLD: return
     if ts.best_bid > ENTRY_MAX: return
     if ts.best_ask >= 1.0: return       # expired markets still emit WS messages
@@ -876,6 +930,12 @@ async def main() -> None:
         logger.info("  Strategie : %s", os.path.basename(_strategy_loaded))
     else:
         logger.warning("  Strategie : fichier absent — parametres par defaut")
+    if HOUR_FILTER_ENABLED:
+        _wd = " ".join(f"{s}-{e}h" for s, e in WEEKDAY_UTC_RANGES) or "toutes heures"
+        _we = " ".join(f"{s}-{e}h" for s, e in WEEKEND_UTC_RANGES) or "bloque"
+        _mo = " ouv.lun=13h30" if US_WEEKLY_OPEN else ""
+        _fr = " ferm.ven=20h00" if US_WEEKLY_CLOSE else ""
+        logger.info("  Filtre horaire : sem=%s | we=%s%s%s", _wd, _we, _mo, _fr)
     if not PRIVATE_KEY:
         logger.warning("  POLY_PRIVATE_KEY non definie — ordres SIMULES")
     logger.info("=" * 65)

@@ -19,7 +19,7 @@ Bot de trading automatisé pour les marchés de prédiction [Polymarket](https:/
 - **Fichiers de stratégie JSON** — les paramètres de signal et de capital sont dans `strategies/polymarket_BTC5M.json` ; changer de stratégie se fait en pointant `"strategy"` dans `config.json` vers n'importe quel fichier
 - **Mode simulation** — le flag `--simulate` isole tous les fichiers dans `/tmp/tradinebotte-sim`, affiche les logs dans le terminal, et ne place aucun ordre réel ; utilisable sur n'importe quelle machine sans toucher les données de production
 - **Code annoté par types** — les 28 fonctions et méthodes de classe de `live_bot.py` portent des annotations de paramètres et de retour complètes ; active l'analyse statique et l'autocomplétion IDE
-- **Suite de 108 tests** — `tests/test_bot.py` (80 tests) couvre les 11 gardes du signal, les chemins de résolution, le calcul des frais, le parsing WebSocket, la page de statut HTML, le hashage htpasswd et la restauration d'état ; `tests/test_backtest.py` (28 tests) couvre le moteur de replay de bout en bout ; aucun réseau ni credentials requis
+- **Suite de 123 tests** — `tests/test_bot.py` (80 tests) couvre les 11 gardes du signal, les chemins de résolution, le calcul des frais, le parsing WebSocket, la page de statut HTML, le hashage htpasswd et la restauration d'état ; `tests/test_backtest.py` (28 tests) couvre le moteur de replay de bout en bout ; aucun réseau ni credentials requis
 - **Service systemd** — `scripts/install_service.sh` génère un fichier d'unité prêt à installer pour l'utilisateur courant ; le bot redémarre automatiquement en cas d'erreur ou de reboot (`Restart=on-failure`, `RestartSec=30`)
 - **Vérification de types mypy** — `mypy bot/ --ignore-missing-imports` retourne 0 erreur ; workflow CI exécuté à chaque push et pull request
 - **Audit de sécurité continu** — `pip-audit` s'exécute à chaque push et chaque semaine pour détecter les CVE dans les dépendances runtime (`aiohttp`, `websockets`, `web3`, `py-clob-client`) ; Dependabot ouvre des PRs automatiques quand de nouvelles versions sont disponibles
@@ -141,7 +141,7 @@ Guide complet (prérequis, configuration du wallet, page de statut web, monitori
 bash scripts/run_tests.sh
 ```
 
-La suite exécute 108 tests (80 pour le bot live, 28 pour le moteur de backtest) couvrant : le calcul des frais, le parsing des messages WebSocket, le calcul de l'OBI, l'enregistrement des marchés, les 11 gardes d'entrée du signal (dont le stop-loss journalier), la résolution des trades (WIN/LOSS/expiration), le calcul du PnL, la restauration d'état après un crash, le hashage SHA1 htpasswd, le rendu de la page de statut HTML, la mise à jour d'état asynchrone, et tous les chemins signal/résolution/paramètres du backtest. Aucun accès réseau ni credentials nécessaires — une base SQLite en mémoire est utilisée pour chaque test.
+La suite exécute 123 tests (80 pour le bot live, 28 pour le moteur de backtest) couvrant : le calcul des frais, le parsing des messages WebSocket, le calcul de l'OBI, l'enregistrement des marchés, les 11 gardes d'entrée du signal (dont le stop-loss journalier), la résolution des trades (WIN/LOSS/expiration), le calcul du PnL, la restauration d'état après un crash, le hashage SHA1 htpasswd, le rendu de la page de statut HTML, la mise à jour d'état asynchrone, et tous les chemins signal/résolution/paramètres du backtest. Aucun accès réseau ni credentials nécessaires — une base SQLite en mémoire est utilisée pour chaque test.
 
 ## Backtest
 

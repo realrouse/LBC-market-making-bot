@@ -9,7 +9,7 @@
 
 ### Stratégie / risk management
 - **Sizing dynamique** — Kelly fractionnel sur la taille de mise plutôt que $10 fixe ; adapte le risque à la confiance du signal
-- **Filtre heure/jour** — la volatilité BTC présente des patterns horaires ; à mesurer sur les snapshots puis backtester avant d'activer
+- ~~**Filtre heure/jour**~~ — ✅ done (`hour_filter` dans strategy JSON : plages UTC semaine/weekend, ouverture/fermeture hebdomadaire US)
 - **Stop-loss hebdomadaire** — complément au stop-loss journalier pour limiter les séries de pertes sur plusieurs jours
 
 ### Backtest / analyse
