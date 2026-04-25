@@ -30,15 +30,15 @@ import aiohttp, websockets
 
 # ─── SIMULATE MODE ───────────────────────────────────────────────────────────
 # --simulate: redirect all file I/O to /tmp/tradinebotte-sim so that tests never
-# touch production data. Overrides POLYMARKET_DIR unconditionally.
+# touch production data. Overrides TRADINEBOTTE_DIR unconditionally.
 _SIMULATE = "--simulate" in sys.argv
 if _SIMULATE:
-    os.environ["POLYMARKET_DIR"] = "/tmp/tradinebotte-sim"
+    os.environ["TRADINEBOTTE_DIR"] = "/tmp/tradinebotte-sim"
 
 # ─── PATHS ───────────────────────────────────────────────────────────────────
 # All paths derive from a single env var so the bot can run anywhere, not just
-# ~/tradinebotte by default — no root required. Override with POLYMARKET_DIR.
-INSTALL_DIR = os.path.expanduser(os.environ.get("POLYMARKET_DIR", "~/tradinebotte"))
+# ~/tradinebotte by default — no root required. Override with TRADINEBOTTE_DIR.
+INSTALL_DIR = os.path.expanduser(os.environ.get("TRADINEBOTTE_DIR", "~/tradinebotte"))
 DB_PATH     = os.path.join(INSTALL_DIR, "live.db")
 LOG_PATH    = os.path.join(INSTALL_DIR, "live.log")
 CONFIG_PATH = os.path.join(INSTALL_DIR, "config.json")

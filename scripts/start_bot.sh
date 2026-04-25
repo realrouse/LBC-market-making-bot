@@ -1,22 +1,22 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════
 #  POLYMARKET LIVE BOT v3 — Lancement
-#  Prérequis : POLYMARKET_DIR=<dir> python3 scripts/setup.py
-#  (génère <POLYMARKET_DIR>/config.json)
+#  Prérequis : TRADINEBOTTE_DIR=<dir> python3 scripts/setup.py
+#  (génère <TRADINEBOTTE_DIR>/config.json)
 #
 #  Répertoire d'installation (par ordre de priorité) :
-#    1. Variable d'environnement : POLYMARKET_DIR=~/tradinebotte bash scripts/start_bot.sh
+#    1. Variable d'environnement : TRADINEBOTTE_DIR=~/tradinebotte bash scripts/start_bot.sh
 #    2. Valeur par défaut : ~/tradinebotte (aucun accès root requis)
 # ═══════════════════════════════════════════════════════════════════
 
-INSTALL_DIR="${POLYMARKET_DIR:-$HOME/tradinebotte}"
+INSTALL_DIR="${TRADINEBOTTE_DIR:-$HOME/tradinebotte}"
 INSTALL_DIR="$(eval echo "$INSTALL_DIR")"
 CONFIG="$INSTALL_DIR/config.json"
 
 # ── Vérification ──────────────────────────────────────────────────
 if [ ! -f "$CONFIG" ]; then
     echo "❌ ERREUR : config.json introuvable dans $INSTALL_DIR"
-    echo "   Lance d'abord : POLYMARKET_DIR=\"$INSTALL_DIR\" python3 scripts/setup.py"
+    echo "   Lance d'abord : TRADINEBOTTE_DIR=\"$INSTALL_DIR\" python3 scripts/setup.py"
     exit 1
 fi
 
@@ -29,7 +29,7 @@ fi
 
 # ── Lancement ─────────────────────────────────────────────────────
 echo "Lancement du bot depuis $INSTALL_DIR..."
-export POLYMARKET_DIR="$INSTALL_DIR"
+export TRADINEBOTTE_DIR="$INSTALL_DIR"
 nohup python3 "$INSTALL_DIR/live_bot.py" > /dev/null 2>&1 &
 echo "PID: $!"
 sleep 3

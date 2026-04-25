@@ -34,7 +34,7 @@ dans un virtualenv situé dans `~/tradinebotte/venv/` :
 
 ## Répertoire d'installation
 
-Tous les scripts lisent la variable d'environnement `POLYMARKET_DIR` pour
+Tous les scripts lisent la variable d'environnement `TRADINEBOTTE_DIR` pour
 déterminer où installer et exécuter le bot. Si elle n'est pas définie,
 la valeur par défaut est :
 
@@ -54,14 +54,14 @@ bash scripts/install.sh
 bash scripts/install.sh ~/tradinebotte
 
 # Chemin personnalisé via variable d'environnement
-POLYMARKET_DIR=~/tradinebotte bash scripts/install.sh
+TRADINEBOTTE_DIR=~/tradinebotte bash scripts/install.sh
 ```
 
 La même variable doit être définie de manière cohérente pour le setup,
 le lancement et le monitoring :
 
 ```bash
-export POLYMARKET_DIR=~/tradinebotte
+export TRADINEBOTTE_DIR=~/tradinebotte
 ```
 
 
@@ -83,11 +83,11 @@ bash scripts/install.sh [répertoire_installation] [--with-tests]
 Ce script va :
 - Installer les packages système (python3, pip, venv, sqlite3)
 - Créer le répertoire d'installation
-- Copier `bot/live_bot.py` et `bot/api_polymarket.py` vers `<POLYMARKET_DIR>/`
-- Copier `strategies/*.json` vers `<POLYMARKET_DIR>/strategies/`
-- Créer un virtualenv dans `<POLYMARKET_DIR>/venv/`
+- Copier `bot/live_bot.py` et `bot/api_polymarket.py` vers `<TRADINEBOTTE_DIR>/`
+- Copier `strategies/*.json` vers `<TRADINEBOTTE_DIR>/strategies/`
+- Créer un virtualenv dans `<TRADINEBOTTE_DIR>/venv/`
 - Installer les dépendances Python dans le virtualenv
-- Générer `<POLYMARKET_DIR>/run.sh` (wrapper avec `POLYMARKET_DIR` pré-défini)
+- Générer `<TRADINEBOTTE_DIR>/run.sh` (wrapper avec `TRADINEBOTTE_DIR` pré-défini)
 - Vérifier la syntaxe du bot
 
 
@@ -99,10 +99,10 @@ Exécuter `setup.py` une seule fois avec votre wallet Polygon. Il va :
 - Effectuer le swap USDC natif → USDC.e via Uniswap V3 si nécessaire
 - Approuver l'allowance CTF Exchange
 - Dériver les credentials API Polymarket
-- Écrire les credentials dans `<POLYMARKET_DIR>/config.json` (chmod 600)
+- Écrire les credentials dans `<TRADINEBOTTE_DIR>/config.json` (chmod 600)
 
 ```bash
-POLYMARKET_DIR=~/tradinebotte python3 scripts/setup.py
+TRADINEBOTTE_DIR=~/tradinebotte python3 scripts/setup.py
 ```
 
 La clé privée est saisie de manière interactive et n'est jamais visible
@@ -135,7 +135,7 @@ Elle se recharge automatiquement toutes les 60 s.
 Un aperçu statique de la page rendue est disponible dans [docs/status_example.html](docs/status_example.html).
 
 Le bot crée le répertoire HTML automatiquement et y écrit un `.htaccess`.
-Le fichier `.htpasswd` est stocké dans `POLYMARKET_DIR/.webstatus_htpasswd`
+Le fichier `.htpasswd` est stocké dans `TRADINEBOTTE_DIR/.webstatus_htpasswd`
 (hors de la racine web).
 
 ### Prérequis — Apache
@@ -169,7 +169,7 @@ Le fichier `.htpasswd` est stocké dans `POLYMARKET_DIR/.webstatus_htpasswd`
 
    ```bash
    # Option A — lisible par tous (plus simple, expose le hash aux utilisateurs locaux)
-   chmod o+r $POLYMARKET_DIR/.webstatus_htpasswd
+   chmod o+r $TRADINEBOTTE_DIR/.webstatus_htpasswd
 
    # Option B — ajouter www-data au groupe principal de l'utilisateur bot (plus sûr)
    sudo usermod -aG $(id -gn $USER) www-data
@@ -191,7 +191,7 @@ location /tradinebot_status.html {
 
 Le `.htpasswd` généré par le bot utilise le format Apache `{SHA}`,
 également supporté par nginx. Utiliser le chemin
-`POLYMARKET_DIR/.webstatus_htpasswd`.
+`TRADINEBOTTE_DIR/.webstatus_htpasswd`.
 
 Si `webstatuspage_path` pointe en dehors de `~/public_html`, s'assurer
 que le serveur web est configuré pour servir ce répertoire.
@@ -200,10 +200,10 @@ que le serveur web est configuré pour servir ce répertoire.
 ## Lancement
 
 ```bash
-POLYMARKET_DIR=~/tradinebotte bash scripts/start_bot.sh
+TRADINEBOTTE_DIR=~/tradinebotte bash scripts/start_bot.sh
 ```
 
-Ou via le wrapper généré (`POLYMARKET_DIR` déjà intégré) :
+Ou via le wrapper généré (`TRADINEBOTTE_DIR` déjà intégré) :
 
 ```bash
 ~/tradinebotte/run.sh
@@ -222,8 +222,8 @@ d'interrompre un trade ouvert). L'arrêter manuellement si besoin :
 pkill -f live_bot.py
 ```
 
-- Logs : `<POLYMARKET_DIR>/live.log`
-- Trades : `<POLYMARKET_DIR>/live.db` (SQLite)
+- Logs : `<TRADINEBOTTE_DIR>/live.log`
+- Trades : `<TRADINEBOTTE_DIR>/live.db` (SQLite)
 
 
 ## Monitoring
@@ -231,7 +231,7 @@ pkill -f live_bot.py
 Dashboard en temps réel :
 
 ```bash
-POLYMARKET_DIR=~/tradinebotte bash scripts/monitor.sh
+TRADINEBOTTE_DIR=~/tradinebotte bash scripts/monitor.sh
 ```
 
 Suivre les logs en direct :

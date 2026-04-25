@@ -11,16 +11,16 @@ Steps performed:
   4. If the CTF Exchange allowance is zero, approve it for the current balance
      (exact amount — not an unlimited approval, to limit smart-contract risk).
   5. Derive Polymarket API keys deterministically from the private key via ECDSA.
-  6. Write all credentials to POLYMARKET_DIR/config.json with chmod 600.
+  6. Write all credentials to TRADINEBOTTE_DIR/config.json with chmod 600.
 
 Usage:
   python3 scripts/setup.py
-  POLYMARKET_DIR=~/tradinebotte python3 scripts/setup.py
+  TRADINEBOTTE_DIR=~/tradinebotte python3 scripts/setup.py
 """
 
 import sys, os, json, getpass, sysconfig
 
-INSTALL_DIR = os.path.expanduser(os.environ.get("POLYMARKET_DIR", "~/tradinebotte"))
+INSTALL_DIR = os.path.expanduser(os.environ.get("TRADINEBOTTE_DIR", "~/tradinebotte"))
 RPC         = "https://polygon.drpc.org"
 CONFIG_PATH = os.path.join(INSTALL_DIR, "config.json")
 

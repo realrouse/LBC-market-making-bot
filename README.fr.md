@@ -30,7 +30,7 @@ Bot de trading automatisé pour les marchés de prédiction [Polymarket](https:/
 
 ## Base de données
 
-Le bot utilise **SQLite** (`live.db`) en mode journal WAL, qui autorise la lecture concurrente pendant les écritures (le script de monitoring peut interroger la base pendant que le bot enregistre des trades). Le fichier se trouve dans `POLYMARKET_DIR/live.db` (par défaut : `~/tradinebotte/live.db`).
+Le bot utilise **SQLite** (`live.db`) en mode journal WAL, qui autorise la lecture concurrente pendant les écritures (le script de monitoring peut interroger la base pendant que le bot enregistre des trades). Le fichier se trouve dans `TRADINEBOTTE_DIR/live.db` (par défaut : `~/tradinebotte/live.db`).
 
 ### Table : `trades`
 
@@ -98,7 +98,7 @@ Les clés optionnelles suivantes peuvent être ajoutées à `config.json` :
 | `webstatuspage_html` | booléen | `false` | Active la page de statut HTML statique. Si `true`, le bot écrit la page dans `webstatuspage_path` toutes les 5 minutes et après chaque résolution de trade. Nécessite un serveur web pointant vers le répertoire HTML — voir `INSTALL.fr` pour les prérequis complets. |
 | `webstatuspage_path` | chaîne | `~/public_html/tradinebot_status.html` | Chemin sur le système de fichiers pour la page HTML. `~` est développé en répertoire personnel. Le répertoire est créé automatiquement s'il n'existe pas. Pour le chemin par défaut `~/public_html`, le module Apache `mod_userdir` doit être activé. |
 | `webstatus_user` | chaîne | `"tradinebot"` | Identifiant pour la protection HTTP Basic Auth via `.htaccess`. Utilisé uniquement si `webstatus_password` est défini. |
-| `webstatus_password` | chaîne | `""` | Mot de passe HTTP Basic Auth. Si vide, aucun `.htaccess` n'est créé et la page est publiquement accessible. Si défini, le bot écrit un `.htaccess` dans le répertoire HTML et un `.htpasswd` (format Apache `{SHA}`) dans `POLYMARKET_DIR/.webstatus_htpasswd` (hors de la racine web). **Prérequis Apache :** modules `mod_auth_basic` + `mod_authn_file` activés, `AllowOverride AuthConfig` sur le répertoire HTML, et permission de lecture sur le `.htpasswd` pour le processus Apache (`www-data`). **nginx :** ne traite pas les `.htaccess` — configurer `auth_basic` manuellement dans le bloc server en pointant vers le même fichier `.htpasswd`. |
+| `webstatus_password` | chaîne | `""` | Mot de passe HTTP Basic Auth. Si vide, aucun `.htaccess` n'est créé et la page est publiquement accessible. Si défini, le bot écrit un `.htaccess` dans le répertoire HTML et un `.htpasswd` (format Apache `{SHA}`) dans `TRADINEBOTTE_DIR/.webstatus_htpasswd` (hors de la racine web). **Prérequis Apache :** modules `mod_auth_basic` + `mod_authn_file` activés, `AllowOverride AuthConfig` sur le répertoire HTML, et permission de lecture sur le `.htpasswd` pour le processus Apache (`www-data`). **nginx :** ne traite pas les `.htaccess` — configurer `auth_basic` manuellement dans le bloc server en pointant vers le même fichier `.htpasswd`. |
 
 ### Requêtes utiles
 
@@ -139,7 +139,7 @@ La suite exécute 99 tests (71 pour le bot live, 28 pour le moteur de backtest) 
 ## Backtest
 
 Rejouer les données `snapshots` historiques avec des paramètres de stratégie configurables.
-Si `POLYMARKET_DIR/live.db` est absent ou contient moins de 100 snapshots, le script utilise automatiquement le jeu de données embarqué (`data/backtest_sample_btc5m_range_2026.db`, 2430 snapshots issus de vrais marchés BTC 5 minutes collectés le 2026-04-25). Le fichier sélectionné est affiché au démarrage.
+Si `TRADINEBOTTE_DIR/live.db` est absent ou contient moins de 100 snapshots, le script utilise automatiquement le jeu de données embarqué (`data/backtest_sample_btc5m_range_2026.db`, 2430 snapshots issus de vrais marchés BTC 5 minutes collectés le 2026-04-25). Le fichier sélectionné est affiché au démarrage.
 
 ```bash
 python3 scripts/backtest.py                        # paramètres par défaut
@@ -147,7 +147,7 @@ python3 scripts/backtest.py --threshold 0.95       # seuil personnalisé
 python3 scripts/backtest.py --detail               # tableau trade par trade
 python3 scripts/backtest.py --compare              # comparaison avec les trades réels
 python3 scripts/backtest.py --sweep                # recherche en grille (135 combinaisons)
-POLYMARKET_DIR=~/mybot python3 scripts/backtest.py # chemin de base de données personnalisé
+TRADINEBOTTE_DIR=~/mybot python3 scripts/backtest.py # chemin de base de données personnalisé
 ```
 
 ## Notes

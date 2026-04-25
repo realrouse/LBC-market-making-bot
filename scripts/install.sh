@@ -4,7 +4,7 @@
 #
 #  Répertoire d'installation (par ordre de priorité) :
 #    1. Argument positionnel : bash scripts/install.sh ~/tradinebotte
-#    2. Variable d'environnement : POLYMARKET_DIR=~/tradinebotte bash scripts/install.sh
+#    2. Variable d'environnement : TRADINEBOTTE_DIR=~/tradinebotte bash scripts/install.sh
 #    3. Valeur par défaut : ~/tradinebotte (aucun accès root requis)
 #
 #  Options :
@@ -22,7 +22,7 @@ for arg in "$@"; do
     fi
 done
 
-INSTALL_DIR="${ARGS[0]:-${POLYMARKET_DIR:-$HOME/tradinebotte}}"
+INSTALL_DIR="${ARGS[0]:-${TRADINEBOTTE_DIR:-$HOME/tradinebotte}}"
 INSTALL_DIR="$(eval echo "$INSTALL_DIR")"   # développe ~ si présent
 
 echo "=== Répertoire d'installation : $INSTALL_DIR ==="
@@ -47,10 +47,10 @@ echo "=== Installation des packages Python ==="
 "$INSTALL_DIR/venv/bin/pip" install --upgrade pip
 "$INSTALL_DIR/venv/bin/pip" install aiohttp websockets web3 py-clob-client
 
-# Wrapper d'exécution avec POLYMARKET_DIR exportée
+# Wrapper d'exécution avec TRADINEBOTTE_DIR exportée
 cat > "$INSTALL_DIR/run.sh" << EOF
 #!/bin/bash
-export POLYMARKET_DIR="$INSTALL_DIR"
+export TRADINEBOTTE_DIR="$INSTALL_DIR"
 source "$INSTALL_DIR/venv/bin/activate"
 python3 "$INSTALL_DIR/live_bot.py"
 EOF
@@ -71,7 +71,7 @@ if [ "$WITH_TESTS" = "1" ]; then
     cp data/backtest_sample_btc5m_range_2026.db "$INSTALL_DIR/data/backtest_sample_btc5m_range_2026.db"
     echo "=== Lancement des tests ==="
     cd "$INSTALL_DIR"
-    POLYMARKET_DIR="$INSTALL_DIR" "$INSTALL_DIR/venv/bin/python3" \
+    TRADINEBOTTE_DIR="$INSTALL_DIR" "$INSTALL_DIR/venv/bin/python3" \
         -W ignore::ResourceWarning -m unittest discover tests/ -v
     cd - > /dev/null
 fi
@@ -80,10 +80,10 @@ echo ""
 echo "=== Installation terminée dans $INSTALL_DIR ==="
 echo ""
 echo "ÉTAPES SUIVANTES :"
-echo "1. Prépare ton wallet : POLYMARKET_DIR=\"$INSTALL_DIR\" python3 scripts/setup.py"
-echo "2. Lance le bot      : POLYMARKET_DIR=\"$INSTALL_DIR\" bash scripts/start_bot.sh"
+echo "1. Prépare ton wallet : TRADINEBOTTE_DIR=\"$INSTALL_DIR\" python3 scripts/setup.py"
+echo "2. Lance le bot      : TRADINEBOTTE_DIR=\"$INSTALL_DIR\" bash scripts/start_bot.sh"
 if [ "$WITH_TESTS" = "1" ]; then
 echo ""
-echo "Tests : cd \"$INSTALL_DIR\" && POLYMARKET_DIR=\"$INSTALL_DIR\" venv/bin/python3 -W ignore::ResourceWarning -m unittest discover tests/ -v"
-echo "Backtest : cd \"$INSTALL_DIR\" && POLYMARKET_DIR=\"$INSTALL_DIR\" venv/bin/python3 scripts/backtest.py"
+echo "Tests : cd \"$INSTALL_DIR\" && TRADINEBOTTE_DIR=\"$INSTALL_DIR\" venv/bin/python3 -W ignore::ResourceWarning -m unittest discover tests/ -v"
+echo "Backtest : cd \"$INSTALL_DIR\" && TRADINEBOTTE_DIR=\"$INSTALL_DIR\" venv/bin/python3 scripts/backtest.py"
 fi

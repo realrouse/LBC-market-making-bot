@@ -9,16 +9,19 @@ All notable changes to this project are documented here.
 ## [Unreleased]
 
 ### Bugfix
-- All scripts, `bot/live_bot.py`, and all documentation — default install directory renamed from `~/polymarket` to `~/tradinebotte` to match the bot's name; `POLYMARKET_DIR` still overrides as before; simulation temp dir renamed from `/tmp/polymarket-sim` to `/tmp/tradinebotte-sim`; test temp dir renamed from `/tmp/polymarket-test` to `/tmp/tradinebotte-test`
+- All scripts, `bot/live_bot.py`, and all documentation — environment variable renamed from `POLYMARKET_DIR` to `TRADINEBOTTE_DIR` to match the project name; update any existing `export POLYMARKET_DIR=...` in your shell profile or systemd unit to `export TRADINEBOTTE_DIR=...`
 
 ### Bugfix
-- All scripts and `bot/live_bot.py` — default install path changed from `/opt/polymarket-live` (requires root) to `~/polymarket` (no root needed); `POLYMARKET_DIR` still overrides as before; historical CHANGELOG entries referencing `/opt/polymarket-live` reflect the old default and are left unchanged
+- All scripts, `bot/live_bot.py`, and all documentation — default install directory renamed from `~/polymarket` to `~/tradinebotte` to match the bot's name; `TRADINEBOTTE_DIR` still overrides as before; simulation temp dir renamed from `/tmp/polymarket-sim` to `/tmp/tradinebotte-sim`; test temp dir renamed from `/tmp/polymarket-test` to `/tmp/tradinebotte-test`
+
+### Bugfix
+- All scripts and `bot/live_bot.py` — default install path changed from `/opt/polymarket-live` (requires root) to `~/polymarket` (no root needed); `TRADINEBOTTE_DIR` still overrides as before; historical CHANGELOG entries referencing `/opt/polymarket-live` reflect the old default and are left unchanged
 
 ### Bugfix
 - `scripts/backtest.py` — fallback to sample dataset now requires `live.db` to have at least 100 snapshots (previously any non-empty file was accepted, causing a stale 16-snapshot test artifact to shadow the bundled dataset); also prints which database is selected (`(live)` vs `(sample)`) at startup
 
 ### Feature
-- `bot/live_bot.py` — new `--simulate` flag: redirects all file I/O to `/tmp/polymarket-sim` (overriding `POLYMARKET_DIR`), mirrors logs to stdout in addition to the log file, and logs a visible `MODE SIMULATION` warning; production `live.db` and `live.log` are never touched; safe to run on any machine without credentials
+- `bot/live_bot.py` — new `--simulate` flag: redirects all file I/O to `/tmp/polymarket-sim` (overriding `TRADINEBOTTE_DIR`), mirrors logs to stdout in addition to the log file, and logs a visible `MODE SIMULATION` warning; production `live.db` and `live.log` are never touched; safe to run on any machine without credentials
 - `INSTALL.md` / `INSTALL.fr.md` — Testing section updated: `timeout 20 python3 bot/live_bot.py --simulate` replaces the previous command that wrote to the production path by default
 - `README.md` / `README.fr.md` — Simulation mode feature bullet updated to describe `--simulate`
 
@@ -28,7 +31,7 @@ All notable changes to this project are documented here.
 
 ### Data
 - `data/backtest_sample_btc5m_range_2026.db` — bundled SQLite sample dataset: 2430 snapshots collected in simulation mode on 2026-04-25 from real Polymarket BTC 5-minute markets (snapshots table only, no credentials or trade data)
-- `scripts/backtest.py` — automatic fallback to `data/backtest_sample_btc5m_range_2026.db` when `POLYMARKET_DIR/live.db` is absent; allows running the backtest on any machine without a live bot database
+- `scripts/backtest.py` — automatic fallback to `data/backtest_sample_btc5m_range_2026.db` when `TRADINEBOTTE_DIR/live.db` is absent; allows running the backtest on any machine without a live bot database
 
 ### Performance
 - `bot/live_bot.py` — `MARKET_REFRESH` reduced from 90 s to 30 s: the bot now discovers new markets at most 30 s after they enter the ±6-minute window, instead of up to 90 s; the Gamma API call remains a single request (tag_id=102892 filter, no pagination) so the overhead is negligible
@@ -60,7 +63,7 @@ All notable changes to this project are documented here.
 
 ### Feature
 - `bot/live_bot.py` — new web status page: when `webstatuspage_html` is `true` in `config.json`, the bot writes a self-contained dark-themed HTML status page showing capital, total/daily PnL, win rate, open positions, and the 10 most recent resolved trades; the page is written every `DASHBOARD_INTERVAL` seconds (5 min) and immediately after each trade resolution; the directory is created automatically; the page carries a `<meta http-equiv="refresh" content="60">` tag for browser auto-refresh
-- `bot/live_bot.py` — `.htaccess` / `.htpasswd` Basic Auth protection: if `webstatus_password` is set, `setup_htaccess()` writes a `.htpasswd` (Apache `{SHA}` format, no external dependencies) to `POLYMARKET_DIR` (outside the web root) and a `.htaccess` referencing it in the HTML page directory; password changes are applied on the next page write; `.htaccess` is written once and not overwritten if already present to preserve manual edits
+- `bot/live_bot.py` — `.htaccess` / `.htpasswd` Basic Auth protection: if `webstatus_password` is set, `setup_htaccess()` writes a `.htpasswd` (Apache `{SHA}` format, no external dependencies) to `TRADINEBOTTE_DIR` (outside the web root) and a `.htaccess` referencing it in the HTML page directory; password changes are applied on the next page write; `.htaccess` is written once and not overwritten if already present to preserve manual edits
 - `config.json.example` — four new optional keys: `webstatuspage_html` (bool, default `false`), `webstatuspage_path` (string, default `~/public_html/tradinebot_status.html`), `webstatus_user` (string, default `"tradinebot"`), `webstatus_password` (string, default `""`)
 
 ### Performance
@@ -72,7 +75,7 @@ All notable changes to this project are documented here.
 ### Feature
 - `scripts/backtest.py` — standalone backtest engine: replays `snapshots` table chronologically, applies configurable signal logic, and produces simulated trade statistics; supports `--sweep` grid-search mode (5×3×3×3 = 135 parameter combinations sorted by win rate), `--detail` per-trade table, and `--compare` to show actual bot results alongside the simulation; configurable via `Params` dataclass (`signal_threshold`, `entry_max`, `min_secs_remaining`, `min_ask_vol`, `win_threshold`, `loss_threshold`, `obi_reject_thresh`, `stake`, `daily_stop_loss`)
 - `tests/test_backtest.py` — 28 tests for the backtest engine: `TestFeeHelper` (2), `TestRunBacktestBasic` (14, covering all signal guards and resolution paths), `TestRunBacktestMultiMarket` (4, independent markets, direction isolation, expiry resolution), `TestRunBacktestDailyStopLoss` (1), `TestRunBacktestParams` (3, threshold/win/loss sensitivity), `TestSummarize` (6, drawdown, win rate, open trade counting)
-- `tests/test_bot.py` — automated test suite (71 tests, zero external services required): `TestComputeFee` (4), `TestParseBookMessage` (14), `TestMarketHelpers` (9), `TestTokenState` (7), `TestRegisterMarket` (5), `TestCheckSignal` (13 guards including all 8 entry conditions, daily stop-loss, and duplicate-entry prevention), `TestCheckResolution` (7), `TestCloseTrade` (6), `TestRestoreState` (5); all tests use an in-memory SQLite database and a fixed `POLYMARKET_DIR=/tmp/polymarket-test` so they never touch production files
+- `tests/test_bot.py` — automated test suite (71 tests, zero external services required): `TestComputeFee` (4), `TestParseBookMessage` (14), `TestMarketHelpers` (9), `TestTokenState` (7), `TestRegisterMarket` (5), `TestCheckSignal` (13 guards including all 8 entry conditions, daily stop-loss, and duplicate-entry prevention), `TestCheckResolution` (7), `TestCloseTrade` (6), `TestRestoreState` (5); all tests use an in-memory SQLite database and a fixed `TRADINEBOTTE_DIR=/tmp/polymarket-test` so they never touch production files
 - `scripts/run_tests.sh` — test runner now suppresses Python 3.13 `ResourceWarning` for unclosed in-memory SQLite connections (`-W ignore::ResourceWarning`); total suite: 99 tests
 - `config.json` / `config.json.example` — new optional key `db_mmap_mb` (integer, default `0`): when set to a non-zero value, activates `PRAGMA mmap_size` so SQLite memory-maps the database file via the kernel page cache; set to e.g. `256` for 256 MB
 - `bot/live_bot.py` — `load_config()` refactored to return the full config dict (extensible for future options); `DB_MMAP_MB` derived from config at startup; `init_db()` applies the pragma and logs a confirmation line when mmap is active
@@ -84,12 +87,12 @@ All notable changes to this project are documented here.
 - `scripts/setup.py` — module docstring translated to English; inline comments explain the security decisions (getpass, exact-amount ERC-20 approvals), Uniswap V3 swap parameters (fee tier 100, 0.5% slippage guard, 5-min deadline), sysconfig dynamic path, API key ECDSA derivation, and chmod 600 rationale
 
 ### Feature
-- `POLYMARKET_DIR` environment variable now controls the install path across all scripts and the bot itself, defaulting to `/opt/polymarket-live`
-- `scripts/install.sh` — accepts install directory as a positional argument or via `POLYMARKET_DIR`; generates a `run.sh` wrapper in the install dir with the path pre-set
-- `scripts/start_bot.sh` — reads `POLYMARKET_DIR`, exports it when launching the bot
-- `scripts/monitor.sh` — reads `POLYMARKET_DIR` for log and database paths
-- `scripts/setup.py` — reads `POLYMARKET_DIR` for `config.json` path and venv site-packages; also fixes hardcoded Python 3.12 venv path (uses `sysconfig` like the bot)
-- `bot/live_bot.py` — `DB_PATH`, `LOG_PATH`, `CONFIG_PATH` and venv lookup all derived from `POLYMARKET_DIR`
+- `TRADINEBOTTE_DIR` environment variable now controls the install path across all scripts and the bot itself, defaulting to `/opt/polymarket-live`
+- `scripts/install.sh` — accepts install directory as a positional argument or via `TRADINEBOTTE_DIR`; generates a `run.sh` wrapper in the install dir with the path pre-set
+- `scripts/start_bot.sh` — reads `TRADINEBOTTE_DIR`, exports it when launching the bot
+- `scripts/monitor.sh` — reads `TRADINEBOTTE_DIR` for log and database paths
+- `scripts/setup.py` — reads `TRADINEBOTTE_DIR` for `config.json` path and venv site-packages; also fixes hardcoded Python 3.12 venv path (uses `sysconfig` like the bot)
+- `bot/live_bot.py` — `DB_PATH`, `LOG_PATH`, `CONFIG_PATH` and venv lookup all derived from `TRADINEBOTTE_DIR`
 
 ### Documentation
 - `INSTALL` — new English installation guide extracted from README.md (requirements, dependencies, wallet setup, configuration, running, monitoring, virtual environment testing)

@@ -9,16 +9,19 @@ Toutes les modifications notables de ce projet sont documentées ici.
 ## [Non publié]
 
 ### Correction de bug
-- Tous les scripts, `bot/live_bot.py` et toute la documentation — répertoire d'installation par défaut renommé de `~/polymarket` en `~/tradinebotte` pour correspondre au nom du bot ; `POLYMARKET_DIR` reste prioritaire comme avant ; répertoire temporaire de simulation renommé de `/tmp/polymarket-sim` en `/tmp/tradinebotte-sim` ; répertoire temporaire de test renommé de `/tmp/polymarket-test` en `/tmp/tradinebotte-test`
+- Tous les scripts, `bot/live_bot.py` et toute la documentation — variable d'environnement renommée de `POLYMARKET_DIR` en `TRADINEBOTTE_DIR` pour correspondre au nom du projet ; mettre à jour tout `export POLYMARKET_DIR=...` dans le profil shell ou l'unité systemd en `export TRADINEBOTTE_DIR=...`
 
 ### Correction de bug
-- Tous les scripts et `bot/live_bot.py` — chemin d'installation par défaut changé de `/opt/polymarket-live` (nécessitait root) vers `~/polymarket` (aucun root requis) ; `POLYMARKET_DIR` reste prioritaire comme avant ; les entrées historiques du CHANGELOG référençant `/opt/polymarket-live` reflètent l'ancien défaut et sont conservées
+- Tous les scripts, `bot/live_bot.py` et toute la documentation — répertoire d'installation par défaut renommé de `~/polymarket` en `~/tradinebotte` pour correspondre au nom du bot ; `TRADINEBOTTE_DIR` reste prioritaire comme avant ; répertoire temporaire de simulation renommé de `/tmp/polymarket-sim` en `/tmp/tradinebotte-sim` ; répertoire temporaire de test renommé de `/tmp/polymarket-test` en `/tmp/tradinebotte-test`
+
+### Correction de bug
+- Tous les scripts et `bot/live_bot.py` — chemin d'installation par défaut changé de `/opt/polymarket-live` (nécessitait root) vers `~/polymarket` (aucun root requis) ; `TRADINEBOTTE_DIR` reste prioritaire comme avant ; les entrées historiques du CHANGELOG référençant `/opt/polymarket-live` reflètent l'ancien défaut et sont conservées
 
 ### Correction de bug
 - `scripts/backtest.py` — le fallback vers le dataset embarqué exige désormais que `live.db` contienne au moins 100 snapshots (auparavant, tout fichier non vide était accepté, ce qui permettait à un artefact de test périmé de 16 snapshots de masquer le dataset embarqué) ; affiche également quel fichier est sélectionné (`(live)` ou `(sample)`) au démarrage
 
 ### Fonctionnalité
-- `bot/live_bot.py` — nouveau flag `--simulate` : redirige tous les fichiers vers `/tmp/polymarket-sim` (surcharge `POLYMARKET_DIR`), duplique les logs sur stdout en plus du fichier log, et affiche un avertissement `MODE SIMULATION` visible ; le `live.db` et `live.log` de production ne sont jamais touchés ; utilisable sur n'importe quelle machine sans credentials
+- `bot/live_bot.py` — nouveau flag `--simulate` : redirige tous les fichiers vers `/tmp/polymarket-sim` (surcharge `TRADINEBOTTE_DIR`), duplique les logs sur stdout en plus du fichier log, et affiche un avertissement `MODE SIMULATION` visible ; le `live.db` et `live.log` de production ne sont jamais touchés ; utilisable sur n'importe quelle machine sans credentials
 - `INSTALL.md` / `INSTALL.fr.md` — section Tests mise à jour : `timeout 20 python3 bot/live_bot.py --simulate` remplace la commande précédente qui écrivait dans le chemin de production par défaut
 - `README.md` / `README.fr.md` — bullet Mode simulation mis à jour pour décrire `--simulate`
 
@@ -28,7 +31,7 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ### Données
 - `data/backtest_sample_btc5m_range_2026.db` — jeu de données SQLite embarqué : 2430 snapshots collectés en mode simulation le 2026-04-25 sur de vrais marchés BTC 5 minutes Polymarket (table snapshots uniquement, aucune credential ni donnée de trade)
-- `scripts/backtest.py` — fallback automatique vers `data/backtest_sample_btc5m_range_2026.db` si `POLYMARKET_DIR/live.db` est absent ; permet de lancer le backtest sur n'importe quelle machine sans base de données du bot live
+- `scripts/backtest.py` — fallback automatique vers `data/backtest_sample_btc5m_range_2026.db` si `TRADINEBOTTE_DIR/live.db` est absent ; permet de lancer le backtest sur n'importe quelle machine sans base de données du bot live
 
 ### Performance
 - `bot/live_bot.py` — `MARKET_REFRESH` réduit de 90 s à 30 s : le bot découvre désormais les nouveaux marchés au plus 30 s après leur entrée dans la fenêtre ±6 minutes, au lieu de 90 s maximum ; l'appel Gamma API reste une requête unique (filtre tag_id=102892, sans pagination), la surcharge est négligeable
@@ -60,7 +63,7 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ### Fonctionnalité
 - `bot/live_bot.py` — nouvelle page de statut web : si `webstatuspage_html` vaut `true` dans `config.json`, le bot écrit une page HTML autonome en thème sombre affichant le capital, le PnL total et journalier, le taux de victoire, les positions ouvertes et les 10 derniers trades résolus ; la page est écrite toutes les `DASHBOARD_INTERVAL` secondes (5 min) et immédiatement après chaque résolution de trade ; le répertoire est créé automatiquement ; la page inclut un `<meta http-equiv="refresh" content="60">` pour le rechargement automatique dans le navigateur
-- `bot/live_bot.py` — protection `.htaccess` / `.htpasswd` Basic Auth : si `webstatus_password` est défini, `setup_htaccess()` écrit un `.htpasswd` (format Apache `{SHA}`, sans dépendance externe) dans `POLYMARKET_DIR` (hors de la racine web) et un `.htaccess` pointant vers lui dans le répertoire de la page HTML ; les changements de mot de passe sont appliqués à la prochaine écriture de la page ; le `.htaccess` n'est écrit qu'une fois et non écrasé s'il existe déjà pour préserver les modifications manuelles
+- `bot/live_bot.py` — protection `.htaccess` / `.htpasswd` Basic Auth : si `webstatus_password` est défini, `setup_htaccess()` écrit un `.htpasswd` (format Apache `{SHA}`, sans dépendance externe) dans `TRADINEBOTTE_DIR` (hors de la racine web) et un `.htaccess` pointant vers lui dans le répertoire de la page HTML ; les changements de mot de passe sont appliqués à la prochaine écriture de la page ; le `.htaccess` n'est écrit qu'une fois et non écrasé s'il existe déjà pour préserver les modifications manuelles
 - `config.json.example` — quatre nouvelles clés optionnelles : `webstatuspage_html` (booléen, défaut `false`), `webstatuspage_path` (chaîne, défaut `~/public_html/tradinebot_status.html`), `webstatus_user` (chaîne, défaut `"tradinebot"`), `webstatus_password` (chaîne, défaut `""`)
 
 ### Performance
@@ -72,7 +75,7 @@ Toutes les modifications notables de ce projet sont documentées ici.
 ### Fonctionnalité
 - `scripts/backtest.py` — moteur de backtest autonome : rejoue la table `snapshots` chronologiquement, applique la logique de signal configurable et produit des statistiques de trades simulés ; mode `--sweep` pour une recherche en grille (5×3×3×3 = 135 combinaisons de paramètres triées par taux de victoire), `--detail` pour un tableau trade par trade, et `--compare` pour afficher les résultats réels du bot en regard de la simulation ; configurable via le dataclass `Params` (`signal_threshold`, `entry_max`, `min_secs_remaining`, `min_ask_vol`, `win_threshold`, `loss_threshold`, `obi_reject_thresh`, `stake`, `daily_stop_loss`)
 - `tests/test_backtest.py` — 28 tests pour le moteur de backtest : `TestFeeHelper` (2), `TestRunBacktestBasic` (14, couvrant toutes les gardes du signal et les chemins de résolution), `TestRunBacktestMultiMarket` (4, marchés indépendants, isolation de direction, résolution à l'expiration), `TestRunBacktestDailyStopLoss` (1), `TestRunBacktestParams` (3, sensibilité aux seuils win/loss), `TestSummarize` (6, drawdown, taux de victoire, comptage des trades ouverts)
-- `tests/test_bot.py` — suite de tests automatisés (71 tests, aucun service externe requis) : `TestComputeFee` (4), `TestParseBookMessage` (14), `TestMarketHelpers` (9), `TestTokenState` (7), `TestRegisterMarket` (5), `TestCheckSignal` (13 gardes dont les 8 conditions d'entrée, le stop-loss journalier et la prévention des doublons), `TestCheckResolution` (7), `TestCloseTrade` (6), `TestRestoreState` (5) ; tous les tests utilisent une base SQLite en mémoire et un `POLYMARKET_DIR=/tmp/polymarket-test` fixe pour ne jamais toucher les fichiers de production
+- `tests/test_bot.py` — suite de tests automatisés (71 tests, aucun service externe requis) : `TestComputeFee` (4), `TestParseBookMessage` (14), `TestMarketHelpers` (9), `TestTokenState` (7), `TestRegisterMarket` (5), `TestCheckSignal` (13 gardes dont les 8 conditions d'entrée, le stop-loss journalier et la prévention des doublons), `TestCheckResolution` (7), `TestCloseTrade` (6), `TestRestoreState` (5) ; tous les tests utilisent une base SQLite en mémoire et un `TRADINEBOTTE_DIR=/tmp/polymarket-test` fixe pour ne jamais toucher les fichiers de production
 - `scripts/run_tests.sh` — le lanceur de tests supprime désormais les `ResourceWarning` Python 3.13 pour les connexions SQLite en mémoire non fermées (`-W ignore::ResourceWarning`) ; suite totale : 99 tests
 - `config.json` / `config.json.example` — nouvelle clé optionnelle `db_mmap_mb` (entier, défaut `0`) : quand elle est non nulle, active `PRAGMA mmap_size` pour que SQLite mappe le fichier de base de données via le page cache du kernel ; mettre à ex. `256` pour 256 Mo
 - `bot/live_bot.py` — `load_config()` refactorisée pour retourner le dict de config complet (extensible pour de futures options) ; `DB_MMAP_MB` dérivé de la config au démarrage ; `init_db()` applique le pragma et enregistre une ligne de confirmation dans les logs quand le mmap est actif
@@ -84,12 +87,12 @@ Toutes les modifications notables de ce projet sont documentées ici.
 - `scripts/setup.py` — docstring du module traduit en anglais ; commentaires inline expliquant les décisions de sécurité (getpass, approbations ERC-20 à montant exact), les paramètres du swap Uniswap V3 (fee tier 100, garde slippage 0,5%, deadline 5 min), le chemin dynamique sysconfig, la dérivation ECDSA des clés API, et le chmod 600
 
 ### Fonctionnalité
-- La variable d'environnement `POLYMARKET_DIR` contrôle désormais le chemin d'installation dans tous les scripts et dans le bot, avec `/opt/polymarket-live` comme valeur par défaut
-- `scripts/install.sh` — accepte le répertoire d'installation en argument positionnel ou via `POLYMARKET_DIR` ; génère un wrapper `run.sh` dans le répertoire d'installation avec le chemin pré-défini
-- `scripts/start_bot.sh` — lit `POLYMARKET_DIR` et l'exporte lors du lancement du bot
-- `scripts/monitor.sh` — lit `POLYMARKET_DIR` pour les chemins des logs et de la base de données
-- `scripts/setup.py` — lit `POLYMARKET_DIR` pour le chemin de `config.json` et les site-packages du venv ; corrige également le chemin venv codé en dur pour Python 3.12 (utilise `sysconfig` comme le bot)
-- `bot/live_bot.py` — `DB_PATH`, `LOG_PATH`, `CONFIG_PATH` et la recherche du venv sont tous dérivés de `POLYMARKET_DIR`
+- La variable d'environnement `TRADINEBOTTE_DIR` contrôle désormais le chemin d'installation dans tous les scripts et dans le bot, avec `/opt/polymarket-live` comme valeur par défaut
+- `scripts/install.sh` — accepte le répertoire d'installation en argument positionnel ou via `TRADINEBOTTE_DIR` ; génère un wrapper `run.sh` dans le répertoire d'installation avec le chemin pré-défini
+- `scripts/start_bot.sh` — lit `TRADINEBOTTE_DIR` et l'exporte lors du lancement du bot
+- `scripts/monitor.sh` — lit `TRADINEBOTTE_DIR` pour les chemins des logs et de la base de données
+- `scripts/setup.py` — lit `TRADINEBOTTE_DIR` pour le chemin de `config.json` et les site-packages du venv ; corrige également le chemin venv codé en dur pour Python 3.12 (utilise `sysconfig` comme le bot)
+- `bot/live_bot.py` — `DB_PATH`, `LOG_PATH`, `CONFIG_PATH` et la recherche du venv sont tous dérivés de `TRADINEBOTTE_DIR`
 
 ### Documentation
 - `INSTALL` — nouveau guide d'installation en anglais extrait du README.md (prérequis, dépendances, configuration du wallet, lancement, monitoring, test en environnement virtuel)

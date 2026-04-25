@@ -30,7 +30,7 @@ Automated trading bot for [Polymarket](https://polymarket.com) prediction market
 
 ## Database
 
-The bot uses **SQLite** (`live.db`) with WAL journal mode for concurrent read access (the monitor script can query while the bot writes). The database file is stored at `POLYMARKET_DIR/live.db` (default: `~/tradinebotte/live.db`).
+The bot uses **SQLite** (`live.db`) with WAL journal mode for concurrent read access (the monitor script can query while the bot writes). The database file is stored at `TRADINEBOTTE_DIR/live.db` (default: `~/tradinebotte/live.db`).
 
 ### Table: `trades`
 
@@ -98,7 +98,7 @@ The following optional keys can be added to `config.json`:
 | `webstatuspage_html` | boolean | `false` | Enable the static HTML status page. When `true`, the bot writes a page to `webstatuspage_path` every 5 minutes and after each trade resolution. Requires a web server pointed at the HTML directory — see `INSTALL` for full prerequisites. |
 | `webstatuspage_path` | string | `~/public_html/tradinebot_status.html` | Filesystem path for the HTML status page. `~` is expanded to the home directory. The directory is created automatically if it does not exist. If using the default `~/public_html` path, Apache `mod_userdir` must be enabled. |
 | `webstatus_user` | string | `"tradinebot"` | Username for HTTP Basic Auth protection via `.htaccess`. Only used when `webstatus_password` is set. |
-| `webstatus_password` | string | `""` | Password for HTTP Basic Auth. If empty, no `.htaccess` is created and the page is publicly accessible. When set, the bot writes a `.htaccess` in the HTML directory and a `.htpasswd` (Apache `{SHA}` format) at `POLYMARKET_DIR/.webstatus_htpasswd` (outside the web root). **Apache prerequisites:** `mod_auth_basic` + `mod_authn_file` enabled, `AllowOverride AuthConfig` on the HTML directory, and read permission on the `.htpasswd` file for the Apache process (`www-data`). **nginx:** does not process `.htaccess` — configure `auth_basic` manually in your server block pointing to the same `.htpasswd` file. |
+| `webstatus_password` | string | `""` | Password for HTTP Basic Auth. If empty, no `.htaccess` is created and the page is publicly accessible. When set, the bot writes a `.htaccess` in the HTML directory and a `.htpasswd` (Apache `{SHA}` format) at `TRADINEBOTTE_DIR/.webstatus_htpasswd` (outside the web root). **Apache prerequisites:** `mod_auth_basic` + `mod_authn_file` enabled, `AllowOverride AuthConfig` on the HTML directory, and read permission on the `.htpasswd` file for the Apache process (`www-data`). **nginx:** does not process `.htaccess` — configure `auth_basic` manually in your server block pointing to the same `.htpasswd` file. |
 
 ### Useful queries
 
@@ -139,7 +139,7 @@ The suite runs 99 tests (71 for the live bot, 28 for the backtest engine) coveri
 ## Backtest
 
 Replay historical `snapshots` data against configurable strategy parameters.
-If `POLYMARKET_DIR/live.db` is absent or has fewer than 100 snapshots, the script falls back automatically to the bundled sample dataset (`data/backtest_sample_btc5m_range_2026.db`, 2430 snapshots from real BTC 5-minute markets collected on 2026-04-25). The selected database is printed at startup.
+If `TRADINEBOTTE_DIR/live.db` is absent or has fewer than 100 snapshots, the script falls back automatically to the bundled sample dataset (`data/backtest_sample_btc5m_range_2026.db`, 2430 snapshots from real BTC 5-minute markets collected on 2026-04-25). The selected database is printed at startup.
 
 ```bash
 python3 scripts/backtest.py                        # default parameters
@@ -147,7 +147,7 @@ python3 scripts/backtest.py --threshold 0.95       # custom threshold
 python3 scripts/backtest.py --detail               # print per-trade table
 python3 scripts/backtest.py --compare              # compare vs actual bot trades
 python3 scripts/backtest.py --sweep                # grid search (135 combinations)
-POLYMARKET_DIR=~/mybot python3 scripts/backtest.py # custom database path
+TRADINEBOTTE_DIR=~/mybot python3 scripts/backtest.py # custom database path
 ```
 
 ## Notes

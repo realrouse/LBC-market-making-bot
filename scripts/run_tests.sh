@@ -9,11 +9,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 # Prefer the project .venv created with `uv venv`.
-# Fall back to the production venv at POLYMARKET_DIR if .venv is absent.
+# Fall back to the production venv at TRADINEBOTTE_DIR if .venv is absent.
 if [ -d "$PROJECT_DIR/.venv" ]; then
     PYTHON="$PROJECT_DIR/.venv/bin/python3"
-elif [ -d "${POLYMARKET_DIR:-$HOME/tradinebotte}/venv" ]; then
-    PYTHON="${POLYMARKET_DIR:-$HOME/tradinebotte}/venv/bin/python3"
+elif [ -d "${TRADINEBOTTE_DIR:-$HOME/tradinebotte}/venv" ]; then
+    PYTHON="${TRADINEBOTTE_DIR:-$HOME/tradinebotte}/venv/bin/python3"
 else
     echo "ERROR: no virtual environment found."
     echo "Create one with:"
@@ -24,7 +24,7 @@ fi
 cd "$PROJECT_DIR"
 
 # Redirect bot I/O to /tmp so tests never touch /opt or write credentials.
-export POLYMARKET_DIR="/tmp/tradinebotte-test"
+export TRADINEBOTTE_DIR="/tmp/tradinebotte-test"
 
 echo "Python : $PYTHON ($("$PYTHON" --version))"
 echo "Tests  : $PROJECT_DIR/tests/"
