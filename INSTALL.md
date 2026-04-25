@@ -317,6 +317,118 @@ python3 scripts/backtest.py --all --sweep
 When more than one file is processed, each file runs with capital reset to `capital_start` (independent simulation), and an AGGREGATE block summarises combined wins, losses, PnL, win rate, and worst drawdown across all files.
 
 
+## Hour / Day Filter
+
+The bot can restrict trade entries to specific UTC hour ranges depending on the day of the week. The filter is configured in the strategy JSON file (`strategies/polymarket_BTC5M.json`) and is **disabled by default** — existing behaviour is preserved until you explicitly enable it.
+
+### Rationale
+
+BTC volatility follows daily and weekly patterns driven by institutional flows:
+
+| Period | UTC window | Characteristic |
+|---|---|---|
+| Asian session | 00:00–08:00 | Moderate volume, directional moves |
+| European dead zone | 08:00–13:00 | Low volume, noisy signals |
+| US session | 13:00–22:00 | High volume, clearest signals |
+| US weekly open | Mon 13:30 | Institutional re-entry after weekend; strong directional move |
+| US weekly close | Fri 20:00 | Position squaring; volatility spike then drop |
+| Weekend | Sat–Sun | Retail-driven, higher noise, lower predictability |
+
+### Configuration
+
+Add or edit the `hour_filter` block in your strategy JSON:
+
+```json
+"hour_filter": {
+    "enabled": true,
+    "weekday_utc_ranges": [[0, 8], [13, 22]],
+    "weekend_utc_ranges": [],
+    "us_weekly_open": true,
+    "us_weekly_close": true
+}
+```
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Master switch. `false` = no filtering, all hours allowed. |
+| `weekday_utc_ranges` | list of `[start, end]` | `[]` | UTC hour ranges allowed Mon–Fri. Empty = all hours allowed on weekdays. |
+| `weekend_utc_ranges` | list of `[start, end]` | `[]` | UTC hour ranges allowed Sat–Sun. Empty = **all weekend trading blocked**. |
+| `us_weekly_open` | bool | `true` | When `true`, blocks entries on **Monday before 13:30 UTC** (US markets have not yet opened for the week). |
+| `us_weekly_close` | bool | `true` | When `true`, blocks entries on **Friday from 20:00 UTC** (US markets have closed for the week). |
+
+Hour ranges use the convention `[start, end)` — `[13, 22]` means 13:00 ≤ hour < 22:00.
+The `us_weekly_open` and `us_weekly_close` constraints are applied **in addition to** `weekday_utc_ranges`, and take precedence over them on their respective days.
+
+### Decision logic (Monday example, filter enabled)
+
+```
+Monday 07:00 UTC
+  → weekday range check: 07 is in [0, 8) → would be OK
+  → us_weekly_open check: 07 < 13:30 → BLOCKED
+
+Monday 13:45 UTC
+  → us_weekly_open check: 13:45 ≥ 13:30 → passes
+  → weekday range check: 13 is in [13, 22) → ALLOWED
+
+Saturday 15:00 UTC
+  → weekend_utc_ranges is [] → BLOCKED
+```
+
+### Preset examples
+
+**Conservative — US session only, no weekends:**
+```json
+"hour_filter": {
+    "enabled": true,
+    "weekday_utc_ranges": [[13, 22]],
+    "weekend_utc_ranges": [],
+    "us_weekly_open": true,
+    "us_weekly_close": true
+}
+```
+
+**Extended — Asian + US sessions, no weekends:**
+```json
+"hour_filter": {
+    "enabled": true,
+    "weekday_utc_ranges": [[0, 8], [13, 22]],
+    "weekend_utc_ranges": [],
+    "us_weekly_open": true,
+    "us_weekly_close": true
+}
+```
+
+**24/7 — all hours, all days (same as disabled):**
+```json
+"hour_filter": {
+    "enabled": true,
+    "weekday_utc_ranges": [],
+    "weekend_utc_ranges": [[0, 24]],
+    "us_weekly_open": false,
+    "us_weekly_close": false
+}
+```
+
+### Backtest with filter
+
+The backtest engine applies the same filter logic when replaying snapshots, so you can measure its effect before enabling it live:
+
+```bash
+# Edit hour_filter.enabled = true in the strategy JSON, then:
+python3 scripts/backtest.py --all
+```
+
+Compare win rate and trade count with and without the filter to validate your chosen windows against your snapshot dataset.
+
+### Startup log
+
+When the filter is active the bot logs the effective configuration at startup:
+
+```
+[INFO]   Filtre horaire : sem=0-8h 13-22h | we=bloque ouv.lun=13h30 ferm.ven=20h00
+```
+
+
 ## Monitoring
 
 Live dashboard:

@@ -321,6 +321,118 @@ python3 scripts/backtest.py --all --sweep
 Quand plusieurs fichiers sont traités, chaque fichier tourne avec le capital réinitialisé à `capital_start` (simulation indépendante), et un bloc AGGREGATE résume les wins, losses, PnL, taux de victoire et pire drawdown combinés de tous les fichiers.
 
 
+## Filtre heure / jour
+
+Le bot peut restreindre les entrées en trade à des plages horaires UTC selon le type de jour. Le filtre est configuré dans le fichier de stratégie JSON (`strategies/polymarket_BTC5M.json`) et est **désactivé par défaut** — le comportement existant est préservé jusqu'à activation explicite.
+
+### Pourquoi un filtre horaire ?
+
+La volatilité BTC suit des patterns journaliers et hebdomadaires liés aux flux institutionnels :
+
+| Période | Fenêtre UTC | Caractéristique |
+|---|---|---|
+| Session asiatique | 00:00–08:00 | Volume modéré, mouvements directionnels |
+| Zone morte européenne | 08:00–13:00 | Volume faible, signaux bruités |
+| Session US | 13:00–22:00 | Volume élevé, signaux les plus fiables |
+| Ouverture hebdomadaire US | Lun 13:30 | Retour institutionnel après le weekend ; fort mouvement directionnel |
+| Fermeture hebdomadaire US | Ven 20:00 | Débouclement de positions ; pic de volatilité puis chute |
+| Weekend | Sam–Dim | Retail-driven, bruit plus élevé, prévisibilité réduite |
+
+### Configuration
+
+Ajouter ou modifier le bloc `hour_filter` dans votre fichier de stratégie JSON :
+
+```json
+"hour_filter": {
+    "enabled": true,
+    "weekday_utc_ranges": [[0, 8], [13, 22]],
+    "weekend_utc_ranges": [],
+    "us_weekly_open": true,
+    "us_weekly_close": true
+}
+```
+
+| Clé | Type | Défaut | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Interrupteur général. `false` = pas de filtre, toutes les heures autorisées. |
+| `weekday_utc_ranges` | liste de `[début, fin]` | `[]` | Plages UTC autorisées lun–ven. Vide = toutes les heures de semaine autorisées. |
+| `weekend_utc_ranges` | liste de `[début, fin]` | `[]` | Plages UTC autorisées sam–dim. Vide = **tout le weekend bloqué**. |
+| `us_weekly_open` | bool | `true` | Si `true`, bloque les entrées le **lundi avant 13h30 UTC** (les marchés US ne sont pas encore ouverts pour la semaine). |
+| `us_weekly_close` | bool | `true` | Si `true`, bloque les entrées le **vendredi à partir de 20h00 UTC** (les marchés US ont fermé pour la semaine). |
+
+Les plages horaires suivent la convention `[début, fin)` — `[13, 22]` signifie 13:00 ≤ heure < 22:00.
+Les contraintes `us_weekly_open` et `us_weekly_close` s'appliquent **en plus** de `weekday_utc_ranges`, et sont prioritaires sur leurs jours respectifs.
+
+### Logique de décision (exemple lundi, filtre actif)
+
+```
+Lundi 07:00 UTC
+  → vérification plage semaine : 07 est dans [0, 8) → serait OK
+  → vérification us_weekly_open : 07 < 13:30 → BLOQUÉ
+
+Lundi 13:45 UTC
+  → vérification us_weekly_open : 13:45 ≥ 13:30 → passe
+  → vérification plage semaine : 13 est dans [13, 22) → AUTORISÉ
+
+Samedi 15:00 UTC
+  → weekend_utc_ranges est [] → BLOQUÉ
+```
+
+### Configurations prêtes à l'emploi
+
+**Conservative — session US uniquement, pas de weekend :**
+```json
+"hour_filter": {
+    "enabled": true,
+    "weekday_utc_ranges": [[13, 22]],
+    "weekend_utc_ranges": [],
+    "us_weekly_open": true,
+    "us_weekly_close": true
+}
+```
+
+**Étendue — sessions asiatique + US, pas de weekend :**
+```json
+"hour_filter": {
+    "enabled": true,
+    "weekday_utc_ranges": [[0, 8], [13, 22]],
+    "weekend_utc_ranges": [],
+    "us_weekly_open": true,
+    "us_weekly_close": true
+}
+```
+
+**24/7 — toutes heures, tous jours (équivalent à désactivé) :**
+```json
+"hour_filter": {
+    "enabled": true,
+    "weekday_utc_ranges": [],
+    "weekend_utc_ranges": [[0, 24]],
+    "us_weekly_open": false,
+    "us_weekly_close": false
+}
+```
+
+### Backtest avec filtre
+
+Le moteur de backtest applique la même logique de filtre lors de la relecture des snapshots — mesurer son effet avant d'activer en live :
+
+```bash
+# Mettre hour_filter.enabled = true dans le JSON de stratégie, puis :
+python3 scripts/backtest.py --all
+```
+
+Comparer le taux de victoire et le nombre de trades avec et sans filtre pour valider les fenêtres choisies sur votre dataset de snapshots.
+
+### Log au démarrage
+
+Quand le filtre est actif, le bot affiche la configuration effective au démarrage :
+
+```
+[INFO]   Filtre horaire : sem=0-8h 13-22h | we=bloque ouv.lun=13h30 ferm.ven=20h00
+```
+
+
 ## Monitoring
 
 Dashboard en temps réel :
