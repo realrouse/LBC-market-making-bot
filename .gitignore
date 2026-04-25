@@ -37,3 +37,4 @@ config.json
 *.log
 *.db
 !data/backtest_sample_btc5m_range_2026.db
+!data/calmsaturday.db
