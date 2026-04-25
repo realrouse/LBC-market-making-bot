@@ -35,6 +35,8 @@ La liste canonique est `requirements.txt` à la racine du projet. Les CVE dans c
 packages sont détectés automatiquement à chaque push via `pip-audit` (GitHub Actions)
 et Dependabot ouvre des PRs lorsque de nouvelles versions sont disponibles.
 
+Les dépendances de développement (`pylint`, `pip-audit`, `mypy`) sont déclarées dans `requirements-dev.txt`.
+
 
 ## Répertoire d'installation
 

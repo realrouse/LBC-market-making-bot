@@ -154,6 +154,7 @@ os.makedirs(INSTALL_DIR, exist_ok=True)
 # --no-log is active (NullHandler has no queue to drain).
 _log_listener: Optional[logging.handlers.QueueListener] = None
 
+_log_handlers: list[logging.Handler]
 if _NO_LOG:
     # --no-log: drop all log records (no file created, no disk I/O).
     # In --simulate mode we keep stdout so interactive runs stay observable.
@@ -166,7 +167,7 @@ else:
     # This keeps every log.* call in the asyncio event loop non-blocking.
     # respect_handler_level=True ensures level filters on the FileHandler
     # are applied in the background thread, not the caller's thread.
-    _log_queue    = queue.Queue()
+    _log_queue: queue.Queue[logging.LogRecord] = queue.Queue()
     _file_handler = logging.FileHandler(LOG_PATH)
     _log_listener = logging.handlers.QueueListener(
         _log_queue, _file_handler, respect_handler_level=True)
@@ -290,14 +291,14 @@ class BotState:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
         self.capital = CAPITAL_START
-        self.session = None          # aiohttp.ClientSession, set when WS loop starts
-        self.tokens = {}             # token_id → TokenState
-        self.market_tokens = {}      # market_id → {"UP": tid, "DOWN": tid}
-        self.open_trades = {}        # market_id → trade row id in DB
-        self.traded_direction = {}   # market_id → "UP" or "DOWN"
+        self.session: Optional[aiohttp.ClientSession] = None
+        self.tokens: dict[str, "TokenState"] = {}             # token_id → TokenState
+        self.market_tokens: dict[str, dict[str, str]] = {}    # market_id → {"UP": tid, "DOWN": tid}
+        self.open_trades: dict[str, int] = {}                 # market_id → trade row id in DB
+        self.traded_direction: dict[str, str] = {}            # market_id → "UP" or "DOWN"
         # signalled prevents re-entering a market we already entered (or
         # attempted to enter) this session, even if the price signal fires again.
-        self.signalled = set()
+        self.signalled: set[str] = set()
         self.total_trades = 0
         self.wins = 0
         self.losses = 0
@@ -436,7 +437,7 @@ async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[floa
          now_ms, ep, oid, STAKE, tb, fee, cost, state.capital, 0)
     )
     state.conn.commit()
-    tid = cur.lastrowid
+    tid = cur.lastrowid or 0
     state.open_trades[ts.market_id] = tid
     state.traded_direction[ts.market_id] = ts.direction
     state.total_trades += 1

@@ -1,6 +1,6 @@
 # tradinebotte — Quick Start
 
-> 🇫🇷 [Version française](QUICKSTART.fr.md) · Full guide: [INSTALL.md](INSTALL.md)
+> 🇫🇷 [Version française](QUICKSTART.fr.md) · Full guide: [INSTALL.md](INSTALL.md) · CI: pylint 10/10 · mypy 0 errors · 108 tests
 
 ## Before you start
 

@@ -8,6 +8,12 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ## [Non publié]
 
+### Qualité de code
+- `bot/live_bot.py` — mypy strict : 0 erreur ; ajout d'annotations de type explicites pour `_log_handlers: list[logging.Handler]`, `_log_queue: queue.Queue[logging.LogRecord]` et les cinq attributs dict/set de `BotState.__init__` (`tokens`, `market_tokens`, `open_trades`, `traded_direction`, `signalled`) ; `cur.lastrowid or 0` protège le type de retour `int | None`
+- `tests/test_bot.py` — ResourceWarning corrigé : suppression du `warnings.filterwarnings` global ; les sept classes de test créant des connexions SQLite utilisent désormais `setUp`/`tearDown` ou `self.addCleanup(conn.close)` ; aucun avertissement de connexion non fermée sur Python 3.13
+- `.github/workflows/mypy.yml` — nouveau workflow CI : exécute `mypy bot/live_bot.py bot/api_polymarket.py --ignore-missing-imports` à chaque push et pull request (Python 3.12)
+- `requirements-dev.txt` — `mypy` ajouté
+
 ### Documentation
 - `QUICKSTART.md` / `QUICKSTART.fr.md` — nouveau guide de démarrage rapide bilingue : cinq commandes (clone, install, setup, start, monitor) couvrant le chemin minimal du zéro à un bot opérationnel ; inclut une note sur le mode simulation et la commande d'arrêt ; croisé depuis `README`, `INSTALL` et `CLAUDE.md`
 - `CLAUDE.md` — règle de documentation bilingue étendue de 6 à 8 fichiers pour inclure `QUICKSTART.md` / `QUICKSTART.fr.md`
