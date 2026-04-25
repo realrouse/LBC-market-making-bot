@@ -652,5 +652,77 @@ class TestRestoreState(unittest.TestCase):
         self.assertAlmostEqual(fresh.win_rate, 75.0)
 
 
+# ─── _htpasswd_sha1 ──────────────────────────────────────────────────────────
+
+class TestHtpasswd(unittest.TestCase):
+
+    def test_prefix(self):
+        self.assertTrue(bot._htpasswd_sha1("anything").startswith("{SHA}"))
+
+    def test_known_value(self):
+        import base64, hashlib
+        expected = "{SHA}" + base64.b64encode(
+            hashlib.sha1(b"password").digest()
+        ).decode()
+        self.assertEqual(bot._htpasswd_sha1("password"), expected)
+
+    def test_different_passwords_differ(self):
+        self.assertNotEqual(bot._htpasswd_sha1("abc"), bot._htpasswd_sha1("xyz"))
+
+
+# ─── generate_status_html ─────────────────────────────────────────────────────
+
+class TestGenerateStatusHtml(unittest.TestCase):
+
+    def _state(self):
+        state = make_state()
+        state.capital      = 123.45
+        state.total_pnl    = 3.45
+        state.total_trades = 5
+        state.wins         = 4
+        state.losses       = 1
+        return state
+
+    def test_contains_capital(self):
+        self.assertIn("123.45", bot.generate_status_html(self._state()))
+
+    def test_contains_table(self):
+        html = bot.generate_status_html(self._state())
+        self.assertIn("<table>", html)
+        self.assertIn("Direction", html)
+
+    def test_no_trades_message_when_empty(self):
+        self.assertIn("Aucun trade", bot.generate_status_html(self._state()))
+
+    def test_win_rate_shown(self):
+        self.assertIn("80.0%", bot.generate_status_html(self._state()))
+
+
+# ─── handle_book_update (integration) ────────────────────────────────────────
+
+class TestHandleBookUpdate(unittest.IsolatedAsyncioTestCase):
+
+    async def test_state_updated_from_message(self):
+        state = make_state()
+        state.session = None
+        now_ms = int(time.time() * 1000)
+        ts = bot.TokenState("tid", "mkt1", "UP", "q",
+                            now_ms - 60_000, now_ms + 300_000)
+        ts.best_bid = 0.50
+        state.tokens["tid"] = ts
+        parsed = {"token_id": "tid", "best_bid": 0.55, "best_ask": 0.56,
+                  "spread": 0.01, "bid_vol": 100.0, "ask_vol": 80.0, "obi": 0.1}
+        await bot.handle_book_update(state, parsed)
+        self.assertAlmostEqual(ts.best_bid, 0.55)
+        self.assertAlmostEqual(ts.ask_vol, 80.0)
+
+    async def test_unknown_token_ignored(self):
+        state = make_state()
+        parsed = {"token_id": "unknown", "best_bid": 0.97, "best_ask": 0.975,
+                  "spread": 0.005, "bid_vol": 100.0, "ask_vol": 50.0, "obi": 0.0}
+        await bot.handle_book_update(state, parsed)
+        self.assertEqual(len(state.open_trades), 0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
