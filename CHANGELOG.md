@@ -8,6 +8,10 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Bugfix
+- `scripts/start_bot.sh` — refuses to start if an instance of `live_bot.py` is already running (exits with error and prints the existing PID); previously killed the running instance automatically, which could interrupt an open trade mid-resolution
+- `INSTALL.md` / `INSTALL.fr.md` — Running section updated to document the new behaviour and the manual stop command (`pkill -f live_bot.py`)
+
 ### Data
 - `data/backtest_sample_btc5m_range_2026.db` — bundled SQLite sample dataset: 2430 snapshots collected in simulation mode on 2026-04-25 from real Polymarket BTC 5-minute markets (snapshots table only, no credentials or trade data)
 - `scripts/backtest.py` — automatic fallback to `data/backtest_sample_btc5m_range_2026.db` when `POLYMARKET_DIR/live.db` is absent; allows running the backtest on any machine without a live bot database
