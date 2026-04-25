@@ -31,6 +31,10 @@ into a virtualenv at `~/tradinebotte/venv/`:
 - `web3`
 - `py-clob-client`
 
+The canonical list is `requirements.txt` at the project root. CVEs in these
+packages are detected automatically on every push via `pip-audit` (GitHub Actions)
+and Dependabot opens PRs when newer versions are available.
+
 
 ## Installation directory
 

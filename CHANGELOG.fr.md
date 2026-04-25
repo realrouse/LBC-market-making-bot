@@ -8,6 +8,16 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ## [Non publié]
 
+### Sécurité
+- `requirements.txt` / `requirements-dev.txt` — manifestes de dépendances : toutes les dépendances runtime (`aiohttp`, `websockets`, `web3`, `py-clob-client`) et dev (`pylint`, `pip-audit`) sont désormais déclarées dans des fichiers versionnés ; tous les workflows CI installent depuis ces fichiers plutôt que de lister les paquets en dur
+- `.github/workflows/audit.yml` — nouveau workflow CI : exécute `pip-audit -r requirements.txt` à chaque push et chaque lundi à 06 h 00 UTC pour détecter les CVE connus dans les dépendances runtime avant qu'elles n'atteignent la production
+- `.github/dependabot.yml` — Dependabot activé pour les paquets `pip` et les `github-actions` ; crée des PRs automatiques chaque lundi lorsque des versions plus récentes sont disponibles
+
+### Qualité de code
+- `bot/live_bot.py` — annotations de types complètes : les 28 fonctions et méthodes de classe portent désormais des annotations de paramètres et de retour (`dict[str, Any]`, `list[str]`, `Optional[float]`, `sqlite3.Connection`, `aiohttp.ClientSession`, etc.) ; le paramètre websocket `ws` utilise `Any` pour rester compatible avec les différentes versions de la bibliothèque websockets
+- `tests/test_live_bot.py` — 30 nouveaux tests unitaires couvrant les propriétés de `TokenState`, `BotState.win_rate`, les 11 gardes de `check_signal` (dont le stop-loss journalier via DB en mémoire), `check_resolution` (WIN/LOSS/expiration), `close_trade` (capital, flag DB, compteurs, pnl_net), `restore_state_from_db`, `_htpasswd_sha1`, `generate_status_html` et l'intégration `handle_book_update` ; utilise SQLite en mémoire et `unittest.IsolatedAsyncioTestCase` — aucun réseau ni credentials requis
+- `.github/workflows/tests.yml` — nouveau workflow CI : exécute `unittest discover` sur Python 3.10, 3.11 et 3.12 à chaque push
+
 ### Fonctionnalité
 - `bot/live_bot.py` — mesure de latence : chaque trade émet une ligne `[LATENCY]` avec `signal_ms` (message WebSocket reçu → décision d'ordre, inclut tous les gardes du signal et la requête SQLite PnL journalier) et `order_rtt_ms` (round-trip HTTP API CLOB) ; les timestamps utilisent `time.monotonic()` et sont passés en paramètre optionnel `_t_ws` à travers `handle_book_update` → `check_signal` → `enter_live_trade` ; zéro surcharge sur les messages sans trade
 - `scripts/latency.py` — nouvel outil d'analyse : parse les lignes `[LATENCY]` de `live.log` et affiche min / mean / p50 / p90 / p99 / max pour signal_ms, order_rtt_ms et total_ms ; usage : `python3 scripts/latency.py [logfile]`

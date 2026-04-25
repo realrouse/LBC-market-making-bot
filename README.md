@@ -19,6 +19,9 @@ Automated trading bot for [Polymarket](https://polymarket.com) prediction market
 - **Pluggable exchange API** — all Polymarket-specific code lives in `bot/api_polymarket.py`; swapping exchanges requires only a new adapter file and a single import change in `live_bot.py`
 - **JSON strategy files** — signal and capital parameters live in `strategies/polymarket_BTC5M.json`; switch strategies by pointing `"strategy"` in `config.json` to any file
 - **Simulation mode** — `--simulate` flag isolates all file I/O to `/tmp/tradinebotte-sim`, mirrors logs to stdout, and places no real orders; safe to run on any machine without affecting production data
+- **Type-annotated codebase** — all 28 functions and class methods in `live_bot.py` carry full parameter and return type hints; enables static analysis and IDE autocompletion
+- **Unit-tested bot logic** — 30 unit tests for `live_bot.py` (`TestCheckSignal` covers all 11 entry guards, `TestCheckResolution` covers WIN/LOSS/expiry paths, `TestCloseTrade`, `TestRestoreState`, and more); combined with the backtest suite: 58 tests total, no network or credentials required
+- **Continuous security audit** — `pip-audit` runs on every push and weekly to detect CVEs in runtime deps (`aiohttp`, `websockets`, `web3`, `py-clob-client`); Dependabot opens automated PRs when newer versions are available
 - **Async logging + latency tracking** — log writes never block the event loop; each trade emits a `[LATENCY]` line with `signal_ms` (WS message → order decision) and `order_rtt_ms` (CLOB API round-trip); `scripts/latency.py` parses the log and prints min/mean/p50/p90/p99/max for each metric; a `QueueListener` daemon thread drains the log queue to disk in the background; add `--no-log` to suppress the log file entirely (SQLite DB is unaffected) for minimum disk I/O in production
 
 ## Strategy
