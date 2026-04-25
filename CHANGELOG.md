@@ -8,6 +8,11 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Feature
+- `bot/live_bot.py` — new `--simulate` flag: redirects all file I/O to `/tmp/polymarket-sim` (overriding `POLYMARKET_DIR`), mirrors logs to stdout in addition to the log file, and logs a visible `MODE SIMULATION` warning; production `live.db` and `live.log` are never touched; safe to run on any machine without credentials
+- `INSTALL.md` / `INSTALL.fr.md` — Testing section updated: `timeout 20 python3 bot/live_bot.py --simulate` replaces the previous command that wrote to the production path by default
+- `README.md` / `README.fr.md` — Simulation mode feature bullet updated to describe `--simulate`
+
 ### Bugfix
 - `scripts/start_bot.sh` — refuses to start if an instance of `live_bot.py` is already running (exits with error and prints the existing PID); previously killed the running instance automatically, which could interrupt an open trade mid-resolution
 - `INSTALL.md` / `INSTALL.fr.md` — Running section updated to document the new behaviour and the manual stop command (`pkill -f live_bot.py`)

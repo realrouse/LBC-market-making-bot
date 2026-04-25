@@ -297,28 +297,24 @@ print('SIGNAL_THRESHOLD:', b.SIGNAL_THRESHOLD)
 "
 ```
 
-Lancer le bot pendant 20 secondes (aucun credential requis — ordres simulés) :
+Lancer le bot pendant 20 secondes en mode simulation isolé (logs sur stdout,
+écrit dans `/tmp/polymarket-sim` — les données de production ne sont jamais touchées) :
 
 ```bash
-timeout 20 .venv/bin/python3 bot/live_bot.py
+timeout 20 .venv/bin/python3 bot/live_bot.py --simulate
 ```
 
-Puis inspecter les logs :
-
-```bash
-cat /opt/polymarket-live/live.log
-```
-
-Sortie attendue :
+Sortie attendue (affichée directement dans le terminal) :
 
 ```
-[INFO] LIVE BOT v3 — Threshold=0.96 Stake=$10 MinAskVol=10
-[WARNING] POLY_PRIVATE_KEY non definie — ordres SIMULES
-[INFO] DB initialisee : /opt/polymarket-live/live.db
-[INFO] State : capital=$100.00 | 0 trades | WR=0.0%
-[INFO] Marches BTC 5-min : 2
-[INFO] Souscription 2 tokens...
-[INFO] WebSocket connecte
+[WARNING]  MODE SIMULATION — donnees isolees dans /tmp/polymarket-sim
+[INFO]     LIVE BOT v3 — Threshold=0.96 Stake=$10 MinAskVol=10
+[WARNING]  POLY_PRIVATE_KEY non definie — ordres SIMULES
+[INFO]     DB initialisee : /tmp/polymarket-sim/live.db
+[INFO]     State : capital=$100.00 | 0 trades | WR=0.0%
+[INFO]     Marches BTC 5-min : 2
+[INFO]     Souscription 2 tokens...
+[INFO]     WebSocket connecte
 ```
 
 Le répertoire `.venv/` est listé dans `.gitignore` et ne doit pas être commité.

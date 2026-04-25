@@ -23,10 +23,17 @@ Launch:
   bash scripts/start_bot.sh     # starts the bot in the background
 """
 
-import asyncio, json, logging, os, sqlite3, time
+import asyncio, json, logging, os, sqlite3, sys, time
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 import aiohttp, websockets
+
+# ─── SIMULATE MODE ───────────────────────────────────────────────────────────
+# --simulate: redirect all file I/O to /tmp/polymarket-sim so that tests never
+# touch production data. Overrides POLYMARKET_DIR unconditionally.
+_SIMULATE = "--simulate" in sys.argv
+if _SIMULATE:
+    os.environ["POLYMARKET_DIR"] = "/tmp/polymarket-sim"
 
 # ─── PATHS ───────────────────────────────────────────────────────────────────
 # All paths derive from a single env var so the bot can run anywhere, not just
@@ -40,8 +47,7 @@ CONFIG_PATH = os.path.join(INSTALL_DIR, "config.json")
 # sys.path insert finds api_polymarket.py in the same directory as this file,
 # whether running standalone from INSTALL_DIR or imported as bot.live_bot from
 # the project root. To target a different exchange, replace the import below.
-import sys as _sys
-_sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import api_polymarket as api
 
 # ─── STRATEGY (defaults) ─────────────────────────────────────────────────────
@@ -133,10 +139,13 @@ WEBSTATUS_PASSWORD = _cfg.get("webstatus_password", "")
 
 # ─── LOGGING & DB INIT ───────────────────────────────────────────────────────
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+_log_handlers = [logging.FileHandler(LOG_PATH)]
+if _SIMULATE:
+    _log_handlers.append(logging.StreamHandler(sys.stdout))
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.FileHandler(LOG_PATH)]
+    handlers=_log_handlers,
 )
 logger = logging.getLogger("live")
 
@@ -787,6 +796,8 @@ def restore_state_from_db(state):
 
 async def main():
     logger.info("=" * 65)
+    if _SIMULATE:
+        logger.warning("  MODE SIMULATION — donnees isolees dans %s", INSTALL_DIR)
     logger.info("  LIVE BOT v3 — Threshold=%.2f Stake=$%.0f MinAskVol=%.0f",
                 SIGNAL_THRESHOLD, STAKE, MIN_ASK_VOL)
     if _strategy_loaded:
