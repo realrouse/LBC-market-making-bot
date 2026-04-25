@@ -162,7 +162,7 @@ it. The `.htpasswd` file is stored at `POLYMARKET_DIR/.webstatus_htpasswd`
 
    ```bash
    # Option A — world-readable (simpler, exposes hash to local users)
-   chmod o+r POLYMARKET_DIR/.webstatus_htpasswd
+   chmod o+r $POLYMARKET_DIR/.webstatus_htpasswd
 
    # Option B — add www-data to the bot user's primary group (safer)
    sudo usermod -aG $(id -gn $USER) www-data
