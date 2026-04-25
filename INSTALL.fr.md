@@ -211,7 +211,13 @@ Vérifier que le bot tourne :
 pgrep -fa live_bot.py
 ```
 
-Une seule instance doit tourner à la fois.
+`start_bot.sh` refuse de démarrer si une instance tourne déjà (pour éviter
+d'interrompre un trade ouvert). L'arrêter manuellement si besoin :
+
+```bash
+pkill -f live_bot.py
+```
+
 - Logs : `<POLYMARKET_DIR>/live.log`
 - Trades : `<POLYMARKET_DIR>/live.db` (SQLite)
 

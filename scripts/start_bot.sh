@@ -20,11 +20,11 @@ if [ ! -f "$CONFIG" ]; then
     exit 1
 fi
 
-# ── Stop instance existante ───────────────────────────────────────
+# ── Vérification instance unique ─────────────────────────────────
 if pgrep -f live_bot.py > /dev/null; then
-    echo "Arrêt de l'instance existante..."
-    pkill -f live_bot.py
-    sleep 2
+    echo "❌ ERREUR : une instance est déjà en cours (PID: $(pgrep -f live_bot.py))"
+    echo "   Arrêtez-la d'abord : pkill -f live_bot.py"
+    exit 1
 fi
 
 # ── Lancement ─────────────────────────────────────────────────────

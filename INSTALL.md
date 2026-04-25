@@ -207,7 +207,13 @@ Verify the bot is running:
 pgrep -fa live_bot.py
 ```
 
-Only one instance should run at a time.
+`start_bot.sh` refuses to start if an instance is already running (to avoid
+interrupting an open trade). Stop it manually first if needed:
+
+```bash
+pkill -f live_bot.py
+```
+
 - Logs: `<POLYMARKET_DIR>/live.log`
 - Trades: `<POLYMARKET_DIR>/live.db` (SQLite)
 
