@@ -8,6 +8,10 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ## [Non publié]
 
+### Fonctionnalité
+- `bot/live_bot.py` — les écritures de logs sont désormais entièrement asynchrones : un thread daemon `QueueListener` vide la queue de logs sur disque ; le event loop asyncio n'est plus jamais bloqué par des I/O fichier ; aucun changement de comportement pour les déploiements existants
+- `bot/live_bot.py` — nouveau flag `--no-log` : supprime entièrement le fichier log (`NullHandler`) ; la DB SQLite (trades + snapshots) n'est pas affectée ; combiner avec `--simulate` pour conserver la sortie stdout ; destiné aux déploiements de production où les I/O disque doivent être minimaux
+
 ### Correction de bug
 - Tous les scripts, `bot/live_bot.py` et toute la documentation — variable d'environnement renommée de `POLYMARKET_DIR` en `TRADINEBOTTE_DIR` pour correspondre au nom du projet ; mettre à jour tout `export POLYMARKET_DIR=...` dans le profil shell ou l'unité systemd en `export TRADINEBOTTE_DIR=...`
 

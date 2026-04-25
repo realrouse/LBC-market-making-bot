@@ -23,15 +23,19 @@ Launch:
   bash scripts/start_bot.sh     # starts the bot in the background
 """
 
-import asyncio, json, logging, os, sqlite3, sys, time
+import asyncio, json, logging, logging.handlers, os, queue, sqlite3, sys, time
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 import aiohttp, websockets
 
-# ─── SIMULATE MODE ───────────────────────────────────────────────────────────
+# ─── RUNTIME FLAGS ───────────────────────────────────────────────────────────
 # --simulate: redirect all file I/O to /tmp/tradinebotte-sim so that tests never
 # touch production data. Overrides TRADINEBOTTE_DIR unconditionally.
+# --no-log:   skip the log file entirely (NullHandler); SQLite DB is unaffected.
+#             Use in production for minimum disk I/O. Stdout still active with
+#             --simulate so interactive testing remains usable.
 _SIMULATE = "--simulate" in sys.argv
+_NO_LOG   = "--no-log"   in sys.argv
 if _SIMULATE:
     os.environ["TRADINEBOTTE_DIR"] = "/tmp/tradinebotte-sim"
 
@@ -138,10 +142,25 @@ WEBSTATUS_USER     = _cfg.get("webstatus_user", "tradinebot")
 WEBSTATUS_PASSWORD = _cfg.get("webstatus_password", "")
 
 # ─── LOGGING & DB INIT ───────────────────────────────────────────────────────
-os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-_log_handlers = [logging.FileHandler(LOG_PATH)]
-if _SIMULATE:
-    _log_handlers.append(logging.StreamHandler(sys.stdout))
+os.makedirs(INSTALL_DIR, exist_ok=True)
+
+_log_listener: Optional[logging.handlers.QueueListener] = None
+if _NO_LOG:
+    # No log file at all: discard records (keep stdout in --simulate mode).
+    _log_handlers = [logging.StreamHandler(sys.stdout)] if _SIMULATE \
+                    else [logging.NullHandler()]
+else:
+    # Async writes: QueueHandler enqueues records instantly (no disk I/O in the
+    # event loop); QueueListener drains the queue from a daemon thread.
+    _log_queue    = queue.Queue()
+    _file_handler = logging.FileHandler(LOG_PATH)
+    _log_listener = logging.handlers.QueueListener(
+        _log_queue, _file_handler, respect_handler_level=True)
+    _log_listener.start()
+    _log_handlers = [logging.handlers.QueueHandler(_log_queue)]
+    if _SIMULATE:
+        _log_handlers.append(logging.StreamHandler(sys.stdout))
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -820,3 +839,6 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Arret.")
+    finally:
+        if _log_listener:
+            _log_listener.stop()  # flush queue and close FileHandler cleanly

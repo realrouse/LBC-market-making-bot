@@ -19,6 +19,7 @@ Bot de trading automatisé pour les marchés de prédiction [Polymarket](https:/
 - **API exchange modulaire** — tout le code spécifique Polymarket est dans `bot/api_polymarket.py` ; changer d'exchange ne nécessite qu'un nouveau fichier adaptateur et une seule ligne d'import dans `live_bot.py`
 - **Fichiers de stratégie JSON** — les paramètres de signal et de capital sont dans `strategies/polymarket_BTC5M.json` ; changer de stratégie se fait en pointant `"strategy"` dans `config.json` vers n'importe quel fichier
 - **Mode simulation** — le flag `--simulate` isole tous les fichiers dans `/tmp/tradinebotte-sim`, affiche les logs dans le terminal, et ne place aucun ordre réel ; utilisable sur n'importe quelle machine sans toucher les données de production
+- **Logging asynchrone** — les écritures de logs ne bloquent jamais le event loop ; un thread daemon `QueueListener` vide la queue de logs sur disque en arrière-plan ; ajouter `--no-log` pour supprimer entièrement le fichier log (la DB SQLite n'est pas affectée) pour un I/O disque minimal en production
 
 ## Stratégie
 

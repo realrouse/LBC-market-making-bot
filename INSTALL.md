@@ -199,6 +199,11 @@ your web server is configured to serve that directory.
 TRADINEBOTTE_DIR=~/tradinebotte bash scripts/start_bot.sh
 ```
 
+**Flags:**
+- *(no flag)* — normal mode: log writes are asynchronous (daemon thread, never blocks the event loop)
+- `--no-log` — suppress the log file entirely for minimum disk I/O; SQLite DB (trades + snapshots) is unaffected; combine with `--simulate` to keep stdout output
+- `--simulate` — isolate all file I/O to `/tmp/tradinebotte-sim`, no real orders placed
+
 Or using the generated wrapper (`TRADINEBOTTE_DIR` already embedded):
 
 ```bash

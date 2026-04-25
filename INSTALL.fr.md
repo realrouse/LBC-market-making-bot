@@ -203,6 +203,11 @@ que le serveur web est configuré pour servir ce répertoire.
 TRADINEBOTTE_DIR=~/tradinebotte bash scripts/start_bot.sh
 ```
 
+**Flags :**
+- *(aucun flag)* — mode normal : les écritures de logs sont asynchrones (thread daemon, ne bloque jamais le event loop)
+- `--no-log` — supprime le fichier log pour un I/O disque minimal ; la DB SQLite (trades + snapshots) n'est pas affectée ; combiner avec `--simulate` pour conserver la sortie stdout
+- `--simulate` — isole tous les fichiers dans `/tmp/tradinebotte-sim`, aucun ordre réel
+
 Ou via le wrapper généré (`TRADINEBOTTE_DIR` déjà intégré) :
 
 ```bash
