@@ -8,6 +8,10 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Data
+- `data/backtest_sample_btc5m_range_2026.db` — bundled SQLite sample dataset: 2430 snapshots collected in simulation mode on 2026-04-25 from real Polymarket BTC 5-minute markets (snapshots table only, no credentials or trade data)
+- `scripts/backtest.py` — automatic fallback to `data/backtest_sample_btc5m_range_2026.db` when `POLYMARKET_DIR/live.db` is absent; allows running the backtest on any machine without a live bot database
+
 ### Performance
 - `bot/live_bot.py` — `MARKET_REFRESH` reduced from 90 s to 30 s: the bot now discovers new markets at most 30 s after they enter the ±6-minute window, instead of up to 90 s; the Gamma API call remains a single request (tag_id=102892 filter, no pagination) so the overhead is negligible
 

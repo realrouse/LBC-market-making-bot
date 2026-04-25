@@ -13,7 +13,7 @@ Bot de trading automatisé pour les marchés de prédiction [Polymarket](https:/
 - **Stop-loss journalier** — suspend le trading dès 30 $ de perte nette sur la journée ; reprend à la session suivante
 - **Persistance SQLite** (mode WAL) — tous les trades et les snapshots de prix toutes les 5 s sont stockés ; l'état survit aux crashs et redémarrages
 - **Reprise après crash** — restaure les trades non résolus depuis la base de données au démarrage ; reconstruit le capital à partir du PnL historique
-- **Moteur de backtest** — rejoue les données `snapshots` avec n'importe quel jeu de paramètres ; supporte la recherche en grille sur 135 combinaisons
+- **Moteur de backtest** — rejoue les données `snapshots` avec n'importe quel jeu de paramètres ; supporte la recherche en grille sur 135 combinaisons ; utilise le jeu de données embarqué (`data/backtest_sample_btc5m_range_2026.db`) si aucune base de données live n'est présente
 - **Suite de 99 tests** — couvre les gardes du signal, les chemins de résolution, le calcul des frais, le parsing WebSocket et la restauration d'état ; aucun réseau ni credentials requis ; déployable sur n'importe quelle cible avec `--with-tests`
 - **Page de statut HTML optionnelle** — le bot écrit une page auto-rafraîchissante (chemin configurable, authentification HTTP Basic Auth optionnelle) — [aperçu visuel](docs/status_example.html)
 - **API exchange modulaire** — tout le code spécifique Polymarket est dans `bot/api_polymarket.py` ; changer d'exchange ne nécessite qu'un nouveau fichier adaptateur et une seule ligne d'import dans `live_bot.py`
@@ -138,7 +138,8 @@ La suite exécute 99 tests (71 pour le bot live, 28 pour le moteur de backtest) 
 
 ## Backtest
 
-Rejouer les données `snapshots` historiques avec des paramètres de stratégie configurables :
+Rejouer les données `snapshots` historiques avec des paramètres de stratégie configurables.
+Si `POLYMARKET_DIR/live.db` est absent, le script utilise automatiquement le jeu de données embarqué (`data/backtest_sample_btc5m_range_2026.db`, 2430 snapshots issus de vrais marchés BTC 5 minutes collectés le 2026-04-25).
 
 ```bash
 python3 scripts/backtest.py                        # paramètres par défaut

@@ -67,7 +67,8 @@ Exécuter le script d'installation depuis la racine du dépôt :
   bash scripts/install.sh [répertoire_installation] [--with-tests]
 
 Options :
-  --with-tests   Copie aussi tests/ et scripts/backtest.py, puis lance
+  --with-tests   Copie aussi tests/, scripts/backtest.py et
+                 data/backtest_sample_btc5m_range_2026.db, puis lance
                  la suite complète de tests (99 tests) juste après l'installation.
 
 Ce script va :

@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """
-Backtest trading strategy parameters against historical snapshot data in live.db.
+Backtest trading strategy parameters against historical snapshot data.
 
 The snapshots table records price data every 5 seconds per tracked token.
 This script replays those snapshots chronologically, applies the signal logic
 with configurable parameters, and produces simulated trade statistics.
+
+Database resolution (first match wins):
+    1. $POLYMARKET_DIR/live.db  (or /opt/polymarket-live/live.db by default)
+    2. data/backtest_sample_btc5m_range_2026.db  (bundled sample dataset)
 
 Usage:
     python3 scripts/backtest.py                          # default parameters
@@ -21,7 +25,10 @@ from itertools import product
 from typing import List, Optional, Tuple
 
 INSTALL_DIR = os.environ.get("POLYMARKET_DIR", "/opt/polymarket-live")
-DB_PATH     = os.path.join(INSTALL_DIR, "live.db")
+_live_db    = os.path.join(INSTALL_DIR, "live.db")
+_sample_db  = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "data", "backtest_sample_btc5m_range_2026.db")
+DB_PATH     = _live_db if os.path.exists(_live_db) else _sample_db
 
 FEE_RATE    = 0.02    # Polymarket taker fee rate
 GAS_FEE_USD = 0.03    # estimated gas cost per order

@@ -67,6 +67,8 @@ if [ "$WITH_TESTS" = "1" ]; then
     cp tests/test_backtest.py "$INSTALL_DIR/tests/test_backtest.py"
     cp scripts/backtest.py    "$INSTALL_DIR/scripts/backtest.py"
     cp scripts/run_tests.sh   "$INSTALL_DIR/scripts/run_tests.sh"
+    mkdir -p "$INSTALL_DIR/data"
+    cp data/backtest_sample_btc5m_range_2026.db "$INSTALL_DIR/data/backtest_sample_btc5m_range_2026.db"
     echo "=== Lancement des tests ==="
     cd "$INSTALL_DIR"
     POLYMARKET_DIR="$INSTALL_DIR" "$INSTALL_DIR/venv/bin/python3" \

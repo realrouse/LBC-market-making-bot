@@ -33,3 +33,4 @@ config.json
 # Runtime artifacts
 *.log
 *.db
+!data/backtest_sample_btc5m_range_2026.db
