@@ -8,6 +8,10 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ## [Non publié]
 
+### Documentation
+- `QUICKSTART.md` / `QUICKSTART.fr.md` — nouveau guide de démarrage rapide bilingue : cinq commandes (clone, install, setup, start, monitor) couvrant le chemin minimal du zéro à un bot opérationnel ; inclut une note sur le mode simulation et la commande d'arrêt ; croisé depuis `README`, `INSTALL` et `CLAUDE.md`
+- `CLAUDE.md` — règle de documentation bilingue étendue de 6 à 8 fichiers pour inclure `QUICKSTART.md` / `QUICKSTART.fr.md`
+
 ### Fonctionnalité
 - `scripts/backtest.py` — backtest multi-fichiers : `--db` accepte désormais un ou plusieurs chemins (expansion de glob shell, ex. `--db data/*.db`) ; nouveau flag `--all` qui scanne le répertoire `data/` pour tous les fichiers `.db` et ajoute `live.db` en tête s'il contient ≥ 100 snapshots ; le capital se réinitialise à `capital_start` indépendamment par fichier ; le bloc BACKTEST par fichier affiche le nom du fichier quand plusieurs fichiers sont traités ; un bloc AGGREGATE (wins/losses/PnL/taux de victoire/pire drawdown combinés) est affiché après tous les fichiers lorsqu'il y en a plus d'un et que `--sweep` n'est pas actif
 

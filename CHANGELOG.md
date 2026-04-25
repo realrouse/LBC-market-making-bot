@@ -8,6 +8,10 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Documentation
+- `QUICKSTART.md` / `QUICKSTART.fr.md` — new bilingual quick-start guide: five commands (clone, install, setup, start, monitor) covering the minimal path from zero to a running bot; includes a simulate-mode note and a stop command; cross-linked from `README`, `INSTALL`, and `CLAUDE.md`
+- `CLAUDE.md` — bilingual doc rule extended from 6 to 8 files to include `QUICKSTART.md` / `QUICKSTART.fr.md`
+
 ### Feature
 - `scripts/backtest.py` — multi-file backtest: `--db` now accepts one or more paths (shell glob-expandable, e.g. `--db data/*.db`); new `--all` flag scans the `data/` directory for all `.db` files and prepends `live.db` if it contains ≥ 100 snapshots; capital resets to `capital_start` independently per file; per-file BACKTEST block shows the filename when multiple files are processed; an AGGREGATE block (combined wins/losses/PnL/win-rate/worst-drawdown) is printed after all files when more than one file is processed and `--sweep` is not active
 

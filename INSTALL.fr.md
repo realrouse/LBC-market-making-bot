@@ -1,6 +1,6 @@
 # tradinebotte — Guide d'installation
 
-> 🇬🇧 [English version](INSTALL.md)
+> 🇬🇧 [English version](INSTALL.md) · Première fois ? Commencer par [QUICKSTART.fr.md](QUICKSTART.fr.md)
 
 
 ## Prérequis

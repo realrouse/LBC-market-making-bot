@@ -1,6 +1,6 @@
 # tradinebotte — Installation Guide
 
-> 🇫🇷 [Version française](INSTALL.fr.md)
+> 🇫🇷 [Version française](INSTALL.fr.md) · First time? Start with [QUICKSTART.md](QUICKSTART.md)
 
 
 ## Requirements
