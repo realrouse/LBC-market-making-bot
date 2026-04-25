@@ -139,7 +139,7 @@ The suite runs 99 tests (71 for the live bot, 28 for the backtest engine) coveri
 ## Backtest
 
 Replay historical `snapshots` data against configurable strategy parameters.
-If `POLYMARKET_DIR/live.db` is absent, the script falls back automatically to the bundled sample dataset (`data/backtest_sample_btc5m_range_2026.db`, 2430 snapshots from real BTC 5-minute markets collected on 2026-04-25).
+If `POLYMARKET_DIR/live.db` is absent or has fewer than 100 snapshots, the script falls back automatically to the bundled sample dataset (`data/backtest_sample_btc5m_range_2026.db`, 2430 snapshots from real BTC 5-minute markets collected on 2026-04-25). The selected database is printed at startup.
 
 ```bash
 python3 scripts/backtest.py                        # default parameters

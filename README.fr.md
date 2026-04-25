@@ -139,7 +139,7 @@ La suite exécute 99 tests (71 pour le bot live, 28 pour le moteur de backtest) 
 ## Backtest
 
 Rejouer les données `snapshots` historiques avec des paramètres de stratégie configurables.
-Si `POLYMARKET_DIR/live.db` est absent, le script utilise automatiquement le jeu de données embarqué (`data/backtest_sample_btc5m_range_2026.db`, 2430 snapshots issus de vrais marchés BTC 5 minutes collectés le 2026-04-25).
+Si `POLYMARKET_DIR/live.db` est absent ou contient moins de 100 snapshots, le script utilise automatiquement le jeu de données embarqué (`data/backtest_sample_btc5m_range_2026.db`, 2430 snapshots issus de vrais marchés BTC 5 minutes collectés le 2026-04-25). Le fichier sélectionné est affiché au démarrage.
 
 ```bash
 python3 scripts/backtest.py                        # paramètres par défaut

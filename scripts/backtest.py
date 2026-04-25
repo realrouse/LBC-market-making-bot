@@ -28,7 +28,22 @@ INSTALL_DIR = os.environ.get("POLYMARKET_DIR", "/opt/polymarket-live")
 _live_db    = os.path.join(INSTALL_DIR, "live.db")
 _sample_db  = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             "data", "backtest_sample_btc5m_range_2026.db")
-DB_PATH     = _live_db if os.path.exists(_live_db) else _sample_db
+
+_LIVE_DB_MIN_SNAPSHOTS = 100  # below this, fall back to the sample dataset
+
+def _live_db_usable(path: str) -> bool:
+    """True if path exists and has enough snapshots to be worth backtesting."""
+    if not os.path.exists(path):
+        return False
+    try:
+        c = sqlite3.connect(path)
+        count = c.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
+        c.close()
+        return count >= _LIVE_DB_MIN_SNAPSHOTS
+    except Exception:
+        return False
+
+DB_PATH = _live_db if _live_db_usable(_live_db) else _sample_db
 
 FEE_RATE    = 0.02    # Polymarket taker fee rate
 GAS_FEE_USD = 0.03    # estimated gas cost per order
@@ -319,6 +334,8 @@ def main():
         print("The bot must run at least one session to populate snapshots.")
         sys.exit(1)
 
+    db_label = "(sample)" if args.db == _sample_db else "(live)"
+    print(f"DB: {args.db} {db_label}")
     conn = sqlite3.connect(args.db)
     n_snapshots = conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
 

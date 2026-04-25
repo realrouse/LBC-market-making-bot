@@ -8,6 +8,9 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Bugfix
+- `scripts/backtest.py` — fallback to sample dataset now requires `live.db` to have at least 100 snapshots (previously any non-empty file was accepted, causing a stale 16-snapshot test artifact to shadow the bundled dataset); also prints which database is selected (`(live)` vs `(sample)`) at startup
+
 ### Feature
 - `bot/live_bot.py` — new `--simulate` flag: redirects all file I/O to `/tmp/polymarket-sim` (overriding `POLYMARKET_DIR`), mirrors logs to stdout in addition to the log file, and logs a visible `MODE SIMULATION` warning; production `live.db` and `live.log` are never touched; safe to run on any machine without credentials
 - `INSTALL.md` / `INSTALL.fr.md` — Testing section updated: `timeout 20 python3 bot/live_bot.py --simulate` replaces the previous command that wrote to the production path by default
