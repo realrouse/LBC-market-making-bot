@@ -9,6 +9,9 @@ All notable changes to this project are documented here.
 ## [Unreleased]
 
 ### Bugfix
+- All scripts, `bot/live_bot.py`, and all documentation — default install directory renamed from `~/polymarket` to `~/tradinebotte` to match the bot's name; `POLYMARKET_DIR` still overrides as before; simulation temp dir renamed from `/tmp/polymarket-sim` to `/tmp/tradinebotte-sim`; test temp dir renamed from `/tmp/polymarket-test` to `/tmp/tradinebotte-test`
+
+### Bugfix
 - All scripts and `bot/live_bot.py` — default install path changed from `/opt/polymarket-live` (requires root) to `~/polymarket` (no root needed); `POLYMARKET_DIR` still overrides as before; historical CHANGELOG entries referencing `/opt/polymarket-live` reflect the old default and are left unchanged
 
 ### Bugfix

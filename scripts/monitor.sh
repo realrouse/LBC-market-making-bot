@@ -1,5 +1,5 @@
 #!/bin/bash
-INSTALL_DIR="${POLYMARKET_DIR:-$HOME/polymarket}"
+INSTALL_DIR="${POLYMARKET_DIR:-$HOME/tradinebotte}"
 INSTALL_DIR="$(eval echo "$INSTALL_DIR")"
 
 echo "=== STATUS ($INSTALL_DIR) ==="

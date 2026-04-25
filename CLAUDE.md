@@ -20,7 +20,7 @@ Ce projet maintient six fichiers de documentation en deux langues :
 
 ## Commands
 
-**Install dependencies** (creates venv at `~/polymarket/venv`):
+**Install dependencies** (creates venv at `~/tradinebotte/venv`):
 ```bash
 bash scripts/install.sh
 ```
@@ -38,8 +38,8 @@ bash scripts/start_bot.sh
 **Monitor live status and stats**:
 ```bash
 bash scripts/monitor.sh
-tail -f ~/polymarket/live.log
-sqlite3 ~/polymarket/live.db "SELECT * FROM trades ORDER BY id DESC LIMIT 10;"
+tail -f ~/tradinebotte/live.log
+sqlite3 ~/tradinebotte/live.db "SELECT * FROM trades ORDER BY id DESC LIMIT 10;"
 ```
 
 No test suite exists yet. There is no linter configured.
@@ -59,7 +59,7 @@ The bot is a single-file async state machine (`bot/live_bot.py`, ~617 lines) dri
 - `TokenState` — per-token market data (bid/ask, volumes, OBI, time remaining)
 - `BotState` — global runtime state: capital, session, active/open trades, maps from token_id and market_id
 
-**State persistence** (SQLite WAL mode, `~/polymarket/live.db`):
+**State persistence** (SQLite WAL mode, `~/tradinebotte/live.db`):
 - `trades` table: 21 columns, entry signal through resolution
 - `snapshots` table: 5-second interval book snapshots for post-analysis
 
@@ -96,10 +96,10 @@ These are backtested. Changing them without re-running the full backtest invalid
 
 ## Runtime Paths (VPS Deployment)
 
-- Bot source: `~/polymarket/live_bot.py`
-- Database: `~/polymarket/live.db`
-- Log file: `~/polymarket/live.log`
-- Virtualenv: `~/polymarket/venv/`
+- Bot source: `~/tradinebotte/live_bot.py`
+- Database: `~/tradinebotte/live.db`
+- Log file: `~/tradinebotte/live.log`
+- Virtualenv: `~/tradinebotte/venv/`
 
 ## Normal Behavior
 

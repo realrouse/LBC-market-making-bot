@@ -15,12 +15,12 @@ Steps performed:
 
 Usage:
   python3 scripts/setup.py
-  POLYMARKET_DIR=~/polymarket python3 scripts/setup.py
+  POLYMARKET_DIR=~/tradinebotte python3 scripts/setup.py
 """
 
 import sys, os, json, getpass, sysconfig
 
-INSTALL_DIR = os.path.expanduser(os.environ.get("POLYMARKET_DIR", "~/polymarket"))
+INSTALL_DIR = os.path.expanduser(os.environ.get("POLYMARKET_DIR", "~/tradinebotte"))
 RPC         = "https://polygon.drpc.org"
 CONFIG_PATH = os.path.join(INSTALL_DIR, "config.json")
 

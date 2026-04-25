@@ -5,11 +5,11 @@
 #  (génère <POLYMARKET_DIR>/config.json)
 #
 #  Répertoire d'installation (par ordre de priorité) :
-#    1. Variable d'environnement : POLYMARKET_DIR=~/polymarket bash scripts/start_bot.sh
-#    2. Valeur par défaut : ~/polymarket (aucun accès root requis)
+#    1. Variable d'environnement : POLYMARKET_DIR=~/tradinebotte bash scripts/start_bot.sh
+#    2. Valeur par défaut : ~/tradinebotte (aucun accès root requis)
 # ═══════════════════════════════════════════════════════════════════
 
-INSTALL_DIR="${POLYMARKET_DIR:-$HOME/polymarket}"
+INSTALL_DIR="${POLYMARKET_DIR:-$HOME/tradinebotte}"
 INSTALL_DIR="$(eval echo "$INSTALL_DIR")"
 CONFIG="$INSTALL_DIR/config.json"
 

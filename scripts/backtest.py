@@ -7,7 +7,7 @@ This script replays those snapshots chronologically, applies the signal logic
 with configurable parameters, and produces simulated trade statistics.
 
 Database resolution (first match wins):
-    1. $POLYMARKET_DIR/live.db  (or /opt/polymarket-live/live.db by default)
+    1. $POLYMARKET_DIR/live.db  (or ~/tradinebotte/live.db by default)
     2. data/backtest_sample_btc5m_range_2026.db  (bundled sample dataset)
 
 Usage:
@@ -15,7 +15,7 @@ Usage:
     python3 scripts/backtest.py --threshold 0.95         # custom threshold
     python3 scripts/backtest.py --threshold 0.95 --min-secs 30 --detail
     python3 scripts/backtest.py --sweep                  # grid search
-    POLYMARKET_DIR=~/polymarket python3 scripts/backtest.py
+    POLYMARKET_DIR=~/tradinebotte python3 scripts/backtest.py
 """
 
 import argparse, os, sqlite3, sys
@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from itertools import product
 from typing import List, Optional, Tuple
 
-INSTALL_DIR = os.path.expanduser(os.environ.get("POLYMARKET_DIR", "~/polymarket"))
+INSTALL_DIR = os.path.expanduser(os.environ.get("POLYMARKET_DIR", "~/tradinebotte"))
 _live_db    = os.path.join(INSTALL_DIR, "live.db")
 _sample_db  = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             "data", "backtest_sample_btc5m_range_2026.db")

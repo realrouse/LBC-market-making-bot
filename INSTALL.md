@@ -15,7 +15,7 @@
   Install on Debian/Ubuntu: `sudo apt install sqlite3`
   Without sudo, use the Python alternative:
   ```bash
-  ~/polymarket/venv/bin/python3 -c \
+  ~/tradinebotte/venv/bin/python3 -c \
     "import sqlite3; c=sqlite3.connect('live.db'); \
      print(c.execute('SELECT COUNT(*) FROM snapshots').fetchone()[0])"
   ```
@@ -24,7 +24,7 @@
 ## Dependencies
 
 The following Python packages are installed automatically by `scripts/install.sh`
-into a virtualenv at `~/polymarket/venv/`:
+into a virtualenv at `~/tradinebotte/venv/`:
 
 - `aiohttp`
 - `websockets`
@@ -38,7 +38,7 @@ All scripts read the `POLYMARKET_DIR` environment variable to determine
 where to install and run the bot. If unset, it defaults to:
 
 ```
-~/polymarket
+~/tradinebotte
 ```
 
 No root access required — the default is in the user's home directory.
@@ -46,20 +46,20 @@ No root access required — the default is in the user's home directory.
 Examples:
 
 ```bash
-# Default (installs in ~/polymarket, no root needed)
+# Default (installs in ~/tradinebotte, no root needed)
 bash scripts/install.sh
 
 # Custom path as argument
-bash scripts/install.sh ~/polymarket
+bash scripts/install.sh ~/tradinebotte
 
 # Custom path via environment variable
-POLYMARKET_DIR=~/polymarket bash scripts/install.sh
+POLYMARKET_DIR=~/tradinebotte bash scripts/install.sh
 ```
 
 The same variable must be set consistently for setup, start, and monitor:
 
 ```bash
-export POLYMARKET_DIR=~/polymarket
+export POLYMARKET_DIR=~/tradinebotte
 ```
 
 
@@ -100,7 +100,7 @@ Run `setup.py` once with your Polygon wallet. It will:
 - Write credentials to `<POLYMARKET_DIR>/config.json` (chmod 600)
 
 ```bash
-POLYMARKET_DIR=~/polymarket python3 scripts/setup.py
+POLYMARKET_DIR=~/tradinebotte python3 scripts/setup.py
 ```
 
 The private key is entered interactively and is never visible in `ps aux`
@@ -196,13 +196,13 @@ your web server is configured to serve that directory.
 ## Running
 
 ```bash
-POLYMARKET_DIR=~/polymarket bash scripts/start_bot.sh
+POLYMARKET_DIR=~/tradinebotte bash scripts/start_bot.sh
 ```
 
 Or using the generated wrapper (`POLYMARKET_DIR` already embedded):
 
 ```bash
-~/polymarket/run.sh
+~/tradinebotte/run.sh
 ```
 
 Verify the bot is running:
@@ -227,19 +227,19 @@ pkill -f live_bot.py
 Live dashboard:
 
 ```bash
-POLYMARKET_DIR=~/polymarket bash scripts/monitor.sh
+POLYMARKET_DIR=~/tradinebotte bash scripts/monitor.sh
 ```
 
 Follow logs in real time:
 
 ```bash
-tail -f ~/polymarket/live.log
+tail -f ~/tradinebotte/live.log
 ```
 
 Recent trades:
 
 ```bash
-sqlite3 ~/polymarket/live.db \
+sqlite3 ~/tradinebotte/live.db \
   "SELECT id, direction, entry_price, outcome, ROUND(pnl_net,3), capital_after \
    FROM trades ORDER BY id DESC LIMIT 10;"
 ```
@@ -247,7 +247,7 @@ sqlite3 ~/polymarket/live.db \
 Today's stats:
 
 ```bash
-sqlite3 ~/polymarket/live.db \
+sqlite3 ~/tradinebotte/live.db \
   "SELECT COUNT(*), SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END), ROUND(SUM(pnl_net),2) \
    FROM trades WHERE resolved=1 AND created_at > (strftime('%s','now')-86400)*1000;"
 ```
@@ -255,7 +255,7 @@ sqlite3 ~/polymarket/live.db \
 Confirm real on-chain orders (not simulated):
 
 ```bash
-grep "order=" ~/polymarket/live.log | grep -v "order=sim" | tail -20
+grep "order=" ~/tradinebotte/live.log | grep -v "order=sim" | tail -20
 ```
 
 
@@ -297,7 +297,7 @@ print('SIGNAL_THRESHOLD:', b.SIGNAL_THRESHOLD)
 ```
 
 Run the bot for 20 seconds in isolated simulate mode (logs to stdout,
-writes to `/tmp/polymarket-sim` — production data is never touched):
+writes to `/tmp/tradinebotte-sim` — production data is never touched):
 
 ```bash
 timeout 20 .venv/bin/python3 bot/live_bot.py --simulate
@@ -306,10 +306,10 @@ timeout 20 .venv/bin/python3 bot/live_bot.py --simulate
 Expected output (printed directly to the terminal):
 
 ```
-[WARNING]  MODE SIMULATION — donnees isolees dans /tmp/polymarket-sim
+[WARNING]  MODE SIMULATION — donnees isolees dans /tmp/tradinebotte-sim
 [INFO]     LIVE BOT v3 — Threshold=0.96 Stake=$10 MinAskVol=10
 [WARNING]  POLY_PRIVATE_KEY non definie — ordres SIMULES
-[INFO]     DB initialisee : /tmp/polymarket-sim/live.db
+[INFO]     DB initialisee : /tmp/tradinebotte-sim/live.db
 [INFO]     State : capital=$100.00 | 0 trades | WR=0.0%
 [INFO]     Marches BTC 5-min : 2
 [INFO]     Souscription 2 tokens...

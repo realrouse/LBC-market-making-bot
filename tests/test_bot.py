@@ -4,7 +4,7 @@ Automated tests for bot/live_bot.py
 Run with:
     bash scripts/run_tests.sh
     # or directly:
-    POLYMARKET_DIR=/tmp/polymarket-test .venv/bin/python3 -m unittest discover tests/ -v
+    POLYMARKET_DIR=/tmp/tradinebotte-test .venv/bin/python3 -m unittest discover tests/ -v
 """
 
 import os, sys, time, sqlite3, unittest, warnings
@@ -16,8 +16,8 @@ from datetime import datetime, timezone, timedelta
 
 # Redirect all bot I/O to /tmp before importing live_bot, so it never tries
 # to create /opt/polymarket-live or open files outside the project tree.
-os.environ["POLYMARKET_DIR"] = "/tmp/polymarket-test"
-os.makedirs("/tmp/polymarket-test", exist_ok=True)
+os.environ["POLYMARKET_DIR"] = "/tmp/tradinebotte-test"
+os.makedirs("/tmp/tradinebotte-test", exist_ok=True)
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bot"))
 import live_bot as bot

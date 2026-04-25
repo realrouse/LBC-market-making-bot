@@ -9,6 +9,9 @@ Toutes les modifications notables de ce projet sont documentées ici.
 ## [Non publié]
 
 ### Correction de bug
+- Tous les scripts, `bot/live_bot.py` et toute la documentation — répertoire d'installation par défaut renommé de `~/polymarket` en `~/tradinebotte` pour correspondre au nom du bot ; `POLYMARKET_DIR` reste prioritaire comme avant ; répertoire temporaire de simulation renommé de `/tmp/polymarket-sim` en `/tmp/tradinebotte-sim` ; répertoire temporaire de test renommé de `/tmp/polymarket-test` en `/tmp/tradinebotte-test`
+
+### Correction de bug
 - Tous les scripts et `bot/live_bot.py` — chemin d'installation par défaut changé de `/opt/polymarket-live` (nécessitait root) vers `~/polymarket` (aucun root requis) ; `POLYMARKET_DIR` reste prioritaire comme avant ; les entrées historiques du CHANGELOG référençant `/opt/polymarket-live` reflètent l'ancien défaut et sont conservées
 
 ### Correction de bug

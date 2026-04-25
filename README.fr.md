@@ -18,7 +18,7 @@ Bot de trading automatisé pour les marchés de prédiction [Polymarket](https:/
 - **Page de statut HTML optionnelle** — le bot écrit une page auto-rafraîchissante (chemin configurable, authentification HTTP Basic Auth optionnelle) — [aperçu visuel](docs/status_example.html)
 - **API exchange modulaire** — tout le code spécifique Polymarket est dans `bot/api_polymarket.py` ; changer d'exchange ne nécessite qu'un nouveau fichier adaptateur et une seule ligne d'import dans `live_bot.py`
 - **Fichiers de stratégie JSON** — les paramètres de signal et de capital sont dans `strategies/polymarket_BTC5M.json` ; changer de stratégie se fait en pointant `"strategy"` dans `config.json` vers n'importe quel fichier
-- **Mode simulation** — le flag `--simulate` isole tous les fichiers dans `/tmp/polymarket-sim`, affiche les logs dans le terminal, et ne place aucun ordre réel ; utilisable sur n'importe quelle machine sans toucher les données de production
+- **Mode simulation** — le flag `--simulate` isole tous les fichiers dans `/tmp/tradinebotte-sim`, affiche les logs dans le terminal, et ne place aucun ordre réel ; utilisable sur n'importe quelle machine sans toucher les données de production
 
 ## Stratégie
 
@@ -30,7 +30,7 @@ Bot de trading automatisé pour les marchés de prédiction [Polymarket](https:/
 
 ## Base de données
 
-Le bot utilise **SQLite** (`live.db`) en mode journal WAL, qui autorise la lecture concurrente pendant les écritures (le script de monitoring peut interroger la base pendant que le bot enregistre des trades). Le fichier se trouve dans `POLYMARKET_DIR/live.db` (par défaut : `~/polymarket/live.db`).
+Le bot utilise **SQLite** (`live.db`) en mode journal WAL, qui autorise la lecture concurrente pendant les écritures (le script de monitoring peut interroger la base pendant que le bot enregistre des trades). Le fichier se trouve dans `POLYMARKET_DIR/live.db` (par défaut : `~/tradinebotte/live.db`).
 
 ### Table : `trades`
 
@@ -152,7 +152,7 @@ POLYMARKET_DIR=~/mybot python3 scripts/backtest.py # chemin de base de données 
 
 ## Notes
 
-- Le CLI `sqlite3` est optionnel — le bot utilise le module Python intégré. L'installer (`sudo apt install sqlite3`) uniquement pour les requêtes manuelles. Sans sudo : `~/polymarket/venv/bin/python3 -c "import sqlite3; c=sqlite3.connect('live.db'); print(c.execute('SELECT COUNT(*) FROM snapshots').fetchone()[0])"`
+- Le CLI `sqlite3` est optionnel — le bot utilise le module Python intégré. L'installer (`sudo apt install sqlite3`) uniquement pour les requêtes manuelles. Sans sudo : `~/tradinebotte/venv/bin/python3 -c "import sqlite3; c=sqlite3.connect('live.db'); print(c.execute('SELECT COUNT(*) FROM snapshots').fetchone()[0])"`
 
 - Les timeouts recv WebSocket (~30s) en période calme sont **normaux** — les keepalives `ping_interval=20` maintiennent la connexion ; le bot ne se reconnecte que si tous les marchés suivis ont expiré
 - Le refresh des marchés (polling de l'API Gamma toutes les 30s) s'exécute en **tâche async de fond**, de sorte que le traitement des messages WebSocket n'est jamais bloqué pendant les appels HTTP

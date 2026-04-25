@@ -18,7 +18,7 @@ Automated trading bot for [Polymarket](https://polymarket.com) prediction market
 - **Optional HTML status page** — bot writes a self-refreshing page (configurable path, optional HTTP Basic Auth) — [see preview](docs/status_example.html)
 - **Pluggable exchange API** — all Polymarket-specific code lives in `bot/api_polymarket.py`; swapping exchanges requires only a new adapter file and a single import change in `live_bot.py`
 - **JSON strategy files** — signal and capital parameters live in `strategies/polymarket_BTC5M.json`; switch strategies by pointing `"strategy"` in `config.json` to any file
-- **Simulation mode** — `--simulate` flag isolates all file I/O to `/tmp/polymarket-sim`, mirrors logs to stdout, and places no real orders; safe to run on any machine without affecting production data
+- **Simulation mode** — `--simulate` flag isolates all file I/O to `/tmp/tradinebotte-sim`, mirrors logs to stdout, and places no real orders; safe to run on any machine without affecting production data
 
 ## Strategy
 
@@ -30,7 +30,7 @@ Automated trading bot for [Polymarket](https://polymarket.com) prediction market
 
 ## Database
 
-The bot uses **SQLite** (`live.db`) with WAL journal mode for concurrent read access (the monitor script can query while the bot writes). The database file is stored at `POLYMARKET_DIR/live.db` (default: `~/polymarket/live.db`).
+The bot uses **SQLite** (`live.db`) with WAL journal mode for concurrent read access (the monitor script can query while the bot writes). The database file is stored at `POLYMARKET_DIR/live.db` (default: `~/tradinebotte/live.db`).
 
 ### Table: `trades`
 
@@ -152,7 +152,7 @@ POLYMARKET_DIR=~/mybot python3 scripts/backtest.py # custom database path
 
 ## Notes
 
-- The `sqlite3` CLI is optional — the bot uses Python's built-in module. Install it (`sudo apt install sqlite3`) only if you want to run manual DB queries. Without sudo, use: `~/polymarket/venv/bin/python3 -c "import sqlite3; c=sqlite3.connect('live.db'); print(c.execute('SELECT COUNT(*) FROM snapshots').fetchone()[0])"`
+- The `sqlite3` CLI is optional — the bot uses Python's built-in module. Install it (`sudo apt install sqlite3`) only if you want to run manual DB queries. Without sudo, use: `~/tradinebotte/venv/bin/python3 -c "import sqlite3; c=sqlite3.connect('live.db'); print(c.execute('SELECT COUNT(*) FROM snapshots').fetchone()[0])"`
 
 - WebSocket recv timeouts at ~30s during quiet periods are **normal** — `ping_interval=20` keepalives maintain the connection; the bot reconnects only when all tracked markets have expired
 - Market refresh (Gamma API polling every 30s) runs as a **background async task** so WebSocket message processing is never blocked during HTTP calls
