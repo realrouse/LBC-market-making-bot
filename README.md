@@ -8,7 +8,7 @@ Automated trading bot for [Polymarket](https://polymarket.com) prediction market
 
 - **Quantitative signal strategy** — entry on `best_bid >= 0.96`, backtested at 98.3% win rate across 1663 trades
 - **Real-time WebSocket feed** — subscribes to Polymarket order books; processes every bid/ask update with sub-second latency
-- **Automatic market discovery** — polls the Gamma API every 90 s in a background task; tracks only markets expiring within ±6 minutes to avoid stale prices
+- **Automatic market discovery** — polls the Gamma API every 30 s in a background task; tracks only markets expiring within ±6 minutes to avoid stale prices
 - **Automated trade resolution** — closes positions automatically on WIN (bid ≥ 0.99), LOSS (bid ≤ 0.01), or market expiry
 - **Daily stop-loss** — halts trading for the day after a $30 net loss; resumes the next session
 - **SQLite persistence** (WAL mode) — all trades and 5-second price snapshots are stored; state survives crashes and restarts
@@ -154,7 +154,7 @@ POLYMARKET_DIR=~/mybot python3 scripts/backtest.py # custom database path
 - The `sqlite3` CLI is optional — the bot uses Python's built-in module. Install it (`sudo apt install sqlite3`) only if you want to run manual DB queries. Without sudo, use: `~/polymarket/venv/bin/python3 -c "import sqlite3; c=sqlite3.connect('live.db'); print(c.execute('SELECT COUNT(*) FROM snapshots').fetchone()[0])"`
 
 - WebSocket recv timeouts at ~30s during quiet periods are **normal** — `ping_interval=20` keepalives maintain the connection; the bot reconnects only when all tracked markets have expired
-- Market refresh (Gamma API polling every 90s) runs as a **background async task** so WebSocket message processing is never blocked during HTTP calls
+- Market refresh (Gamma API polling every 30s) runs as a **background async task** so WebSocket message processing is never blocked during HTTP calls
 - The Gamma API query uses `tag_id=102892` (the `5M` tag) to pre-filter server-side to 5-minute markets only, reducing each poll from potentially thousands of markets to ~12–20 in a **single API call** (no pagination)
 - If `POLY_PRIVATE_KEY` is not set, orders are simulated (no on-chain execution)
 - Signals can be infrequent during low-volatility BTC periods — this is expected

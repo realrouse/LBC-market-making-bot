@@ -8,7 +8,7 @@ Bot de trading automatisé pour les marchés de prédiction [Polymarket](https:/
 
 - **Stratégie quantitative** — entrée sur `best_bid >= 0.96`, backtestée à 98,3% de victoires sur 1663 trades
 - **Flux WebSocket temps réel** — souscrit aux carnets d'ordres Polymarket ; traite chaque mise à jour bid/ask avec une latence inférieure à la seconde
-- **Découverte automatique des marchés** — interroge l'API Gamma toutes les 90 s en tâche de fond ; ne suit que les marchés expirant dans ±6 minutes pour éviter les prix figés
+- **Découverte automatique des marchés** — interroge l'API Gamma toutes les 30 s en tâche de fond ; ne suit que les marchés expirant dans ±6 minutes pour éviter les prix figés
 - **Résolution automatique des trades** — clôture les positions automatiquement en WIN (bid ≥ 0.99), LOSS (bid ≤ 0.01), ou à l'expiration du marché
 - **Stop-loss journalier** — suspend le trading dès 30 $ de perte nette sur la journée ; reprend à la session suivante
 - **Persistance SQLite** (mode WAL) — tous les trades et les snapshots de prix toutes les 5 s sont stockés ; l'état survit aux crashs et redémarrages
@@ -154,7 +154,7 @@ POLYMARKET_DIR=~/mybot python3 scripts/backtest.py # chemin de base de données 
 - Le CLI `sqlite3` est optionnel — le bot utilise le module Python intégré. L'installer (`sudo apt install sqlite3`) uniquement pour les requêtes manuelles. Sans sudo : `~/polymarket/venv/bin/python3 -c "import sqlite3; c=sqlite3.connect('live.db'); print(c.execute('SELECT COUNT(*) FROM snapshots').fetchone()[0])"`
 
 - Les timeouts recv WebSocket (~30s) en période calme sont **normaux** — les keepalives `ping_interval=20` maintiennent la connexion ; le bot ne se reconnecte que si tous les marchés suivis ont expiré
-- Le refresh des marchés (polling de l'API Gamma toutes les 90s) s'exécute en **tâche async de fond**, de sorte que le traitement des messages WebSocket n'est jamais bloqué pendant les appels HTTP
+- Le refresh des marchés (polling de l'API Gamma toutes les 30s) s'exécute en **tâche async de fond**, de sorte que le traitement des messages WebSocket n'est jamais bloqué pendant les appels HTTP
 - La requête API Gamma utilise `tag_id=102892` (le tag `5M`) pour pré-filtrer côté serveur aux seuls marchés 5 minutes, réduisant chaque poll de potentiellement des milliers de marchés à ~12–20 en **un seul appel API** (sans pagination)
 - Si `POLY_PRIVATE_KEY` n'est pas défini, les ordres sont simulés (aucune exécution on-chain)
 - Les signaux peuvent être rares en période de faible volatilité BTC — c'est attendu

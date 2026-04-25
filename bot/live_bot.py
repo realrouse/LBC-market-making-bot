@@ -62,7 +62,7 @@ DAILY_STOP_LOSS    = 30.0
 # ─── TIMING ──────────────────────────────────────────────────────────────────
 SNAPSHOT_INTERVAL  = 5    # seconds between SQLite price snapshots per token
 DASHBOARD_INTERVAL = 300  # seconds between log dashboard prints
-MARKET_REFRESH     = 90   # seconds between Gamma API polls to discover new markets
+MARKET_REFRESH     = 30   # seconds between Gamma API polls to discover new markets
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────
 

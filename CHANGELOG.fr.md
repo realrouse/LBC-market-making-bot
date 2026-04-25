@@ -8,6 +8,9 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ## [Non publié]
 
+### Performance
+- `bot/live_bot.py` — `MARKET_REFRESH` réduit de 90 s à 30 s : le bot découvre désormais les nouveaux marchés au plus 30 s après leur entrée dans la fenêtre ±6 minutes, au lieu de 90 s maximum ; l'appel Gamma API reste une requête unique (filtre tag_id=102892, sans pagination), la surcharge est négligeable
+
 ### Documentation
 - `INSTALL` / `INSTALL.fr` — CLI sqlite3 ajouté aux prérequis avec note indiquant que le bot fonctionne sans lui ; commande Python de remplacement fournie pour les hôtes sans sudo
 
