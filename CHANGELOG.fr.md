@@ -11,6 +11,10 @@ Toutes les modifications notables de ce projet sont documentées ici.
 ### Fonctionnalité
 - **Filtre heure/jour** — nouveau bloc `hour_filter` dans `strategies/polymarket_BTC5M.json` (désactivé par défaut). Quand actif, restreint les entrées à des plages horaires UTC configurables par type de jour (semaine/weekend), avec gestion spéciale de l'ouverture hebdomadaire US (lundi avant 13h30 UTC) et de la fermeture (vendredi à partir de 20h00 UTC). Appliqué identiquement dans le bot live (garde `is_trading_hour()` dans `check_signal()`) et dans le moteur de backtest (`_is_trading_hour()` dans `run_backtest()`). 15 nouveaux tests unitaires.
 
+### Documentation
+- `INSTALL.md` / `INSTALL.fr.md` — nouvelle section « Filtre heure / jour » : tableau de justification (sessions asiatique/EU/US, ouverture/fermeture hebdomadaire), référence complète des paramètres, logique de décision pas-à-pas avec exemple du lundi, 3 configurations prêtes à l'emploi, workflow de validation par backtest, exemple de log au démarrage
+- `README.md` / `README.fr.md` — nouveau bullet fonctionnalité pour le filtre horaire ; compteur de tests mis à jour à 123
+
 ### Précédent
 - `scripts/tradinebotte.service` — template d'unité systemd : `After=network-online.target`, `Restart=on-failure`, `RestartSec=30`, `StartLimitBurst=5` (max 5 redémarrages par 5 min) ; les placeholders `__USER__` et `__TRADINEBOTTE_DIR__` sont substitués à l'installation
 - `scripts/install_service.sh` — script générateur : lit `TRADINEBOTTE_DIR` (ou utilise `~/tradinebotte` par défaut), valide que l'installation existe, substitue les placeholders avec `sed`, écrit dans `/tmp/tradinebotte.service` et affiche les quatre commandes `sudo` pour activer le service
