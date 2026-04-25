@@ -136,7 +136,10 @@ DB_MMAP_MB = int(_cfg.get("db_mmap_mb", 0))
 # The page is protected by .htaccess Basic Auth if webstatus_password is set.
 # .htpasswd is stored in INSTALL_DIR (outside the web root) for security.
 _webstatus_raw = _cfg.get("webstatuspage_html", False)
-WEBSTATUS_ENABLED  = str(_webstatus_raw).lower() in ("true", "1", "yes") if not isinstance(_webstatus_raw, bool) else _webstatus_raw
+WEBSTATUS_ENABLED  = (
+    str(_webstatus_raw).lower() in ("true", "1", "yes")
+    if not isinstance(_webstatus_raw, bool) else _webstatus_raw
+)
 WEBSTATUS_PATH     = os.path.expanduser(_cfg.get("webstatuspage_path", "~/public_html/tradinebot_status.html"))
 WEBSTATUS_USER     = _cfg.get("webstatus_user", "tradinebot")
 WEBSTATUS_PASSWORD = _cfg.get("webstatus_password", "")

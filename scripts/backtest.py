@@ -152,7 +152,7 @@ def run_backtest(rows: list, params: Params) -> Tuple[List[SimTrade], float]:
         if best_bid > params.entry_max:                              continue
         if best_ask >= 1.0:                                          continue
         if best_ask > params.entry_max:                              continue
-        if ask_vol > 0 and ask_vol < params.min_ask_vol:             continue
+        if 0 < ask_vol < params.min_ask_vol:                          continue
         if secs_remaining < params.min_secs_remaining:               continue
         if obi < params.obi_reject_thresh:                           continue
         if capital - len(open_trades) * params.stake < params.stake: continue

@@ -50,11 +50,11 @@ from py_clob_client.client import ClobClient
 from py_clob_client.constants import POLYGON
 
 w3   = Web3(Web3.HTTPProvider(RPC))
-acct = Account.from_key(PRIVATE_KEY)
+acct = Account.from_key(PRIVATE_KEY)  # pylint: disable=no-value-for-parameter
 WALLET = acct.address
 
 print(f"\n{'='*60}")
-print(f"  SETUP POLYMARKET LIVE BOT")
+print("  SETUP POLYMARKET LIVE BOT")
 print(f"{'='*60}")
 print(f"Wallet    : {WALLET}")
 print(f"Connected : {w3.is_connected()}")
@@ -62,11 +62,13 @@ print(f"Block     : {w3.eth.block_number}")
 
 # ── ERC-20 minimal ABI ────────────────────────────────────────────────────────
 # Only includes the three functions we need: balanceOf, allowance, approve.
+# pylint: disable=line-too-long
 abi = [
     {"inputs":[{"name":"account","type":"address"}],"name":"balanceOf","outputs":[{"name":"","type":"uint256"}],"type":"function"},
     {"inputs":[{"name":"owner","type":"address"},{"name":"spender","type":"address"}],"name":"allowance","outputs":[{"name":"","type":"uint256"}],"type":"function"},
     {"inputs":[{"name":"spender","type":"address"},{"name":"amount","type":"uint256"}],"name":"approve","outputs":[{"name":"","type":"bool"}],"type":"function"}
 ]
+# pylint: enable=line-too-long
 
 usdc_e = w3.eth.contract(address=Web3.to_checksum_address(USDC_E), abi=abi)
 usdc_n = w3.eth.contract(address=Web3.to_checksum_address(USDC_NATIVE), abi=abi)
@@ -76,7 +78,7 @@ bal_n = usdc_n.functions.balanceOf(Web3.to_checksum_address(WALLET)).call()
 allow = usdc_e.functions.allowance(Web3.to_checksum_address(WALLET), Web3.to_checksum_address(CTF_EXCHANGE)).call()
 matic = w3.eth.get_balance(Web3.to_checksum_address(WALLET))
 
-print(f"\n── BALANCES ──")
+print("\n── BALANCES ──")
 print(f"MATIC    : {matic/1e18:.4f} MATIC {'✅' if matic > 0.01*1e18 else '❌ INSUFFICIENT'}")
 print(f"USDC.e   : {bal_e/1e6:.2f} USDC {'✅' if bal_e > 0 else '⚠️  Swap needed'}")
 print(f"USDC nat : {bal_n/1e6:.2f} USDC")
@@ -103,7 +105,7 @@ if bal_e == 0 and bal_n > 0:
     signed = w3.eth.account.sign_transaction(tx, PRIVATE_KEY)
     txh = w3.eth.send_raw_transaction(signed.raw_transaction)
     w3.eth.wait_for_transaction_receipt(txh, timeout=60)
-    print(f"   Approve OK")
+    print("   Approve OK")
 
     # Step 2: call exactInputSingle on the Uniswap V3 SwapRouter.
     # fee=100 selects the 0.01% fee tier — the cheapest pool for stablecoin-to-stablecoin swaps.
@@ -138,7 +140,7 @@ if bal_e == 0 and bal_n > 0:
 
 # ── Approve CTF Exchange to spend USDC.e ─────────────────────────────────────
 if allow == 0 and bal_e > 0:
-    print(f"\n⚠️  No allowance set. Approving CTF Exchange...")
+    print("\n⚠️  No allowance set. Approving CTF Exchange...")
     nonce = w3.eth.get_transaction_count(Web3.to_checksum_address(WALLET))
     # Approve the exact current balance rather than 2**256-1 (unlimited).
     # If CTF Exchange were ever exploited, the attacker could only drain the
@@ -156,11 +158,11 @@ if allow == 0 and bal_e > 0:
 # create_or_derive_api_creds signs a deterministic message with the wallet's
 # ECDSA key. The result is reproducible — re-running this script produces the
 # same API keys, so no separate secret needs to be stored beyond the private key.
-print(f"\n── API KEYS POLYMARKET ──")
+print("\n── API KEYS POLYMARKET ──")
 client = ClobClient("https://clob.polymarket.com",
     key=PRIVATE_KEY, chain_id=POLYGON, signature_type=0)
 creds = client.create_or_derive_api_creds()
-print(f"✅ Keys derived from private key")
+print("✅ Keys derived from private key")
 
 # ── Write config.json ─────────────────────────────────────────────────────────
 config = {
@@ -179,10 +181,10 @@ print(f"\n{'='*60}")
 print(f"  CONFIG WRITTEN → {CONFIG_PATH}")
 print(f"{'='*60}")
 print(f"  Wallet        : {WALLET}")
-print(f"  Keys derived  : OK")
-print(f"  Permissions   : chmod 600")
+print("  Keys derived  : OK")
+print("  Permissions   : chmod 600")
 print(f"\n{'='*60}")
-print(f"  LAUNCH")
+print("  LAUNCH")
 print(f"{'='*60}")
-print(f"bash scripts/start_bot.sh")
+print("bash scripts/start_bot.sh")
 print(f"tail -f {os.path.join(INSTALL_DIR, 'live.log')}")

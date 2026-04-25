@@ -57,3 +57,17 @@ disable=
     # Tests legitimately access private helpers (_fee, _live_db_usable) to
     # verify internal logic without exposing it as part of the public API.
     W0212,
+
+    # ── Docstrings ───────────────────────────────────────────────────────────
+    # Test classes and small utility functions are self-documenting through
+    # their names (test_win_increases_capital, etc.) — docstrings add no value.
+    C0115,
+    C0116,
+
+    # ── Complexity limits ─────────────────────────────────────────────────────
+    # The main bot loop, backtest engine, and setup script are inherently
+    # complex single-pass state machines; splitting them artificially into
+    # smaller functions would hurt readability without improving correctness.
+    R0911,
+    R0912,
+    R0915,
