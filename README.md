@@ -14,7 +14,6 @@ Automated trading bot for [Polymarket](https://polymarket.com) prediction market
 - **SQLite persistence** (WAL mode) — all trades and 5-second price snapshots are stored; state survives crashes and restarts
 - **Crash recovery** — restores unresolved trades from the database on startup; rebuilds capital from historical PnL
 - **Backtest engine** — replays `snapshots` data against any parameter set; supports grid search across 135 combinations; `--db file1.db file2.db` or `--db data/*.db` runs independent capital simulations across multiple snapshot files; `--all` auto-scans `data/` and prepends `live.db` when usable; aggregate win-rate and PnL printed across all files; falls back to the bundled sample dataset (`data/backtest_sample_btc5m_range_2026.db`) when no live database is present
-- **108-test suite** — covers signal guards, resolution paths, fee calculation, WebSocket parsing, HTML status page, and state restore; no network or credentials required; deployable to any target with `--with-tests`
 - **Optional HTML status page** — bot writes a self-refreshing page (configurable path, optional HTTP Basic Auth) — [see preview](docs/status_example.html)
 - **Pluggable exchange API** — all Polymarket-specific code lives in `bot/api_polymarket.py`; swapping exchanges requires only a new adapter file and a single import change in `live_bot.py`
 - **JSON strategy files** — signal and capital parameters live in `strategies/polymarket_BTC5M.json`; switch strategies by pointing `"strategy"` in `config.json` to any file
@@ -138,7 +137,7 @@ See **[INSTALL.md](INSTALL.md)** for the full installation guide, including requ
 bash scripts/run_tests.sh
 ```
 
-The suite runs 99 tests (71 for the live bot, 28 for the backtest engine) covering: fee calculation, WebSocket message parsing, OBI computation, market registration, all 8 signal entry guards (including the daily stop-loss), trade resolution (WIN/LOSS/expiry), PnL calculation, crash-recovery state restore, and all backtest signal/resolution/parameter paths. No network access or credentials are required — an in-memory SQLite database is used for every test.
+The suite runs 108 tests (80 for the live bot, 28 for the backtest engine) covering: fee calculation, WebSocket message parsing, OBI computation, market registration, all 11 signal entry guards (including the daily stop-loss), trade resolution (WIN/LOSS/expiry), PnL calculation, crash-recovery state restore, htpasswd SHA1 hashing, HTML status page rendering, async book-update state, and all backtest signal/resolution/parameter paths. No network access or credentials are required — an in-memory SQLite database is used for every test.
 
 ## Backtest
 
@@ -151,6 +150,9 @@ python3 scripts/backtest.py --threshold 0.95       # custom threshold
 python3 scripts/backtest.py --detail               # print per-trade table
 python3 scripts/backtest.py --compare              # compare vs actual bot trades
 python3 scripts/backtest.py --sweep                # grid search (135 combinations)
+python3 scripts/backtest.py --db data/s1.db data/s2.db  # explicit files
+python3 scripts/backtest.py --db data/*.db         # shell glob (independent capital per file)
+python3 scripts/backtest.py --all                  # scan data/ + live.db if ≥ 100 snapshots
 TRADINEBOTTE_DIR=~/mybot python3 scripts/backtest.py # custom database path
 ```
 

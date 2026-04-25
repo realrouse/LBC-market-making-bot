@@ -14,7 +14,6 @@ Bot de trading automatisé pour les marchés de prédiction [Polymarket](https:/
 - **Persistance SQLite** (mode WAL) — tous les trades et les snapshots de prix toutes les 5 s sont stockés ; l'état survit aux crashs et redémarrages
 - **Reprise après crash** — restaure les trades non résolus depuis la base de données au démarrage ; reconstruit le capital à partir du PnL historique
 - **Moteur de backtest** — rejoue les données `snapshots` avec n'importe quel jeu de paramètres ; supporte la recherche en grille sur 135 combinaisons ; `--db file1.db file2.db` ou `--db data/*.db` exécute des simulations de capital indépendantes sur plusieurs fichiers de snapshots ; `--all` scanne automatiquement `data/` et ajoute `live.db` en tête si utilisable ; taux de victoire et PnL agrégés affichés sur tous les fichiers ; utilise le jeu de données embarqué (`data/backtest_sample_btc5m_range_2026.db`) si aucune base de données live n'est présente
-- **Suite de 108 tests** — couvre les gardes du signal, les chemins de résolution, le calcul des frais, le parsing WebSocket, la page de statut HTML et la restauration d'état ; aucun réseau ni credentials requis ; déployable sur n'importe quelle cible avec `--with-tests`
 - **Page de statut HTML optionnelle** — le bot écrit une page auto-rafraîchissante (chemin configurable, authentification HTTP Basic Auth optionnelle) — [aperçu visuel](docs/status_example.html)
 - **API exchange modulaire** — tout le code spécifique Polymarket est dans `bot/api_polymarket.py` ; changer d'exchange ne nécessite qu'un nouveau fichier adaptateur et une seule ligne d'import dans `live_bot.py`
 - **Fichiers de stratégie JSON** — les paramètres de signal et de capital sont dans `strategies/polymarket_BTC5M.json` ; changer de stratégie se fait en pointant `"strategy"` dans `config.json` vers n'importe quel fichier
@@ -138,7 +137,7 @@ Voir **[INSTALL.fr.md](INSTALL.fr.md)** pour le guide d'installation complet : p
 bash scripts/run_tests.sh
 ```
 
-La suite exécute 99 tests (71 pour le bot live, 28 pour le moteur de backtest) couvrant : le calcul des frais, le parsing des messages WebSocket, le calcul de l'OBI, l'enregistrement des marchés, les 8 gardes d'entrée du signal (dont le stop-loss journalier), la résolution des trades (WIN/LOSS/expiration), le calcul du PnL, la restauration d'état après un crash, et tous les chemins signal/résolution/paramètres du backtest. Aucun accès réseau ni credentials nécessaires — une base SQLite en mémoire est utilisée pour chaque test.
+La suite exécute 108 tests (80 pour le bot live, 28 pour le moteur de backtest) couvrant : le calcul des frais, le parsing des messages WebSocket, le calcul de l'OBI, l'enregistrement des marchés, les 11 gardes d'entrée du signal (dont le stop-loss journalier), la résolution des trades (WIN/LOSS/expiration), le calcul du PnL, la restauration d'état après un crash, le hashage SHA1 htpasswd, le rendu de la page de statut HTML, la mise à jour d'état asynchrone, et tous les chemins signal/résolution/paramètres du backtest. Aucun accès réseau ni credentials nécessaires — une base SQLite en mémoire est utilisée pour chaque test.
 
 ## Backtest
 
@@ -151,6 +150,9 @@ python3 scripts/backtest.py --threshold 0.95       # seuil personnalisé
 python3 scripts/backtest.py --detail               # tableau trade par trade
 python3 scripts/backtest.py --compare              # comparaison avec les trades réels
 python3 scripts/backtest.py --sweep                # recherche en grille (135 combinaisons)
+python3 scripts/backtest.py --db data/s1.db data/s2.db  # fichiers explicites
+python3 scripts/backtest.py --db data/*.db         # glob shell (capital indépendant par fichier)
+python3 scripts/backtest.py --all                  # scanne data/ + live.db si ≥ 100 snapshots
 TRADINEBOTTE_DIR=~/mybot python3 scripts/backtest.py # chemin de base de données personnalisé
 ```
 
