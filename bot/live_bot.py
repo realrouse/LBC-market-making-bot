@@ -25,7 +25,7 @@ Launch:
 
 import asyncio, json, logging, logging.handlers, os, queue, sqlite3, sys, time
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 import aiohttp, websockets
 
 # ─── RUNTIME FLAGS ───────────────────────────────────────────────────────────
@@ -76,7 +76,7 @@ MARKET_REFRESH     = 30   # seconds between Gamma API polls to discover new mark
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────
 
-def load_config():
+def load_config() -> dict[str, Any]:
     """
     Load all configuration from config.json if it exists, returning the raw
     dict. Returns an empty dict if the file is absent so callers can fall back
@@ -90,7 +90,7 @@ def load_config():
 _cfg = load_config()
 
 
-def load_strategy(path):
+def load_strategy(path: str) -> Optional[dict[str, Any]]:
     """Load strategy parameters from a JSON file. Returns None if not found."""
     if not os.path.exists(path):
         return None
@@ -215,7 +215,7 @@ CREATE INDEX IF NOT EXISTS idx_trades_market ON trades(market_id);
 CREATE INDEX IF NOT EXISTS idx_trades_resolved ON trades(resolved);
 """
 
-def init_db():
+def init_db() -> sqlite3.Connection:
     """Open (or create) the SQLite database and apply schema migrations."""
     # check_same_thread=False is safe here because asyncio is single-threaded;
     # the connection is only ever accessed from the event loop.
@@ -245,8 +245,8 @@ class TokenState:
                  "bid_vol", "ask_vol", "obi",
                  "last_update_ts", "last_snapshot_ts")
 
-    def __init__(self, token_id, market_id, direction, question,
-                 market_start_ms, market_end_ms):
+    def __init__(self, token_id: str, market_id: str, direction: str, question: str,
+                 market_start_ms: int, market_end_ms: int) -> None:
         self.token_id = token_id
         self.market_id = market_id
         self.direction = direction
@@ -262,19 +262,19 @@ class TokenState:
         self.last_update_ts = 0.0; self.last_snapshot_ts = 0.0
 
     @property
-    def secs_remaining(self):
+    def secs_remaining(self) -> float:
         """Seconds until the market's scheduled end time (0 if already past)."""
         if not self.market_end_ms: return 9999.0
         return max(0.0, (self.market_end_ms - time.time() * 1000) / 1000.0)
 
     @property
-    def seconds_elapsed(self):
+    def seconds_elapsed(self) -> float:
         """Seconds since the market's scheduled start time."""
         if not self.market_start_ms: return 0.0
         return max(0.0, (time.time() * 1000 - self.market_start_ms) / 1000.0)
 
     @property
-    def market_ended(self):
+    def market_ended(self) -> bool:
         """
         True if the market is past its end time plus a 5-second grace period.
         The grace period prevents treating a market as ended due to clock skew.
@@ -287,7 +287,7 @@ class BotState:
     Global runtime state shared across all async tasks.
     A single instance lives for the entire process lifetime.
     """
-    def __init__(self, conn):
+    def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
         self.capital = CAPITAL_START
         self.session = None          # aiohttp.ClientSession, set when WS loop starts
@@ -304,7 +304,7 @@ class BotState:
         self.total_pnl = 0.0
 
     @property
-    def win_rate(self):
+    def win_rate(self) -> float:
         """Win rate as a percentage, 0.0 if no resolved trades."""
         t = self.wins + self.losses
         return (self.wins / t * 100) if t else 0.0
@@ -312,7 +312,7 @@ class BotState:
 
 # ─── WEBSOCKET MESSAGE HANDLING ───────────────────────────────────────────────
 
-async def handle_book_update(state, parsed):
+async def handle_book_update(state: BotState, parsed: dict[str, Any]) -> None:
     """Apply a parsed book update to the token's state, then check for signals."""
     # Capture the monotonic clock as early as possible — before even the token
     # lookup — so t_ws represents the true start of processing this WS message.
@@ -340,7 +340,7 @@ async def handle_book_update(state, parsed):
 
 # ─── SIGNAL & TRADE LOGIC ─────────────────────────────────────────────────────
 
-async def check_signal(state, ts, _t_ws=None):
+async def check_signal(state: BotState, ts: TokenState, _t_ws: Optional[float] = None) -> None:
     """
     Evaluate all entry conditions for the given token and enter a trade if met.
 
@@ -392,7 +392,7 @@ async def check_signal(state, ts, _t_ws=None):
     state.signalled.add(ts.market_id)
     await enter_live_trade(state, ts, _t_ws=_t_ws)
 
-async def enter_live_trade(state, ts, _t_ws=None):
+async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[float] = None) -> None:
     """
     Record the trade in the DB, submit the CLOB order, and update bot state.
     The DB insert happens even if the CLOB order fails so we always have an
@@ -457,7 +457,7 @@ async def enter_live_trade(state, ts, _t_ws=None):
             t_signal_ms, order_rtt_ms, total_ms, ts.direction, ts.market_id[:12],
         )
 
-def check_resolution(state, ts):
+def check_resolution(state: BotState, ts: TokenState) -> None:
     """
     Check if an open trade on this token has reached a WIN or LOSS threshold.
     We only resolve a trade for the direction we actually entered — if we
@@ -473,7 +473,7 @@ def check_resolution(state, ts):
     if outcome:
         close_trade(state, ts, state.open_trades[ts.market_id], outcome)
 
-def close_trade(state, ts, trade_id, outcome):
+def close_trade(state: BotState, ts: TokenState, trade_id: int, outcome: str) -> None:
     """
     Mark a trade as resolved in the DB and update capital.
 
@@ -511,7 +511,7 @@ def close_trade(state, ts, trade_id, outcome):
     )
     write_web_status(state)
 
-def save_snapshot(state, ts):
+def save_snapshot(state: BotState, ts: TokenState) -> None:
     """Persist a price snapshot to the DB for post-session analysis."""
     state.conn.execute(
         "INSERT INTO snapshots (ts_ms, market_id, token_id, direction, "
@@ -523,7 +523,7 @@ def save_snapshot(state, ts):
     )
     state.conn.commit()
 
-def print_dashboard(state):
+def print_dashboard(state: BotState) -> None:
     """Log a periodic summary of bot status to the log file."""
     logger.info("=" * 65)
     logger.info("  LIVE BOT  %s", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
@@ -537,12 +537,12 @@ def print_dashboard(state):
 
 # ─── WEB STATUS PAGE FUNCTIONS ────────────────────────────────────────────────
 
-def _htpasswd_sha1(password):
+def _htpasswd_sha1(password: str) -> str:
     """Return an Apache {SHA} htpasswd hash (no external dependencies)."""
     import base64, hashlib
     return "{SHA}" + base64.b64encode(hashlib.sha1(password.encode()).digest()).decode()
 
-def setup_htaccess(html_path):
+def setup_htaccess(html_path: str) -> None:
     """
     Create .htaccess in the HTML directory and .htpasswd in INSTALL_DIR.
     .htpasswd lives outside the web root so it cannot be downloaded.
@@ -567,7 +567,7 @@ def setup_htaccess(html_path):
             )
         logger.info("htaccess cree : %s", htaccess_path)
 
-def _status_html_trade_rows(conn):
+def _status_html_trade_rows(conn: sqlite3.Connection) -> str:
     """Return HTML <tr> rows for the 10 most recent resolved trades."""
     rows = conn.execute(
         "SELECT id, direction, outcome, entry_price, pnl_net, capital_after, "
@@ -590,7 +590,7 @@ def _status_html_trade_rows(conn):
         )
     return "\n".join(parts)
 
-def generate_status_html(state):
+def generate_status_html(state: BotState) -> str:
     """Build a self-contained HTML status page from current bot state."""
     now_str  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     today_ms = int(
@@ -663,7 +663,7 @@ def generate_status_html(state):
         '</body>\n</html>\n'
     )
 
-def write_web_status(state):
+def write_web_status(state: BotState) -> None:
     """Write the HTML status page to disk. No-op when WEBSTATUS_ENABLED is false."""
     if not WEBSTATUS_ENABLED:
         return
@@ -678,7 +678,7 @@ def write_web_status(state):
 
 # ─── MARKET DISCOVERY ─────────────────────────────────────────────────────────
 
-def register_market(state, market):
+def register_market(state: BotState, market: dict[str, Any]) -> list[str]:
     """
     Add a market's UP and DOWN tokens to the state if not already tracked.
     Skips markets that have already ended. Returns a list of newly added token IDs
@@ -704,7 +704,7 @@ def register_market(state, market):
 
 # ─── WEBSOCKET LIFECYCLE ──────────────────────────────────────────────────────
 
-async def ws_loop(state, session):
+async def ws_loop(state: BotState, session: aiohttp.ClientSession) -> None:
     """
     Outer reconnection loop with exponential backoff.
     Doubles the wait time on each failure, capped at 60 seconds, to avoid
@@ -720,7 +720,7 @@ async def ws_loop(state, session):
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60)
 
-async def _market_refresh_loop(state, session, ws):
+async def _market_refresh_loop(state: BotState, session: aiohttp.ClientSession, ws: Any) -> None:
     """
     Background task: polls the exchange API every MARKET_REFRESH seconds and
     subscribes newly discovered tokens while the main recv loop continues
@@ -754,7 +754,7 @@ async def _market_refresh_loop(state, session, ws):
             logger.warning("Refresh marches erreur : %s", e)
 
 
-async def _run_ws(state, session):
+async def _run_ws(state: BotState, session: aiohttp.ClientSession) -> None:
     """
     One WebSocket session: fetch markets, subscribe to their tokens, then
     process messages until the connection drops.
@@ -835,7 +835,7 @@ async def _run_ws(state, session):
 
 # ─── STARTUP ─────────────────────────────────────────────────────────────────
 
-def restore_state_from_db(state):
+def restore_state_from_db(state: BotState) -> None:
     """
     Reload open trades and cumulative stats from the DB on startup.
     This allows the bot to survive restarts without losing track of positions
@@ -865,7 +865,7 @@ def restore_state_from_db(state):
     logger.info("State : capital=$%.2f | %d trades | WR=%.1f%%",
                 state.capital, row[0], state.win_rate)
 
-async def main():
+async def main() -> None:
     logger.info("=" * 65)
     if _SIMULATE:
         logger.warning("  MODE SIMULATION — donnees isolees dans %s", INSTALL_DIR)
