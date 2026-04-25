@@ -142,23 +142,36 @@ WEBSTATUS_USER     = _cfg.get("webstatus_user", "tradinebot")
 WEBSTATUS_PASSWORD = _cfg.get("webstatus_password", "")
 
 # ─── LOGGING & DB INIT ───────────────────────────────────────────────────────
+# Create INSTALL_DIR before opening FileHandler or the SQLite DB, both of
+# which require the directory to already exist.
 os.makedirs(INSTALL_DIR, exist_ok=True)
 
+# _log_listener is module-level so the __main__ block can call .stop() on exit
+# to flush any buffered records before the process terminates. None when
+# --no-log is active (NullHandler has no queue to drain).
 _log_listener: Optional[logging.handlers.QueueListener] = None
+
 if _NO_LOG:
-    # No log file at all: discard records (keep stdout in --simulate mode).
+    # --no-log: drop all log records (no file created, no disk I/O).
+    # In --simulate mode we keep stdout so interactive runs stay observable.
     _log_handlers = [logging.StreamHandler(sys.stdout)] if _SIMULATE \
                     else [logging.NullHandler()]
 else:
-    # Async writes: QueueHandler enqueues records instantly (no disk I/O in the
-    # event loop); QueueListener drains the queue from a daemon thread.
+    # Async logging: logger.info() just enqueues a LogRecord in _log_queue
+    # (nanoseconds, no syscall). The QueueListener runs a daemon thread that
+    # calls FileHandler.emit() — the only place disk I/O actually occurs.
+    # This keeps every log.* call in the asyncio event loop non-blocking.
+    # respect_handler_level=True ensures level filters on the FileHandler
+    # are applied in the background thread, not the caller's thread.
     _log_queue    = queue.Queue()
     _file_handler = logging.FileHandler(LOG_PATH)
     _log_listener = logging.handlers.QueueListener(
         _log_queue, _file_handler, respect_handler_level=True)
-    _log_listener.start()
+    _log_listener.start()   # starts the daemon writer thread
     _log_handlers = [logging.handlers.QueueHandler(_log_queue)]
     if _SIMULATE:
+        # In simulate mode, mirror all records to stdout so the terminal
+        # shows live output without needing `tail -f`.
         _log_handlers.append(logging.StreamHandler(sys.stdout))
 
 logging.basicConfig(
@@ -298,7 +311,12 @@ class BotState:
 
 async def handle_book_update(state, parsed):
     """Apply a parsed book update to the token's state, then check for signals."""
-    t_ws = time.monotonic()          # timestamp for latency tracking — passed through
+    # Capture the monotonic clock as early as possible — before even the token
+    # lookup — so t_ws represents the true start of processing this WS message.
+    # time.monotonic() is used (not time.time()) because it is guaranteed to be
+    # strictly increasing and unaffected by NTP adjustments; it is only used for
+    # duration measurements, never for wall-clock timestamps.
+    t_ws = time.monotonic()
     ts = state.tokens.get(parsed["token_id"])
     if not ts: return
     ts.best_bid  = parsed["best_bid"]
@@ -307,7 +325,8 @@ async def handle_book_update(state, parsed):
     ts.bid_vol   = parsed["bid_vol"]
     ts.ask_vol   = parsed["ask_vol"]
     ts.obi       = parsed["obi"]
-    ts.last_update_ts = time.time()
+    ts.last_update_ts = time.time()  # wall-clock for snapshot interval checks
+    # Pass t_ws so enter_live_trade can compute end-to-end latency if a trade fires.
     await check_signal(state, ts, _t_ws=t_ws)
     check_resolution(state, ts)
     now = time.time()
@@ -321,6 +340,10 @@ async def handle_book_update(state, parsed):
 async def check_signal(state, ts, _t_ws=None):
     """
     Evaluate all entry conditions for the given token and enter a trade if met.
+
+    _t_ws: monotonic timestamp captured at the start of handle_book_update.
+    Passed through to enter_live_trade for latency measurement. None means
+    no latency tracking (e.g. direct calls from tests).
 
     The guards are ordered from cheapest to most expensive to evaluate, and
     from most common rejection to least. Each guard has a specific reason:
@@ -371,6 +394,10 @@ async def enter_live_trade(state, ts, _t_ws=None):
     Record the trade in the DB, submit the CLOB order, and update bot state.
     The DB insert happens even if the CLOB order fails so we always have an
     audit trail and can detect orphaned positions on restart.
+
+    _t_ws: monotonic timestamp from handle_book_update. When provided, latency
+    metrics are computed and emitted as a [LATENCY] log line parseable by
+    scripts/latency.py.
     """
     now_ms = int(time.time() * 1000)
     ep = ts.best_ask                        # entry price = best available ask
@@ -378,7 +405,14 @@ async def enter_live_trade(state, ts, _t_ws=None):
     fee = api.compute_fee(ep, tb)
     cost = STAKE + fee
     oid = None
+
+    # Latency measurement — point A: everything from WS message receipt up to
+    # this point (token update, all signal guards, daily PnL query, fee calc).
+    # Computed before the API call so it excludes order RTT.
     t_signal_ms = (time.monotonic() - _t_ws) * 1000 if _t_ws is not None else None
+
+    # Latency measurement — point B: bracket only the CLOB API HTTP call so we
+    # can isolate network RTT from in-process signal latency.
     t_pre_order = time.monotonic()
     if state.session:
         oid = await api.post_order(
@@ -409,6 +443,10 @@ async def enter_live_trade(state, ts, _t_ws=None):
         ts.secs_remaining, oid or "sim"
     )
     if t_signal_ms is not None:
+        # total_ms = signal latency + order RTT; these two intervals are
+        # contiguous (t_signal_ms ends exactly where t_pre_order begins) so
+        # their sum equals the true end-to-end time from WS receive to order done.
+        # This line is parsed by scripts/latency.py — keep the key=value format.
         total_ms = t_signal_ms + order_rtt_ms
         logger.info(
             "[LATENCY] signal_ms=%.2f order_rtt_ms=%.2f total_ms=%.2f"
@@ -851,5 +889,7 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logger.info("Arret.")
     finally:
+        # Flush the async log queue before exit. Without this, records still
+        # sitting in the queue when the process ends would be silently dropped.
         if _log_listener:
-            _log_listener.stop()  # flush queue and close FileHandler cleanly
+            _log_listener.stop()
