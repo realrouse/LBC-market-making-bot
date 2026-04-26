@@ -77,14 +77,21 @@ place duplicate orders on reconnection).
 |---|---|
 | ZMQ subscriber | Connects a SUB socket to the feed address; subscribes to all messages |
 | Market registration | Builds `TokenState` pairs from feed `market` messages |
-| Signal evaluation | Calls `live_bot.handle_book_update()` → `check_signal()` on every `book` message |
+| Signal evaluation | Calls `live_bot.handle_book_update()` → `check_signal()` on every `book` message, using **its own** strategy parameters |
 | Order placement | Calls `live_bot.enter_live_trade()` → Polymarket CLOB API |
 | Trade resolution | WIN/LOSS/expiry resolved via `check_resolution()` as in the standalone bot |
 | Persistence | Own `live.db`, `account.log`, `config.json` under `TRADINEBOTTE_DIR` |
 
-The account bot imports `live_bot` for its entire trading pipeline.  All
-strategy parameters, signal guards, and fee calculations are identical to
-the standalone mode.
+The account bot is a **separate OS process**.  At startup it sets `TRADINEBOTTE_DIR`
+then imports `live_bot`, which reads all strategy parameters from that directory's
+`strategies/polymarket_BTC5M.json` at import time.  Because each process has its
+own copy of the `live_bot` module, **each account bot can run a completely
+different strategy** — different threshold, different stake, different hour filter,
+different stop-loss — while sharing the same raw WebSocket feed.
+
+The feed is entirely **signal-agnostic**: it broadcasts every raw book update
+without any filtering.  Signal evaluation happens independently inside each
+account bot process.
 
 ---
 
@@ -182,11 +189,46 @@ TRADINEBOTTE_DIR=~/account-b python3 scripts/setup.py
 The config contains the private key, API credentials, and optional strategy
 overrides.  Files are chmod 600 and never shared between accounts.
 
-### Strategy parameters
+### Strategy parameters — each account bot is independent
 
 Strategy parameters (`strategies/polymarket_BTC5M.json`) are read from
-`TRADINEBOTTE_DIR/strategies/` by each account bot independently.  This means
-each account can use a different threshold, stake, or hour filter.
+`TRADINEBOTTE_DIR/strategies/` by each account bot **at process startup**.
+Because each `account_bot.py` is a separate OS process with its own copy of the
+`live_bot` module, every account bot evaluates signals independently against
+**its own** parameters.  The feed broadcasts raw book updates with no filtering —
+it has no knowledge of any threshold or strategy.
+
+This means you can run genuinely different strategies in parallel:
+
+| Account | `signal_threshold` | `stake` | `hour_filter` | Purpose |
+|---|---|---|---|---|
+| `~/account-conservative` | `0.98` | `$5` | US session only | Low-risk, fewer entries |
+| `~/account-standard` | `0.96` | `$10` | disabled | Backtested default |
+| `~/account-aggressive` | `0.94` | `$20` | 24/7 | Higher frequency |
+
+Each account needs its own `strategies/` directory with a JSON file configured
+for that strategy:
+
+```bash
+# Set up a conservative account with a custom threshold
+mkdir -p ~/account-conservative/strategies
+cp strategies/polymarket_BTC5M.json ~/account-conservative/strategies/
+# Edit ~/account-conservative/strategies/polymarket_BTC5M.json:
+#   "signal_threshold": 0.98, "stake": 5, "daily_stop_loss": 15
+TRADINEBOTTE_DIR=~/account-conservative python3 scripts/setup.py
+```
+
+Signal guards that differ per account bot (all read from the strategy JSON):
+
+| Parameter | Key in JSON | Effect |
+|---|---|---|
+| Entry threshold | `signal_threshold` | Minimum `best_bid` to enter |
+| Stake | `stake` | USD per trade |
+| Daily stop-loss | `daily_stop_loss` | Max daily loss before halting |
+| Min time remaining | `min_secs_remaining` | Minimum seconds until market close |
+| Min ask volume | `min_ask_vol` | Minimum liquidity at entry |
+| OBI reject threshold | `obi_reject_thresh` | Order book imbalance floor |
+| Hour / day filter | `hour_filter` | UTC trading windows per weekday/weekend |
 
 ---
 

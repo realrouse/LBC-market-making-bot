@@ -79,14 +79,21 @@ ne placeront pas d'ordres en double à la reconnexion).
 |---|---|
 | Souscripteur ZMQ | Connecte un socket SUB à l'adresse du feed ; souscrit à tous les messages |
 | Enregistrement des marchés | Construit les paires `TokenState` depuis les messages `market` du feed |
-| Évaluation du signal | Appelle `live_bot.handle_book_update()` → `check_signal()` sur chaque message `book` |
+| Évaluation du signal | Appelle `live_bot.handle_book_update()` → `check_signal()` sur chaque message `book`, avec **ses propres** paramètres de stratégie |
 | Passage d'ordres | Appelle `live_bot.enter_live_trade()` → API CLOB Polymarket |
 | Résolution des trades | WIN/LOSS/expiration résolus via `check_resolution()` comme dans le bot autonome |
 | Persistance | Propre `live.db`, `account.log`, `config.json` sous `TRADINEBOTTE_DIR` |
 
-L'account bot importe `live_bot` pour l'intégralité de sa pipeline de trading. Tous
-les paramètres de stratégie, gardes du signal et calculs de frais sont identiques au
-mode autonome.
+L'account bot est un **processus OS séparé**. Au démarrage, il définit `TRADINEBOTTE_DIR`
+puis importe `live_bot`, qui lit tous les paramètres de stratégie depuis
+`strategies/polymarket_BTC5M.json` de ce répertoire à l'import. Comme chaque processus
+possède sa propre copie du module `live_bot`, **chaque account bot peut exécuter une
+stratégie totalement différente** — seuil différent, mise différente, filtre horaire
+différent, stop-loss différent — tout en partageant le même feed WebSocket brut.
+
+Le feed est entièrement **agnostique du signal** : il diffuse chaque mise à jour
+du carnet d'ordres brute sans aucun filtrage. L'évaluation du signal se fait
+indépendamment dans chaque processus account bot.
 
 ---
 
@@ -184,11 +191,47 @@ TRADINEBOTTE_DIR=~/account-b python3 scripts/setup.py
 Le config contient la clé privée, les credentials API, et les éventuelles surcharges
 de stratégie. Les fichiers sont chmod 600 et ne sont jamais partagés entre comptes.
 
-### Paramètres de stratégie
+### Paramètres de stratégie — chaque account bot est indépendant
 
 Les paramètres de stratégie (`strategies/polymarket_BTC5M.json`) sont lus depuis
-`TRADINEBOTTE_DIR/strategies/` par chaque account bot indépendamment. Chaque compte
-peut donc utiliser un seuil, une mise ou un filtre horaire différents.
+`TRADINEBOTTE_DIR/strategies/` par chaque account bot **au démarrage du processus**.
+Comme chaque `account_bot.py` est un processus OS séparé avec sa propre copie du
+module `live_bot`, chaque account bot évalue les signaux indépendamment selon **ses
+propres** paramètres. Le feed diffuse les mises à jour brutes du carnet d'ordres
+sans aucun filtrage — il n'a aucune connaissance d'un seuil ou d'une stratégie.
+
+Il est donc possible de faire tourner des stratégies réellement différentes en
+parallèle :
+
+| Compte | `signal_threshold` | `stake` | `hour_filter` | Objectif |
+|---|---|---|---|---|
+| `~/account-conservateur` | `0.98` | `5 $` | Session US uniquement | Faible risque, moins d'entrées |
+| `~/account-standard` | `0.96` | `10 $` | désactivé | Défaut backtesté |
+| `~/account-agressif` | `0.94` | `20 $` | 24/7 | Fréquence plus élevée |
+
+Chaque compte a besoin de son propre répertoire `strategies/` avec un fichier JSON
+configuré pour cette stratégie :
+
+```bash
+# Configurer un compte conservateur avec un seuil personnalisé
+mkdir -p ~/account-conservateur/strategies
+cp strategies/polymarket_BTC5M.json ~/account-conservateur/strategies/
+# Éditer ~/account-conservateur/strategies/polymarket_BTC5M.json :
+#   "signal_threshold": 0.98, "stake": 5, "daily_stop_loss": 15
+TRADINEBOTTE_DIR=~/account-conservateur python3 scripts/setup.py
+```
+
+Gardes du signal qui diffèrent par account bot (tous lus depuis le JSON de stratégie) :
+
+| Paramètre | Clé JSON | Effet |
+|---|---|---|
+| Seuil d'entrée | `signal_threshold` | `best_bid` minimum pour entrer |
+| Mise | `stake` | USD par trade |
+| Stop-loss journalier | `daily_stop_loss` | Perte max avant suspension |
+| Temps restant minimum | `min_secs_remaining` | Secondes minimum avant clôture du marché |
+| Volume ask minimum | `min_ask_vol` | Liquidité minimum à l'entrée |
+| Seuil de rejet OBI | `obi_reject_thresh` | Plancher de déséquilibre du carnet |
+| Filtre heure / jour | `hour_filter` | Plages horaires UTC par jour semaine/weekend |
 
 ---
 
