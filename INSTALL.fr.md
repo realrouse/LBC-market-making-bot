@@ -439,11 +439,14 @@ Quand le filtre est actif, le bot affiche la configuration effective au démarra
 
 ## Partage WebSocket multi-bot (Option B — ZeroMQ)
 
-> Référence complète de l'architecture : **[docs/multi.fr.md](docs/multi.fr.md)**
+> Référence complète de l'architecture et guide de décision : **[docs/multi.fr.md](docs/multi.fr.md)**
 
-Faire tourner plusieurs comptes sur Polymarket depuis une seule machine implique
-normalement d'ouvrir une connexion WebSocket par bot. L'architecture ZeroMQ
-évite cela en séparant le bot en deux processus distincts :
+Utiliser l'Option B pour faire tourner deux comptes ou plus simultanément, quand
+les comptes appartiennent à des utilisateurs Linux différents, ou pour comparer
+différentes stratégies en parallèle. Pour un seul compte, l'Option A
+(`live_bot.py` autonome) est plus simple.
+
+L'architecture ZeroMQ sépare le bot en deux processus distincts :
 
 | Processus | Fichier | Rôle |
 |---|---|---|

@@ -13,12 +13,25 @@
 
 ## Choose your deployment mode
 
-| Mode | When to use | Files involved |
-|---|---|---|
-| **Option A — Standalone** | One account, simplest setup | `live_bot.py` |
-| **Option B — Multi-bot** | Two or more accounts on the same server | `feed.py` + `account_bot.py` |
+**Option A — Standalone** (`live_bot.py`)
+: Each bot opens its own WebSocket connection to Polymarket.
+: **Use when:** one account, or a small number of accounts where simplicity and ease of debugging matter more than connection efficiency.
 
-Both modes share the same strategy, database schema, and signal logic.
+**Option B — Multi-bot** (`feed.py` + `account_bot.py`)
+: One shared WebSocket feed; each account bot subscribes via ZeroMQ.
+: **Use when:** two or more accounts on the same machine, multiple Linux users each with their own account, or running different strategies in parallel (each bot evaluates signals independently with its own parameters).
+
+Quick decision guide:
+
+| Situation | Recommended |
+|---|---|
+| First setup, single account | **Option A** |
+| Two wallets, same Linux user | **Option B** |
+| Two wallets, different Linux users (`/home/user1`, `/home/user2`) | **Option B** |
+| One account but two strategies to compare simultaneously | **Option B** |
+| Want simplest possible operation and debugging | **Option A** |
+
+Both modes share the same strategy JSON format, database schema, signal logic, and backtesting tools. Switching from A to B later requires no changes to existing data.
 
 ---
 

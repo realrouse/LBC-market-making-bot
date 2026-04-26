@@ -2,11 +2,25 @@
 
 > 🇬🇧 [English version](multi.md)
 
-Ce document décrit l'**Option B** : faire tourner plusieurs comptes de trading
-indépendants sur le même serveur en partageant une seule connexion WebSocket vers
-Polymarket.
+Ce document décrit l'**Option B** : partager une seule connexion WebSocket entre
+plusieurs bots de trading indépendants via ZeroMQ.
 
 Pour le setup à compte unique, voir [QUICKSTART.fr.md — Option A](../QUICKSTART.fr.md).
+
+## Quand utiliser l'Option B
+
+| Situation | Option A (bot seul) | Option B (multi-bot) |
+|---|---|---|
+| Compte unique | ✅ plus simple | possible mais inutile |
+| Deux wallets, même utilisateur Linux | fonctionne (deux processus, deux connexions WS) | ✅ une seule connexion WS |
+| Deux wallets, utilisateurs Linux différents | fonctionne | ✅ une connexion WS, cross-user |
+| Un compte, deux stratégies à comparer | deux bots autonomes | ✅ un feed, deux account bots |
+| Priorité : simplicité et débogage facile | ✅ | plus de pièces mobiles |
+| Priorité : connexions exchange minimales | plus de connexions | ✅ |
+
+**Règle pratique :** commencer par l'Option A. Passer à l'Option B quand on a deux
+comptes ou plus à faire tourner simultanément, ou quand on veut comparer des
+stratégies sans ouvrir plusieurs connexions WebSocket.
 
 ---
 

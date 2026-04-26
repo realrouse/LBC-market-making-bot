@@ -2,10 +2,25 @@
 
 > 🇫🇷 [Version française](multi.fr.md)
 
-This document describes **Option B**: running multiple independent trading accounts
-on the same server while sharing a single WebSocket connection to Polymarket.
+This document describes **Option B**: sharing a single WebSocket connection across
+multiple independent trading bots via ZeroMQ.
 
 For the single-account setup, see [QUICKSTART.md — Option A](../QUICKSTART.md).
+
+## When to use Option B
+
+| Situation | Option A (standalone) | Option B (multi-bot) |
+|---|---|---|
+| Single account | ✅ simpler | possible but unnecessary |
+| Two wallets, same Linux user | works (two processes, two WS connections) | ✅ one WS connection |
+| Two wallets, different Linux users | works | ✅ one WS connection, cross-user |
+| One account, two strategies to compare | two standalone bots | ✅ one feed, two account bots |
+| Priority: simplicity and easy debugging | ✅ | more moving parts |
+| Priority: minimal exchange connections | more connections | ✅ |
+
+**Rule of thumb:** start with Option A.  Move to Option B when you have two or more
+accounts to run simultaneously, or when you want to compare strategies without
+opening multiple WebSocket connections.
 
 ---
 
