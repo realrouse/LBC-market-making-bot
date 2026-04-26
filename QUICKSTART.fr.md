@@ -126,13 +126,16 @@ TRADINEBOTTE_DIR=~/account-b python3 scripts/setup.py   # clé compte B
 
 Chaque compte obtient son propre `~/account-X/config.json` (chmod 600).
 
-### 3 — Lancer le feed, puis chaque account bot
+### 3 — Lancer tous les account bots simultanément
 
 ```bash
-bash scripts/start_feed.sh                                    # feed partagé
 TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
 TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
 ```
+
+Inutile de démarrer le feed manuellement — le premier account bot à démarrer
+lance `feed.py` automatiquement. Les autres attendent et se connectent dès qu'il
+est prêt.
 
 ### 4 — Monitorer chaque compte
 

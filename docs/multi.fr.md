@@ -290,27 +290,45 @@ ZeroMQ. Voir [Déploiement cross-user](#déploiement-cross-user-comptes-linux-di
 
 ## Séquence de lancement
 
-L'ordre est important : le feed doit binder son socket PUB avant que les account
-bots se connectent.
+**account_bot.py démarre le feed automatiquement** — il n'est pas nécessaire de
+lancer feed.py séparément.  Il suffit de démarrer tous les account bots en même
+temps :
 
 ```bash
-# Étape 1 — lancer le feed partagé
+# Les trois peuvent être lancés simultanément — aucun ordre requis
+TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
+TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
+TRADINEBOTTE_DIR=~/account-c bash scripts/start_account.sh
+```
+
+**Fonctionnement (sans race condition) :**
+
+1. Chaque account_bot sonde l'adresse du feed pendant 5 secondes au démarrage.
+2. Si aucun feed n'est trouvé, il tente d'acquérir un verrou exclusif
+   (`/tmp/tradinebotte-feed-<hash>.lock`).
+3. Le gagnant démarre `feed.py` en sous-processus et attend jusqu'à 30 s qu'il
+   soit prêt, puis libère le verrou.
+4. Les autres bloquent sur le verrou, voient le feed actif au déblocage et
+   procèdent sans démarrer un second feed.
+
+Les logs du feed vont dans `/tmp/tradinebotte-feed-<hash>.log`.
+
+Si vous préférez démarrer le feed explicitement (ex. pour systemd) :
+
+```bash
+# Optionnel : démarrage manuel du feed
 bash scripts/start_feed.sh
 
-# Étape 2 — lancer chaque account bot (terminaux séparés ou nohup)
+# Les account bots sautent l'auto-démarrage et se connectent directement
 TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
 TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
 ```
 
-Les scripts affichent le PID et les premières lignes de chaque log. Un délai de
-démarrage de 2 secondes est intégré pour détecter les crashs immédiats avant de
-signaler le succès.
-
-Avec une adresse personnalisée (port différent) :
+Avec une adresse personnalisée :
 
 ```bash
-TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash scripts/start_feed.sh
 TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
+TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
 ```
 
 ---

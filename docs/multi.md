@@ -288,25 +288,44 @@ See [Cross-user deployment](#cross-user-deployment-different-linux-accounts) bel
 
 ## Launch sequence
 
-Order matters: the feed must bind its PUB socket before account bots connect.
+**account_bot.py auto-starts the feed** — you do not need to start feed.py
+separately.  Just launch all account bots at once:
 
 ```bash
-# Step 1 — start the shared feed
+# All three can be started simultaneously — no ordering required
+TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
+TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
+TRADINEBOTTE_DIR=~/account-c bash scripts/start_account.sh
+```
+
+**How it works (race-safe):**
+
+1. Every account_bot probes the feed address for 5 seconds on startup.
+2. If no feed is found, it races for an exclusive file lock
+   (`/tmp/tradinebotte-feed-<hash>.lock`).
+3. The winner starts `feed.py` as a subprocess and waits up to 30 s for it to
+   be ready, then releases the lock.
+4. The losers block on the lock, see the feed is ready when they unblock, and
+   proceed without starting a second feed.
+
+Feed logs go to `/tmp/tradinebotte-feed-<hash>.log`.
+
+If you prefer to start the feed explicitly (e.g. for systemd or monitoring):
+
+```bash
+# Optional: manual feed start — account_bots will find it automatically
 bash scripts/start_feed.sh
 
-# Step 2 — start each account bot (separate terminals or nohup)
+# Then account bots (they will skip the auto-start and connect directly)
 TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
 TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
 ```
 
-The scripts print the PID and the first lines of each log.  A 2-second startup
-delay is built in to catch immediate crashes before reporting success.
-
-To use a non-default feed address (e.g. a different port):
+To use a non-default feed address:
 
 ```bash
-TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash scripts/start_feed.sh
 TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
+TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
 ```
 
 ---
