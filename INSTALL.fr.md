@@ -28,27 +28,25 @@ paquets système doivent être présents avant de lancer `scripts/install.sh` :
 
 ```bash
 # À exécuter une fois en root / sudo sur le serveur avant toute installation
-sudo apt-get install -y python3-venv python3-pip
+sudo apt-get install -y python3-venv python3-pip python3.10-venv
 ```
 
-Sur certaines versions d'Ubuntu (ex. 22.04 avec Python 3.10), le paquet venv
-est version-spécifique. Si la commande ci-dessus ne suffit pas, exécuter aussi :
-
-```bash
-sudo apt-get install -y python3.10-venv   # remplacer 3.10 par votre version mineure Python
-```
+> Sur Ubuntu 22.04 / Python 3.10, `python3-venv` seul ne suffit pas —
+> `python3.10-venv` (paquet version-spécifique) est également requis.
+> Remplacer `3.10` par la version mineure réelle si différente
+> (`python3 --version` pour vérifier).
 
 | Paquet | Pourquoi nécessaire |
 |---|---|
-| `python3-venv` | `python3 -m venv` échoue sans lui sur Debian/Ubuntu |
-| `python3.X-venv` | fallback version-spécifique si `python3-venv` seul ne suffit pas |
-| `python3-pip` | nécessaire pour bootstrapper `ensurepip` dans le venv |
+| `python3-venv` | support venv de base sur Debian/Ubuntu |
+| `python3.10-venv` | support ensurepip version-spécifique (requis sur Ubuntu 22.04) |
+| `python3-pip` | nécessaire pour bootstrapper pip dans le venv |
 
-Si l'un ou l'autre paquet est manquant, la création du venv échoue avec :
+Si un paquet manque, la création du venv échoue avec :
 *"The virtual environment was not created successfully because ensurepip is not
 available."*
-Une fois les deux installés, `install.sh` place toutes les dépendances Python
-dans le venv isolé et **ne touche plus jamais au Python système**.
+Une fois installés, `install.sh` place toutes les dépendances Python dans le
+venv isolé et **ne touche plus jamais au Python système**.
 
 
 ## Dépendances

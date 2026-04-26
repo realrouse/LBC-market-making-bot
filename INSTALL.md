@@ -28,26 +28,24 @@ system packages must be present before `scripts/install.sh` can run:
 
 ```bash
 # Run once as root / sudo on the server before any user installs the bot
-sudo apt-get install -y python3-venv python3-pip
+sudo apt-get install -y python3-venv python3-pip python3.10-venv
 ```
 
-On some Ubuntu versions (e.g. 22.04 with Python 3.10) the venv package is
-version-specific. If the command above is not sufficient, also run:
-
-```bash
-sudo apt-get install -y python3.10-venv   # replace 3.10 with your Python minor version
-```
+> On Ubuntu 22.04 / Python 3.10 `python3-venv` alone is not enough —
+> `python3.10-venv` (the version-specific package) is also required.
+> Replace `3.10` with your actual Python minor version if different
+> (`python3 --version` to check).
 
 | Package | Why needed |
 |---|---|
-| `python3-venv` | `python3 -m venv` fails without it on Debian/Ubuntu |
-| `python3.X-venv` | version-specific fallback when `python3-venv` alone is not enough |
-| `python3-pip` | needed to bootstrap `ensurepip` inside the venv |
+| `python3-venv` | base venv support on Debian/Ubuntu |
+| `python3.10-venv` | version-specific ensurepip support (required on Ubuntu 22.04) |
+| `python3-pip` | needed to bootstrap pip inside the venv |
 
-If either package is missing, the venv creation fails with:
+If any package is missing, venv creation fails with:
 *"The virtual environment was not created successfully because ensurepip
 is not available."*
-Once both are installed, `install.sh` puts all Python dependencies inside the
+Once installed, `install.sh` puts all Python dependencies inside the
 isolated venv and **never touches the system Python again**.
 
 

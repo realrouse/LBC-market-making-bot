@@ -41,12 +41,11 @@ Les deux modes partagent le même format JSON de stratégie, le même schéma de
 
 > **Prérequis administrateur serveur (une fois par machine) :**
 > ```bash
-> sudo apt-get install -y python3-venv python3-pip
-> # Sur Ubuntu 22.04 / Python 3.10, exécuter aussi :
-> sudo apt-get install -y python3.10-venv
+> sudo apt-get install -y python3-venv python3-pip python3.10-venv
 > ```
-> Sans `python3-venv` et `python3-pip`, la création du virtualenv échoue sur
-> Debian/Ubuntu avec *"ensurepip is not available"*. Requis une seule fois en root —
+> Les trois paquets sont requis sur Ubuntu 22.04 / Python 3.10. Remplacer `3.10`
+> par la version mineure Python (`python3 --version`). Sans eux, la création du
+> venv échoue avec *"ensurepip is not available"*. Requis une seule fois en root —
 > les utilisateurs individuels n'ont plus besoin du root ensuite.
 
 ```bash
