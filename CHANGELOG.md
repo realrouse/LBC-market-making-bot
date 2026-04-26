@@ -18,6 +18,7 @@ All notable changes to this project are documented here.
 ### Documentation
 - `INSTALL.md` / `INSTALL.fr.md` — new "Hour / Day Filter" section: rationale table (Asian/EU/US sessions, weekly open/close), full parameter reference, decision logic walkthrough with step-by-step Monday example, 3 ready-to-use preset configs, backtest validation workflow, and startup log example
 - `README.md` / `README.fr.md` — new feature bullet for the hour/day filter; test count updated to 123
+- `tests/test_multibot.py` — 30 new tests for `feed.py` and `account_bot.py`: 7 unit tests for `feed.register_market()`, 9 unit tests for `account_bot._register_from_market_msg()`, 8 async ZMQ integration tests for Option A (single bot), 6 async ZMQ integration tests for Option B (two simultaneous bots sharing the same feed); total test count raised to 153
 
 ### Previous
 - `scripts/tradinebotte.service` — systemd unit template: `After=network-online.target`, `Restart=on-failure`, `RestartSec=30`, `StartLimitBurst=5` (max 5 restarts per 5 min); placeholders `__USER__` and `__TRADINEBOTTE_DIR__` are substituted at install time

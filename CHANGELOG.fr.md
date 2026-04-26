@@ -18,6 +18,7 @@ Toutes les modifications notables de ce projet sont documentées ici.
 ### Documentation
 - `INSTALL.md` / `INSTALL.fr.md` — nouvelle section « Filtre heure / jour » : tableau de justification (sessions asiatique/EU/US, ouverture/fermeture hebdomadaire), référence complète des paramètres, logique de décision pas-à-pas avec exemple du lundi, 3 configurations prêtes à l'emploi, workflow de validation par backtest, exemple de log au démarrage
 - `README.md` / `README.fr.md` — nouveau bullet fonctionnalité pour le filtre horaire ; compteur de tests mis à jour à 123
+- `tests/test_multibot.py` — 30 nouveaux tests pour `feed.py` et `account_bot.py` : 7 tests unitaires pour `feed.register_market()`, 9 tests unitaires pour `account_bot._register_from_market_msg()`, 8 tests d'intégration ZMQ async pour l'Option A (bot seul), 6 tests d'intégration ZMQ async pour l'Option B (deux bots simultanés partageant le même feed) ; compteur total porté à 153
 
 ### Précédent
 - `scripts/tradinebotte.service` — template d'unité systemd : `After=network-online.target`, `Restart=on-failure`, `RestartSec=30`, `StartLimitBurst=5` (max 5 redémarrages par 5 min) ; les placeholders `__USER__` et `__TRADINEBOTTE_DIR__` sont substitués à l'installation

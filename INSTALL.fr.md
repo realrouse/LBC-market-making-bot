@@ -82,7 +82,7 @@ bash scripts/install.sh [répertoire_installation] [--with-tests]
 **Options :**
 - `--with-tests` — Copie aussi `tests/`, `scripts/backtest.py` et
   `data/backtest_sample_btc5m_range_2026.db`, puis lance
-  la suite complète de tests (123 tests) juste après l'installation.
+  la suite complète de tests (153 tests) juste après l'installation.
   Le backtest utilise `live.db` uniquement s'il contient ≥ 100 snapshots ;
   sinon il bascule automatiquement sur le dataset embarqué.
 
