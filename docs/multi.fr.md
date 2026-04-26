@@ -194,6 +194,8 @@ peut donc utiliser un seuil, une mise ou un filtre horaire différents.
 
 ## Arborescence
 
+### Même utilisateur Linux (le plus simple)
+
 ```
 ~/tradinebotte/               ← venv partagé + log du feed (sans credentials)
   venv/
@@ -212,6 +214,19 @@ peut donc utiliser un seuil, une mise ou un filtre horaire différents.
   config.json
   live.db
   account.log
+```
+
+### Utilisateurs Linux différents (cross-user)
+
+Chaque utilisateur gère sa propre installation ; ils ne partagent que l'adresse
+ZeroMQ. Voir [Déploiement cross-user](#déploiement-cross-user-comptes-linux-différents) ci-dessous.
+
+```
+/home/user1/tradinebotte/     ← utilisateur du feed : venv, feed.log (sans credentials)
+/home/user1/account-1/        ← compte de trading de user1
+
+/home/user2/tradinebotte/     ← venv propre de user2 (installation séparée)
+/home/user2/account-2/        ← compte de trading de user2 (clé propre, DB propre)
 ```
 
 ---
@@ -324,6 +339,159 @@ TRADINEBOTTE_DIR=~/account-c bash scripts/start_account.sh
 Aucun redémarrage du feed ni des account bots existants nécessaire.
 
 ---
+
+## Déploiement cross-user (comptes Linux différents)
+
+Le socket ZeroMQ PUB se bind sur une **adresse TCP loopback** (`127.0.0.1`).
+Sur Linux, le TCP loopback est accessible à tout processus de la machine, quel que
+soit l'utilisateur qui l'exécute — sans configuration particulière, sans système de
+fichiers partagé, sans sudo. Le feed peut donc tourner sous `user1` et les account
+bots sous `user2`, `user3`, etc.
+
+### Prérequis par utilisateur
+
+Chaque utilisateur Linux a besoin de sa propre installation indépendante :
+
+```bash
+# En tant que user2 — configuration initiale
+git clone https://github.com/neofutur/tradinebotte.git ~/tradinebotte
+bash ~/tradinebotte/scripts/install.sh          # crée ~/tradinebotte/venv avec pyzmq
+TRADINEBOTTE_DIR=~/account-2 python3 ~/tradinebotte/scripts/setup.py   # config wallet
+```
+
+> Le `config.json` de chaque utilisateur (clé privée, credentials API) reste dans
+> son propre répertoire personnel sous ses propres permissions Unix. Aucune credential
+> n'est jamais partagée.
+
+### Qui exécute le feed ?
+
+Le feed n'a aucune credential et aucune logique de trading — n'importe quel
+utilisateur peut le lancer. Choix typiques :
+
+| Qui lance feed.py | Quand l'utiliser |
+|---|---|
+| Le même utilisateur qu'un des comptes (ex. `user1`) | 2–3 comptes, setup simple |
+| Un compte système dédié (`tradinebotte-feed`) | Production ; séparation claire des responsabilités |
+
+### Séquence de lancement (cross-user)
+
+```bash
+# En tant que user1 — lancer le feed partagé (bind tcp://127.0.0.1:5557)
+bash ~/tradinebotte/scripts/start_feed.sh
+
+# En tant que user2 — lancer son account bot (se connecte à la même adresse)
+TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5557 \
+TRADINEBOTTE_DIR=~/account-2 \
+bash ~/tradinebotte/scripts/start_account.sh
+
+# En tant que user3 — un autre account bot
+TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5557 \
+TRADINEBOTTE_DIR=~/account-3 \
+bash ~/tradinebotte/scripts/start_account.sh
+```
+
+Chaque utilisateur utilise **son propre venv** (`~/tradinebotte/venv/`) via son
+propre `start_account.sh`. Le `TRADINEBOTTE_FEED_ADDR` doit être identique pour
+tous les utilisateurs.
+
+### Arborescence (cross-user)
+
+```
+/home/user1/
+  tradinebotte/
+    venv/                     ← venv de user1 (pyzmq, aiohttp, etc.)
+    feed.log                  ← diagnostics du feed
+    strategies/
+      polymarket_BTC5M.json
+  account-1/
+    config.json               (chmod 600, user1 uniquement)
+    live.db
+    account.log
+
+/home/user2/
+  tradinebotte/
+    venv/                     ← venv propre de user2 (installation indépendante)
+    strategies/
+      polymarket_BTC5M.json
+  account-2/
+    config.json               (chmod 600, user2 uniquement)
+    live.db
+    account.log
+
+/home/user3/
+  tradinebotte/
+    venv/
+  account-3/
+    config.json               (chmod 600, user3 uniquement)
+    live.db
+    account.log
+```
+
+### Monitoring cross-user
+
+Chaque utilisateur surveille ses propres logs indépendamment :
+
+```bash
+# user1 surveille le feed + son propre compte
+tail -f ~/tradinebotte/feed.log
+tail -f ~/account-1/account.log
+
+# user2 surveille uniquement son compte
+tail -f ~/account-2/account.log
+```
+
+Vérifier que le feed est actif depuis n'importe quel utilisateur :
+
+```bash
+pgrep -u user1 -f feed.py && echo "feed actif" || echo "feed arrêté"
+```
+
+### Modèle de sécurité
+
+| Ce qui est partagé | Qui peut y accéder | Risque |
+|---|---|---|
+| Messages ZMQ du feed (`market`, `book`, `ping`) | Tout utilisateur local connaissant le port | Données de marché uniquement — sans credentials ni clés |
+| `config.json` | Propriétaire uniquement (chmod 600) | Jamais exposé |
+| `live.db` | Propriétaire uniquement | Jamais exposé |
+| `account.log` | Propriétaire uniquement | Jamais exposé |
+
+Le feed ne stocke délibérément aucune credential. Tout utilisateur local pourrait se
+connecter au port ZMQ et recevoir les données de marché, mais ces données sont
+publiques (le carnet d'ordres de Polymarket est public) et ne contiennent rien de
+sensible. Les clés privées ne quittent jamais le `TRADINEBOTTE_DIR` de chaque
+utilisateur.
+
+### Conflits de port
+
+Si le port 5557 est déjà utilisé sur la machine :
+
+```bash
+# Vérifier ce qui utilise le port
+ss -tlnp | grep 5557
+
+# Utiliser un port différent pour tous les participants
+TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash scripts/start_feed.sh
+# — chaque account bot doit utiliser la même adresse
+TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-2 bash scripts/start_account.sh
+```
+
+### Unités systemd (cross-user)
+
+Chaque utilisateur peut installer sa propre unité systemd utilisateur de façon
+indépendante :
+
+```bash
+# En tant que user1 — unité feed
+bash ~/tradinebotte/scripts/install_service.sh   # suivre les commandes sudo affichées
+
+# En tant que user2 — unité account bot (adapter install_service.sh ou écrire manuellement)
+# Cible : ExecStart=.../account_bot.py avec TRADINEBOTTE_DIR et TRADINEBOTTE_FEED_ADDR définis
+```
+
+Une unité de service feed dédiée peut être installée au niveau système
+(`/etc/systemd/system/tradinebotte-feed.service`) par un administrateur pour garantir
+qu'elle démarre avant les unités account bot de chaque utilisateur.
+
 
 ## Comparaison avec le mode autonome
 
