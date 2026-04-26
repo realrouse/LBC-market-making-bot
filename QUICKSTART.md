@@ -11,7 +11,20 @@
 
 ---
 
-## 1 — Clone and install
+## Choose your deployment mode
+
+| Mode | When to use | Files involved |
+|---|---|---|
+| **Option A — Standalone** | One account, simplest setup | `live_bot.py` |
+| **Option B — Multi-bot** | Two or more accounts on the same server | `feed.py` + `account_bot.py` |
+
+Both modes share the same strategy, database schema, and signal logic.
+
+---
+
+## Option A — Standalone (one account)
+
+### 1 — Clone and install
 
 ```bash
 git clone https://github.com/neofutur/tradinebotte.git
@@ -21,9 +34,7 @@ bash scripts/install.sh
 
 This creates `~/tradinebotte/` with a virtualenv and all dependencies. No root needed.
 
----
-
-## 2 — Connect your wallet (one-time)
+### 2 — Connect your wallet (one-time)
 
 ```bash
 python3 scripts/setup.py
@@ -33,37 +44,20 @@ You will be prompted for your private key (masked, never stored in history).
 The script checks balances, swaps USDC if needed, approves the exchange, and writes
 `~/tradinebotte/config.json` (chmod 600).
 
----
-
-## 3 — Start the bot
+### 3 — Start the bot
 
 ```bash
 bash scripts/start_bot.sh
 ```
 
----
-
-## 4 — Monitor
+### 4 — Monitor
 
 ```bash
 bash scripts/monitor.sh          # live dashboard
 tail -f ~/tradinebotte/live.log  # raw log stream
 ```
 
----
-
-## Test without real money first
-
-```bash
-bash scripts/start_bot.sh --simulate
-```
-
-All file I/O goes to `~/tradinebotte-sim`. No orders are placed on-chain.
-To run multiple bots in parallel, set `TRADINEBOTTE_DIR` first: `TRADINEBOTTE_DIR=~/account-a bash scripts/start_bot.sh --simulate`
-
----
-
-## Auto-restart on reboot (systemd)
+### Auto-restart on reboot (systemd)
 
 ```bash
 bash scripts/install_service.sh   # generates unit file and prints install commands
@@ -71,27 +65,84 @@ bash scripts/install_service.sh   # generates unit file and prints install comma
 
 Then follow the printed `sudo` commands to enable the service.
 
----
-
-## Multiple accounts — shared WebSocket (ZeroMQ)
-
-Run a single WebSocket feed and multiple independent account bots:
+### Stop
 
 ```bash
-bash scripts/start_feed.sh                               # shared feed (one WS connection)
+pkill -f live_bot.py              # if running manually
+sudo systemctl stop tradinebotte  # if running via systemd
+```
+
+---
+
+## Option B — Multi-bot (shared WebSocket, multiple accounts)
+
+One `feed.py` process opens a single WebSocket connection to Polymarket and
+broadcasts every book update via ZeroMQ.  Each `account_bot.py` subscribes to
+this feed and trades one account independently — with its own database, log file,
+and private key.  No extra exchange connections are opened.
+
+```
+feed.py  →  ZMQ PUB (tcp://127.0.0.1:5557)
+              ├── account_bot.py  [~/account-a]
+              └── account_bot.py  [~/account-b]
+```
+
+### 1 — Clone and install (shared venv)
+
+```bash
+git clone https://github.com/neofutur/tradinebotte.git
+cd tradinebotte
+bash scripts/install.sh           # creates ~/tradinebotte/venv
+```
+
+### 2 — Set up each account (one-time per account)
+
+```bash
+TRADINEBOTTE_DIR=~/account-a python3 scripts/setup.py   # enter account A key
+TRADINEBOTTE_DIR=~/account-b python3 scripts/setup.py   # enter account B key
+```
+
+Each account gets its own `~/account-X/config.json` (chmod 600).
+
+### 3 — Start the feed, then each account bot
+
+```bash
+bash scripts/start_feed.sh                                # shared feed
 TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
 TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
 ```
 
-Each account needs its own directory with a `config.json` (run `TRADINEBOTTE_DIR=~/account-a python3 scripts/setup.py` for each).  Full guide: [INSTALL.md — Multi-bot section](INSTALL.md#multi-bot-websocket-sharing-option-a--zeromq).
+### 4 — Monitor each account
+
+```bash
+tail -f ~/account-a/account.log
+tail -f ~/account-b/account.log
+tail -f ~/tradinebotte/feed.log   # feed diagnostics
+```
+
+### Stop
+
+```bash
+pkill -f feed.py
+pkill -f account_bot.py
+```
+
+Full guide: [INSTALL.md — Multi-bot section](INSTALL.md#multi-bot-websocket-sharing-option-a--zeromq).
 
 ---
 
-## Stop the bot
+## Test without real money first
+
+Works for both modes — just add `--simulate` (standalone) or set a directory
+without a real private key (multi-bot):
 
 ```bash
-pkill -f live_bot.py        # if running manually
-sudo systemctl stop tradinebotte  # if running via systemd
-pkill -f feed.py            # multi-bot feed
-pkill -f account_bot.py     # multi-bot account bots
+# Standalone simulate
+bash scripts/start_bot.sh --simulate        # writes to ~/tradinebotte-sim
+
+# Multi-bot simulate (each account in its own directory)
+TRADINEBOTTE_DIR=~/sim-a bash scripts/start_bot.sh --simulate
+TRADINEBOTTE_DIR=~/sim-b bash scripts/start_bot.sh --simulate
 ```
+
+No orders are placed on-chain in either case.
