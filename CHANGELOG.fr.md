@@ -11,6 +11,9 @@ Toutes les modifications notables de ce projet sont documentées ici.
 ### Fonctionnalité
 - **Filtre heure/jour** — nouveau bloc `hour_filter` dans `strategies/polymarket_BTC5M.json` (désactivé par défaut). Quand actif, restreint les entrées à des plages horaires UTC configurables par type de jour (semaine/weekend), avec gestion spéciale de l'ouverture hebdomadaire US (lundi avant 13h30 UTC) et de la fermeture (vendredi à partir de 20h00 UTC). Appliqué identiquement dans le bot live (garde `is_trading_hour()` dans `check_signal()`) et dans le moteur de backtest (`_is_trading_hour()` dans `run_backtest()`). 15 nouveaux tests unitaires.
 
+### Correctif
+- `bot/live_bot.py` — `--simulate` n'écrase plus `TRADINEBOTTE_DIR` si la variable est déjà définie dans l'environnement ; plusieurs bots peuvent désormais tourner en simulation parallèle avec des répertoires totalement isolés (`TRADINEBOTTE_DIR=~/compte-a python3 live_bot.py --simulate`)
+
 ### Documentation
 - `INSTALL.md` / `INSTALL.fr.md` — nouvelle section « Filtre heure / jour » : tableau de justification (sessions asiatique/EU/US, ouverture/fermeture hebdomadaire), référence complète des paramètres, logique de décision pas-à-pas avec exemple du lundi, 3 configurations prêtes à l'emploi, workflow de validation par backtest, exemple de log au démarrage
 - `README.md` / `README.fr.md` — nouveau bullet fonctionnalité pour le filtre horaire ; compteur de tests mis à jour à 123

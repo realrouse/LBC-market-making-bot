@@ -30,13 +30,16 @@ import aiohttp, websockets
 
 # ─── RUNTIME FLAGS ───────────────────────────────────────────────────────────
 # --simulate: redirect all file I/O to /tmp/tradinebotte-sim so that tests never
-# touch production data. Overrides TRADINEBOTTE_DIR unconditionally.
+# touch production data. Only sets the default when TRADINEBOTTE_DIR is not
+# already defined, so multiple bots can run in isolation:
+#   TRADINEBOTTE_DIR=~/account-a python3 live_bot.py --simulate
+#   TRADINEBOTTE_DIR=~/account-b python3 live_bot.py --simulate
 # --no-log:   skip the log file entirely (NullHandler); SQLite DB is unaffected.
 #             Use in production for minimum disk I/O. Stdout still active with
 #             --simulate so interactive testing remains usable.
 _SIMULATE = "--simulate" in sys.argv
 _NO_LOG   = "--no-log"   in sys.argv
-if _SIMULATE:
+if _SIMULATE and "TRADINEBOTTE_DIR" not in os.environ:
     os.environ["TRADINEBOTTE_DIR"] = "/tmp/tradinebotte-sim"
 
 # ─── PATHS ───────────────────────────────────────────────────────────────────

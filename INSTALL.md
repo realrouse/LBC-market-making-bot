@@ -240,7 +240,11 @@ is online (`After=network-online.target`).
 **Flags:**
 - *(no flag)* — normal mode: log writes are asynchronous (daemon thread, never blocks the event loop)
 - `--no-log` — suppress the log file entirely for minimum disk I/O; SQLite DB (trades + snapshots) is unaffected; combine with `--simulate` to keep stdout output
-- `--simulate` — isolate all file I/O to `/tmp/tradinebotte-sim`, no real orders placed
+- `--simulate` — isolate all file I/O to `/tmp/tradinebotte-sim` by default, no real orders placed. If `TRADINEBOTTE_DIR` is already set in the environment, that path is used instead — allowing multiple bots to run in parallel without conflict:
+  ```bash
+  TRADINEBOTTE_DIR=~/account-a python3 live_bot.py --simulate
+  TRADINEBOTTE_DIR=~/account-b python3 live_bot.py --simulate
+  ```
 
 Or using the generated wrapper (`TRADINEBOTTE_DIR` already embedded):
 
