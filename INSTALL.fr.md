@@ -20,6 +20,28 @@
      print(c.execute('SELECT COUNT(*) FROM snapshots').fetchone()[0])"
   ```
 
+### Prérequis administrateur serveur (Debian/Ubuntu)
+
+Le script d'installation crée un virtualenv et y bootstrap pip via
+`ensurepip` — **aucun pip système n'est requis à l'exécution**. Toutefois, deux
+paquets système doivent être présents avant de lancer `scripts/install.sh` :
+
+```bash
+# À exécuter une fois en root / sudo sur le serveur avant toute installation
+sudo apt-get install -y python3-venv python3-pip
+```
+
+| Paquet | Pourquoi nécessaire |
+|---|---|
+| `python3-venv` | `python3 -m venv` échoue sans lui sur Debian/Ubuntu |
+| `python3-pip` | nécessaire pour bootstrapper `ensurepip` dans le venv |
+
+Si `python3-pip` est absent du Python système, la création du venv échoue avec :
+*"The virtual environment was not created successfully because ensurepip is not
+available."* Installer `python3-pip` en système résout le problème — ensuite,
+`install.sh` installe toutes les dépendances Python dans le venv isolé et
+**ne touche plus jamais au Python système**.
+
 
 ## Dépendances
 

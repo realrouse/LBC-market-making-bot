@@ -20,6 +20,28 @@
      print(c.execute('SELECT COUNT(*) FROM snapshots').fetchone()[0])"
   ```
 
+### Server admin prerequisites (Debian/Ubuntu)
+
+The install script creates a virtualenv and bootstraps pip inside it via
+`ensurepip` — **no system-level pip is required at runtime**. However, two
+system packages must be present before `scripts/install.sh` can run:
+
+```bash
+# Run once as root / sudo on the server before any user installs the bot
+sudo apt-get install -y python3-venv python3-pip
+```
+
+| Package | Why needed |
+|---|---|
+| `python3-venv` | `python3 -m venv` fails without it on Debian/Ubuntu |
+| `python3-pip` | needed to bootstrap `ensurepip` inside the venv |
+
+If `python3-pip` is absent from the system Python, the venv creation will fail
+with: *"The virtual environment was not created successfully because ensurepip
+is not available."* Installing `python3-pip` system-wide fixes this — after that,
+`install.sh` installs all Python dependencies inside the isolated venv and
+**never touches the system Python again**.
+
 
 ## Dependencies
 

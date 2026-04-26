@@ -39,6 +39,13 @@ Both modes share the same strategy JSON format, database schema, signal logic, a
 
 ### 1 — Clone and install
 
+> **Server admin prerequisite (once per machine):**
+> ```bash
+> sudo apt-get install -y python3-venv python3-pip
+> ```
+> Without these two packages the virtualenv creation fails on Debian/Ubuntu.
+> Only needed once by root — individual users never need root after that.
+
 ```bash
 git clone https://github.com/neofutur/tradinebotte.git
 cd tradinebotte

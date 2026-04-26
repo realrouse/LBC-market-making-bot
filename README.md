@@ -137,6 +137,8 @@ sqlite3 live.db "SELECT ts_ms, best_bid, best_ask, obi
 
 Full guide (requirements, wallet setup, web status page, monitoring, testing): **[INSTALL.md](INSTALL.md)**.
 
+> **Server admin note:** `python3-venv` and `python3-pip` must be installed once as root before any user runs `install.sh`. See [INSTALL.md — Server admin prerequisites](INSTALL.md#server-admin-prerequisites-debianubuntu).
+
 ## Tests
 
 ```bash

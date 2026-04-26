@@ -39,6 +39,13 @@ Les deux modes partagent le même format JSON de stratégie, le même schéma de
 
 ### 1 — Cloner et installer
 
+> **Prérequis administrateur serveur (une fois par machine) :**
+> ```bash
+> sudo apt-get install -y python3-venv python3-pip
+> ```
+> Sans ces deux paquets, la création du virtualenv échoue sur Debian/Ubuntu.
+> Requis une seule fois en root — les utilisateurs individuels n'ont plus besoin du root ensuite.
+
 ```bash
 git clone https://github.com/neofutur/tradinebotte.git
 cd tradinebotte
