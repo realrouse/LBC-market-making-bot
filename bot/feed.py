@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
-feed.py — Shared WebSocket feed broadcaster (Option A multi-bot architecture)
+feed.py — Shared WebSocket feed broadcaster (Option B multi-bot architecture)
 
 Maintains a single WebSocket connection to Polymarket and republishes every
 book update and market registration event over a ZeroMQ PUB socket.  One or
 more account_bot.py processes subscribe to this feed and run independent
 trading strategies without opening additional connections to the exchange.
+
+Full architecture documentation: docs/multi.md
 
 Message types published:
   {"t": "market", "market_id": "...", "question": "...",

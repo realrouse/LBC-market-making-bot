@@ -433,7 +433,9 @@ When the filter is active the bot logs the effective configuration at startup:
 ```
 
 
-## Multi-bot WebSocket sharing (Option A — ZeroMQ)
+## Multi-bot WebSocket sharing (Option B — ZeroMQ)
+
+> Full architecture reference: **[docs/multi.md](docs/multi.md)**
 
 Running multiple accounts against Polymarket from one machine normally means
 opening one WebSocket connection per bot.  The ZeroMQ architecture avoids this

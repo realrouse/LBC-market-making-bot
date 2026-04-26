@@ -127,7 +127,7 @@ pkill -f feed.py
 pkill -f account_bot.py
 ```
 
-Full guide: [INSTALL.md — Multi-bot section](INSTALL.md#multi-bot-websocket-sharing-option-a--zeromq).
+Full architecture documentation: [docs/multi.md](docs/multi.md) · INSTALL reference: [INSTALL.md — Multi-bot section](INSTALL.md#multi-bot-websocket-sharing-option-a--zeromq).
 
 ---
 

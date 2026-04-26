@@ -127,7 +127,7 @@ pkill -f feed.py
 pkill -f account_bot.py
 ```
 
-Guide complet : [INSTALL.fr.md — section multi-bot](INSTALL.fr.md#partage-websocket-multi-bot-option-a--zeromq).
+Documentation complète de l'architecture : [docs/multi.fr.md](docs/multi.fr.md) · Référence INSTALL : [INSTALL.fr.md — section multi-bot](INSTALL.fr.md#partage-websocket-multi-bot-option-a--zeromq).
 
 ---
 

@@ -9,7 +9,7 @@ All notable changes to this project are documented here.
 ## [Unreleased]
 
 ### Feature
-- **Multi-bot WebSocket sharing (Option A — ZeroMQ)** — `bot/feed.py` maintains a single WebSocket connection to Polymarket and publishes every book update over a ZeroMQ PUB socket (`tcp://127.0.0.1:5557` by default, overridable via `TRADINEBOTTE_FEED_ADDR`). `bot/account_bot.py` subscribes to the feed and runs the full trading strategy for one account in isolation. Multiple `account_bot.py` processes can run in parallel, each with its own `TRADINEBOTTE_DIR` (config, DB, log), without opening additional WebSocket connections. `scripts/start_feed.sh` and `scripts/start_account.sh` handle launch and logging. `pyzmq` added to `requirements.txt`.
+- **Multi-bot WebSocket sharing (Option B — ZeroMQ)** — `bot/feed.py` maintains a single WebSocket connection to Polymarket and publishes every book update over a ZeroMQ PUB socket (`tcp://127.0.0.1:5557` by default, overridable via `TRADINEBOTTE_FEED_ADDR`). `bot/account_bot.py` subscribes to the feed and runs the full trading strategy for one account in isolation. Multiple `account_bot.py` processes can run in parallel, each with its own `TRADINEBOTTE_DIR` (config, DB, log), without opening additional WebSocket connections. `scripts/start_feed.sh` and `scripts/start_account.sh` handle launch and logging. `pyzmq` added to `requirements.txt`.
 - **Hour/day filter** — new `hour_filter` block in `strategies/polymarket_BTC5M.json` (disabled by default). When enabled, restricts entries to configurable UTC hour ranges per weekday/weekend, with special handling for the US weekly open (Monday before 13:30 UTC) and close (Friday from 20:00 UTC). Applied identically in the live bot (`is_trading_hour()` guard in `check_signal()`) and in the backtest engine (`_is_trading_hour()` in `run_backtest()`). 15 new unit tests.
 
 ### Fix
@@ -18,6 +18,7 @@ All notable changes to this project are documented here.
 ### Documentation
 - `INSTALL.md` / `INSTALL.fr.md` — new "Hour / Day Filter" section: rationale table (Asian/EU/US sessions, weekly open/close), full parameter reference, decision logic walkthrough with step-by-step Monday example, 3 ready-to-use preset configs, backtest validation workflow, and startup log example
 - `README.md` / `README.fr.md` — new feature bullet for the hour/day filter; test count updated to 123
+- `docs/multi.md` / `docs/multi.fr.md` — full bilingual architecture documentation: why/when to use multi-bot, ASCII diagram, component reference, message protocol (all 3 types with all fields), environment variables, directory layout, launch sequence, per-account monitoring, failure modes (feed crash, account crash, network interruption), adding a third account, comparison table with standalone mode, test coverage reference; linked from README, INSTALL, QUICKSTART, feed.py, account_bot.py
 - `tests/test_multibot.py` — 30 new tests for `feed.py` and `account_bot.py`: 7 unit tests for `feed.register_market()`, 9 unit tests for `account_bot._register_from_market_msg()`, 8 async ZMQ integration tests for Option A (single bot), 6 async ZMQ integration tests for Option B (two simultaneous bots sharing the same feed); total test count raised to 153
 
 ### Previous

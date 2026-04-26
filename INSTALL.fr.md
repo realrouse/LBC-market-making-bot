@@ -437,7 +437,9 @@ Quand le filtre est actif, le bot affiche la configuration effective au démarra
 ```
 
 
-## Partage WebSocket multi-bot (Option A — ZeroMQ)
+## Partage WebSocket multi-bot (Option B — ZeroMQ)
+
+> Référence complète de l'architecture : **[docs/multi.fr.md](docs/multi.fr.md)**
 
 Faire tourner plusieurs comptes sur Polymarket depuis une seule machine implique
 normalement d'ouvrir une connexion WebSocket par bot. L'architecture ZeroMQ

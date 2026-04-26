@@ -7,6 +7,8 @@ tradinebotte trading logic for one account in isolation.  Multiple instances
 can run in parallel — each pointed at its own TRADINEBOTTE_DIR — without
 sharing a WebSocket connection or interfering with each other.
 
+Full architecture documentation: docs/multi.md
+
 Usage:
   TRADINEBOTTE_DIR=~/account-a python3 bot/account_bot.py
   TRADINEBOTTE_DIR=~/account-b python3 bot/account_bot.py
