@@ -42,9 +42,12 @@ Both modes share the same strategy JSON format, database schema, signal logic, a
 > **Server admin prerequisite (once per machine):**
 > ```bash
 > sudo apt-get install -y python3-venv python3-pip
+> # On Ubuntu 22.04 / Python 3.10, also run:
+> sudo apt-get install -y python3.10-venv
 > ```
-> Without these two packages the virtualenv creation fails on Debian/Ubuntu.
-> Only needed once by root — individual users never need root after that.
+> Without `python3-venv` and `python3-pip` the virtualenv creation fails on
+> Debian/Ubuntu with *"ensurepip is not available"*. Only needed once by root —
+> individual users never need root after that.
 
 ```bash
 git clone https://github.com/neofutur/tradinebotte.git

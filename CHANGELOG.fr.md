@@ -9,7 +9,7 @@ Toutes les modifications notables de ce projet sont documentées ici.
 ## [Non publié]
 
 ### Documentation
-- **Prérequis administrateur serveur** — `INSTALL.md`, `INSTALL.fr.md`, `QUICKSTART.md`, `QUICKSTART.fr.md` documentent désormais que `python3-venv` et `python3-pip` doivent être installés en root une fois par machine avant qu'un utilisateur puisse exécuter `scripts/install.sh` ; précise qu'`ensurepip` bootstrap pip dans le venv isolé afin que le Python système ne soit plus jamais touché ensuite
+- **Prérequis administrateur serveur** — `INSTALL.md`, `INSTALL.fr.md`, `QUICKSTART.md`, `QUICKSTART.fr.md` documentent désormais que `python3-venv`, `python3-pip`, et le paquet version-spécifique `python3.X-venv` (ex. `python3.10-venv` sur Ubuntu 22.04) doivent être installés en root une fois par machine avant qu'un utilisateur puisse exécuter `scripts/install.sh` ; précise qu'`ensurepip` bootstrap pip dans le venv isolé afin que le Python système ne soit plus jamais touché ensuite
 
 ### Fonctionnalité
 - **Partage WebSocket multi-bot (Option B — ZeroMQ)** — `bot/feed.py` maintient une seule connexion WebSocket vers Polymarket et publie chaque mise à jour du carnet d'ordres via un socket ZeroMQ PUB (`tcp://127.0.0.1:5557` par défaut, configurable via `TRADINEBOTTE_FEED_ADDR`). `bot/account_bot.py` souscrit au feed et exécute la stratégie complète pour un compte en isolation. Plusieurs processus `account_bot.py` peuvent tourner en parallèle, chacun avec son propre `TRADINEBOTTE_DIR` (config, DB, log), sans ouvrir de connexion WebSocket supplémentaire. `scripts/start_feed.sh` et `scripts/start_account.sh` gèrent le lancement et les logs. `pyzmq` ajouté dans `requirements.txt`.
