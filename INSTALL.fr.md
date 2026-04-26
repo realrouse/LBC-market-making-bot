@@ -244,7 +244,7 @@ disponible (`After=network-online.target`).
 **Flags :**
 - *(aucun flag)* — mode normal : les écritures de logs sont asynchrones (thread daemon, ne bloque jamais le event loop)
 - `--no-log` — supprime le fichier log pour un I/O disque minimal ; la DB SQLite (trades + snapshots) n'est pas affectée ; combiner avec `--simulate` pour conserver la sortie stdout
-- `--simulate` — isole tous les fichiers dans `/tmp/tradinebotte-sim` par défaut, aucun ordre réel. Si `TRADINEBOTTE_DIR` est déjà défini dans l'environnement, ce chemin est utilisé à la place — ce qui permet de faire tourner plusieurs bots en parallèle sans conflit :
+- `--simulate` — isole tous les fichiers dans `~/tradinebotte-sim` par défaut, aucun ordre réel. Si `TRADINEBOTTE_DIR` est déjà défini dans l'environnement, ce chemin est utilisé à la place — ce qui permet de faire tourner plusieurs bots en parallèle sans conflit :
   ```bash
   TRADINEBOTTE_DIR=~/compte-a python3 live_bot.py --simulate
   TRADINEBOTTE_DIR=~/compte-b python3 live_bot.py --simulate
@@ -513,7 +513,7 @@ print('SIGNAL_THRESHOLD:', b.SIGNAL_THRESHOLD)
 ```
 
 Lancer le bot pendant 20 secondes en mode simulation isolé (logs sur stdout,
-écrit dans `/tmp/tradinebotte-sim` — les données de production ne sont jamais touchées) :
+écrit dans `~/tradinebotte-sim` — les données de production ne sont jamais touchées) :
 
 ```bash
 timeout 20 .venv/bin/python3 bot/live_bot.py --simulate
@@ -522,10 +522,10 @@ timeout 20 .venv/bin/python3 bot/live_bot.py --simulate
 Sortie attendue (affichée directement dans le terminal) :
 
 ```
-[WARNING]  MODE SIMULATION — donnees isolees dans /tmp/tradinebotte-sim
+[WARNING]  MODE SIMULATION — donnees isolees dans ~/tradinebotte-sim
 [INFO]     LIVE BOT v3 — Threshold=0.96 Stake=$10 MinAskVol=10
 [WARNING]  POLY_PRIVATE_KEY non definie — ordres SIMULES
-[INFO]     DB initialisee : /tmp/tradinebotte-sim/live.db
+[INFO]     DB initialisee : ~/tradinebotte-sim/live.db
 [INFO]     State : capital=$100.00 | 0 trades | WR=0.0%
 [INFO]     Marches BTC 5-min : 2
 [INFO]     Souscription 2 tokens...

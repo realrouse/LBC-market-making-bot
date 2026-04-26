@@ -58,7 +58,7 @@ tail -f ~/tradinebotte/live.log  # raw log stream
 bash scripts/start_bot.sh --simulate
 ```
 
-All file I/O goes to `/tmp/tradinebotte-sim`. No orders are placed on-chain.
+All file I/O goes to `~/tradinebotte-sim`. No orders are placed on-chain.
 To run multiple bots in parallel, set `TRADINEBOTTE_DIR` first: `TRADINEBOTTE_DIR=~/account-a bash scripts/start_bot.sh --simulate`
 
 ---

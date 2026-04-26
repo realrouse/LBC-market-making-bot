@@ -58,7 +58,7 @@ tail -f ~/tradinebotte/live.log  # flux de logs bruts
 bash scripts/start_bot.sh --simulate
 ```
 
-Tous les fichiers sont isolés dans `/tmp/tradinebotte-sim`. Aucun ordre n'est placé on-chain.
+Tous les fichiers sont isolés dans `~/tradinebotte-sim`. Aucun ordre n'est placé on-chain.
 Pour faire tourner plusieurs bots en parallèle, définir `TRADINEBOTTE_DIR` au préalable : `TRADINEBOTTE_DIR=~/compte-a bash scripts/start_bot.sh --simulate`
 
 ---

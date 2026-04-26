@@ -240,7 +240,7 @@ is online (`After=network-online.target`).
 **Flags:**
 - *(no flag)* — normal mode: log writes are asynchronous (daemon thread, never blocks the event loop)
 - `--no-log` — suppress the log file entirely for minimum disk I/O; SQLite DB (trades + snapshots) is unaffected; combine with `--simulate` to keep stdout output
-- `--simulate` — isolate all file I/O to `/tmp/tradinebotte-sim` by default, no real orders placed. If `TRADINEBOTTE_DIR` is already set in the environment, that path is used instead — allowing multiple bots to run in parallel without conflict:
+- `--simulate` — isolate all file I/O to `~/tradinebotte-sim` by default, no real orders placed. If `TRADINEBOTTE_DIR` is already set in the environment, that path is used instead — allowing multiple bots to run in parallel without conflict:
   ```bash
   TRADINEBOTTE_DIR=~/account-a python3 live_bot.py --simulate
   TRADINEBOTTE_DIR=~/account-b python3 live_bot.py --simulate
@@ -508,7 +508,7 @@ print('SIGNAL_THRESHOLD:', b.SIGNAL_THRESHOLD)
 ```
 
 Run the bot for 20 seconds in isolated simulate mode (logs to stdout,
-writes to `/tmp/tradinebotte-sim` — production data is never touched):
+writes to `~/tradinebotte-sim` — production data is never touched):
 
 ```bash
 timeout 20 .venv/bin/python3 bot/live_bot.py --simulate
@@ -517,10 +517,10 @@ timeout 20 .venv/bin/python3 bot/live_bot.py --simulate
 Expected output (printed directly to the terminal):
 
 ```
-[WARNING]  MODE SIMULATION — donnees isolees dans /tmp/tradinebotte-sim
+[WARNING]  MODE SIMULATION — donnees isolees dans ~/tradinebotte-sim
 [INFO]     LIVE BOT v3 — Threshold=0.96 Stake=$10 MinAskVol=10
 [WARNING]  POLY_PRIVATE_KEY non definie — ordres SIMULES
-[INFO]     DB initialisee : /tmp/tradinebotte-sim/live.db
+[INFO]     DB initialisee : ~/tradinebotte-sim/live.db
 [INFO]     State : capital=$100.00 | 0 trades | WR=0.0%
 [INFO]     Marches BTC 5-min : 2
 [INFO]     Souscription 2 tokens...
