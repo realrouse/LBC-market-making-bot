@@ -73,9 +73,25 @@ Puis suivre les commandes `sudo` affichées pour activer le service.
 
 ---
 
+## Plusieurs comptes — WebSocket partagé (ZeroMQ)
+
+Un seul feed WebSocket, plusieurs bots de trading indépendants :
+
+```bash
+bash scripts/start_feed.sh                                    # feed partagé (une seule connexion WS)
+TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
+TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
+```
+
+Chaque compte nécessite son propre répertoire avec `config.json` (lancer `TRADINEBOTTE_DIR=~/account-a python3 scripts/setup.py` pour chacun).  Guide complet : [INSTALL.fr.md — section multi-bot](INSTALL.fr.md#partage-websocket-multi-bot-option-a--zeromq).
+
+---
+
 ## Arrêter le bot
 
 ```bash
 pkill -f live_bot.py                    # si lancé manuellement
 sudo systemctl stop tradinebotte        # si lancé via systemd
+pkill -f feed.py                        # feed multi-bot
+pkill -f account_bot.py                 # account bots multi-bot
 ```

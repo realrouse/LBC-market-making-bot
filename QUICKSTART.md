@@ -73,9 +73,25 @@ Then follow the printed `sudo` commands to enable the service.
 
 ---
 
+## Multiple accounts — shared WebSocket (ZeroMQ)
+
+Run a single WebSocket feed and multiple independent account bots:
+
+```bash
+bash scripts/start_feed.sh                               # shared feed (one WS connection)
+TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
+TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
+```
+
+Each account needs its own directory with a `config.json` (run `TRADINEBOTTE_DIR=~/account-a python3 scripts/setup.py` for each).  Full guide: [INSTALL.md — Multi-bot section](INSTALL.md#multi-bot-websocket-sharing-option-a--zeromq).
+
+---
+
 ## Stop the bot
 
 ```bash
 pkill -f live_bot.py        # if running manually
 sudo systemctl stop tradinebotte  # if running via systemd
+pkill -f feed.py            # multi-bot feed
+pkill -f account_bot.py     # multi-bot account bots
 ```

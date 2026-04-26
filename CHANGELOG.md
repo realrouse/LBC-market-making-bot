@@ -9,6 +9,7 @@ All notable changes to this project are documented here.
 ## [Unreleased]
 
 ### Feature
+- **Multi-bot WebSocket sharing (Option A — ZeroMQ)** — `bot/feed.py` maintains a single WebSocket connection to Polymarket and publishes every book update over a ZeroMQ PUB socket (`tcp://127.0.0.1:5557` by default, overridable via `TRADINEBOTTE_FEED_ADDR`). `bot/account_bot.py` subscribes to the feed and runs the full trading strategy for one account in isolation. Multiple `account_bot.py` processes can run in parallel, each with its own `TRADINEBOTTE_DIR` (config, DB, log), without opening additional WebSocket connections. `scripts/start_feed.sh` and `scripts/start_account.sh` handle launch and logging. `pyzmq` added to `requirements.txt`.
 - **Hour/day filter** — new `hour_filter` block in `strategies/polymarket_BTC5M.json` (disabled by default). When enabled, restricts entries to configurable UTC hour ranges per weekday/weekend, with special handling for the US weekly open (Monday before 13:30 UTC) and close (Friday from 20:00 UTC). Applied identically in the live bot (`is_trading_hour()` guard in `check_signal()`) and in the backtest engine (`_is_trading_hour()` in `run_backtest()`). 15 new unit tests.
 
 ### Fix

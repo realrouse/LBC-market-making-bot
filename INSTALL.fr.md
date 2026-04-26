@@ -437,6 +437,92 @@ Quand le filtre est actif, le bot affiche la configuration effective au démarra
 ```
 
 
+## Partage WebSocket multi-bot (Option A — ZeroMQ)
+
+Faire tourner plusieurs comptes sur Polymarket depuis une seule machine implique
+normalement d'ouvrir une connexion WebSocket par bot. L'architecture ZeroMQ
+évite cela en séparant le bot en deux processus distincts :
+
+| Processus | Fichier | Rôle |
+|---|---|---|
+| Feed | `bot/feed.py` | Connexion WS unique ; diffuse les mises à jour via ZMQ PUB |
+| Account bot | `bot/account_bot.py` | Souscrit au feed ; trade un compte en isolation complète |
+
+### Prérequis
+
+`pyzmq` est déjà inclus dans `requirements.txt`. L'installer avec le reste des
+dépendances :
+
+```bash
+bash scripts/install.sh
+```
+
+### Arborescence (exemple — deux comptes)
+
+```
+~/tradinebotte/          ← venv partagé + log du feed
+  venv/
+  feed.log
+~/account-a/             ← compte A : DB, log, config propres
+  config.json
+  live.db
+  account.log
+~/account-b/             ← compte B : DB, log, config propres
+  config.json
+  live.db
+  account.log
+```
+
+Configurer chaque répertoire de compte d'abord :
+
+```bash
+TRADINEBOTTE_DIR=~/account-a python3 scripts/setup.py   # clé compte A
+TRADINEBOTTE_DIR=~/account-b python3 scripts/setup.py   # clé compte B
+```
+
+### Lancement
+
+```bash
+# 1. Lancer le feed partagé (une seule instance)
+bash scripts/start_feed.sh
+
+# 2. Lancer chaque account bot dans un terminal séparé
+TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
+TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
+```
+
+Adresse personnalisée (port ou hôte différent) :
+
+```bash
+TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash scripts/start_feed.sh
+TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
+```
+
+### Arrêt
+
+```bash
+pkill -f feed.py
+pkill -f account_bot.py
+```
+
+### Protocole de messages
+
+Le feed publie trois types de messages JSON via ZeroMQ PUB :
+
+| Type | Champs | Rôle |
+|---|---|---|
+| `market` | `market_id`, `question`, `up_token_id`, `dn_token_id`, `start_ms`, `end_ms` | Nouveau marché enregistré |
+| `book` | `token_id`, `best_bid`, `best_ask`, `spread`, `bid_vol`, `ask_vol`, `obi` | Mise à jour du carnet |
+| `ping` | `ts` | Keepalive toutes les 10 s |
+
+### Notes d'architecture
+
+- Le feed n'a aucune logique de trading et ne stocke aucune clé — il est sûr de le redémarrer sans affecter l'état des comptes.
+- Chaque processus `account_bot.py` écrit dans sa propre base SQLite ; le chemin `handle_book_update` / `check_signal` / `enter_live_trade` de `live_bot.py` s'exécute sans modification.
+- Si le feed redémarre, les account bots récupèrent automatiquement — ils rateront les mises à jour pendant l'interruption mais ne placeront pas d'ordres en double car l'ensemble `signalled` est persisté dans la DB entre les sessions.
+- Le pattern PUB/SUB ZeroMQ est unidirectionnel : les account bots n'envoient jamais de messages au feed.
+
+
 ## Monitoring
 
 Dashboard en temps réel :
