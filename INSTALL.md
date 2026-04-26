@@ -237,6 +237,9 @@ The service restarts automatically on failure (`Restart=on-failure`, 30 s delay,
 max 5 restarts per 5 minutes). On reboot the bot comes back up once the network
 is online (`After=network-online.target`).
 
+> **Multi-bot (Option B)**: use `scripts/install_feed_service.sh` and
+> `scripts/install_account_service.sh` instead. See [docs/multi.md](docs/multi.md).
+
 **Flags:**
 - *(no flag)* — normal mode: log writes are asynchronous (daemon thread, never blocks the event loop)
 - `--no-log` — suppress the log file entirely for minimum disk I/O; SQLite DB (trades + snapshots) is unaffected; combine with `--simulate` to keep stdout output

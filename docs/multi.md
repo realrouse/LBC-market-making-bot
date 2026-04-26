@@ -522,21 +522,58 @@ TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash scripts/start_feed.sh
 TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-2 bash scripts/start_account.sh
 ```
 
-### systemd units (cross-user)
+### systemd services
 
-Each user can install their own systemd user unit independently:
+The project ships two dedicated generator scripts:
+
+| Script | Generates | Purpose |
+|---|---|---|
+| `scripts/install_feed_service.sh` | `tradinebotte-feed.service` | System-level feed (one per machine) |
+| `scripts/install_account_service.sh` | `tradinebotte-account-<name>.service` | Per-account bot (one per wallet) |
+
+**Step 1 — install the feed service (run once per machine, as any user):**
 
 ```bash
-# As user1 — feed unit
-bash ~/tradinebotte/scripts/install_service.sh   # follow printed sudo commands
+bash scripts/install_feed_service.sh
+# optional: use a non-default ZMQ address
+TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash scripts/install_feed_service.sh
 
-# As user2 — account bot unit (adapt install_service.sh or write manually)
-# Target: ExecStart=.../account_bot.py with TRADINEBOTTE_DIR and TRADINEBOTTE_FEED_ADDR set
+# Follow the printed sudo commands:
+sudo cp /tmp/tradinebotte-feed.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable tradinebotte-feed
+sudo systemctl start tradinebotte-feed
 ```
 
-A dedicated feed service unit can be installed at the system level
-(`/etc/systemd/system/tradinebotte-feed.service`) by an admin to ensure it
-starts before any user's account bot unit.
+**Step 2 — install an account service (once per wallet directory):**
+
+```bash
+# Each wallet owner runs this for their own directory:
+TRADINEBOTTE_DIR=~/account-a bash scripts/install_account_service.sh
+TRADINEBOTTE_DIR=~/account-b bash scripts/install_account_service.sh
+
+# Follow the printed sudo commands for each:
+sudo cp /tmp/tradinebotte-account-account-a.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable tradinebotte-account-account-a
+sudo systemctl start tradinebotte-account-account-a
+```
+
+The account unit declares `Requires=tradinebotte-feed.service` — systemd will
+refuse to start it if the feed is not running, and will restart it automatically
+if the feed comes back after a crash.
+
+**Cross-user**: the feed service runs as whichever user ran `install_feed_service.sh`.
+Account services run as their respective wallet owners. All connect via
+`127.0.0.1` — no extra Linux permissions needed.
+
+```bash
+# Useful monitoring commands:
+sudo systemctl status tradinebotte-feed
+sudo systemctl status tradinebotte-account-account-a
+journalctl -u tradinebotte-feed -f
+journalctl -u tradinebotte-account-account-a -f
+```
 
 
 ## Comparison with standalone mode

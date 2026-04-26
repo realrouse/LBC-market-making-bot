@@ -1,0 +1,19 @@
+[Unit]
+Description=tradinebotte — Shared WebSocket feed (ZeroMQ broadcaster)
+Documentation=https://github.com/neofutur/tradinebotte/blob/main/docs/multi.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+Environment=TRADINEBOTTE_FEED_ADDR=__FEED_ADDR__
+WorkingDirectory=__INSTALL_DIR__
+ExecStart=__VENV__/bin/python3 __BOT_DIR__/feed.py
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Install]
+WantedBy=multi-user.target

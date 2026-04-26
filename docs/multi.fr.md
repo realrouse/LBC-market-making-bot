@@ -532,22 +532,59 @@ TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash scripts/start_feed.sh
 TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-2 bash scripts/start_account.sh
 ```
 
-### Unités systemd (cross-user)
+### Services systemd
 
-Chaque utilisateur peut installer sa propre unité systemd utilisateur de façon
-indépendante :
+Le projet fournit deux scripts générateurs dédiés :
+
+| Script | Génère | Rôle |
+|---|---|---|
+| `scripts/install_feed_service.sh` | `tradinebotte-feed.service` | Feed système (un par machine) |
+| `scripts/install_account_service.sh` | `tradinebotte-account-<nom>.service` | Bot par compte (un par portefeuille) |
+
+**Étape 1 — installer le service feed (une fois par machine) :**
 
 ```bash
-# En tant que user1 — unité feed
-bash ~/tradinebotte/scripts/install_service.sh   # suivre les commandes sudo affichées
+bash scripts/install_feed_service.sh
+# optionnel : adresse ZMQ non standard
+TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash scripts/install_feed_service.sh
 
-# En tant que user2 — unité account bot (adapter install_service.sh ou écrire manuellement)
-# Cible : ExecStart=.../account_bot.py avec TRADINEBOTTE_DIR et TRADINEBOTTE_FEED_ADDR définis
+# Suivre les commandes sudo affichées :
+sudo cp /tmp/tradinebotte-feed.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable tradinebotte-feed
+sudo systemctl start tradinebotte-feed
 ```
 
-Une unité de service feed dédiée peut être installée au niveau système
-(`/etc/systemd/system/tradinebotte-feed.service`) par un administrateur pour garantir
-qu'elle démarre avant les unités account bot de chaque utilisateur.
+**Étape 2 — installer un service de compte (une fois par répertoire de portefeuille) :**
+
+```bash
+# Chaque propriétaire de portefeuille exécute ceci pour son répertoire :
+TRADINEBOTTE_DIR=~/account-a bash scripts/install_account_service.sh
+TRADINEBOTTE_DIR=~/account-b bash scripts/install_account_service.sh
+
+# Suivre les commandes sudo affichées pour chacun :
+sudo cp /tmp/tradinebotte-account-account-a.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable tradinebotte-account-account-a
+sudo systemctl start tradinebotte-account-account-a
+```
+
+L'unité account déclare `Requires=tradinebotte-feed.service` — systemd refusera
+de la démarrer si le feed n'est pas actif, et la redémarrera automatiquement si
+le feed revient après un crash.
+
+**Cross-user** : le service feed tourne sous l'utilisateur qui a exécuté
+`install_feed_service.sh`. Les services account tournent chacun sous le
+propriétaire du portefeuille. Tous se connectent via `127.0.0.1` — aucun
+droit Linux supplémentaire requis.
+
+```bash
+# Commandes de surveillance utiles :
+sudo systemctl status tradinebotte-feed
+sudo systemctl status tradinebotte-account-account-a
+journalctl -u tradinebotte-feed -f
+journalctl -u tradinebotte-account-account-a -f
+```
 
 
 ## Comparaison avec le mode autonome

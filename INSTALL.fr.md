@@ -241,6 +241,9 @@ Le service redémarre automatiquement en cas d'erreur (`Restart=on-failure`, dé
 max 5 redémarrages par 5 minutes). Au reboot, le bot revient dès que le réseau est
 disponible (`After=network-online.target`).
 
+> **Multi-bot (Option B)** : utiliser `scripts/install_feed_service.sh` et
+> `scripts/install_account_service.sh` à la place. Voir [docs/multi.md](docs/multi.md).
+
 **Flags :**
 - *(aucun flag)* — mode normal : les écritures de logs sont asynchrones (thread daemon, ne bloque jamais le event loop)
 - `--no-log` — supprime le fichier log pour un I/O disque minimal ; la DB SQLite (trades + snapshots) n'est pas affectée ; combiner avec `--simulate` pour conserver la sortie stdout
