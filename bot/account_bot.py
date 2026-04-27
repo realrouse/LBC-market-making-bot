@@ -34,6 +34,12 @@ Message types consumed from feed.py:
 import asyncio, fcntl, json, logging, os, subprocess, sys, time
 import zmq, zmq.asyncio
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    stream=sys.stdout,
+)
+
 # ─── CONFIGURE INSTALL DIR BEFORE IMPORTING live_bot ─────────────────────────
 # live_bot reads TRADINEBOTTE_DIR at module level (INSTALL_DIR, DB_PATH, etc.)
 # so the env var must be set before the import statement.
