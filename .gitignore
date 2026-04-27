@@ -30,6 +30,9 @@ venv/
 # Credentials — never commit
 config.json
 
+# Integration test configuration — contains server addresses and passwords
+scripts/test_multibot.conf
+
 # Claude Code internal files
 .claude/scheduled_tasks.lock
 

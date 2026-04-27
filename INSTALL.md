@@ -553,6 +553,30 @@ The feed publishes three JSON message types over ZeroMQ PUB:
 - If the feed restarts, account bots automatically recover — they will miss book updates during the gap but will not place duplicate orders because the `signalled` set is persisted to the DB between sessions.
 - The ZeroMQ PUB/SUB pattern is one-way: account bots never send messages back to the feed.
 
+### Integration test
+
+`scripts/test_multibot_deploy.sh` automates a full clean-install and end-to-end integration test across a configurable set of Linux test accounts. Requires `sshpass` on the local machine. Server address, port, usernames, and passwords are read from `~/.tradinebotte-test.conf` — copy the template and fill in your values:
+
+```bash
+cp scripts/test_multibot.conf.example ~/.tradinebotte-test.conf
+editor ~/.tradinebotte-test.conf
+```
+
+```bash
+# Full clean install + 3-minute multibot test
+bash scripts/test_multibot_deploy.sh
+
+# Reuse an existing install, extend the test to 5 minutes
+bash scripts/test_multibot_deploy.sh --skip-deploy --duration 300
+```
+
+What the script verifies:
+- Feed auto-starts when 3 bots are launched simultaneously (race-safe file lock)
+- Exactly one `feed.py` process is visible across all Linux users (`ps aux`)
+- All 3 `account_bot.py` processes connect and receive book updates
+- No ERROR/CRITICAL log lines during the test window
+- All processes are stopped cleanly after the test
+
 
 ## Monitoring
 

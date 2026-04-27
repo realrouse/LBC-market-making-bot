@@ -154,6 +154,16 @@ pkill -f account_bot.py
 
 Documentation complète de l'architecture : [docs/multi.fr.md](docs/multi.fr.md) · Référence INSTALL : [INSTALL.fr.md — section multi-bot](INSTALL.fr.md#partage-websocket-multi-bot-option-a--zeromq).
 
+### Test d'intégration
+
+Pour vérifier automatiquement que le multi-bot fonctionne de bout en bout entre comptes Linux :
+
+```bash
+bash scripts/test_multibot_deploy.sh
+```
+
+Ce script nettoie les comptes de test configurés, réinstalle le bot, démarre tous les bots simultanément en mode `--verbose`, surveille pendant 3 minutes, vérifie qu'un seul feed tourne et que tous les bots reçoivent des book updates, puis arrête tout. Configurer le serveur de test via `~/.tradinebotte-test.conf` (copier `scripts/test_multibot.conf.example`). Voir [INSTALL.fr.md — Test d'intégration](INSTALL.fr.md#test-dintégration) pour les détails complets.
+
 ---
 
 ## Tester sans argent réel
