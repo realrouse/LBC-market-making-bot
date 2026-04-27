@@ -30,8 +30,9 @@ Message types consumed from feed.py:
    "spread": ..., "bid_vol": ..., "ask_vol": ..., "obi": ...}
   {"t": "ping",  "ts": ...}
 """
+# pylint: disable=duplicate-code  # market-expiry purge loop mirrors feed.py by design
 
-import argparse, asyncio, fcntl, json, logging, os, subprocess, sys, time
+import argparse, asyncio, fcntl, logging, os, subprocess, sys, time
 import zmq, zmq.asyncio
 
 logging.basicConfig(
@@ -115,7 +116,7 @@ def _ensure_feed() -> None:
         logger.info("Feed actif sur %s", _FEED_ADDR)
         return
 
-    lock_file = open(_FEED_LOCK_PATH, "w")
+    lock_file = open(_FEED_LOCK_PATH, "w", encoding="utf-8")  # pylint: disable=consider-using-with
     try:
         fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -137,8 +138,8 @@ def _ensure_feed() -> None:
         if VERBOSE:
             logger.debug("[ENSURE_FEED] démarrage feed.py : %s", " ".join(cmd))
             logger.debug("[ENSURE_FEED] log feed : %s", log_path)
-        with open(log_path, "a") as log_f:
-            proc = subprocess.Popen(cmd, env=env, stdout=log_f, stderr=log_f)
+        with open(log_path, "ab") as log_f:
+            proc = subprocess.Popen(cmd, env=env, stdout=log_f, stderr=log_f)  # pylint: disable=consider-using-with
         logger.info("Feed démarré (PID %d) — log: %s", proc.pid, log_path)
 
         # Wait until feed publishes its first message.

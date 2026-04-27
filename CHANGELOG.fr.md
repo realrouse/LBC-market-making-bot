@@ -9,6 +9,7 @@ Toutes les modifications notables de ce projet sont documentées ici.
 ## [Non publié]
 
 ### Qualité de code
+- `bot/account_bot.py` — pylint 10/10 : import `json` inutilisé supprimé ; `open(lock_file)` et `open(log_path)` portent désormais un encodage explicite (`utf-8`) ou le mode binaire (`ab`) ; les usages intentionnels sans `with` sont annotés `# pylint: disable=consider-using-with` ; `# pylint: disable=duplicate-code` ajouté au niveau module (boucle de purge des marchés expirés identique à `feed.py` par conception)
 - `bot/account_bot.py` — ResourceWarning corrigé : `_run()` encapsule désormais sa boucle d'événements dans un `try/finally` pour appeler `sock.close(linger=0)` et `ctx.term()` à l'annulation ; le socket et le contexte ZMQ sont garantis d'être libérés lors de l'annulation de la tâche en test ou à l'arrêt
 
 ### Tests
