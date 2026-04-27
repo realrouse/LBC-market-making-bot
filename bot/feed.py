@@ -19,10 +19,11 @@ Message types published:
 
 Usage:
   python3 bot/feed.py
+  python3 bot/feed.py --verbose
   TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 python3 bot/feed.py
 """
 
-import asyncio, json, logging, os, sys, time
+import argparse, asyncio, json, logging, os, sys, time
 from typing import Any
 import aiohttp, websockets, zmq, zmq.asyncio
 
@@ -30,24 +31,43 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import api_polymarket as api
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────
-FEED_ADDR = os.environ.get("TRADINEBOTTE_FEED_ADDR", "tcp://127.0.0.1:5557")
+FEED_ADDR       = os.environ.get("TRADINEBOTTE_FEED_ADDR", "tcp://127.0.0.1:5557")
 MARKET_REFRESH  = 30   # seconds between Gamma API polls
 PING_INTERVAL   = 10   # seconds between keepalive pings to subscribers
-LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
+LOG_FORMAT      = "%(asctime)s [%(levelname)s] %(message)s"
 
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT,
                     handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger("feed")
 
+# Set by _parse_args() — used throughout for conditional debug logging.
+VERBOSE = False
+
 # ─── STATE ───────────────────────────────────────────────────────────────────
-# registered: market_id → {"up": token_id, "dn": token_id, "end_ms": float}
-# token_meta: token_id  → market_id (for routing book updates)
 registered: dict[str, dict[str, Any]] = {}
 token_meta: dict[str, str] = {}
 
 
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="tradinebotte feed broadcaster")
+    p.add_argument("--verbose", action="store_true",
+                   help="Enable DEBUG logging — very detailed, for diagnostics only")
+    return p.parse_args()
+
+
 def _pub_json(sock: zmq.asyncio.Socket, msg: dict[str, Any]) -> None:
     sock.send_json(msg, zmq.NOBLOCK)
+    if VERBOSE:
+        t = msg.get("t", "?")
+        if t == "book":
+            logger.debug("[PUB book] token=%.12s bid=%.4f ask=%.4f obi=%.3f",
+                         msg.get("token_id", ""), msg.get("best_bid", 0),
+                         msg.get("best_ask", 0), msg.get("obi", 0))
+        elif t == "market":
+            logger.debug("[PUB market] %s %s", msg.get("market_id", ""),
+                         msg.get("question", "")[:60])
+        elif t == "ping":
+            logger.debug("[PUB ping] ts=%d", msg.get("ts", 0))
 
 
 def register_market(market: dict[str, Any]) -> list[str]:
@@ -74,6 +94,8 @@ def register_market(market: dict[str, Any]) -> list[str]:
             new.append(tid)
     if mid not in registered:
         registered[mid] = {"up": up, "dn": dn, "end_ms": em, "question": q, "start_ms": sm}
+    if VERBOSE and new:
+        logger.debug("[REGISTER] market=%s q=%s new_tokens=%d", mid, q[:40], len(new))
     return new
 
 
@@ -83,7 +105,11 @@ async def _market_refresh(sock: zmq.asyncio.Socket,
     while True:
         await asyncio.sleep(MARKET_REFRESH)
         try:
+            if VERBOSE:
+                logger.debug("[REFRESH] polling Gamma API...")
             markets = await api.get_markets(session)
+            if VERBOSE:
+                logger.debug("[REFRESH] %d markets returned", len(markets))
             new_ids: list[str] = []
             for m in markets:
                 tids = register_market(m)
@@ -115,6 +141,9 @@ async def _market_refresh(sock: zmq.asyncio.Socket,
                     token_meta.pop(tid, None)
             if expired:
                 logger.info("Marches expires purges : %d", len(expired))
+            if VERBOSE:
+                logger.debug("[REFRESH] done — %d markets, %d tokens actifs",
+                             len(registered), len(token_meta))
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -131,7 +160,10 @@ async def _ping_loop(sock: zmq.asyncio.Socket) -> None:
 
 
 async def _run_ws(sock: zmq.asyncio.Socket, session: aiohttp.ClientSession) -> None:
+    if VERBOSE:
+        logger.debug("[WS] appel get_markets...")
     markets = await api.get_markets(session)
+    logger.info("Marches BTC 5-min : %d", len(markets))
     if not markets:
         logger.warning("Aucun marche — attente 30s")
         await asyncio.sleep(30)
@@ -159,6 +191,8 @@ async def _run_ws(sock: zmq.asyncio.Socket, session: aiohttp.ClientSession) -> N
         return
 
     logger.info("Souscription %d tokens...", len(all_token_ids))
+    if VERBOSE:
+        logger.debug("[WS] tokens: %s", all_token_ids[:6])
     async with websockets.connect(api.WS_URL, ping_interval=20, ping_timeout=10) as ws:
         for i in range(0, len(all_token_ids), api.WS_BATCH_SIZE):
             await ws.send(api.make_subscribe_msg(all_token_ids[i:i + api.WS_BATCH_SIZE]))
@@ -167,6 +201,7 @@ async def _run_ws(sock: zmq.asyncio.Socket, session: aiohttp.ClientSession) -> N
         refresh_task = asyncio.create_task(_market_refresh(sock, session, ws))
         ping_task    = asyncio.create_task(_ping_loop(sock))
 
+        msgs_received = 0
         try:
             while True:
                 try:
@@ -175,8 +210,13 @@ async def _run_ws(sock: zmq.asyncio.Socket, session: aiohttp.ClientSession) -> N
                     if not token_meta:
                         logger.warning("Aucun token actif — reconnexion")
                         break
+                    if VERBOSE:
+                        logger.debug("[WS] timeout 30s (normal en periode calme), "
+                                     "%d msgs recus jusqu'ici", msgs_received)
                     continue
-                except Exception:
+                except Exception as e:
+                    if VERBOSE:
+                        logger.debug("[WS] exception recv : %s", e)
                     break
 
                 try:
@@ -187,8 +227,13 @@ async def _run_ws(sock: zmq.asyncio.Socket, session: aiohttp.ClientSession) -> N
                     continue
 
                 for msg in msgs:
+                    if VERBOSE:
+                        logger.debug("[WS RAW] %s", str(msg)[:200])
                     p = api.parse_book_update(msg)
                     if p:
+                        msgs_received += 1
+                        if VERBOSE and msgs_received % 50 == 0:
+                            logger.debug("[WS] %d book updates publies", msgs_received)
                         _pub_json(sock, {"t": "book", **p})
         finally:
             refresh_task.cancel()
@@ -205,7 +250,9 @@ async def main() -> None:
     sock = ctx.socket(zmq.PUB)
     sock.bind(FEED_ADDR)
     logger.info("Feed PUB bind sur %s", FEED_ADDR)
-    # Allow subscribers to connect before the first message.
+    if VERBOSE:
+        logger.debug("[VERBOSE] mode diagnostic actif")
+        logger.debug("[ZMQ] socket PUB bind sur %s", FEED_ADDR)
     await asyncio.sleep(0.5)
 
     backoff = 1
@@ -216,9 +263,17 @@ async def main() -> None:
                 backoff = 1
             except Exception as e:
                 logger.warning("WS erreur (%s) — reconnexion %ds", e, backoff)
+                if VERBOSE:
+                    import traceback
+                    logger.debug("[WS ERREUR] %s", traceback.format_exc())
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 60)
 
 
 if __name__ == "__main__":
+    args = _parse_args()
+    if args.verbose:
+        VERBOSE = True
+        logging.getLogger().setLevel(logging.DEBUG)
+        logger.setLevel(logging.DEBUG)
     asyncio.run(main())
