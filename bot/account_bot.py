@@ -192,60 +192,64 @@ async def _run(state: bot.BotState) -> None:
     last_msg_ts = time.time()
     msgs_total  = 0
 
-    while True:
-        try:
-            raw = await asyncio.wait_for(sock.recv_json(), timeout=FEED_TIMEOUT)
-            last_msg_ts = time.time()
-            msgs_total += 1
-        except asyncio.TimeoutError:
-            idle = time.time() - last_msg_ts
-            logger.warning("Aucun message du feed depuis %.0fs — feed actif ?", idle)
-            continue
-        except Exception as e:
-            logger.error("Erreur reception feed : %s", e)
-            await asyncio.sleep(5)
-            continue
-
-        t = raw.get("t")
-
-        if VERBOSE:
-            if t == "book":
-                logger.debug("[FEED] book token=%.12s bid=%.4f ask=%.4f obi=%.3f",
-                             raw.get("token_id", ""), raw.get("best_bid", 0),
-                             raw.get("best_ask", 0), raw.get("obi", 0))
-            elif t == "ping":
-                logger.debug("[FEED] ping #%d (total msgs: %d)", raw.get("ts", 0), msgs_total)
-            elif t == "market":
-                logger.debug("[FEED] market %s", raw.get("market_id", "")[:16])
-
-        if t == "market":
-            _register_from_market_msg(state, raw)
-
-        elif t == "book":
-            token_id = raw.get("token_id", "")
-            if token_id not in state.tokens:
-                if VERBOSE:
-                    logger.debug("[BOOK] token inconnu ignoré : %.20s", token_id)
+    try:
+        while True:
+            try:
+                raw = await asyncio.wait_for(sock.recv_json(), timeout=FEED_TIMEOUT)
+                last_msg_ts = time.time()
+                msgs_total += 1
+            except asyncio.TimeoutError:
+                idle = time.time() - last_msg_ts
+                logger.warning("Aucun message du feed depuis %.0fs — feed actif ?", idle)
                 continue
-            parsed = {k: v for k, v in raw.items() if k != "t"}
+            except Exception as e:
+                logger.error("Erreur reception feed : %s", e)
+                await asyncio.sleep(5)
+                continue
+
+            t = raw.get("t")
+
             if VERBOSE:
-                logger.debug("[BOOK] traitement signal — bid=%.4f seuil=%.2f",
-                             raw.get("best_bid", 0), bot.SIGNAL_THRESHOLD)
-            await bot.handle_book_update(state, parsed)
+                if t == "book":
+                    logger.debug("[FEED] book token=%.12s bid=%.4f ask=%.4f obi=%.3f",
+                                 raw.get("token_id", ""), raw.get("best_bid", 0),
+                                 raw.get("best_ask", 0), raw.get("obi", 0))
+                elif t == "ping":
+                    logger.debug("[FEED] ping #%d (total msgs: %d)", raw.get("ts", 0), msgs_total)
+                elif t == "market":
+                    logger.debug("[FEED] market %s", raw.get("market_id", "")[:16])
 
-        elif t == "ping":
-            pass  # keepalive — no action needed
+            if t == "market":
+                _register_from_market_msg(state, raw)
 
-        # Purge expired markets periodically.
-        expired = [
-            tid for tid, ts in list(state.tokens.items())
-            if ts.market_ended and ts.market_id not in state.open_trades
-        ]
-        for tid in expired:
-            ts_obj = state.tokens.pop(tid, None)
-            if ts_obj:
-                state.market_tokens.pop(ts_obj.market_id, None)
-                state.signalled.discard(ts_obj.market_id)
+            elif t == "book":
+                token_id = raw.get("token_id", "")
+                if token_id not in state.tokens:
+                    if VERBOSE:
+                        logger.debug("[BOOK] token inconnu ignoré : %.20s", token_id)
+                    continue
+                parsed = {k: v for k, v in raw.items() if k != "t"}
+                if VERBOSE:
+                    logger.debug("[BOOK] traitement signal — bid=%.4f seuil=%.2f",
+                                 raw.get("best_bid", 0), bot.SIGNAL_THRESHOLD)
+                await bot.handle_book_update(state, parsed)
+
+            elif t == "ping":
+                pass  # keepalive — no action needed
+
+            # Purge expired markets periodically.
+            expired = [
+                tid for tid, ts in list(state.tokens.items())
+                if ts.market_ended and ts.market_id not in state.open_trades
+            ]
+            for tid in expired:
+                ts_obj = state.tokens.pop(tid, None)
+                if ts_obj:
+                    state.market_tokens.pop(ts_obj.market_id, None)
+                    state.signalled.discard(ts_obj.market_id)
+    finally:
+        sock.close(linger=0)
+        ctx.term()
 
 
 async def main() -> None:

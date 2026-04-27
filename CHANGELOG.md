@@ -8,6 +8,9 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Code Quality
+- `bot/account_bot.py` — ResourceWarning fixed: `_run()` now wraps its event loop in `try/finally` to call `sock.close(linger=0)` and `ctx.term()` on cancellation; ZMQ socket and context are guaranteed to be released when the task is cancelled during tests or on shutdown
+
 ### Testing
 - **`scripts/test_multibot_deploy.sh`** — full end-to-end integration test for the multi-bot Option B setup across configurable test accounts: Phase 1 cleanup (kill processes, remove dirs, clear lock files), Phase 2 deploy (rsync + venv creation + pip install without root), Phase 3 simultaneous launch of all N account_bots in `--verbose` mode to stress-test the race-safe feed auto-start, Phase 4 sustained operation with 30s heartbeat checks, Phase 5 log analysis (feed WebSocket confirmation, book update count per bot, ERROR/CRITICAL line count), Phase 6 teardown and final process count; exits 0 on full pass, 1 on any failure; `--skip-deploy` reuses an existing install; `--duration N` overrides the 3-minute default; server address, SSH port, usernames, and passwords are read from `~/.tradinebotte-test.conf` (or `TEST_MULTIBOT_CONF` env var) — never hardcoded; `scripts/test_multibot.conf.example` provides the template
 
