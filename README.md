@@ -152,6 +152,16 @@ The suite runs 153 tests (95 for the live bot, 28 for the backtest engine, 30 fo
 Replay historical `snapshots` data against configurable strategy parameters.
 If `TRADINEBOTTE_DIR/live.db` is absent or has fewer than 100 snapshots, the script falls back automatically to the bundled sample dataset (`data/backtest_sample_btc5m_range_2026.db`, 2430 snapshots from real BTC 5-minute markets collected on 2026-04-25). The selected database is printed at startup.
 
+Three real-session datasets are included in `data/`:
+
+| File | Snapshots | Period | Trades | Win rate |
+|---|---|---|---|---|
+| `backtest_sample_btc5m_range_2026.db` | 2,430 | 2026-04-25 | 0 | — |
+| `calmsaturday.db` | 10,126 | 2026-04-26 ~11h | 9 | 100% |
+| `basicsunday.db` | 24,870 | 2026-04-25→26 ~26h | 43 | 97.7% |
+
+Run all three at once with `--all` (aggregate: 52 trades, 51 wins, **98.1% win rate**).
+
 ```bash
 python3 scripts/backtest.py                        # default parameters
 python3 scripts/backtest.py --threshold 0.95       # custom threshold

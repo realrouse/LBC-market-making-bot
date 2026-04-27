@@ -152,6 +152,16 @@ La suite exécute 153 tests (95 pour le bot live, 28 pour le moteur de backtest,
 Rejouer les données `snapshots` historiques avec des paramètres de stratégie configurables.
 Si `TRADINEBOTTE_DIR/live.db` est absent ou contient moins de 100 snapshots, le script utilise automatiquement le jeu de données embarqué (`data/backtest_sample_btc5m_range_2026.db`, 2430 snapshots issus de vrais marchés BTC 5 minutes collectés le 2026-04-25). Le fichier sélectionné est affiché au démarrage.
 
+Trois jeux de données de sessions réelles sont inclus dans `data/` :
+
+| Fichier | Snapshots | Période | Trades | Taux victoire |
+|---|---|---|---|---|
+| `backtest_sample_btc5m_range_2026.db` | 2 430 | 2026-04-25 | 0 | — |
+| `calmsaturday.db` | 10 126 | 2026-04-26 ~11h | 9 | 100 % |
+| `basicsunday.db` | 24 870 | 2026-04-25→26 ~26h | 43 | 97,7 % |
+
+Lancer les trois en une commande avec `--all` (agrégat : 52 trades, 51 victoires, **98,1 % de taux de victoire**).
+
 ```bash
 python3 scripts/backtest.py                        # paramètres par défaut
 python3 scripts/backtest.py --threshold 0.95       # seuil personnalisé

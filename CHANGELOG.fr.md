@@ -8,6 +8,9 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ## [Non publié]
 
+### Données
+- **`data/basicsunday.db`** — 24 870 snapshots d'une session de simulation live ~26h (2026-04-25 20:57 → 2026-04-26 22:55), 312 marchés distincts ; résultat backtest : 42/43 victoires (97,7 %), PnL -3,58 $ ; combiné avec `calmsaturday.db` via `--all` : 52 trades, 51 victoires, **98,1 % de taux de victoire agrégé** ; `README.fr.md` mis à jour avec un tableau comparatif des jeux de données
+
 ### Documentation
 - **Prérequis administrateur serveur** — confirmé en conditions réelles sur Ubuntu 22.04 / Python 3.10 : les trois paquets `python3-venv`, `python3-pip`, et `python3.10-venv` sont requis ; `python3.10-venv` est désormais un prérequis principal (non un fallback) dans `INSTALL.md`, `INSTALL.fr.md`, `QUICKSTART.md`, `QUICKSTART.fr.md`, `README.md`, `README.fr.md` ; sans lui la création du venv échoue avec *"ensurepip is not available"*
 
