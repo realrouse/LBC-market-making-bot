@@ -107,14 +107,21 @@ if [ "$WITH_TESTS" = "1" ]; then
     cd - > /dev/null
 fi
 
+# Prefix TRADINEBOTTE_DIR=... only when the user chose a non-default dir.
+if [ "$INSTALL_DIR" = "$HOME/tradinebotte" ]; then
+    _TD=""
+else
+    _TD="TRADINEBOTTE_DIR=\"$INSTALL_DIR\" "
+fi
+
 echo ""
 echo "=== Installation terminée dans $INSTALL_DIR ==="
 echo ""
 echo "ÉTAPES SUIVANTES :"
-echo "1. Prépare ton wallet : TRADINEBOTTE_DIR=\"$INSTALL_DIR\" python3 \"$REPO_DIR/scripts/setup.py\""
-echo "2. Lance le bot      : TRADINEBOTTE_DIR=\"$INSTALL_DIR\" bash \"$REPO_DIR/scripts/start_bot.sh\""
+echo "1. Prépare ton wallet : ${_TD}python3 \"$REPO_DIR/scripts/setup.py\""
+echo "2. Lance le bot      : ${_TD}bash \"$REPO_DIR/scripts/start_bot.sh\""
 if [ "$WITH_TESTS" = "1" ]; then
 echo ""
-echo "Tests   : cd \"$INSTALL_DIR\" && TRADINEBOTTE_DIR=\"$INSTALL_DIR\" venv/bin/python3 -W ignore::ResourceWarning -m unittest discover tests/ -v"
-echo "Backtest: cd \"$INSTALL_DIR\" && TRADINEBOTTE_DIR=\"$INSTALL_DIR\" venv/bin/python3 \"$REPO_DIR/scripts/backtest.py\""
+echo "Tests   : cd \"$INSTALL_DIR\" && ${_TD}venv/bin/python3 -W ignore::ResourceWarning -m unittest discover tests/ -v"
+echo "Backtest: cd \"$INSTALL_DIR\" && ${_TD}venv/bin/python3 \"$REPO_DIR/scripts/backtest.py\""
 fi
