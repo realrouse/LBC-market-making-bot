@@ -2,7 +2,9 @@
 """
 Polymarket wallet setup — run ONCE before starting the bot.
 
-Steps performed:
+Press Enter without a key to create a simulation config (no real orders).
+
+Steps performed (real key only):
   1. Read the Polygon private key securely via masked stdin (getpass),
      so it never appears in process listings (ps aux) or shell history.
   2. Check MATIC, USDC.e, and native USDC balances on Polygon mainnet.
@@ -14,8 +16,9 @@ Steps performed:
   6. Write all credentials to TRADINEBOTTE_DIR/config.json with chmod 600.
 
 Usage:
-  python3 scripts/setup.py
-  TRADINEBOTTE_DIR=~/tradinebotte python3 scripts/setup.py
+  python3 scripts/setup.py                           # real wallet
+  python3 scripts/setup.py  (Enter without key)      # simulation mode
+  TRADINEBOTTE_DIR=~/account-a python3 scripts/setup.py
 """
 
 import sys, os, json, getpass, sysconfig
@@ -26,7 +29,28 @@ CONFIG_PATH = os.path.join(INSTALL_DIR, "config.json")
 
 # getpass reads from /dev/tty so the key is never echoed to the terminal,
 # never stored in readline history, and never visible in `ps aux` arguments.
-PRIVATE_KEY = getpass.getpass("Polygon private key (0x...): ").strip()
+PRIVATE_KEY = getpass.getpass(
+    "Polygon private key (0x...) — Enter without key for simulation mode: "
+).strip()
+
+if not PRIVATE_KEY:
+    # Simulation mode: write a minimal config with empty credentials.
+    # The bot detects private_key="" and places SIMULATED orders only.
+    os.makedirs(INSTALL_DIR, exist_ok=True)
+    sim_config = {"private_key": "", "api_key": "", "api_secret": "", "api_passphrase": ""}
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(sim_config, f, indent=2)
+    os.chmod(CONFIG_PATH, 0o600)
+    print(f"\n{'='*60}")
+    print("  SIMULATION MODE — aucun ordre réel")
+    print(f"{'='*60}")
+    print(f"  Config écrit  : {CONFIG_PATH}")
+    print("  private_key   : (vide — ordres simulés)")
+    print(f"\nLancer le bot :")
+    print(f"  bash scripts/start_bot.sh")
+    print(f"  tail -f {os.path.join(INSTALL_DIR, 'live.log')}")
+    sys.exit(0)
+
 if not PRIVATE_KEY.startswith("0x") or len(PRIVATE_KEY) != 66:
     print("Invalid format — expected: 0x followed by 64 hex characters")
     sys.exit(1)

@@ -9,6 +9,7 @@ Toutes les modifications notables de ce projet sont documentées ici.
 ## [Non publié]
 
 ### Amélioration
+- **`scripts/setup.py`** — appuyer sur Entrée sans clé privée crée désormais un `config.json` de simulation (credentials vides) et sort proprement ; les imports blockchain sont entièrement ignorés dans ce chemin ; le prompt mentionne l'option ; docs QUICKSTART + INSTALL mis à jour (EN + FR)
 - **`scripts/install.sh`** — n'appelle plus `apt-get` directement ; détecte à la place les paquets système manquants (`python3`, `python3-venv`, `python3.X-venv`, `sqlite3`) et affiche la commande `sudo apt-get install` exacte avec le numéro de version Python auto-détecté ; sort en erreur si quelque chose manque, continue silencieusement si tout est présent ; docs mis à jour dans INSTALL, QUICKSTART, README (EN + FR)
 
 ### Qualité de code

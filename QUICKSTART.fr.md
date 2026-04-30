@@ -57,7 +57,7 @@ bash scripts/install.sh
 
 Crée `~/tradinebotte/` avec un virtualenv et toutes les dépendances. Aucun accès root requis.
 
-### 2 — Connecter le wallet (une seule fois)
+### 2 — Configurer (une seule fois)
 
 ```bash
 python3 scripts/setup.py
@@ -66,6 +66,9 @@ python3 scripts/setup.py
 La clé privée est demandée de façon interactive (masquée, jamais dans l'historique shell).  
 Le script vérifie les balances, swape l'USDC si nécessaire, approuve l'exchange, et écrit
 `~/tradinebotte/config.json` (chmod 600).
+
+> **Pas encore de wallet ?** Appuyer sur Entrée sans saisir de clé — `setup.py` crée
+> un config de simulation et le bot tourne en ordres simulés (aucune transaction on-chain).
 
 ### 3 — Démarrer le bot
 

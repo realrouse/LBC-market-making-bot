@@ -126,17 +126,19 @@ Ce script va :
 
 ## Configuration du wallet (une seule fois)
 
-Exécuter `setup.py` une seule fois avec votre wallet Polygon. Il va :
-- Demander la clé privée de manière interactive (stdin masqué)
-- Vérifier les balances USDC.e et USDC natif
-- Effectuer le swap USDC natif → USDC.e via Uniswap V3 si nécessaire
-- Approuver l'allowance CTF Exchange
-- Dériver les credentials API Polymarket
-- Écrire les credentials dans `<TRADINEBOTTE_DIR>/config.json` (chmod 600)
+Exécuter `setup.py` avant de lancer le bot — il crée `config.json` :
 
 ```bash
-TRADINEBOTTE_DIR=~/tradinebotte python3 scripts/setup.py
+python3 scripts/setup.py
 ```
+
+Lors de la demande de clé privée :
+- **Wallet réel :** saisir `0x` + 64 caractères hexadécimaux — le script vérifie les balances,
+  effectue le swap USDC natif → USDC.e si nécessaire, approuve le CTF Exchange, dérive les
+  credentials API Polymarket et écrit `<TRADINEBOTTE_DIR>/config.json` (chmod 600).
+- **Simulation (sans wallet) :** appuyer sur Entrée sans saisir de clé — le script écrit un
+  `config.json` minimal avec des credentials vides ; le bot tourne en ordres simulés et aucune
+  transaction on-chain n'est effectuée.
 
 La clé privée est saisie de manière interactive et n'est jamais visible
 dans `ps aux` ni dans l'historique shell.

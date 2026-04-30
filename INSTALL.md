@@ -123,17 +123,19 @@ This will:
 
 ## Wallet Setup (one-time)
 
-Run `setup.py` once with your Polygon wallet. It will:
-- Prompt for your private key interactively (masked stdin)
-- Check USDC.e and USDC native balances
-- Swap USDC native → USDC.e via Uniswap V3 if needed
-- Approve CTF Exchange allowance
-- Derive your Polymarket API credentials
-- Write credentials to `<TRADINEBOTTE_DIR>/config.json` (chmod 600)
+Run `setup.py` once before starting the bot — it creates `config.json`:
 
 ```bash
-TRADINEBOTTE_DIR=~/tradinebotte python3 scripts/setup.py
+python3 scripts/setup.py
 ```
+
+When prompted for a private key:
+- **Real wallet:** enter `0x` + 64 hex characters — the script checks balances,
+  swaps USDC native → USDC.e if needed, approves the CTF Exchange, derives your
+  Polymarket API credentials, and writes `<TRADINEBOTTE_DIR>/config.json` (chmod 600).
+- **Simulation (no wallet):** press Enter without typing a key — the script writes
+  a minimal `config.json` with empty credentials; the bot runs with simulated orders
+  and no on-chain transactions occur.
 
 The private key is entered interactively and is never visible in `ps aux`
 or shell history.

@@ -56,7 +56,7 @@ bash scripts/install.sh
 
 This creates `~/tradinebotte/` with a virtualenv and all dependencies. No root needed.
 
-### 2 — Connect your wallet (one-time)
+### 2 — Configure (one-time)
 
 ```bash
 python3 scripts/setup.py
@@ -65,6 +65,9 @@ python3 scripts/setup.py
 You will be prompted for your private key (masked, never stored in history).  
 The script checks balances, swaps USDC if needed, approves the exchange, and writes
 `~/tradinebotte/config.json` (chmod 600).
+
+> **No wallet yet?** Press Enter without typing a key — `setup.py` creates a
+> simulation config and the bot runs with simulated orders (no on-chain transactions).
 
 ### 3 — Start the bot
 
