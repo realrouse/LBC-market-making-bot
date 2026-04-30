@@ -8,6 +8,9 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ## [Non publié]
 
+### Correction de bug
+- **`scripts/start_bot.sh`** — utilisait `python3` système au lieu du `python3` du virtualenv ; le bot crashait immédiatement car aiohttp/web3/etc. sont installés dans le venv, pas dans le Python système ; corrigé pour utiliser `$INSTALL_DIR/venv/bin/python3` ; la sortie `nohup` est désormais redirigée vers `live.log` au lieu de `/dev/null` pour que les erreurs de démarrage soient visibles dans le tail du log ; ajout d'une vérification d'existence du venv avec un message d'erreur clair
+
 ### Amélioration
 - **`scripts/setup.py`** — appuyer sur Entrée sans clé privée crée désormais un `config.json` de simulation (credentials vides) et sort proprement ; les imports blockchain sont entièrement ignorés dans ce chemin ; le prompt mentionne l'option ; docs QUICKSTART + INSTALL mis à jour (EN + FR)
 - **`scripts/install.sh`** — n'appelle plus `apt-get` directement ; détecte à la place les paquets système manquants (`python3`, `python3-venv`, `python3.X-venv`, `sqlite3`) et affiche la commande `sudo apt-get install` exacte avec le numéro de version Python auto-détecté ; sort en erreur si quelque chose manque, continue silencieusement si tout est présent ; docs mis à jour dans INSTALL, QUICKSTART, README (EN + FR)
