@@ -75,8 +75,8 @@ echo "=== Création de l'environnement virtuel ==="
 python3 -m venv "$INSTALL_DIR/venv"
 
 echo "=== Installation des packages Python ==="
-"$INSTALL_DIR/venv/bin/pip" install --upgrade pip
-"$INSTALL_DIR/venv/bin/pip" install aiohttp websockets web3 py-clob-client
+"$INSTALL_DIR/venv/bin/pip" install --quiet --upgrade pip
+"$INSTALL_DIR/venv/bin/pip" install --quiet aiohttp websockets web3 py-clob-client
 
 # Wrapper d'exécution avec TRADINEBOTTE_DIR exportée
 cat > "$INSTALL_DIR/run.sh" << EOF
