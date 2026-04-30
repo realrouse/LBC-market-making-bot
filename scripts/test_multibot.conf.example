@@ -23,3 +23,7 @@ TEST_PASSWORDS=(pass1 pass2 pass3)
 # Duration of the sustained-operation phase (seconds). Default: 180.
 # Can also be overridden on the command line: --duration 300
 # TEST_DURATION=180
+
+# Remote directories on the test server. Defaults work for most setups.
+# TEST_REMOTE_INSTALL_DIR=~/tradinebotte   # where the bot code is deployed
+# TEST_REMOTE_BOT_DIR=~/account-sim        # runtime dir for each bot (TRADINEBOTTE_DIR)

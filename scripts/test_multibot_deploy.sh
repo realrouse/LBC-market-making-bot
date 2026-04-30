@@ -79,6 +79,9 @@ USERS=("${TEST_USERS[@]:?TEST_USERS manquant dans $CONF}")
 PASSWORDS=("${TEST_PASSWORDS[@]:?TEST_PASSWORDS manquant dans $CONF}")
 # Config can set a default duration; --duration flag takes precedence if already changed
 [[ "$DURATION" -eq 180 && -n "${TEST_DURATION:-}" ]] && DURATION="$TEST_DURATION"
+# Remote directories — override in conf via TEST_REMOTE_INSTALL_DIR / TEST_REMOTE_BOT_DIR
+REMOTE_INSTALL_DIR="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
+REMOTE_BOT_DIR="${TEST_REMOTE_BOT_DIR:-~/account-sim}"
 
 N_BOTS=${#USERS[@]}
 if [[ "$N_BOTS" -ne ${#PASSWORDS[@]} ]]; then
@@ -110,7 +113,7 @@ deploy_code() {
         --exclude='*.pyc' \
         --exclude='.venv' \
         -e "ssh -p $PORT -o StrictHostKeyChecking=no" \
-        "$LOCAL_REPO/" "${USERS[$idx]}@$SERVER:~/tradinebotte/" 2>&1
+        "$LOCAL_REPO/" "${USERS[$idx]}@$SERVER:$REMOTE_INSTALL_DIR/" 2>&1
 }
 
 # ─── Pré-vol ───────────────────────────────────────────────────────────────────
@@ -146,7 +149,7 @@ for idx in "${!USERS[@]}"; do
         pkill -f account_bot.py 2>/dev/null || true
         pkill -f 'bot/feed.py'  2>/dev/null || true
         sleep 1
-        rm -rf ~/tradinebotte ~/account-sim
+        rm -rf $REMOTE_INSTALL_DIR $REMOTE_BOT_DIR
         rm -f /tmp/tradinebotte-feed-*.lock /tmp/tradinebotte-feed-*.log
     " && ok "$user nettoyé" || warn "$user nettoyage partiel"
 done
@@ -170,13 +173,13 @@ else
         deploy_code $idx && ok "$user : rsync OK" || { err "$user : rsync échoué"; exit 1; }
 
         info "Création venv $user..."
-        run $idx "python3 -m venv ~/tradinebotte/venv 2>&1" \
+        run $idx "python3 -m venv $REMOTE_INSTALL_DIR/venv 2>&1" \
             && ok "$user : venv créé" || { err "$user : création venv échouée"; exit 1; }
 
         info "pip install $user..."
         run $idx "
-            ~/tradinebotte/venv/bin/pip install --quiet --upgrade pip
-            ~/tradinebotte/venv/bin/pip install --quiet -r ~/tradinebotte/requirements.txt
+            $REMOTE_INSTALL_DIR/venv/bin/pip install --quiet --upgrade pip
+            $REMOTE_INSTALL_DIR/venv/bin/pip install --quiet -r $REMOTE_INSTALL_DIR/requirements.txt
         " && ok "$user : dépendances installées" || { err "$user : pip install échoué"; exit 1; }
     done
 fi
@@ -185,20 +188,20 @@ fi
 section "PHASE 3 — RÉPERTOIRES SIMULATION"
 for idx in "${!USERS[@]}"; do
     user="${USERS[$idx]}"
-    run $idx "mkdir -p ~/account-sim" && ok "$user : ~/account-sim prêt"
+    run $idx "mkdir -p $REMOTE_BOT_DIR" && ok "$user : $REMOTE_BOT_DIR prêt"
 done
 
 # ─── Phase 4 : Lancement simultané ─────────────────────────────────────────────
 section "PHASE 4 — LANCEMENT SIMULTANÉ DES $N_BOTS BOTS"
 info "Envoi des $N_BOTS commandes de lancement en parallèle (test race condition)..."
 
-LAUNCH_CMD='
-    cd ~/tradinebotte
-    TRADINEBOTTE_DIR=~/account-sim \
-    nohup ~/tradinebotte/venv/bin/python3 bot/account_bot.py --verbose \
-        > ~/account-sim/account.log 2>&1 < /dev/null &
-    echo "PID=$!"
-'
+LAUNCH_CMD="
+    cd $REMOTE_INSTALL_DIR
+    TRADINEBOTTE_DIR=$REMOTE_BOT_DIR \\
+    nohup $REMOTE_INSTALL_DIR/venv/bin/python3 bot/account_bot.py --verbose \\
+        > $REMOTE_BOT_DIR/account.log 2>&1 < /dev/null &
+    echo \"PID=\$!\"
+"
 
 for idx in "${!USERS[@]}"; do
     run_bg $idx "$LAUNCH_CMD"
@@ -222,7 +225,7 @@ info "Processus account_bot : $BOT_COUNT (attendu : $N_BOTS)"
 
 for idx in "${!USERS[@]}"; do
     user="${USERS[$idx]}"
-    LOG=$(run $idx "cat ~/account-sim/account.log 2>/dev/null || echo '(vide)'")
+    LOG=$(run $idx "cat /account.log 2>/dev/null || echo '(vide)'")
     if echo "$LOG" | grep -q "Connecte au feed"; then
         ok "$user : connecté au feed"
     else
@@ -277,7 +280,7 @@ section "PHASE 7 — ANALYSE DES LOGS"
 
 for idx in "${!USERS[@]}"; do
     user="${USERS[$idx]}"
-    LOG=$(run $idx "cat ~/account-sim/account.log 2>/dev/null || echo '(vide)'")
+    LOG=$(run $idx "cat /account.log 2>/dev/null || echo '(vide)'")
     echo ""
     echo -e "${BOLD}--- $user : account.log (20 dernières lignes) ---${NC}"
     echo "$LOG" | tail -20
