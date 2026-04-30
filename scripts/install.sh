@@ -16,6 +16,8 @@
 # ═══════════════════════════════════════════════════════════════════
 set -e
 
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
 WITH_TESTS=0
 ARGS=()
 for arg in "$@"; do
@@ -109,10 +111,10 @@ echo ""
 echo "=== Installation terminée dans $INSTALL_DIR ==="
 echo ""
 echo "ÉTAPES SUIVANTES :"
-echo "1. Prépare ton wallet : TRADINEBOTTE_DIR=\"$INSTALL_DIR\" python3 scripts/setup.py"
-echo "2. Lance le bot      : TRADINEBOTTE_DIR=\"$INSTALL_DIR\" bash scripts/start_bot.sh"
+echo "1. Prépare ton wallet : TRADINEBOTTE_DIR=\"$INSTALL_DIR\" python3 \"$REPO_DIR/scripts/setup.py\""
+echo "2. Lance le bot      : TRADINEBOTTE_DIR=\"$INSTALL_DIR\" bash \"$REPO_DIR/scripts/start_bot.sh\""
 if [ "$WITH_TESTS" = "1" ]; then
 echo ""
-echo "Tests : cd \"$INSTALL_DIR\" && TRADINEBOTTE_DIR=\"$INSTALL_DIR\" venv/bin/python3 -W ignore::ResourceWarning -m unittest discover tests/ -v"
-echo "Backtest : cd \"$INSTALL_DIR\" && TRADINEBOTTE_DIR=\"$INSTALL_DIR\" venv/bin/python3 scripts/backtest.py"
+echo "Tests   : cd \"$INSTALL_DIR\" && TRADINEBOTTE_DIR=\"$INSTALL_DIR\" venv/bin/python3 -W ignore::ResourceWarning -m unittest discover tests/ -v"
+echo "Backtest: cd \"$INSTALL_DIR\" && TRADINEBOTTE_DIR=\"$INSTALL_DIR\" venv/bin/python3 \"$REPO_DIR/scripts/backtest.py\""
 fi
