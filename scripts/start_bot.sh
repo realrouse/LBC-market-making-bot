@@ -37,7 +37,9 @@ fi
 
 # ── Lancement ─────────────────────────────────────────────────────
 LOG="$INSTALL_DIR/live.log"
-echo "Lancement du bot depuis $INSTALL_DIR..."
+DISPLAY_LOG="${LOG/$HOME/\~}"
+DISPLAY_DIR="${INSTALL_DIR/$HOME/\~}"
+echo "Lancement du bot depuis $DISPLAY_DIR..."
 export TRADINEBOTTE_DIR="$INSTALL_DIR"
 nohup "$PYTHON" "$INSTALL_DIR/live_bot.py" >> "$LOG" 2>&1 &
 echo "PID: $!"
@@ -45,7 +47,7 @@ sleep 3
 
 if pgrep -f live_bot.py > /dev/null; then
     echo "✅ Bot en cours — PID: $(pgrep -f live_bot.py)"
-    echo "Logs: tail -f $LOG"
+    echo "Logs: tail -f $DISPLAY_LOG"
 else
     echo "❌ Bot arrêté — dernières lignes du log:"
     tail -20 "$LOG"
