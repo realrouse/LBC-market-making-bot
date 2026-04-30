@@ -39,14 +39,15 @@ Les deux modes partagent le même format JSON de stratégie, le même schéma de
 
 ### 1 — Cloner et installer
 
-> **Prérequis administrateur serveur (une fois par machine) :**
-> ```bash
-> sudo apt-get install -y python3-venv python3-pip python3.10-venv
+> **Prérequis administrateur serveur (une fois par machine, si nécessaire) :**
+> `scripts/install.sh` détecte les paquets système manquants et affiche la commande
+> exacte à exécuter en root. Si des paquets manquent, tu verras par exemple :
 > ```
-> Les trois paquets sont requis sur Ubuntu 22.04 / Python 3.10. Remplacer `3.10`
-> par la version mineure Python (`python3 --version`). Sans eux, la création du
-> venv échoue avec *"ensurepip is not available"*. Requis une seule fois en root —
-> les utilisateurs individuels n'ont plus besoin du root ensuite.
+> sudo apt-get install -y python3-venv python3.12-venv
+> ```
+> Le numéro de version est détecté automatiquement. Exécute cette commande en root
+> une seule fois, puis relance `install.sh`. Les utilisateurs individuels n'ont plus
+> besoin du root ensuite.
 
 ```bash
 git clone https://github.com/neofutur/tradinebotte.git

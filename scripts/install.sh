@@ -1,11 +1,15 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════
-#  POLYMARKET LIVE BOT v3 — Installation Ubuntu 24.04
+#  POLYMARKET LIVE BOT v3 — Installation (Linux/Mac)
+#
+#  Prérequis root (une seule fois par machine, si absents) :
+#    sudo apt-get install -y python3 python3-venv python3.X-venv sqlite3
+#  Ce script détecte les manquants et affiche la commande exacte à lancer.
 #
 #  Répertoire d'installation (par ordre de priorité) :
 #    1. Argument positionnel : bash scripts/install.sh ~/tradinebotte
 #    2. Variable d'environnement : TRADINEBOTTE_DIR=~/tradinebotte bash scripts/install.sh
-#    3. Valeur par défaut : ~/tradinebotte (aucun accès root requis)
+#    3. Valeur par défaut : ~/tradinebotte
 #
 #  Options :
 #    --with-tests   copie aussi tests/ et scripts/backtest.py
@@ -27,9 +31,34 @@ INSTALL_DIR="$(eval echo "$INSTALL_DIR")"   # développe ~ si présent
 
 echo "=== Répertoire d'installation : $INSTALL_DIR ==="
 
-echo "=== Installation des dépendances système ==="
-apt-get update -q
-apt-get install -y python3 python3-pip python3-venv sqlite3
+echo "=== Vérification des dépendances système ==="
+
+_MISSING=()
+
+if ! command -v python3 &>/dev/null; then
+    _MISSING+=("python3")
+fi
+
+# python3 -m venv nécessite ensurepip (paquet python3-venv + python3.X-venv sur Ubuntu)
+if command -v python3 &>/dev/null && ! python3 -c "import ensurepip" &>/dev/null 2>&1; then
+    _PY_MINOR=$(python3 -c "import sys; print(sys.version_info.minor)")
+    _MISSING+=("python3-venv" "python3.${_PY_MINOR}-venv")
+fi
+
+if ! command -v sqlite3 &>/dev/null; then
+    _MISSING+=("sqlite3")
+fi
+
+if [ ${#_MISSING[@]} -gt 0 ]; then
+    echo ""
+    echo "ERREUR : paquets système manquants. Lance cette commande en root (une seule fois par machine) :"
+    echo ""
+    echo "  sudo apt-get install -y ${_MISSING[*]}"
+    echo ""
+    exit 1
+fi
+
+echo "Dépendances système OK."
 
 echo "=== Création des répertoires ==="
 mkdir -p "$INSTALL_DIR"

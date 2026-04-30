@@ -138,7 +138,7 @@ sqlite3 live.db "SELECT ts_ms, best_bid, best_ask, obi
 
 Guide complet (prérequis, configuration du wallet, page de statut web, monitoring, tests) : **[INSTALL.fr.md](INSTALL.fr.md)**.
 
-> **Note administrateur serveur :** `python3-venv`, `python3-pip`, et `python3.10-venv` doivent tous être installés une fois en root avant qu'un utilisateur puisse lancer `install.sh` (Ubuntu 22.04 / Python 3.10). Voir [INSTALL.fr.md — Prérequis administrateur serveur](INSTALL.fr.md#prérequis-administrateur-serveur-debianubuntu).
+> **Note administrateur serveur :** `scripts/install.sh` détecte les paquets système manquants et affiche la commande `sudo apt-get install` exacte à exécuter en root — aucune recherche manuelle de paquets nécessaire. Voir [INSTALL.fr.md — Prérequis administrateur serveur](INSTALL.fr.md#prérequis-administrateur-serveur-debianubuntu).
 
 ## Tests
 

@@ -22,30 +22,29 @@
 
 ### Prérequis administrateur serveur (Debian/Ubuntu)
 
-Le script d'installation crée un virtualenv et y bootstrap pip via
-`ensurepip` — **aucun pip système n'est requis à l'exécution**. Toutefois, deux
-paquets système doivent être présents avant de lancer `scripts/install.sh` :
+`scripts/install.sh` **détecte automatiquement les paquets manquants** et
+affiche la commande `sudo apt-get install` exacte à exécuter en root — inutile
+de connaître les noms de paquets à l'avance.
+
+Il suffit de lancer le script en tant qu'utilisateur normal :
 
 ```bash
-# À exécuter une fois en root / sudo sur le serveur avant toute installation
-sudo apt-get install -y python3-venv python3-pip python3.10-venv
+bash scripts/install.sh
 ```
 
-> Sur Ubuntu 22.04 / Python 3.10, `python3-venv` seul ne suffit pas —
-> `python3.10-venv` (paquet version-spécifique) est également requis.
-> Remplacer `3.10` par la version mineure réelle si différente
-> (`python3 --version` pour vérifier).
+Si quelque chose manque, le script affiche :
 
-| Paquet | Pourquoi nécessaire |
-|---|---|
-| `python3-venv` | support venv de base sur Debian/Ubuntu |
-| `python3.10-venv` | support ensurepip version-spécifique (requis sur Ubuntu 22.04) |
-| `python3-pip` | nécessaire pour bootstrapper pip dans le venv |
+```
+ERREUR : paquets système manquants. Lance cette commande en root (une seule fois par machine) :
 
-Si un paquet manque, la création du venv échoue avec :
-*"The virtual environment was not created successfully because ensurepip is not
-available."*
-Une fois installés, `install.sh` place toutes les dépendances Python dans le
+  sudo apt-get install -y python3-venv python3.10-venv
+```
+
+Le numéro de version (`3.10`) est détecté automatiquement depuis le Python
+système — aucune substitution manuelle nécessaire. Lancer la commande affichée
+en root, puis relancer `install.sh`.
+
+Une fois installés, `install.sh` place toutes les dépendances Python dans un
 venv isolé et **ne touche plus jamais au Python système**.
 
 

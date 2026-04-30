@@ -39,14 +39,14 @@ Both modes share the same strategy JSON format, database schema, signal logic, a
 
 ### 1 — Clone and install
 
-> **Server admin prerequisite (once per machine):**
-> ```bash
-> sudo apt-get install -y python3-venv python3-pip python3.10-venv
+> **Server admin prerequisite (once per machine, if needed):**
+> `scripts/install.sh` detects missing system packages and prints the exact
+> command to run as root. If packages are absent you will see something like:
 > ```
-> All three packages are required on Ubuntu 22.04 / Python 3.10. Replace `3.10`
-> with your Python minor version (`python3 --version`). Without them the venv
-> creation fails with *"ensurepip is not available"*. Only needed once by root —
-> individual users never need root after that.
+> sudo apt-get install -y python3-venv python3.12-venv
+> ```
+> The version number is auto-detected. Run that command as root once, then
+> re-run `install.sh`. Individual users never need root after that.
 
 ```bash
 git clone https://github.com/neofutur/tradinebotte.git

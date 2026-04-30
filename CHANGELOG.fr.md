@@ -8,6 +8,9 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ## [Non publié]
 
+### Amélioration
+- **`scripts/install.sh`** — n'appelle plus `apt-get` directement ; détecte à la place les paquets système manquants (`python3`, `python3-venv`, `python3.X-venv`, `sqlite3`) et affiche la commande `sudo apt-get install` exacte avec le numéro de version Python auto-détecté ; sort en erreur si quelque chose manque, continue silencieusement si tout est présent ; docs mis à jour dans INSTALL, QUICKSTART, README (EN + FR)
+
 ### Qualité de code
 - `bot/account_bot.py` — pylint 10/10 : import `json` inutilisé supprimé ; `open(lock_file)` et `open(log_path)` portent désormais un encodage explicite (`utf-8`) ou le mode binaire (`ab`) ; les usages intentionnels sans `with` sont annotés `# pylint: disable=consider-using-with` ; `# pylint: disable=duplicate-code` ajouté au niveau module (boucle de purge des marchés expirés identique à `feed.py` par conception)
 - `bot/account_bot.py` — ResourceWarning corrigé : `_run()` encapsule désormais sa boucle d'événements dans un `try/finally` pour appeler `sock.close(linger=0)` et `ctx.term()` à l'annulation ; le socket et le contexte ZMQ sont garantis d'être libérés lors de l'annulation de la tâche en test ou à l'arrêt
