@@ -8,6 +8,10 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ## [Non publié]
 
+---
+
+## [0.3] - 2026-05-01
+
 ### Correction de bug
 - **`scripts/start_bot.sh`** — le message de lancement et le chemin du log s'affichaient avec le chemin absolu `$HOME` ; remplacé par des chemins relatifs avec `~` via substitution bash (`${VAR/$HOME/\~}`)
 - **`scripts/start_bot.sh`** — utilisait `python3` système au lieu du `python3` du virtualenv ; le bot crashait immédiatement car aiohttp/web3/etc. sont installés dans le venv, pas dans le Python système ; corrigé pour utiliser `$INSTALL_DIR/venv/bin/python3` ; la sortie `nohup` est désormais redirigée vers `live.log` au lieu de `/dev/null` pour que les erreurs de démarrage soient visibles dans le tail du log ; ajout d'une vérification d'existence du venv avec un message d'erreur clair
