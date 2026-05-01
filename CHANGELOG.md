@@ -8,6 +8,10 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Fix
+- **`bot/account_bot.py`** — lock and log files now created under `/tmp/tradinebotte-<user>/` instead of flat `/tmp/tradinebotte-feed-<hash>.*`; each Linux user owns their subdirectory entirely, eliminating "Operation not permitted" errors on shared hosts where the `/tmp` sticky bit prevents one user from removing another's files
+- **`scripts/test_multibot_deploy.sh`** — cleanup (Phase 1) and teardown (Phase 8) now use `rm -rf /tmp/tradinebotte-$USER` matching the new per-user path; feed log detection (Phases 5 and 7) searches each user's subdirectory in turn and records which user's account ran the feed (`FEED_LOG_IDX`) so subsequent reads use the correct SSH account
+
 ---
 
 ## [0.3] - 2026-05-01
