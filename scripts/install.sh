@@ -72,7 +72,13 @@ echo "=== Copie du bot ==="
 cp bot/live_bot.py       "$INSTALL_DIR/live_bot.py"
 cp bot/api_polymarket.py "$INSTALL_DIR/api_polymarket.py"
 mkdir -p "$INSTALL_DIR/strategies"
-cp strategies/*.json     "$INSTALL_DIR/strategies/"
+# Guard against same-file error when the repo is cloned directly into
+# INSTALL_DIR (e.g. git clone → ~/tradinebotte, install → ~/tradinebotte).
+_STRAT_SRC="$(cd strategies && pwd)"
+_STRAT_DST="$(cd "$INSTALL_DIR/strategies" && pwd)"
+if [ "$_STRAT_SRC" != "$_STRAT_DST" ]; then
+    cp strategies/*.json "$INSTALL_DIR/strategies/"
+fi
 
 echo "=== Création de l'environnement virtuel ==="
 python3 -m venv "$INSTALL_DIR/venv"
