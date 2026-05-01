@@ -20,6 +20,33 @@
      print(c.execute('SELECT COUNT(*) FROM snapshots').fetchone()[0])"
   ```
 
+### Prérequis administrateur serveur (Debian/Ubuntu)
+
+`scripts/install.sh` **détecte automatiquement les paquets manquants** et
+affiche la commande `sudo apt-get install` exacte à exécuter en root — inutile
+de connaître les noms de paquets à l'avance.
+
+Il suffit de lancer le script en tant qu'utilisateur normal :
+
+```bash
+bash scripts/install.sh
+```
+
+Si quelque chose manque, le script affiche :
+
+```
+ERREUR : paquets système manquants. Lance cette commande en root (une seule fois par machine) :
+
+  sudo apt-get install -y python3-venv python3.10-venv
+```
+
+Le numéro de version (`3.10`) est détecté automatiquement depuis le Python
+système — aucune substitution manuelle nécessaire. Lancer la commande affichée
+en root, puis relancer `install.sh`.
+
+Une fois installés, `install.sh` place toutes les dépendances Python dans un
+venv isolé et **ne touche plus jamais au Python système**.
+
 
 ## Dépendances
 
@@ -34,6 +61,8 @@ dans un virtualenv situé dans `~/tradinebotte/venv/` :
 La liste canonique est `requirements.txt` à la racine du projet. Les CVE dans ces
 packages sont détectés automatiquement à chaque push via `pip-audit` (GitHub Actions)
 et Dependabot ouvre des PRs lorsque de nouvelles versions sont disponibles.
+
+Les dépendances de développement (`pylint`, `pip-audit`, `mypy`) sont déclarées dans `requirements-dev.txt`.
 
 
 ## Répertoire d'installation
@@ -80,7 +109,7 @@ bash scripts/install.sh [répertoire_installation] [--with-tests]
 **Options :**
 - `--with-tests` — Copie aussi `tests/`, `scripts/backtest.py` et
   `data/backtest_sample_btc5m_range_2026.db`, puis lance
-  la suite complète de tests (108 tests) juste après l'installation.
+  la suite complète de tests (153 tests) juste après l'installation.
   Le backtest utilise `live.db` uniquement s'il contient ≥ 100 snapshots ;
   sinon il bascule automatiquement sur le dataset embarqué.
 
@@ -97,17 +126,19 @@ Ce script va :
 
 ## Configuration du wallet (une seule fois)
 
-Exécuter `setup.py` une seule fois avec votre wallet Polygon. Il va :
-- Demander la clé privée de manière interactive (stdin masqué)
-- Vérifier les balances USDC.e et USDC natif
-- Effectuer le swap USDC natif → USDC.e via Uniswap V3 si nécessaire
-- Approuver l'allowance CTF Exchange
-- Dériver les credentials API Polymarket
-- Écrire les credentials dans `<TRADINEBOTTE_DIR>/config.json` (chmod 600)
+Exécuter `setup.py` avant de lancer le bot — il crée `config.json` :
 
 ```bash
-TRADINEBOTTE_DIR=~/tradinebotte python3 scripts/setup.py
+python3 scripts/setup.py
 ```
+
+Lors de la demande de clé privée :
+- **Wallet réel :** saisir `0x` + 64 caractères hexadécimaux — le script vérifie les balances,
+  effectue le swap USDC natif → USDC.e si nécessaire, approuve le CTF Exchange, dérive les
+  credentials API Polymarket et écrit `<TRADINEBOTTE_DIR>/config.json` (chmod 600).
+- **Simulation (sans wallet) :** appuyer sur Entrée sans saisir de clé — le script écrit un
+  `config.json` minimal avec des credentials vides ; le bot tourne en ordres simulés et aucune
+  transaction on-chain n'est effectuée.
 
 La clé privée est saisie de manière interactive et n'est jamais visible
 dans `ps aux` ni dans l'historique shell.
@@ -207,10 +238,49 @@ que le serveur web est configuré pour servir ce répertoire.
 TRADINEBOTTE_DIR=~/tradinebotte bash scripts/start_bot.sh
 ```
 
+### Démarrage automatique avec systemd (recommandé sur VPS)
+
+Exécuter le script générateur une fois après l'installation :
+
+```bash
+TRADINEBOTTE_DIR=~/tradinebotte bash scripts/install_service.sh
+```
+
+Il valide l'installation, écrit un fichier d'unité prêt à l'emploi dans `/tmp/tradinebotte.service`
+et affiche les commandes exactes pour l'activer :
+
+```bash
+sudo cp /tmp/tradinebotte.service /etc/systemd/system/tradinebotte.service
+sudo systemctl daemon-reload
+sudo systemctl enable tradinebotte   # démarrer au boot
+sudo systemctl start tradinebotte    # démarrer maintenant
+```
+
+Commandes utiles :
+
+```bash
+sudo systemctl status tradinebotte
+sudo systemctl stop tradinebotte
+sudo systemctl restart tradinebotte
+journalctl -u tradinebotte -f        # logs systemd en direct
+tail -f ~/tradinebotte/live.log      # logs applicatifs du bot
+```
+
+Le service redémarre automatiquement en cas d'erreur (`Restart=on-failure`, délai 30 s,
+max 5 redémarrages par 5 minutes). Au reboot, le bot revient dès que le réseau est
+disponible (`After=network-online.target`).
+
+> **Multi-bot (Option B)** : utiliser `scripts/install_feed_service.sh` et
+> `scripts/install_account_service.sh` à la place. Voir [docs/multi.md](docs/multi.md).
+
 **Flags :**
 - *(aucun flag)* — mode normal : les écritures de logs sont asynchrones (thread daemon, ne bloque jamais le event loop)
 - `--no-log` — supprime le fichier log pour un I/O disque minimal ; la DB SQLite (trades + snapshots) n'est pas affectée ; combiner avec `--simulate` pour conserver la sortie stdout
-- `--simulate` — isole tous les fichiers dans `/tmp/tradinebotte-sim`, aucun ordre réel
+- `--simulate` — isole tous les fichiers dans `~/tradinebotte-sim` par défaut, aucun ordre réel. Si `TRADINEBOTTE_DIR` est déjà défini dans l'environnement, ce chemin est utilisé à la place — ce qui permet de faire tourner plusieurs bots en parallèle sans conflit :
+  ```bash
+  TRADINEBOTTE_DIR=~/compte-a python3 live_bot.py --simulate
+  TRADINEBOTTE_DIR=~/compte-b python3 live_bot.py --simulate
+  ```
 
 Ou via le wrapper généré (`TRADINEBOTTE_DIR` déjà intégré) :
 
@@ -285,6 +355,233 @@ python3 scripts/backtest.py --all --sweep
 ```
 
 Quand plusieurs fichiers sont traités, chaque fichier tourne avec le capital réinitialisé à `capital_start` (simulation indépendante), et un bloc AGGREGATE résume les wins, losses, PnL, taux de victoire et pire drawdown combinés de tous les fichiers.
+
+
+## Filtre heure / jour
+
+Le bot peut restreindre les entrées en trade à des plages horaires UTC selon le type de jour. Le filtre est configuré dans le fichier de stratégie JSON (`strategies/polymarket_BTC5M.json`) et est **désactivé par défaut** — le comportement existant est préservé jusqu'à activation explicite.
+
+### Pourquoi un filtre horaire ?
+
+La volatilité BTC suit des patterns journaliers et hebdomadaires liés aux flux institutionnels :
+
+| Période | Fenêtre UTC | Caractéristique |
+|---|---|---|
+| Session asiatique | 00:00–08:00 | Volume modéré, mouvements directionnels |
+| Zone morte européenne | 08:00–13:00 | Volume faible, signaux bruités |
+| Session US | 13:00–22:00 | Volume élevé, signaux les plus fiables |
+| Ouverture hebdomadaire US | Lun 13:30 | Retour institutionnel après le weekend ; fort mouvement directionnel |
+| Fermeture hebdomadaire US | Ven 20:00 | Débouclement de positions ; pic de volatilité puis chute |
+| Weekend | Sam–Dim | Retail-driven, bruit plus élevé, prévisibilité réduite |
+
+### Configuration
+
+Ajouter ou modifier le bloc `hour_filter` dans votre fichier de stratégie JSON :
+
+```json
+"hour_filter": {
+    "enabled": true,
+    "weekday_utc_ranges": [[0, 8], [13, 22]],
+    "weekend_utc_ranges": [],
+    "us_weekly_open": true,
+    "us_weekly_close": true
+}
+```
+
+| Clé | Type | Défaut | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Interrupteur général. `false` = pas de filtre, toutes les heures autorisées. |
+| `weekday_utc_ranges` | liste de `[début, fin]` | `[]` | Plages UTC autorisées lun–ven. Vide = toutes les heures de semaine autorisées. |
+| `weekend_utc_ranges` | liste de `[début, fin]` | `[]` | Plages UTC autorisées sam–dim. Vide = **tout le weekend bloqué**. |
+| `us_weekly_open` | bool | `true` | Si `true`, bloque les entrées le **lundi avant 13h30 UTC** (les marchés US ne sont pas encore ouverts pour la semaine). |
+| `us_weekly_close` | bool | `true` | Si `true`, bloque les entrées le **vendredi à partir de 20h00 UTC** (les marchés US ont fermé pour la semaine). |
+
+Les plages horaires suivent la convention `[début, fin)` — `[13, 22]` signifie 13:00 ≤ heure < 22:00.
+Les contraintes `us_weekly_open` et `us_weekly_close` s'appliquent **en plus** de `weekday_utc_ranges`, et sont prioritaires sur leurs jours respectifs.
+
+### Logique de décision (exemple lundi, filtre actif)
+
+```
+Lundi 07:00 UTC
+  → vérification plage semaine : 07 est dans [0, 8) → serait OK
+  → vérification us_weekly_open : 07 < 13:30 → BLOQUÉ
+
+Lundi 13:45 UTC
+  → vérification us_weekly_open : 13:45 ≥ 13:30 → passe
+  → vérification plage semaine : 13 est dans [13, 22) → AUTORISÉ
+
+Samedi 15:00 UTC
+  → weekend_utc_ranges est [] → BLOQUÉ
+```
+
+### Configurations prêtes à l'emploi
+
+**Conservative — session US uniquement, pas de weekend :**
+```json
+"hour_filter": {
+    "enabled": true,
+    "weekday_utc_ranges": [[13, 22]],
+    "weekend_utc_ranges": [],
+    "us_weekly_open": true,
+    "us_weekly_close": true
+}
+```
+
+**Étendue — sessions asiatique + US, pas de weekend :**
+```json
+"hour_filter": {
+    "enabled": true,
+    "weekday_utc_ranges": [[0, 8], [13, 22]],
+    "weekend_utc_ranges": [],
+    "us_weekly_open": true,
+    "us_weekly_close": true
+}
+```
+
+**24/7 — toutes heures, tous jours (équivalent à désactivé) :**
+```json
+"hour_filter": {
+    "enabled": true,
+    "weekday_utc_ranges": [],
+    "weekend_utc_ranges": [[0, 24]],
+    "us_weekly_open": false,
+    "us_weekly_close": false
+}
+```
+
+### Backtest avec filtre
+
+Le moteur de backtest applique la même logique de filtre lors de la relecture des snapshots — mesurer son effet avant d'activer en live :
+
+```bash
+# Mettre hour_filter.enabled = true dans le JSON de stratégie, puis :
+python3 scripts/backtest.py --all
+```
+
+Comparer le taux de victoire et le nombre de trades avec et sans filtre pour valider les fenêtres choisies sur votre dataset de snapshots.
+
+### Log au démarrage
+
+Quand le filtre est actif, le bot affiche la configuration effective au démarrage :
+
+```
+[INFO]   Filtre horaire : sem=0-8h 13-22h | we=bloque ouv.lun=13h30 ferm.ven=20h00
+```
+
+
+## Partage WebSocket multi-bot (Option B — ZeroMQ)
+
+> Référence complète de l'architecture et guide de décision : **[docs/multi.fr.md](docs/multi.fr.md)**
+
+Utiliser l'Option B pour faire tourner deux comptes ou plus simultanément, quand
+les comptes appartiennent à des utilisateurs Linux différents, ou pour comparer
+différentes stratégies en parallèle. Pour un seul compte, l'Option A
+(`live_bot.py` autonome) est plus simple.
+
+L'architecture ZeroMQ sépare le bot en deux processus distincts :
+
+| Processus | Fichier | Rôle |
+|---|---|---|
+| Feed | `bot/feed.py` | Connexion WS unique ; diffuse les mises à jour via ZMQ PUB |
+| Account bot | `bot/account_bot.py` | Souscrit au feed ; trade un compte en isolation complète |
+
+### Prérequis
+
+`pyzmq` est déjà inclus dans `requirements.txt`. L'installer avec le reste des
+dépendances :
+
+```bash
+bash scripts/install.sh
+```
+
+### Arborescence (exemple — deux comptes)
+
+```
+~/tradinebotte/          ← venv partagé + log du feed
+  venv/
+  feed.log
+~/account-a/             ← compte A : DB, log, config propres
+  config.json
+  live.db
+  account.log
+~/account-b/             ← compte B : DB, log, config propres
+  config.json
+  live.db
+  account.log
+```
+
+Configurer chaque répertoire de compte d'abord :
+
+```bash
+TRADINEBOTTE_DIR=~/account-a python3 scripts/setup.py   # clé compte A
+TRADINEBOTTE_DIR=~/account-b python3 scripts/setup.py   # clé compte B
+```
+
+### Lancement
+
+```bash
+# 1. Lancer le feed partagé (une seule instance)
+bash scripts/start_feed.sh
+
+# 2. Lancer chaque account bot dans un terminal séparé
+TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
+TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
+```
+
+Adresse personnalisée (port ou hôte différent) :
+
+```bash
+TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash scripts/start_feed.sh
+TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
+```
+
+### Arrêt
+
+```bash
+pkill -f feed.py
+pkill -f account_bot.py
+```
+
+### Protocole de messages
+
+Le feed publie trois types de messages JSON via ZeroMQ PUB :
+
+| Type | Champs | Rôle |
+|---|---|---|
+| `market` | `market_id`, `question`, `up_token_id`, `dn_token_id`, `start_ms`, `end_ms` | Nouveau marché enregistré |
+| `book` | `token_id`, `best_bid`, `best_ask`, `spread`, `bid_vol`, `ask_vol`, `obi` | Mise à jour du carnet |
+| `ping` | `ts` | Keepalive toutes les 10 s |
+
+### Notes d'architecture
+
+- Le feed n'a aucune logique de trading et ne stocke aucune clé — il est sûr de le redémarrer sans affecter l'état des comptes.
+- Chaque processus `account_bot.py` écrit dans sa propre base SQLite ; le chemin `handle_book_update` / `check_signal` / `enter_live_trade` de `live_bot.py` s'exécute sans modification.
+- Si le feed redémarre, les account bots récupèrent automatiquement — ils rateront les mises à jour pendant l'interruption mais ne placeront pas d'ordres en double car l'ensemble `signalled` est persisté dans la DB entre les sessions.
+- Le pattern PUB/SUB ZeroMQ est unidirectionnel : les account bots n'envoient jamais de messages au feed.
+
+### Test d'intégration
+
+`scripts/test_multibot_deploy.sh` automatise un install propre complet et un test d'intégration de bout en bout sur un ensemble configurable de comptes Linux de test. Requiert `sshpass` sur la machine locale. L'adresse serveur, le port, les noms d'utilisateur et les mots de passe sont lus depuis `~/.tradinebotte-test.conf` — copier le template et renseigner les valeurs :
+
+```bash
+cp scripts/test_multibot.conf.example ~/.tradinebotte-test.conf
+editor ~/.tradinebotte-test.conf
+```
+
+```bash
+# Install propre + test multibot 3 minutes
+bash scripts/test_multibot_deploy.sh
+
+# Réutiliser une install existante, étendre à 5 minutes
+bash scripts/test_multibot_deploy.sh --skip-deploy --duration 300
+```
+
+Ce que le script vérifie :
+- Feed auto-démarré quand 3 bots se lancent simultanément (verrou fichier sans race condition)
+- Exactement un processus `feed.py` visible depuis tous les utilisateurs Linux (`ps aux`)
+- Les 3 processus `account_bot.py` se connectent et reçoivent des book updates
+- Aucune ligne ERROR/CRITICAL dans les logs pendant la fenêtre de test
+- Tous les processus arrêtés proprement après le test
 
 
 ## Monitoring
@@ -363,7 +660,7 @@ print('SIGNAL_THRESHOLD:', b.SIGNAL_THRESHOLD)
 ```
 
 Lancer le bot pendant 20 secondes en mode simulation isolé (logs sur stdout,
-écrit dans `/tmp/tradinebotte-sim` — les données de production ne sont jamais touchées) :
+écrit dans `~/tradinebotte-sim` — les données de production ne sont jamais touchées) :
 
 ```bash
 timeout 20 .venv/bin/python3 bot/live_bot.py --simulate
@@ -372,10 +669,10 @@ timeout 20 .venv/bin/python3 bot/live_bot.py --simulate
 Sortie attendue (affichée directement dans le terminal) :
 
 ```
-[WARNING]  MODE SIMULATION — donnees isolees dans /tmp/tradinebotte-sim
+[WARNING]  MODE SIMULATION — donnees isolees dans ~/tradinebotte-sim
 [INFO]     LIVE BOT v3 — Threshold=0.96 Stake=$10 MinAskVol=10
 [WARNING]  POLY_PRIVATE_KEY non definie — ordres SIMULES
-[INFO]     DB initialisee : /tmp/tradinebotte-sim/live.db
+[INFO]     DB initialisee : ~/tradinebotte-sim/live.db
 [INFO]     State : capital=$100.00 | 0 trades | WR=0.0%
 [INFO]     Marches BTC 5-min : 2
 [INFO]     Souscription 2 tokens...

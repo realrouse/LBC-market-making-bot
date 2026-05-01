@@ -12,5 +12,14 @@
     "daily_stop_loss":    30.0,
     "stake":              10.0,
     "capital_start":      100.0,
-    "gas_fee_usd":        0.03
+    "gas_fee_usd":        0.03,
+
+    "hour_filter": {
+        "_comment": "US weekly open = Mon 13:30 UTC (NYSE open). US weekly close = Fri 20:00 UTC (NYSE close).",
+        "enabled":            false,
+        "weekday_utc_ranges": [[0, 8], [13, 22]],
+        "weekend_utc_ranges": [],
+        "us_weekly_open":     true,
+        "us_weekly_close":    true
+    }
 }

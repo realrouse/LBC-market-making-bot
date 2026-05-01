@@ -1,5 +1,28 @@
 # TODO — Idées et améliorations futures
 
+## Roadmap v0.3
+
+### Opérationnel / infrastructure
+- ~~**systemd unit**~~ — ✅ done (`scripts/tradinebotte.service` + `scripts/install_service.sh`)
+- **Notifications Telegram** — alerte sur chaque trade, déclenchement du stop-loss journalier, reconnexion WebSocket
+- **Health-check HTTP** — mini serveur local (ex. port 9090) répondant avec les stats brutes ; monitorable depuis un reverse proxy ou un cron externe
+
+### Stratégie / risk management
+- **Sizing dynamique** — Kelly fractionnel sur la taille de mise plutôt que $10 fixe ; adapte le risque à la confiance du signal
+- ~~**Filtre heure/jour**~~ — ✅ done (`hour_filter` dans strategy JSON : plages UTC semaine/weekend, ouverture/fermeture hebdomadaire US)
+- **Stop-loss hebdomadaire** — complément au stop-loss journalier pour limiter les séries de pertes sur plusieurs jours
+
+### Backtest / analyse
+- **Sharpe / Sortino ratio** — métriques manquantes dans le rapport actuel ; importantes pour comparer des stratégies
+- **Walk-forward optimization** — entraîne sur N semaines, valide sur la suivante, glisse la fenêtre ; réduit le risque d'overfitting du `--sweep`
+- **Collecte automatique de snapshots** — en mode `--simulate`, enregistrer les snapshots en continu pour enrichir le dataset de backtest
+
+### Qualité de code
+- ~~**Fermeture des connexions SQLite dans les tests**~~ — ✅ done (setUp/tearDown + addCleanup sur toutes les classes)
+- ~~**mypy strict**~~ — ✅ done (0 erreur, workflow CI `.github/workflows/mypy.yml`)
+
+---
+
 ## Exchanges alternatifs
 
 - **Kalshi** — marchés d'événements binaires (US), API REST+WS documentée,

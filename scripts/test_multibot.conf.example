@@ -1,0 +1,29 @@
+# tradinebotte — multibot integration test configuration
+#
+# Copy this file to ~/.tradinebotte-test.conf and fill in your values:
+#   cp scripts/test_multibot.conf.example ~/.tradinebotte-test.conf
+#   editor ~/.tradinebotte-test.conf
+#
+# Or point to a custom location:
+#   TEST_MULTIBOT_CONF=/path/to/conf bash scripts/test_multibot_deploy.sh
+#
+# The file is sourced as bash, so standard bash syntax applies.
+
+# ─── SSH target server ─────────────────────────────────────────────────────────
+TEST_SERVER="myserver.example.com"
+TEST_PORT="22"
+
+# ─── Test accounts ─────────────────────────────────────────────────────────────
+# All three arrays must have the same length.
+# Each entry corresponds to one account bot instance.
+TEST_USERS=(user1 user2 user3)
+TEST_PASSWORDS=(pass1 pass2 pass3)
+
+# ─── Optional overrides ────────────────────────────────────────────────────────
+# Duration of the sustained-operation phase (seconds). Default: 180.
+# Can also be overridden on the command line: --duration 300
+# TEST_DURATION=180
+
+# Remote directories on the test server. Defaults work for most setups.
+# TEST_REMOTE_INSTALL_DIR=~/tradinebotte   # where the bot code is deployed
+# TEST_REMOTE_BOT_DIR=~/account-sim        # runtime dir for each bot (TRADINEBOTTE_DIR)

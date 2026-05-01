@@ -1,16 +1,22 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════
-#  POLYMARKET LIVE BOT v3 — Installation Ubuntu 24.04
+#  POLYMARKET LIVE BOT v3 — Installation (Linux/Mac)
+#
+#  Prérequis root (une seule fois par machine, si absents) :
+#    sudo apt-get install -y python3 python3-venv python3.X-venv sqlite3
+#  Ce script détecte les manquants et affiche la commande exacte à lancer.
 #
 #  Répertoire d'installation (par ordre de priorité) :
 #    1. Argument positionnel : bash scripts/install.sh ~/tradinebotte
 #    2. Variable d'environnement : TRADINEBOTTE_DIR=~/tradinebotte bash scripts/install.sh
-#    3. Valeur par défaut : ~/tradinebotte (aucun accès root requis)
+#    3. Valeur par défaut : ~/tradinebotte
 #
 #  Options :
 #    --with-tests   copie aussi tests/ et scripts/backtest.py
 # ═══════════════════════════════════════════════════════════════════
 set -e
+
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 WITH_TESTS=0
 ARGS=()
@@ -27,9 +33,34 @@ INSTALL_DIR="$(eval echo "$INSTALL_DIR")"   # développe ~ si présent
 
 echo "=== Répertoire d'installation : $INSTALL_DIR ==="
 
-echo "=== Installation des dépendances système ==="
-apt-get update -q
-apt-get install -y python3 python3-pip python3-venv sqlite3
+echo "=== Vérification des dépendances système ==="
+
+_MISSING=()
+
+if ! command -v python3 &>/dev/null; then
+    _MISSING+=("python3")
+fi
+
+# python3 -m venv nécessite ensurepip (paquet python3-venv + python3.X-venv sur Ubuntu)
+if command -v python3 &>/dev/null && ! python3 -c "import ensurepip" &>/dev/null 2>&1; then
+    _PY_MINOR=$(python3 -c "import sys; print(sys.version_info.minor)")
+    _MISSING+=("python3-venv" "python3.${_PY_MINOR}-venv")
+fi
+
+if ! command -v sqlite3 &>/dev/null; then
+    _MISSING+=("sqlite3")
+fi
+
+if [ ${#_MISSING[@]} -gt 0 ]; then
+    echo ""
+    echo "ERREUR : paquets système manquants. Lance cette commande en root (une seule fois par machine) :"
+    echo ""
+    echo "  sudo apt-get install -y ${_MISSING[*]}"
+    echo ""
+    exit 1
+fi
+
+echo "Dépendances système OK."
 
 echo "=== Création des répertoires ==="
 mkdir -p "$INSTALL_DIR"
@@ -44,8 +75,8 @@ echo "=== Création de l'environnement virtuel ==="
 python3 -m venv "$INSTALL_DIR/venv"
 
 echo "=== Installation des packages Python ==="
-"$INSTALL_DIR/venv/bin/pip" install --upgrade pip
-"$INSTALL_DIR/venv/bin/pip" install aiohttp websockets web3 py-clob-client
+"$INSTALL_DIR/venv/bin/pip" install --quiet --upgrade pip
+"$INSTALL_DIR/venv/bin/pip" install --quiet aiohttp websockets web3 py-clob-client
 
 # Wrapper d'exécution avec TRADINEBOTTE_DIR exportée
 cat > "$INSTALL_DIR/run.sh" << EOF
@@ -76,14 +107,22 @@ if [ "$WITH_TESTS" = "1" ]; then
     cd - > /dev/null
 fi
 
+# Prefix TRADINEBOTTE_DIR=... only when the user chose a non-default dir.
+if [ "$INSTALL_DIR" = "$HOME/tradinebotte" ]; then
+    _TD=""
+else
+    _TD="TRADINEBOTTE_DIR=\"$INSTALL_DIR\" "
+fi
+
 echo ""
 echo "=== Installation terminée dans $INSTALL_DIR ==="
 echo ""
 echo "ÉTAPES SUIVANTES :"
-echo "1. Prépare ton wallet : TRADINEBOTTE_DIR=\"$INSTALL_DIR\" python3 scripts/setup.py"
-echo "2. Lance le bot      : TRADINEBOTTE_DIR=\"$INSTALL_DIR\" bash scripts/start_bot.sh"
+echo "1. Configurer        : ${_TD}python3 \"$REPO_DIR/scripts/setup.py\""
+echo "   (saisir la clé privée du wallet, ou Entrée sans clé pour le mode simulation)"
+echo "2. Lance le bot      : ${_TD}bash \"$REPO_DIR/scripts/start_bot.sh\""
 if [ "$WITH_TESTS" = "1" ]; then
 echo ""
-echo "Tests : cd \"$INSTALL_DIR\" && TRADINEBOTTE_DIR=\"$INSTALL_DIR\" venv/bin/python3 -W ignore::ResourceWarning -m unittest discover tests/ -v"
-echo "Backtest : cd \"$INSTALL_DIR\" && TRADINEBOTTE_DIR=\"$INSTALL_DIR\" venv/bin/python3 scripts/backtest.py"
+echo "Tests   : cd \"$INSTALL_DIR\" && ${_TD}venv/bin/python3 -W ignore::ResourceWarning -m unittest discover tests/ -v"
+echo "Backtest: cd \"$INSTALL_DIR\" && ${_TD}venv/bin/python3 \"$REPO_DIR/scripts/backtest.py\""
 fi

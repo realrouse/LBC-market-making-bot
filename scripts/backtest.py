@@ -92,6 +92,18 @@ class Params:
     stake:              float = 10.0
     daily_stop_loss:    float = 30.0
     capital_start:      float = 100.0
+    # Hour filter
+    hour_filter:        bool              = False
+    weekday_utc_ranges: list              = None   # type: ignore[assignment]
+    weekend_utc_ranges: list              = None   # type: ignore[assignment]
+    us_weekly_open:     bool              = True
+    us_weekly_close:    bool              = True
+
+    def __post_init__(self) -> None:
+        if self.weekday_utc_ranges is None:
+            self.weekday_utc_ranges = []
+        if self.weekend_utc_ranges is None:
+            self.weekend_utc_ranges = []
 
 
 # ─── Simulated trade record ───────────────────────────────────────────────────
@@ -121,6 +133,34 @@ def _fee(price: float, tokens: float) -> float:
 
 def _date(ts_ms: int) -> str:
     return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+
+
+# ─── Hour filter ──────────────────────────────────────────────────────────────
+
+def _is_trading_hour(ts_ms: int, params: Params) -> bool:
+    """Mirror of live_bot.is_trading_hour() for backtest replay."""
+    if not params.hour_filter:
+        return True
+    dt     = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+    dow    = dt.weekday()
+    hour   = dt.hour
+    minute = dt.minute
+
+    if dow >= 5:
+        if not params.weekend_utc_ranges:
+            return False
+        return any(s <= hour < e for s, e in params.weekend_utc_ranges)
+
+    if dow == 0 and params.us_weekly_open:
+        if hour < 13 or (hour == 13 and minute < 30):
+            return False
+    if dow == 4 and params.us_weekly_close:
+        if hour >= 20:
+            return False
+
+    if not params.weekday_utc_ranges:
+        return True
+    return any(s <= hour < e for s, e in params.weekday_utc_ranges)
 
 
 # ─── Core replay engine ───────────────────────────────────────────────────────
@@ -176,6 +216,7 @@ def run_backtest(rows: list, params: Params) -> Tuple[List[SimTrade], float]:
         # ── Signal check ─────────────────────────────────────────────────────
         if market_id in signalled:                                   continue
         if secs_remaining <= 0:                                      continue
+        if not _is_trading_hour(ts_ms, params):                      continue
         if best_bid < params.signal_threshold:                       continue
         if best_bid > params.entry_max:                              continue
         if best_ask >= 1.0:                                          continue

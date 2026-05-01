@@ -27,17 +27,28 @@ if pgrep -f live_bot.py > /dev/null; then
     exit 1
 fi
 
+# ── Vérification venv ─────────────────────────────────────────────
+PYTHON="$INSTALL_DIR/venv/bin/python3"
+if [ ! -x "$PYTHON" ]; then
+    echo "❌ ERREUR : virtualenv introuvable dans $INSTALL_DIR/venv"
+    echo "   Lance d'abord : bash scripts/install.sh"
+    exit 1
+fi
+
 # ── Lancement ─────────────────────────────────────────────────────
-echo "Lancement du bot depuis $INSTALL_DIR..."
+LOG="$INSTALL_DIR/live.log"
+DISPLAY_LOG="${LOG/$HOME/\~}"
+DISPLAY_DIR="${INSTALL_DIR/$HOME/\~}"
+echo "Lancement du bot depuis $DISPLAY_DIR..."
 export TRADINEBOTTE_DIR="$INSTALL_DIR"
-nohup python3 "$INSTALL_DIR/live_bot.py" > /dev/null 2>&1 &
+nohup "$PYTHON" "$INSTALL_DIR/live_bot.py" >> "$LOG" 2>&1 &
 echo "PID: $!"
 sleep 3
 
 if pgrep -f live_bot.py > /dev/null; then
     echo "✅ Bot en cours — PID: $(pgrep -f live_bot.py)"
-    echo "Logs: tail -f $INSTALL_DIR/live.log"
+    echo "Logs: tail -f $DISPLAY_LOG"
 else
-    echo "❌ Bot arrêté — vérifier les logs:"
-    tail -20 "$INSTALL_DIR/live.log"
+    echo "❌ Bot arrêté — dernières lignes du log:"
+    tail -20 "$LOG"
 fi

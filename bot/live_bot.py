@@ -29,15 +29,19 @@ from typing import Any, Optional
 import aiohttp, websockets
 
 # ─── RUNTIME FLAGS ───────────────────────────────────────────────────────────
-# --simulate: redirect all file I/O to /tmp/tradinebotte-sim so that tests never
-# touch production data. Overrides TRADINEBOTTE_DIR unconditionally.
+# --simulate: redirect all file I/O to ~/tradinebotte-sim so that tests never
+# touch production data. ~/tradinebotte-sim is user-specific and persists across
+# reboots (unlike /tmp). Only sets the default when TRADINEBOTTE_DIR is not
+# already defined, so multiple bots can run in isolation:
+#   TRADINEBOTTE_DIR=~/account-a python3 live_bot.py --simulate
+#   TRADINEBOTTE_DIR=~/account-b python3 live_bot.py --simulate
 # --no-log:   skip the log file entirely (NullHandler); SQLite DB is unaffected.
 #             Use in production for minimum disk I/O. Stdout still active with
 #             --simulate so interactive testing remains usable.
 _SIMULATE = "--simulate" in sys.argv
 _NO_LOG   = "--no-log"   in sys.argv
-if _SIMULATE:
-    os.environ["TRADINEBOTTE_DIR"] = "/tmp/tradinebotte-sim"
+if _SIMULATE and "TRADINEBOTTE_DIR" not in os.environ:
+    os.environ["TRADINEBOTTE_DIR"] = os.path.expanduser("~/tradinebotte-sim")
 
 # ─── PATHS ───────────────────────────────────────────────────────────────────
 # All paths derive from a single env var so the bot can run anywhere, not just
@@ -68,6 +72,13 @@ WIN_THRESHOLD      = 0.99
 LOSS_THRESHOLD     = 0.01
 OBI_REJECT_THRESH  = -0.50
 DAILY_STOP_LOSS    = 30.0
+
+# ─── HOUR FILTER (defaults — overridden by strategy JSON) ────────────────────
+HOUR_FILTER_ENABLED:    bool                  = False
+WEEKDAY_UTC_RANGES:     list[tuple[int, int]] = []
+WEEKEND_UTC_RANGES:     list[tuple[int, int]] = []
+US_WEEKLY_OPEN:         bool                  = True   # block Mon before 13:30 UTC
+US_WEEKLY_CLOSE:        bool                  = True   # block Fri from 20:00 UTC
 
 # ─── TIMING ──────────────────────────────────────────────────────────────────
 SNAPSHOT_INTERVAL  = 5    # seconds between SQLite price snapshots per token
@@ -118,6 +129,13 @@ if _strat:
     OBI_REJECT_THRESH  = float(_strat.get("obi_reject_thresh",   OBI_REJECT_THRESH))
     DAILY_STOP_LOSS    = float(_strat.get("daily_stop_loss",     DAILY_STOP_LOSS))
 
+    _hf = _strat.get("hour_filter", {})
+    HOUR_FILTER_ENABLED = bool(_hf.get("enabled", False))
+    WEEKDAY_UTC_RANGES  = [tuple(r) for r in _hf.get("weekday_utc_ranges", [])]
+    WEEKEND_UTC_RANGES  = [tuple(r) for r in _hf.get("weekend_utc_ranges", [])]
+    US_WEEKLY_OPEN      = bool(_hf.get("us_weekly_open", True))
+    US_WEEKLY_CLOSE     = bool(_hf.get("us_weekly_close", True))
+
 # Credentials: config.json first, env vars as fallback for container deployments.
 PRIVATE_KEY    = _cfg.get("private_key",    os.environ.get("POLY_PRIVATE_KEY", ""))
 API_KEY        = _cfg.get("api_key",        os.environ.get("POLY_API_KEY", ""))
@@ -154,6 +172,7 @@ os.makedirs(INSTALL_DIR, exist_ok=True)
 # --no-log is active (NullHandler has no queue to drain).
 _log_listener: Optional[logging.handlers.QueueListener] = None
 
+_log_handlers: list[logging.Handler]
 if _NO_LOG:
     # --no-log: drop all log records (no file created, no disk I/O).
     # In --simulate mode we keep stdout so interactive runs stay observable.
@@ -166,7 +185,7 @@ else:
     # This keeps every log.* call in the asyncio event loop non-blocking.
     # respect_handler_level=True ensures level filters on the FileHandler
     # are applied in the background thread, not the caller's thread.
-    _log_queue    = queue.Queue()
+    _log_queue: queue.Queue[logging.LogRecord] = queue.Queue()
     _file_handler = logging.FileHandler(LOG_PATH)
     _log_listener = logging.handlers.QueueListener(
         _log_queue, _file_handler, respect_handler_level=True)
@@ -290,14 +309,14 @@ class BotState:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
         self.capital = CAPITAL_START
-        self.session = None          # aiohttp.ClientSession, set when WS loop starts
-        self.tokens = {}             # token_id → TokenState
-        self.market_tokens = {}      # market_id → {"UP": tid, "DOWN": tid}
-        self.open_trades = {}        # market_id → trade row id in DB
-        self.traded_direction = {}   # market_id → "UP" or "DOWN"
+        self.session: Optional[aiohttp.ClientSession] = None
+        self.tokens: dict[str, "TokenState"] = {}             # token_id → TokenState
+        self.market_tokens: dict[str, dict[str, str]] = {}    # market_id → {"UP": tid, "DOWN": tid}
+        self.open_trades: dict[str, int] = {}                 # market_id → trade row id in DB
+        self.traded_direction: dict[str, str] = {}            # market_id → "UP" or "DOWN"
         # signalled prevents re-entering a market we already entered (or
         # attempted to enter) this session, even if the price signal fires again.
-        self.signalled = set()
+        self.signalled: set[str] = set()
         self.total_trades = 0
         self.wins = 0
         self.losses = 0
@@ -340,6 +359,45 @@ async def handle_book_update(state: BotState, parsed: dict[str, Any]) -> None:
 
 # ─── SIGNAL & TRADE LOGIC ─────────────────────────────────────────────────────
 
+def is_trading_hour(ts_ms: Optional[int] = None) -> bool:
+    """
+    Return True if the given timestamp (or now) falls within the configured
+    trading window. Always returns True when HOUR_FILTER_ENABLED is False.
+
+    Window logic:
+      - Weekends (Sat/Sun): allowed only if WEEKEND_UTC_RANGES is non-empty.
+      - Weekdays (Mon–Fri): allowed by WEEKDAY_UTC_RANGES (empty = all hours).
+      - Monday before 13:30 UTC: blocked when US_WEEKLY_OPEN is True
+        (US markets have not yet opened for the week).
+      - Friday from 20:00 UTC: blocked when US_WEEKLY_CLOSE is True
+        (US markets have closed for the week).
+    """
+    if not HOUR_FILTER_ENABLED:
+        return True
+    dt     = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc) if ts_ms is not None \
+             else datetime.now(timezone.utc)
+    dow    = dt.weekday()   # 0=Mon … 6=Sun
+    hour   = dt.hour
+    minute = dt.minute
+
+    if dow >= 5:                             # weekend
+        if not WEEKEND_UTC_RANGES:
+            return False
+        return any(s <= hour < e for s, e in WEEKEND_UTC_RANGES)
+
+    # Weekday special constraints
+    if dow == 0 and US_WEEKLY_OPEN:          # Monday — wait for US weekly open
+        if hour < 13 or (hour == 13 and minute < 30):
+            return False
+    if dow == 4 and US_WEEKLY_CLOSE:         # Friday — stop at US weekly close
+        if hour >= 20:
+            return False
+
+    if not WEEKDAY_UTC_RANGES:               # empty = all weekday hours allowed
+        return True
+    return any(s <= hour < e for s, e in WEEKDAY_UTC_RANGES)
+
+
 async def check_signal(state: BotState, ts: TokenState, _t_ws: Optional[float] = None) -> None:
     """
     Evaluate all entry conditions for the given token and enter a trade if met.
@@ -368,6 +426,7 @@ async def check_signal(state: BotState, ts: TokenState, _t_ws: Optional[float] =
     """
     if ts.market_id in state.signalled: return
     if ts.market_ended: return
+    if not is_trading_hour(): return
     if ts.best_bid < SIGNAL_THRESHOLD: return
     if ts.best_bid > ENTRY_MAX: return
     if ts.best_ask >= 1.0: return       # expired markets still emit WS messages
@@ -436,7 +495,7 @@ async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[floa
          now_ms, ep, oid, STAKE, tb, fee, cost, state.capital, 0)
     )
     state.conn.commit()
-    tid = cur.lastrowid
+    tid = cur.lastrowid or 0
     state.open_trades[ts.market_id] = tid
     state.traded_direction[ts.market_id] = ts.direction
     state.total_trades += 1
@@ -875,6 +934,12 @@ async def main() -> None:
         logger.info("  Strategie : %s", os.path.basename(_strategy_loaded))
     else:
         logger.warning("  Strategie : fichier absent — parametres par defaut")
+    if HOUR_FILTER_ENABLED:
+        _wd = " ".join(f"{s}-{e}h" for s, e in WEEKDAY_UTC_RANGES) or "toutes heures"
+        _we = " ".join(f"{s}-{e}h" for s, e in WEEKEND_UTC_RANGES) or "bloque"
+        _mo = " ouv.lun=13h30" if US_WEEKLY_OPEN else ""
+        _fr = " ferm.ven=20h00" if US_WEEKLY_CLOSE else ""
+        logger.info("  Filtre horaire : sem=%s | we=%s%s%s", _wd, _we, _mo, _fr)
     if not PRIVATE_KEY:
         logger.warning("  POLY_PRIVATE_KEY non definie — ordres SIMULES")
     logger.info("=" * 65)

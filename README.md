@@ -15,11 +15,16 @@ Automated trading bot for [Polymarket](https://polymarket.com) prediction market
 - **Crash recovery** — restores unresolved trades from the database on startup; rebuilds capital from historical PnL
 - **Backtest engine** — replays `snapshots` data against any parameter set; supports grid search across 135 combinations; `--db file1.db file2.db` or `--db data/*.db` runs independent capital simulations across multiple snapshot files; `--all` auto-scans `data/` and prepends `live.db` when usable; aggregate win-rate and PnL printed across all files; falls back to the bundled sample dataset (`data/backtest_sample_btc5m_range_2026.db`) when no live database is present
 - **Optional HTML status page** — bot writes a self-refreshing page (configurable path, optional HTTP Basic Auth) — [see preview](docs/status_example.html)
+- **Multi-bot WebSocket sharing** — `bot/feed.py` holds a single WebSocket connection and broadcasts every book update over ZeroMQ PUB; one or more `bot/account_bot.py` processes subscribe and trade with fully isolated SQLite databases, logs, and configs; each bot evaluates signals with **its own** strategy parameters (different thresholds, stakes, or hour filters); works across Linux users (`/home/user1`, `/home/user2`); **feed auto-starts** — the first account_bot to launch starts feed.py automatically via a race-safe file lock, no manual feed management needed — see [docs/multi.md](docs/multi.md) for the full decision guide and architecture reference
 - **Pluggable exchange API** — all Polymarket-specific code lives in `bot/api_polymarket.py`; swapping exchanges requires only a new adapter file and a single import change in `live_bot.py`
 - **JSON strategy files** — signal and capital parameters live in `strategies/polymarket_BTC5M.json`; switch strategies by pointing `"strategy"` in `config.json` to any file
-- **Simulation mode** — `--simulate` flag isolates all file I/O to `/tmp/tradinebotte-sim`, mirrors logs to stdout, and places no real orders; safe to run on any machine without affecting production data
+- **Simulation mode** — `--simulate` flag isolates all file I/O to `~/tradinebotte-sim` by default, mirrors logs to stdout, and places no real orders; set `TRADINEBOTTE_DIR` before launching to use a custom path — enabling multiple bots to run in parallel without directory conflicts
 - **Type-annotated codebase** — all 28 functions and class methods in `live_bot.py` carry full parameter and return type hints; enables static analysis and IDE autocompletion
-- **108-test suite** — `tests/test_bot.py` (80 tests) covers all 11 signal guards, resolution paths, fee calculation, WebSocket parsing, HTML status page, htpasswd hashing, and state restore; `tests/test_backtest.py` (28 tests) covers the replay engine end-to-end; no network or credentials required
+- **Hour/day filter** — optional `hour_filter` block in the strategy JSON restricts entries to configurable UTC hour ranges per weekday/weekend, with built-in handling for the US weekly open (Monday before 13:30 UTC) and close (Friday from 20:00 UTC); disabled by default; applied identically in the live bot and backtest engine; see [INSTALL.md](INSTALL.md#hour--day-filter) for full documentation
+- **153-test suite** — `tests/test_bot.py` (95 tests) covers all 11 signal guards, resolution paths, fee calculation, WebSocket parsing, HTML status page, htpasswd hashing, state restore, and hour filter logic; `tests/test_backtest.py` (28 tests) covers the replay engine end-to-end; `tests/test_multibot.py` (30 tests) covers `feed.py` and `account_bot.py` including ZMQ round-trip integration with one and two simultaneous bots; no network or credentials required
+- **systemd services** — `scripts/install_service.sh` (Option A) and `scripts/install_feed_service.sh` / `scripts/install_account_service.sh` (Option B) generate ready-to-install unit files; bots restart automatically on failure or reboot (`Restart=on-failure`); the feed service uses `RestartSec=10` while account bots use `RestartSec=30`; `Requires=tradinebotte-feed.service` enforces the start/restart ordering
+- **mypy type checking** — `mypy bot/ --ignore-missing-imports` reports 0 errors; CI workflow runs on every push and pull request
+- **Integration test script** — `scripts/test_multibot_deploy.sh` automates a full clean-install and end-to-end test on a configurable set of Linux test accounts: cleanup, rsync deploy, venv creation, simultaneous launch of all N bots in `--verbose` mode (stress-tests the race-safe feed auto-start), 30s heartbeat monitoring, log analysis (WebSocket, book update count, error lines), teardown; server, port, users, and passwords are read from `~/.tradinebotte-test.conf` (template: `scripts/test_multibot.conf.example`); `--skip-deploy` reuses an existing install; `--duration N` adjusts the test window; exits 0 on full pass
 - **Continuous security audit** — `pip-audit` runs on every push and weekly to detect CVEs in runtime deps (`aiohttp`, `websockets`, `web3`, `py-clob-client`); Dependabot opens automated PRs when newer versions are available
 - **Async logging + latency tracking** — log writes never block the event loop; each trade emits a `[LATENCY]` line with `signal_ms` (WS message → order decision) and `order_rtt_ms` (CLOB API round-trip); `scripts/latency.py` parses the log and prints min/mean/p50/p90/p99/max for each metric; a `QueueListener` daemon thread drains the log queue to disk in the background; add `--no-log` to suppress the log file entirely (SQLite DB is unaffected) for minimum disk I/O in production
 
@@ -133,18 +138,30 @@ sqlite3 live.db "SELECT ts_ms, best_bid, best_ask, obi
 
 Full guide (requirements, wallet setup, web status page, monitoring, testing): **[INSTALL.md](INSTALL.md)**.
 
+> **Server admin note:** `scripts/install.sh` detects missing system packages and prints the exact `sudo apt-get install` command to run as root — no manual package lookup needed. See [INSTALL.md — Server admin prerequisites](INSTALL.md#server-admin-prerequisites-debianubuntu).
+
 ## Tests
 
 ```bash
 bash scripts/run_tests.sh
 ```
 
-The suite runs 108 tests (80 for the live bot, 28 for the backtest engine) covering: fee calculation, WebSocket message parsing, OBI computation, market registration, all 11 signal entry guards (including the daily stop-loss), trade resolution (WIN/LOSS/expiry), PnL calculation, crash-recovery state restore, htpasswd SHA1 hashing, HTML status page rendering, async book-update state, and all backtest signal/resolution/parameter paths. No network access or credentials are required — an in-memory SQLite database is used for every test.
+The suite runs 153 tests (95 for the live bot, 28 for the backtest engine, 30 for the multi-bot ZeroMQ architecture) covering: fee calculation, WebSocket message parsing, OBI computation, market registration, all 11 signal entry guards (including the daily stop-loss), trade resolution (WIN/LOSS/expiry), PnL calculation, crash-recovery state restore, htpasswd SHA1 hashing, HTML status page rendering, async book-update state, all backtest signal/resolution/parameter paths, and ZMQ feed/account_bot integration with one and two simultaneous bots. No network access or credentials are required — an in-memory SQLite database is used for every test.
 
 ## Backtest
 
 Replay historical `snapshots` data against configurable strategy parameters.
 If `TRADINEBOTTE_DIR/live.db` is absent or has fewer than 100 snapshots, the script falls back automatically to the bundled sample dataset (`data/backtest_sample_btc5m_range_2026.db`, 2430 snapshots from real BTC 5-minute markets collected on 2026-04-25). The selected database is printed at startup.
+
+Three real-session datasets are included in `data/`:
+
+| File | Snapshots | Period | Trades | Win rate |
+|---|---|---|---|---|
+| `backtest_sample_btc5m_range_2026.db` | 2,430 | 2026-04-25 | 0 | — |
+| `calmsaturday.db` | 10,126 | 2026-04-26 ~11h | 9 | 100% |
+| `basicsunday.db` | 24,870 | 2026-04-25→26 ~26h | 43 | 97.7% |
+
+Run all three at once with `--all` (aggregate: 52 trades, 51 wins, **98.1% win rate**).
 
 ```bash
 python3 scripts/backtest.py                        # default parameters

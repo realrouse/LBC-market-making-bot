@@ -8,6 +8,60 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+---
+
+## [0.3] - 2026-05-01
+
+### Bug Fix
+- **`scripts/start_bot.sh`** — launch message and log path were displayed as absolute `$HOME`-prefixed paths; replaced with `~`-relative paths using bash parameter substitution (`${VAR/$HOME/\~}`)
+- **`scripts/start_bot.sh`** — was using system `python3` instead of the virtualenv's `python3`; the bot would crash immediately because aiohttp/web3/etc. are installed in the venv, not the system Python; fixed to use `$INSTALL_DIR/venv/bin/python3`; also redirected `nohup` output to `live.log` instead of `/dev/null` so startup errors are now visible in the log tail; added a venv existence check with a clear error message
+
+### Improvement
+- **`scripts/setup.py`** — pressing Enter without a private key now creates a simulation `config.json` (empty credentials) and exits cleanly; blockchain imports are skipped entirely in this path; prompt updated to mention the option; QUICKSTART + INSTALL docs updated (EN + FR)
+- **`scripts/install.sh`** — no longer calls `apt-get` directly; instead detects missing system packages (`python3`, `python3-venv`, `python3.X-venv`, `sqlite3`) and prints the exact `sudo apt-get install` command with the auto-detected Python version; exits with an error if anything is missing, continues silently if all present; docs updated across INSTALL, QUICKSTART, README (EN + FR)
+
+### Code Quality
+- `bot/account_bot.py` — pylint 10/10: removed unused `json` import; `open(lock_file)` and `open(log_path)` now carry explicit encoding (`utf-8`) or binary mode (`ab`); intentional non-`with` usages annotated with `# pylint: disable=consider-using-with`; `# pylint: disable=duplicate-code` added at module level (market-expiry purge loop mirrors `feed.py` by design)
+- `bot/account_bot.py` — ResourceWarning fixed: `_run()` now wraps its event loop in `try/finally` to call `sock.close(linger=0)` and `ctx.term()` on cancellation; ZMQ socket and context are guaranteed to be released when the task is cancelled during tests or on shutdown
+
+### Testing
+- **`scripts/test_multibot_deploy.sh`** — two bugs fixed: (1) `grep -c || echo 0` produced `"0\n0"` because `grep -c` always prints the count to stdout before exiting 1 on no matches, and `|| echo 0` then added a second zero — causing `"0\n0"` to be stored in `BOOK_COUNT`/`ERROR_COUNT` and failing the subsequent `[[ -eq ]]` arithmetic comparison with a syntax error; fixed by replacing `|| echo 0` with `|| true` (grep already printed the count); (2) `ELAPSED=20` was not updated when the Phase 4 stabilisation wait was extended from 20 s to 30 s, causing the heartbeat loop to run one extra iteration in Phase 6; corrected to `ELAPSED=30`
+- **`scripts/test_multibot_deploy.sh`** — full end-to-end integration test for the multi-bot Option B setup across configurable test accounts: Phase 1 cleanup (kill processes, remove dirs, clear lock files), Phase 2 deploy (rsync + venv creation + pip install without root), Phase 3 simultaneous launch of all N account_bots in `--verbose` mode to stress-test the race-safe feed auto-start, Phase 4 sustained operation with 30s heartbeat checks, Phase 5 log analysis (feed WebSocket confirmation, book update count per bot, ERROR/CRITICAL line count), Phase 6 teardown and final process count; exits 0 on full pass, 1 on any failure; `--skip-deploy` reuses an existing install; `--duration N` overrides the 3-minute default; server address, SSH port, usernames, and passwords are read from `~/.tradinebotte-test.conf` (or `TEST_MULTIBOT_CONF` env var) — never hardcoded; `scripts/test_multibot.conf.example` provides the template
+
+### Data
+- **`data/basicsunday.db`** — 24,870 snapshots from a ~26h live simulation session (2026-04-25 20:57 → 2026-04-26 22:55), 312 distinct markets; backtest result: 42/43 wins (97.7%), PnL -$3.58; combined with `calmsaturday.db` via `--all`: 52 trades, 51 wins, **98.1% aggregate win rate**; `README.md` updated with a dataset comparison table
+
+### Documentation
+- **Server admin prerequisites** — confirmed live on Ubuntu 22.04 / Python 3.10: all three packages `python3-venv`, `python3-pip`, and `python3.10-venv` are required; `python3.10-venv` is now a primary requirement (not a fallback) in `INSTALL.md`, `INSTALL.fr.md`, `QUICKSTART.md`, `QUICKSTART.fr.md`, `README.md`, `README.fr.md`; without it venv creation fails with *"ensurepip is not available"*
+
+### Feature
+- **Multi-bot WebSocket sharing (Option B — ZeroMQ)** — `bot/feed.py` maintains a single WebSocket connection to Polymarket and publishes every book update over a ZeroMQ PUB socket (`tcp://127.0.0.1:5557` by default, overridable via `TRADINEBOTTE_FEED_ADDR`). `bot/account_bot.py` subscribes to the feed and runs the full trading strategy for one account in isolation. Multiple `account_bot.py` processes can run in parallel, each with its own `TRADINEBOTTE_DIR` (config, DB, log), without opening additional WebSocket connections. `scripts/start_feed.sh` and `scripts/start_account.sh` handle launch and logging. `pyzmq` added to `requirements.txt`.
+- **Hour/day filter** — new `hour_filter` block in `strategies/polymarket_BTC5M.json` (disabled by default). When enabled, restricts entries to configurable UTC hour ranges per weekday/weekend, with special handling for the US weekly open (Monday before 13:30 UTC) and close (Friday from 20:00 UTC). Applied identically in the live bot (`is_trading_hour()` guard in `check_signal()`) and in the backtest engine (`_is_trading_hour()` in `run_backtest()`). 15 new unit tests.
+
+### Fix
+- `bot/live_bot.py` — `--simulate` no longer overwrites `TRADINEBOTTE_DIR` when already set in the environment; multiple bots can now run in parallel simulation mode with fully isolated directories (`TRADINEBOTTE_DIR=~/account-a python3 live_bot.py --simulate`)
+
+### Documentation
+- `INSTALL.md` / `INSTALL.fr.md` — new "Hour / Day Filter" section: rationale table (Asian/EU/US sessions, weekly open/close), full parameter reference, decision logic walkthrough with step-by-step Monday example, 3 ready-to-use preset configs, backtest validation workflow, and startup log example
+- `README.md` / `README.fr.md` — new feature bullet for the hour/day filter; test count updated to 123
+- `docs/multi.md` / `docs/multi.fr.md` — full bilingual architecture documentation: Option A vs B decision guide (when to use each, tradeoffs table), ASCII diagram, component reference, per-account independent signal evaluation, message protocol (all 3 types with all fields), environment variables, directory layout, launch sequence, per-account monitoring, failure modes, cross-user deployment (different Linux accounts), adding a third account, comparison table with standalone mode; linked from README, INSTALL, QUICKSTART, feed.py, account_bot.py
+- `QUICKSTART.md` / `QUICKSTART.fr.md` — restructured deployment choice section: definition-list format for Option A/B, decision table covering single account, two wallets same/different Linux users, strategy comparison, simplicity vs efficiency tradeoffs
+- `tests/test_multibot.py` — 30 new tests for `feed.py` and `account_bot.py`: 7 unit tests for `feed.register_market()`, 9 unit tests for `account_bot._register_from_market_msg()`, 8 async ZMQ integration tests for Option A (single bot), 6 async ZMQ integration tests for Option B (two simultaneous bots sharing the same feed); total test count raised to 153
+
+- **`--verbose` diagnostic mode** — both `bot/feed.py` and `bot/account_bot.py` accept `--verbose`; sets logging to DEBUG and emits detailed traces: raw WebSocket messages (200-char truncated), every ZMQ PUB with key fields, ZMQ probe results and timing, `_ensure_feed()` lock race steps and per-second wait loop, book signal threshold comparisons, unknown token skips, market registrations, init params at startup; `feed.py` subprocess inherits `--verbose` when `account_bot.py` is started with it; normal INFO output is unchanged without the flag
+- **Self-starting feed in account_bot.py** — `_ensure_feed()` probes the feed address for 5 s on startup; if unreachable, acquires an exclusive file lock (`/tmp/tradinebotte-feed-<hash>.lock`) and launches `feed.py` as a subprocess, waiting up to 30 s for it to be ready before releasing the lock; concurrent account_bots that lose the race block on a shared lock and connect once the winner releases it — all bots can now be started simultaneously with no manual feed management; feed logs go to `/tmp/tradinebotte-feed-<hash>.log`; `docs/multi.md`, `QUICKSTART.md` updated to reflect the simplified launch sequence
+- **systemd services for multi-bot (Option B)** — `scripts/tradinebotte-feed.service` and `scripts/tradinebotte-account.service` are unit templates for the ZeroMQ feed and per-account bots. `scripts/install_feed_service.sh` auto-detects the virtualenv (`.venv` for dev, `venv` for prod), validates `feed.py` and `pyzmq`, generates a ready-to-install system service with `User=`, `WorkingDirectory=`, `ExecStart=`, and `TRADINEBOTTE_FEED_ADDR=`. `scripts/install_account_service.sh` derives the service name from the account directory basename (`tradinebotte-account-<name>`), applies the same venv auto-detection, and sets `Requires=tradinebotte-feed.service` so systemd enforces the start/restart ordering. Both scripts print exact `sudo cp / daemon-reload / enable / start` commands. `docs/multi.md` and `docs/multi.fr.md` updated with a full systemd installation walkthrough.
+
+### Previous
+- `scripts/tradinebotte.service` — systemd unit template: `After=network-online.target`, `Restart=on-failure`, `RestartSec=30`, `StartLimitBurst=5` (max 5 restarts per 5 min); placeholders `__USER__` and `__TRADINEBOTTE_DIR__` are substituted at install time
+- `scripts/install_service.sh` — generator script: reads `TRADINEBOTTE_DIR` (or defaults to `~/tradinebotte`), validates the install exists, substitutes placeholders with `sed`, writes to `/tmp/tradinebotte.service`, and prints the four `sudo` commands needed to enable the service
+
+### Code Quality
+- `bot/live_bot.py` — mypy strict: 0 errors; added explicit type annotations for `_log_handlers: list[logging.Handler]`, `_log_queue: queue.Queue[logging.LogRecord]`, and all five `BotState.__init__` dict/set attributes (`tokens`, `market_tokens`, `open_trades`, `traded_direction`, `signalled`); `cur.lastrowid or 0` guards the `int | None` return type
+- `tests/test_bot.py` — ResourceWarning fixed: removed global `warnings.filterwarnings` suppression; all seven test classes that create SQLite connections now use explicit `setUp`/`tearDown` or `self.addCleanup(conn.close)`; no unclosed connection warnings on Python 3.13
+- `.github/workflows/mypy.yml` — new CI workflow: runs `mypy bot/live_bot.py bot/api_polymarket.py --ignore-missing-imports` on every push and pull request (Python 3.12)
+- `requirements-dev.txt` — `mypy` added
+
 ### Documentation
 - `QUICKSTART.md` / `QUICKSTART.fr.md` — new bilingual quick-start guide: five commands (clone, install, setup, start, monitor) covering the minimal path from zero to a running bot; includes a simulate-mode note and a stop command; cross-linked from `README`, `INSTALL`, and `CLAUDE.md`
 - `CLAUDE.md` — bilingual doc rule extended from 6 to 8 files to include `QUICKSTART.md` / `QUICKSTART.fr.md`

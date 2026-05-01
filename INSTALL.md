@@ -20,6 +20,32 @@
      print(c.execute('SELECT COUNT(*) FROM snapshots').fetchone()[0])"
   ```
 
+### Server admin prerequisites (Debian/Ubuntu)
+
+`scripts/install.sh` **detects missing packages automatically** and prints
+the exact `sudo apt-get install` command to run as root — no need to know
+the package names in advance.
+
+Just run the script as a normal user:
+
+```bash
+bash scripts/install.sh
+```
+
+If anything is missing, you will see:
+
+```
+ERREUR : paquets système manquants. Lance cette commande en root (une seule fois par machine) :
+
+  sudo apt-get install -y python3-venv python3.10-venv
+```
+
+The version number (`3.10`) is detected from the system Python — no manual
+substitution needed. Run the printed command as root, then re-run `install.sh`.
+
+Once installed, `install.sh` puts all Python dependencies inside an
+isolated venv and **never touches the system Python again**.
+
 
 ## Dependencies
 
@@ -34,6 +60,8 @@ into a virtualenv at `~/tradinebotte/venv/`:
 The canonical list is `requirements.txt` at the project root. CVEs in these
 packages are detected automatically on every push via `pip-audit` (GitHub Actions)
 and Dependabot opens PRs when newer versions are available.
+
+Dev dependencies (`pylint`, `pip-audit`, `mypy`) are declared in `requirements-dev.txt`.
 
 
 ## Installation directory
@@ -78,7 +106,7 @@ bash scripts/install.sh [install_dir] [--with-tests]
 **Options:**
 - `--with-tests` — Also copy `tests/`, `scripts/backtest.py`, and
   `data/backtest_sample_btc5m_range_2026.db`, then run the
-  full test suite (108 tests) immediately after installation.
+  full test suite (153 tests) immediately after installation.
   The backtest uses `live.db` only if it contains ≥ 100 snapshots;
   otherwise it falls back to the bundled sample dataset automatically.
 
@@ -95,17 +123,19 @@ This will:
 
 ## Wallet Setup (one-time)
 
-Run `setup.py` once with your Polygon wallet. It will:
-- Prompt for your private key interactively (masked stdin)
-- Check USDC.e and USDC native balances
-- Swap USDC native → USDC.e via Uniswap V3 if needed
-- Approve CTF Exchange allowance
-- Derive your Polymarket API credentials
-- Write credentials to `<TRADINEBOTTE_DIR>/config.json` (chmod 600)
+Run `setup.py` once before starting the bot — it creates `config.json`:
 
 ```bash
-TRADINEBOTTE_DIR=~/tradinebotte python3 scripts/setup.py
+python3 scripts/setup.py
 ```
+
+When prompted for a private key:
+- **Real wallet:** enter `0x` + 64 hex characters — the script checks balances,
+  swaps USDC native → USDC.e if needed, approves the CTF Exchange, derives your
+  Polymarket API credentials, and writes `<TRADINEBOTTE_DIR>/config.json` (chmod 600).
+- **Simulation (no wallet):** press Enter without typing a key — the script writes
+  a minimal `config.json` with empty credentials; the bot runs with simulated orders
+  and no on-chain transactions occur.
 
 The private key is entered interactively and is never visible in `ps aux`
 or shell history.
@@ -203,10 +233,49 @@ your web server is configured to serve that directory.
 TRADINEBOTTE_DIR=~/tradinebotte bash scripts/start_bot.sh
 ```
 
+### Auto-start with systemd (recommended for VPS)
+
+Run the generator script once after installation:
+
+```bash
+TRADINEBOTTE_DIR=~/tradinebotte bash scripts/install_service.sh
+```
+
+It validates the install, writes a ready-to-use unit file to `/tmp/tradinebotte.service`,
+and prints the exact commands to enable it:
+
+```bash
+sudo cp /tmp/tradinebotte.service /etc/systemd/system/tradinebotte.service
+sudo systemctl daemon-reload
+sudo systemctl enable tradinebotte   # start on boot
+sudo systemctl start tradinebotte    # start now
+```
+
+Useful systemd commands:
+
+```bash
+sudo systemctl status tradinebotte
+sudo systemctl stop tradinebotte
+sudo systemctl restart tradinebotte
+journalctl -u tradinebotte -f        # live systemd logs
+tail -f ~/tradinebotte/live.log      # bot application logs
+```
+
+The service restarts automatically on failure (`Restart=on-failure`, 30 s delay,
+max 5 restarts per 5 minutes). On reboot the bot comes back up once the network
+is online (`After=network-online.target`).
+
+> **Multi-bot (Option B)**: use `scripts/install_feed_service.sh` and
+> `scripts/install_account_service.sh` instead. See [docs/multi.md](docs/multi.md).
+
 **Flags:**
 - *(no flag)* — normal mode: log writes are asynchronous (daemon thread, never blocks the event loop)
 - `--no-log` — suppress the log file entirely for minimum disk I/O; SQLite DB (trades + snapshots) is unaffected; combine with `--simulate` to keep stdout output
-- `--simulate` — isolate all file I/O to `/tmp/tradinebotte-sim`, no real orders placed
+- `--simulate` — isolate all file I/O to `~/tradinebotte-sim` by default, no real orders placed. If `TRADINEBOTTE_DIR` is already set in the environment, that path is used instead — allowing multiple bots to run in parallel without conflict:
+  ```bash
+  TRADINEBOTTE_DIR=~/account-a python3 live_bot.py --simulate
+  TRADINEBOTTE_DIR=~/account-b python3 live_bot.py --simulate
+  ```
 
 Or using the generated wrapper (`TRADINEBOTTE_DIR` already embedded):
 
@@ -281,6 +350,232 @@ python3 scripts/backtest.py --all --sweep
 ```
 
 When more than one file is processed, each file runs with capital reset to `capital_start` (independent simulation), and an AGGREGATE block summarises combined wins, losses, PnL, win rate, and worst drawdown across all files.
+
+
+## Hour / Day Filter
+
+The bot can restrict trade entries to specific UTC hour ranges depending on the day of the week. The filter is configured in the strategy JSON file (`strategies/polymarket_BTC5M.json`) and is **disabled by default** — existing behaviour is preserved until you explicitly enable it.
+
+### Rationale
+
+BTC volatility follows daily and weekly patterns driven by institutional flows:
+
+| Period | UTC window | Characteristic |
+|---|---|---|
+| Asian session | 00:00–08:00 | Moderate volume, directional moves |
+| European dead zone | 08:00–13:00 | Low volume, noisy signals |
+| US session | 13:00–22:00 | High volume, clearest signals |
+| US weekly open | Mon 13:30 | Institutional re-entry after weekend; strong directional move |
+| US weekly close | Fri 20:00 | Position squaring; volatility spike then drop |
+| Weekend | Sat–Sun | Retail-driven, higher noise, lower predictability |
+
+### Configuration
+
+Add or edit the `hour_filter` block in your strategy JSON:
+
+```json
+"hour_filter": {
+    "enabled": true,
+    "weekday_utc_ranges": [[0, 8], [13, 22]],
+    "weekend_utc_ranges": [],
+    "us_weekly_open": true,
+    "us_weekly_close": true
+}
+```
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Master switch. `false` = no filtering, all hours allowed. |
+| `weekday_utc_ranges` | list of `[start, end]` | `[]` | UTC hour ranges allowed Mon–Fri. Empty = all hours allowed on weekdays. |
+| `weekend_utc_ranges` | list of `[start, end]` | `[]` | UTC hour ranges allowed Sat–Sun. Empty = **all weekend trading blocked**. |
+| `us_weekly_open` | bool | `true` | When `true`, blocks entries on **Monday before 13:30 UTC** (US markets have not yet opened for the week). |
+| `us_weekly_close` | bool | `true` | When `true`, blocks entries on **Friday from 20:00 UTC** (US markets have closed for the week). |
+
+Hour ranges use the convention `[start, end)` — `[13, 22]` means 13:00 ≤ hour < 22:00.
+The `us_weekly_open` and `us_weekly_close` constraints are applied **in addition to** `weekday_utc_ranges`, and take precedence over them on their respective days.
+
+### Decision logic (Monday example, filter enabled)
+
+```
+Monday 07:00 UTC
+  → weekday range check: 07 is in [0, 8) → would be OK
+  → us_weekly_open check: 07 < 13:30 → BLOCKED
+
+Monday 13:45 UTC
+  → us_weekly_open check: 13:45 ≥ 13:30 → passes
+  → weekday range check: 13 is in [13, 22) → ALLOWED
+
+Saturday 15:00 UTC
+  → weekend_utc_ranges is [] → BLOCKED
+```
+
+### Preset examples
+
+**Conservative — US session only, no weekends:**
+```json
+"hour_filter": {
+    "enabled": true,
+    "weekday_utc_ranges": [[13, 22]],
+    "weekend_utc_ranges": [],
+    "us_weekly_open": true,
+    "us_weekly_close": true
+}
+```
+
+**Extended — Asian + US sessions, no weekends:**
+```json
+"hour_filter": {
+    "enabled": true,
+    "weekday_utc_ranges": [[0, 8], [13, 22]],
+    "weekend_utc_ranges": [],
+    "us_weekly_open": true,
+    "us_weekly_close": true
+}
+```
+
+**24/7 — all hours, all days (same as disabled):**
+```json
+"hour_filter": {
+    "enabled": true,
+    "weekday_utc_ranges": [],
+    "weekend_utc_ranges": [[0, 24]],
+    "us_weekly_open": false,
+    "us_weekly_close": false
+}
+```
+
+### Backtest with filter
+
+The backtest engine applies the same filter logic when replaying snapshots, so you can measure its effect before enabling it live:
+
+```bash
+# Edit hour_filter.enabled = true in the strategy JSON, then:
+python3 scripts/backtest.py --all
+```
+
+Compare win rate and trade count with and without the filter to validate your chosen windows against your snapshot dataset.
+
+### Startup log
+
+When the filter is active the bot logs the effective configuration at startup:
+
+```
+[INFO]   Filtre horaire : sem=0-8h 13-22h | we=bloque ouv.lun=13h30 ferm.ven=20h00
+```
+
+
+## Multi-bot WebSocket sharing (Option B — ZeroMQ)
+
+> Full architecture reference and decision guide: **[docs/multi.md](docs/multi.md)**
+
+Use Option B when running two or more accounts simultaneously, when accounts belong
+to different Linux users, or when comparing different strategies in parallel.
+For a single account, Option A (`live_bot.py` standalone) is simpler.
+
+The ZeroMQ architecture splits the bot into two processes:
+
+| Process | File | Role |
+|---|---|---|
+| Feed | `bot/feed.py` | Single WS connection; broadcasts book updates via ZMQ PUB |
+| Account bot | `bot/account_bot.py` | Subscribes to feed; trades one account in full isolation |
+
+### Prerequisites
+
+`pyzmq` is already included in `requirements.txt`.  Install it with the rest of
+the dependencies:
+
+```bash
+bash scripts/install.sh
+```
+
+### Directory layout (example — two accounts)
+
+```
+~/tradinebotte/          ← shared venv + the feed log
+  venv/
+  feed.log
+~/account-a/             ← account A: own DB, log, config
+  config.json
+  live.db
+  account.log
+~/account-b/             ← account B: own DB, log, config
+  config.json
+  live.db
+  account.log
+```
+
+Set up each account directory first:
+
+```bash
+TRADINEBOTTE_DIR=~/account-a python3 scripts/setup.py   # enter account A key
+TRADINEBOTTE_DIR=~/account-b python3 scripts/setup.py   # enter account B key
+```
+
+### Launching
+
+```bash
+# 1. Start the shared feed (one instance, any TRADINEBOTTE_DIR for the venv path)
+bash scripts/start_feed.sh
+
+# 2. Start each account bot in a separate shell
+TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
+TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
+```
+
+Custom feed address (useful when running on different ports or hosts):
+
+```bash
+TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash scripts/start_feed.sh
+TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
+```
+
+### Stopping
+
+```bash
+pkill -f feed.py
+pkill -f account_bot.py
+```
+
+### Message protocol
+
+The feed publishes three JSON message types over ZeroMQ PUB:
+
+| Type | Fields | Purpose |
+|---|---|---|
+| `market` | `market_id`, `question`, `up_token_id`, `dn_token_id`, `start_ms`, `end_ms` | New market registered |
+| `book` | `token_id`, `best_bid`, `best_ask`, `spread`, `bid_vol`, `ask_vol`, `obi` | Book update |
+| `ping` | `ts` | Keepalive every 10 s |
+
+### Architecture notes
+
+- The feed has no trading logic and holds no credentials — it is safe to restart without affecting account state.
+- Each `account_bot.py` process writes to its own SQLite database; the `handle_book_update` / `check_signal` / `enter_live_trade` path from `live_bot.py` runs unmodified.
+- If the feed restarts, account bots automatically recover — they will miss book updates during the gap but will not place duplicate orders because the `signalled` set is persisted to the DB between sessions.
+- The ZeroMQ PUB/SUB pattern is one-way: account bots never send messages back to the feed.
+
+### Integration test
+
+`scripts/test_multibot_deploy.sh` automates a full clean-install and end-to-end integration test across a configurable set of Linux test accounts. Requires `sshpass` on the local machine. Server address, port, usernames, and passwords are read from `~/.tradinebotte-test.conf` — copy the template and fill in your values:
+
+```bash
+cp scripts/test_multibot.conf.example ~/.tradinebotte-test.conf
+editor ~/.tradinebotte-test.conf
+```
+
+```bash
+# Full clean install + 3-minute multibot test
+bash scripts/test_multibot_deploy.sh
+
+# Reuse an existing install, extend the test to 5 minutes
+bash scripts/test_multibot_deploy.sh --skip-deploy --duration 300
+```
+
+What the script verifies:
+- Feed auto-starts when 3 bots are launched simultaneously (race-safe file lock)
+- Exactly one `feed.py` process is visible across all Linux users (`ps aux`)
+- All 3 `account_bot.py` processes connect and receive book updates
+- No ERROR/CRITICAL log lines during the test window
+- All processes are stopped cleanly after the test
 
 
 ## Monitoring
@@ -358,7 +653,7 @@ print('SIGNAL_THRESHOLD:', b.SIGNAL_THRESHOLD)
 ```
 
 Run the bot for 20 seconds in isolated simulate mode (logs to stdout,
-writes to `/tmp/tradinebotte-sim` — production data is never touched):
+writes to `~/tradinebotte-sim` — production data is never touched):
 
 ```bash
 timeout 20 .venv/bin/python3 bot/live_bot.py --simulate
@@ -367,10 +662,10 @@ timeout 20 .venv/bin/python3 bot/live_bot.py --simulate
 Expected output (printed directly to the terminal):
 
 ```
-[WARNING]  MODE SIMULATION — donnees isolees dans /tmp/tradinebotte-sim
+[WARNING]  MODE SIMULATION — donnees isolees dans ~/tradinebotte-sim
 [INFO]     LIVE BOT v3 — Threshold=0.96 Stake=$10 MinAskVol=10
 [WARNING]  POLY_PRIVATE_KEY non definie — ordres SIMULES
-[INFO]     DB initialisee : /tmp/tradinebotte-sim/live.db
+[INFO]     DB initialisee : ~/tradinebotte-sim/live.db
 [INFO]     State : capital=$100.00 | 0 trades | WR=0.0%
 [INFO]     Marches BTC 5-min : 2
 [INFO]     Souscription 2 tokens...
