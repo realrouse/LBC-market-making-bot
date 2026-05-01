@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Documentation bilingue — règle obligatoire
 
-Ce projet maintient huit fichiers de documentation en deux langues :
+Ce projet maintient dix fichiers de documentation en deux langues :
 
 | Anglais | Français |
 |---|---|
@@ -16,8 +16,9 @@ Ce projet maintient huit fichiers de documentation en deux langues :
 | `CHANGELOG.md` | `CHANGELOG.fr.md` |
 | `INSTALL.md` | `INSTALL.fr.md` |
 | `QUICKSTART.md` | `QUICKSTART.fr.md` |
+| `UPDATE.md` | `UPDATE.fr.md` |
 
-**Les huit fichiers doivent être mis à jour dans le même commit.** Ne jamais modifier l'un sans mettre à jour son équivalent dans l'autre langue. Un hook Claude Code (`.claude/settings.json`) rappelle cette règle après chaque `git commit`.
+**Les dix fichiers doivent être mis à jour dans le même commit.** Ne jamais modifier l'un sans mettre à jour son équivalent dans l'autre langue. Un hook Claude Code (`.claude/settings.json`) rappelle cette règle après chaque `git commit`.
 
 ## Commands
 

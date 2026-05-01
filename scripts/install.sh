@@ -80,12 +80,17 @@ if [ "$_STRAT_SRC" != "$_STRAT_DST" ]; then
     cp strategies/*.json "$INSTALL_DIR/strategies/"
 fi
 
-echo "=== Création de l'environnement virtuel ==="
-python3 -m venv "$INSTALL_DIR/venv"
-
-echo "=== Installation des packages Python ==="
-"$INSTALL_DIR/venv/bin/pip" install --quiet --upgrade pip
-"$INSTALL_DIR/venv/bin/pip" install --quiet aiohttp websockets web3 py-clob-client
+if [ -d "$INSTALL_DIR/venv" ]; then
+    echo "=== Mise à jour des packages Python (venv existant) ==="
+    "$INSTALL_DIR/venv/bin/pip" install --quiet --upgrade pip
+    "$INSTALL_DIR/venv/bin/pip" install --quiet --upgrade aiohttp websockets web3 py-clob-client
+else
+    echo "=== Création de l'environnement virtuel ==="
+    python3 -m venv "$INSTALL_DIR/venv"
+    echo "=== Installation des packages Python ==="
+    "$INSTALL_DIR/venv/bin/pip" install --quiet --upgrade pip
+    "$INSTALL_DIR/venv/bin/pip" install --quiet aiohttp websockets web3 py-clob-client
+fi
 
 # Wrapper d'exécution avec TRADINEBOTTE_DIR exportée
 cat > "$INSTALL_DIR/run.sh" << EOF
