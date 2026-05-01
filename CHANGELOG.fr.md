@@ -9,6 +9,7 @@ Toutes les modifications notables de ce projet sont documentées ici.
 ## [Non publié]
 
 ### Correction de bug
+- **`scripts/install.sh`** — la vérification du CLI `sqlite3` est rétrogradée de l'erreur bloquante à un avertissement non-bloquant ; le bot utilise le module Python `sqlite3` intégré (toujours disponible) et n'appelle jamais le CLI — seul `monitor.sh` en a besoin pour les requêtes manuelles ; l'avertissement affiche toujours la commande d'installation mais ne bloque plus avec `exit 1`
 - **`bot/account_bot.py`** — les fichiers lock et log sont désormais créés dans `/tmp/tradinebotte-<user>/` au lieu du chemin plat `/tmp/tradinebotte-feed-<hash>.*` ; chaque utilisateur Linux possède entièrement son sous-répertoire, ce qui élimine les erreurs « Operation not permitted » sur les hôtes partagés où le sticky bit de `/tmp` empêche un utilisateur de supprimer les fichiers d'un autre
 - **`scripts/test_multibot_deploy.sh`** — le nettoyage (Phase 1) et le teardown (Phase 8) utilisent désormais `rm -rf /tmp/tradinebotte-$USER` conformément au nouveau chemin par utilisateur ; la détection du log du feed (Phases 5 et 7) parcourt le sous-répertoire de chaque utilisateur et mémorise lequel a démarré le feed (`FEED_LOG_IDX`) pour que les lectures suivantes utilisent le bon compte SSH
 

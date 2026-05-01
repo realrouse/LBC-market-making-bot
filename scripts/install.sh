@@ -47,10 +47,6 @@ if command -v python3 &>/dev/null && ! python3 -c "import ensurepip" &>/dev/null
     _MISSING+=("python3-venv" "python3.${_PY_MINOR}-venv")
 fi
 
-if ! command -v sqlite3 &>/dev/null; then
-    _MISSING+=("sqlite3")
-fi
-
 if [ ${#_MISSING[@]} -gt 0 ]; then
     echo ""
     echo "ERREUR : paquets système manquants. Lance cette commande en root (une seule fois par machine) :"
@@ -58,6 +54,13 @@ if [ ${#_MISSING[@]} -gt 0 ]; then
     echo "  sudo apt-get install -y ${_MISSING[*]}"
     echo ""
     exit 1
+fi
+
+# sqlite3 CLI — optionnel : uniquement nécessaire pour monitor.sh (requêtes
+# manuelles). Le bot utilise le module Python sqlite3 intégré, toujours dispo.
+if ! command -v sqlite3 &>/dev/null; then
+    echo "Avertissement : sqlite3 CLI absent — monitor.sh ne fonctionnera pas."
+    echo "  Pour l'installer : sudo apt-get install -y sqlite3"
 fi
 
 echo "Dépendances système OK."
