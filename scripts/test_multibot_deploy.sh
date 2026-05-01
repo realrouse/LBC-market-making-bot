@@ -112,6 +112,7 @@ deploy_code() {
         --exclude='__pycache__' \
         --exclude='*.pyc' \
         --exclude='.venv' \
+        --exclude='venv/' \
         -e "ssh -p $PORT -o StrictHostKeyChecking=no" \
         "$LOCAL_REPO/" "${USERS[$idx]}@$SERVER:$REMOTE_INSTALL_DIR/" 2>&1
 }
@@ -146,11 +147,15 @@ for idx in "${!USERS[@]}"; do
     user="${USERS[$idx]}"
     info "Nettoyage $user..."
     run $idx "
-        pkill -f account_bot.py 2>/dev/null || true
-        pkill -f 'bot/feed.py'  2>/dev/null || true
-        sleep 1
-        rm -rf $REMOTE_INSTALL_DIR $REMOTE_BOT_DIR
-        rm -f /tmp/tradinebotte-feed-*.lock /tmp/tradinebotte-feed-*.log
+        pkill -f '[a]ccount_bot.py' 2>/dev/null || true
+        pkill -f '[f]eed.py'        2>/dev/null || true
+        sleep 3
+        pkill -9 -f '[a]ccount_bot.py' 2>/dev/null || true
+        pkill -9 -f '[f]eed.py'        2>/dev/null || true
+        fuser -k 5557/tcp 2>/dev/null || true
+        rm -rf $REMOTE_INSTALL_DIR $REMOTE_BOT_DIR || true
+        rm -f /tmp/tradinebotte-feed-*.lock /tmp/tradinebotte-feed-*.log || true
+        exit 0
     " && ok "$user nettoyé" || warn "$user nettoyage partiel"
 done
 
@@ -198,7 +203,7 @@ info "Envoi des $N_BOTS commandes de lancement en parallèle (test race conditio
 LAUNCH_CMD="
     cd $REMOTE_INSTALL_DIR
     TRADINEBOTTE_DIR=$REMOTE_BOT_DIR \\
-    nohup $REMOTE_INSTALL_DIR/venv/bin/python3 bot/account_bot.py --verbose \\
+    nohup $REMOTE_INSTALL_DIR/venv/bin/python3 -u bot/account_bot.py --verbose \\
         > $REMOTE_BOT_DIR/account.log 2>&1 < /dev/null &
     echo \"PID=\$!\"
 "
@@ -209,8 +214,8 @@ done
 wait  # attend que les N sessions SSH retournent (pas que les bots terminent)
 
 ok "$N_BOTS commandes de lancement envoyées"
-info "Attente 20s — feed auto-start + stabilisation..."
-sleep 20
+info "Attente 30s — feed auto-start + stabilisation..."
+sleep 30
 
 # ─── Phase 5 : Vérification initiale ───────────────────────────────────────────
 section "PHASE 5 — VÉRIFICATION INITIALE"
@@ -225,22 +230,18 @@ info "Processus account_bot : $BOT_COUNT (attendu : $N_BOTS)"
 
 for idx in "${!USERS[@]}"; do
     user="${USERS[$idx]}"
-    LOG=$(run $idx "cat /account.log 2>/dev/null || echo '(vide)'")
-    if echo "$LOG" | grep -q "Connecte au feed"; then
-        ok "$user : connecté au feed"
-    else
-        err "$user : pas de message 'Connecte au feed'"
-    fi
-    if echo "$LOG" | grep -qE "Feed démarré|Feed prêt"; then
+    run $idx "grep -q 'Connecte au feed' $REMOTE_BOT_DIR/account.log 2>/dev/null" && \
+        ok "$user : connecté au feed" || err "$user : pas de message 'Connecte au feed'"
+    if run $idx "grep -qE 'Feed démarré|Feed prêt' $REMOTE_BOT_DIR/account.log 2>/dev/null"; then
         ok "$user : a démarré le feed (gagnant de la race)"
-    elif echo "$LOG" | grep -q "Feed actif sur"; then
+    elif run $idx "grep -q 'Feed actif sur' $REMOTE_BOT_DIR/account.log 2>/dev/null"; then
         ok "$user : a trouvé le feed déjà actif"
-    elif echo "$LOG" | grep -q "Feed en cours de démarrage"; then
+    elif run $idx "grep -q 'Feed en cours de démarrage' $REMOTE_BOT_DIR/account.log 2>/dev/null"; then
         ok "$user : a attendu le démarrage du feed (perdant de la race)"
     fi
 done
 
-FEED_LOG_PATH=$(run 0 "ls /tmp/tradinebotte-feed-*.log 2>/dev/null | head -1 || echo '(introuvable)'")
+FEED_LOG_PATH=$(run 0 "ls -t /tmp/tradinebotte-feed-*.log 2>/dev/null | head -1 || echo '(introuvable)'")
 info "Log feed : $FEED_LOG_PATH"
 if [[ "$FEED_LOG_PATH" != "(introuvable)" ]]; then
     FEED_LOG=$(run 0 "cat $FEED_LOG_PATH 2>/dev/null | head -60 || echo '(vide)'")
@@ -255,7 +256,7 @@ fi
 
 # ─── Phase 6 : Opération soutenue ──────────────────────────────────────────────
 section "PHASE 6 — OPÉRATION SOUTENUE (${DURATION}s)"
-ELAPSED=20
+ELAPSED=30
 CHECK_INTERVAL=30
 
 while [[ $ELAPSED -lt $DURATION ]]; do
@@ -280,28 +281,32 @@ section "PHASE 7 — ANALYSE DES LOGS"
 
 for idx in "${!USERS[@]}"; do
     user="${USERS[$idx]}"
-    LOG=$(run $idx "cat /account.log 2>/dev/null || echo '(vide)'")
     echo ""
     echo -e "${BOLD}--- $user : account.log (20 dernières lignes) ---${NC}"
-    echo "$LOG" | tail -20
+    run $idx "tail -20 $REMOTE_BOT_DIR/account.log 2>/dev/null || echo '(vide)'"
 
-    echo "$LOG" | grep -q "Connecte au feed" && ok "$user : connexion feed confirmée" || err "$user : pas de connexion feed"
-    BOOK_COUNT=$(echo "$LOG" | grep -c '\[FEED\] book' || true)
+    run $idx "grep -q 'Connecte au feed' $REMOTE_BOT_DIR/account.log 2>/dev/null" && \
+        ok "$user : connexion feed confirmée" || err "$user : pas de connexion feed"
+    BOOK_COUNT=$(run $idx "grep -c '\[FEED\] book' $REMOTE_BOT_DIR/account.log 2>/dev/null || true")
     [[ "$BOOK_COUNT" -gt 0 ]] && ok "$user : $BOOK_COUNT book updates reçus (flux actif)" || \
         warn "$user : aucun book update — marché peut-être calme"
-    ERROR_COUNT=$(echo "$LOG" | grep -ciE "^.*\[(ERROR|CRITICAL)\]" || true)
+    ERROR_COUNT=$(run $idx "grep -ciE '\[(ERROR|CRITICAL)\]' $REMOTE_BOT_DIR/account.log 2>/dev/null || true")
     [[ "$ERROR_COUNT" -eq 0 ]] && ok "$user : pas d'erreur critique" || \
         err "$user : $ERROR_COUNT ligne(s) ERROR/CRITICAL dans les logs"
 done
 
 echo ""
-echo -e "${BOLD}--- Feed log (30 dernières lignes) ---${NC}"
+echo -e "${BOLD}--- Feed log (30 premières + 10 dernières lignes) ---${NC}"
 if [[ "${FEED_LOG_PATH:-}" != "(introuvable)" && -n "${FEED_LOG_PATH:-}" ]]; then
-    FEED_LOG_FINAL=$(run 0 "cat $FEED_LOG_PATH 2>/dev/null | tail -30 || echo '(vide)'")
-    echo "$FEED_LOG_FINAL"
-    echo "$FEED_LOG_FINAL" | grep -qE "WebSocket connecte|Souscription" && \
+    FEED_LOG_HEAD=$(run 0 "head -30 $FEED_LOG_PATH 2>/dev/null || echo '(vide)'")
+    FEED_LOG_TAIL=$(run 0 "tail -10 $FEED_LOG_PATH 2>/dev/null || echo '(vide)'")
+    echo "$FEED_LOG_HEAD"
+    echo "..."
+    echo "$FEED_LOG_TAIL"
+    # Grep sur le serveur pour éviter de transférer un log de plusieurs Mo
+    run 0 "grep -qE 'WebSocket connecte|Souscription|Connected' $FEED_LOG_PATH 2>/dev/null" && \
         ok "Feed : WebSocket confirmé dans le log final" || err "Feed : WebSocket non confirmé"
-    echo "$FEED_LOG_FINAL" | grep -q "Marches BTC" && \
+    run 0 "grep -qiE 'BTC|bitcoin|Marche' $FEED_LOG_PATH 2>/dev/null" && \
         ok "Feed : marchés BTC trouvés" || warn "Feed : marchés BTC non trouvés"
 else
     warn "Feed log introuvable — impossible d'analyser"
@@ -318,8 +323,13 @@ section "PHASE 8 — TEARDOWN"
 for idx in "${!USERS[@]}"; do
     user="${USERS[$idx]}"
     run $idx "
-        pkill -f account_bot.py 2>/dev/null || true
-        pkill -f 'bot/feed.py'  2>/dev/null || true
+        pkill -f '[a]ccount_bot.py' 2>/dev/null || true
+        pkill -f '[f]eed.py'        2>/dev/null || true
+        sleep 2
+        pkill -9 -f '[a]ccount_bot.py' 2>/dev/null || true
+        pkill -9 -f '[f]eed.py'        2>/dev/null || true
+        fuser -k 5557/tcp 2>/dev/null || true
+        exit 0
     " && info "$user : processus arrêtés" || true
 done
 sleep 3
