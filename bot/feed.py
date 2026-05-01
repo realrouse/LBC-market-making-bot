@@ -44,8 +44,8 @@ logger = logging.getLogger("feed")
 VERBOSE = False
 
 # ─── STATE ───────────────────────────────────────────────────────────────────
-registered: dict[str, dict[str, Any]] = {}
-token_meta: dict[str, str] = {}
+registered: dict[str, dict[str, Any]] = {}  # market_id → {up, dn, end_ms, question, start_ms}
+token_meta: dict[str, str] = {}             # token_id  → market_id
 
 
 def _parse_args() -> argparse.Namespace:

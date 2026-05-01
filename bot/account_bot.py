@@ -184,6 +184,7 @@ def _register_from_market_msg(state: bot.BotState, msg: dict) -> None:
 
 
 async def _run(state: bot.BotState) -> None:
+    """Main message loop: receive ZMQ messages from feed.py and dispatch to live_bot handlers."""
     ctx  = zmq.asyncio.Context()
     sock = ctx.socket(zmq.SUB)
     sock.connect(_FEED_ADDR)
