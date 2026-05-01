@@ -30,6 +30,9 @@ venv/
 # Credentials — never commit
 config.json
 
+# Private AI context — contains infrastructure details, keep local only
+docs/CONTEXT_AI.md
+
 # Integration test configuration — contains server addresses and passwords
 scripts/test_multibot.conf
 
