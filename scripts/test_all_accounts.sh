@@ -2,21 +2,21 @@
 # ═══════════════════════════════════════════════════════════════════
 #  test_all_accounts.sh — Clean install + test on all configured accounts
 #
-#  For each account (in order):
+#  For each account:
 #    1. Kill any running bot
 #    2. Wipe ~/tradinebotte and ~/account-sim
 #    3. rsync latest repo from local machine
 #    4. bash scripts/install.sh --with-tests  (creates venv + runs tests)
-#    5. Wait DELAY seconds before moving to the next account
 #
 #  Configuration (required — same file as test_multibot_deploy.sh):
 #    cp scripts/test_multibot.conf.example ~/.tradinebotte-test.conf
 #    editor ~/.tradinebotte-test.conf   # set TEST_SERVER, TEST_PORT, TEST_USERS, TEST_PASSWORDS
 #
 #  Usage:
-#    bash scripts/test_all_accounts.sh            # default 180s delay
-#    bash scripts/test_all_accounts.sh --delay 60 # custom delay
-#    bash scripts/test_all_accounts.sh --no-wait  # no delay between accounts
+#    bash scripts/test_all_accounts.sh             # sequential, 180s delay
+#    bash scripts/test_all_accounts.sh --parallel  # all accounts at the same time
+#    bash scripts/test_all_accounts.sh --delay 60  # custom delay (sequential only)
+#    bash scripts/test_all_accounts.sh --no-wait   # no delay between accounts
 #
 #  Custom conf location:
 #    TEST_MULTIBOT_CONF=/path/to/conf bash scripts/test_all_accounts.sh
@@ -27,20 +27,23 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
+TMPDIR_LOCAL="${HOME}/tmp/test-all-accounts"
 
-DELAY=180   # seconds between accounts (default 3 min)
+DELAY=180
+PARALLEL=false
 
 # ── Argument parsing ──────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --delay)   DELAY="$2"; shift 2 ;;
-        --no-wait) DELAY=0;    shift   ;;
-        *) echo "Usage: $0 [--delay SECONDS] [--no-wait]" >&2; exit 1 ;;
+        --parallel) PARALLEL=true; shift ;;
+        --delay)    DELAY="$2";    shift 2 ;;
+        --no-wait)  DELAY=0;       shift ;;
+        *) echo "Usage: $0 [--parallel] [--delay SECONDS] [--no-wait]" >&2; exit 1 ;;
     esac
 done
 
 # ── Load configuration ────────────────────────────────────────────
-BOLD="\033[1m"; GREEN="\033[32m"; RED="\033[31m"; YELLOW="\033[33m"; NC="\033[0m"
+BOLD="\033[1m"; GREEN="\033[32m"; RED="\033[31m"; YELLOW="\033[33m"; CYAN="\033[36m"; NC="\033[0m"
 
 CONF="${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
 if [[ ! -f "$CONF" ]]; then
@@ -62,7 +65,7 @@ PORT="${TEST_PORT:-22}"
 USERS=("${TEST_USERS[@]:?TEST_USERS manquant dans $CONF}")
 PASSWORDS=("${TEST_PASSWORDS[@]:?TEST_PASSWORDS manquant dans $CONF}")
 
-if [[ ${#USERS[@]} -ne ${#PASSWORDS[@]} ]; then
+if [[ ${#USERS[@]} -ne ${#PASSWORDS[@]} ]]; then
     echo -e "${RED}TEST_USERS et TEST_PASSWORDS doivent avoir la même longueur.${NC}" >&2
     exit 1
 fi
@@ -93,76 +96,159 @@ rsync_to() {
         "$REPO_DIR/" "${user}@${HOST}:/home/${user}/tradinebotte/"
 }
 
-# ── Check sshpass is available ────────────────────────────────────
+# ── Per-account worker (used in both sequential and parallel modes) ──
+# Writes human-readable log to LOG_FILE and a one-line result to RESULT_FILE.
+run_account() {
+    local user="$1" pwd="$2" log_file="$3" result_file="$4"
+    # Disable set -e inside the worker: each step handles its own errors,
+    # and we must always reach the result-write at the end.
+    set +e
+
+    _ssh() { sshpass -p "$pwd" ssh -p "$PORT" -o StrictHostKeyChecking=no \
+                 -o ConnectTimeout=15 "${user}@${HOST}" "$@"; }
+    _rsync() {
+        sshpass -p "$pwd" rsync -a \
+            --exclude='*.db' --exclude='__pycache__' \
+            --exclude='.git' --exclude='venv' \
+            -e "ssh -p $PORT -o StrictHostKeyChecking=no" \
+            "$REPO_DIR/" "${user}@${HOST}:/home/${user}/tradinebotte/"
+    }
+
+    {
+        echo "=== DÉBUT $(date '+%H:%M:%S') — ${user}@${HOST} ==="
+
+        echo "→ Arrêt du bot..."
+        _ssh "pkill -f live_bot.py 2>/dev/null; true" 2>/dev/null
+
+        echo "→ Nettoyage du compte..."
+        if _ssh "rm -rf ~/tradinebotte ~/account-sim"; then
+            echo "✓ Compte vidé"
+        else
+            echo "✗ Nettoyage échoué"
+            echo "WIPE ERROR" > "$result_file"
+            echo "=== FIN $(date '+%H:%M:%S') — ${user} ==="
+        fi
+
+        echo "→ Rsync de la dernière version..."
+        if _rsync; then
+            echo "✓ Rsync terminé"
+        else
+            echo "✗ Rsync échoué"
+            echo "RSYNC ERROR" > "$result_file"
+            echo "=== FIN $(date '+%H:%M:%S') — ${user} ==="
+        fi
+
+        echo "→ Installation et tests..."
+        INSTALL_OUT=$(_ssh \
+            "cd /home/${user}/tradinebotte && bash scripts/install.sh --with-tests 2>&1")
+        local rc=$?
+        echo "$INSTALL_OUT"
+
+        if [[ $rc -ne 0 ]] && ! echo "$INSTALL_OUT" | grep -q "^Ran [0-9]* tests"; then
+            echo "✗ install.sh a échoué (exit $rc)"
+            echo "INSTALL ERROR (exit $rc)" > "$result_file"
+        elif echo "$INSTALL_OUT" | grep -q "^Ran [0-9]* tests"; then
+            TEST_LINE=$(echo "$INSTALL_OUT" | grep "^Ran [0-9]* tests")
+            if echo "$INSTALL_OUT" | grep -qE "^OK$"; then
+                echo "✓ ${TEST_LINE} — OK"
+                echo "OK" > "$result_file"
+            else
+                FAIL_LINE=$(echo "$INSTALL_OUT" | grep -E "^FAILED" | head -1)
+                echo "✗ ${TEST_LINE} — ${FAIL_LINE}"
+                echo "FAILED — ${FAIL_LINE}" > "$result_file"
+            fi
+        else
+            echo "✗ install.sh n'a produit aucune sortie de test"
+            echo "NO OUTPUT" > "$result_file"
+        fi
+
+        echo "=== FIN $(date '+%H:%M:%S') — ${user} ==="
+    } >> "$log_file" 2>&1
+}
+
+# ── Check sshpass ─────────────────────────────────────────────────
 if ! command -v sshpass &>/dev/null; then
     echo -e "${RED}ERROR: sshpass not found. Install with: sudo apt install sshpass${NC}" >&2
     exit 1
 fi
 
-# ── Main loop ─────────────────────────────────────────────────────
-RESULTS=()
+mkdir -p "$TMPDIR_LOCAL"
 START_TOTAL=$(date +%s)
 TOTAL=${#USERS[@]}
 
-for i in "${!USERS[@]}"; do
-    USER="${USERS[$i]}"
-    PWD="${PASSWORDS[$i]}"
-    ACCOUNT_NUM=$((i + 1))
+# ── Parallel mode ─────────────────────────────────────────────────
+if $PARALLEL; then
+    section "MODE PARALLÈLE — ${TOTAL} comptes sur ${HOST}"
+    PIDS=()
+    LOG_FILES=()
+    RESULT_FILES=()
 
-    section "COMPTE ${ACCOUNT_NUM}/${TOTAL} — ${USER}@${HOST}"
+    for i in "${!USERS[@]}"; do
+        USER="${USERS[$i]}"
+        PWD="${PASSWORDS[$i]}"
+        LOG_FILE="${TMPDIR_LOCAL}/${USER}.log"
+        RESULT_FILE="${TMPDIR_LOCAL}/${USER}.result"
+        > "$LOG_FILE"
+        rm -f "$RESULT_FILE"
+        LOG_FILES+=("$LOG_FILE")
+        RESULT_FILES+=("$RESULT_FILE")
 
-    # ── Step 1: wipe ────────────────────────────────────────────
-    info "Arrêt du bot..."
-    ssh_run "$USER" "$PWD" "pkill -f live_bot.py 2>/dev/null; echo ok" 2>/dev/null || true
+        info "Lancement de ${USER} en arrière-plan..."
+        run_account "$USER" "$PWD" "$LOG_FILE" "$RESULT_FILE" &
+        PIDS+=($!)
+    done
 
-    info "Nettoyage du compte..."
-    ssh_run "$USER" "$PWD" "rm -rf ~/tradinebotte ~/account-sim"
-    ok "Compte vidé"
+    echo ""
+    info "Attente de la fin des ${TOTAL} jobs parallèles..."
+    for pid in "${PIDS[@]}"; do
+        wait "$pid" || true
+    done
 
-    # ── Step 2: rsync ───────────────────────────────────────────
-    info "Rsync de la dernière version..."
-    rsync_to "$USER" "$PWD"
-    ok "Rsync terminé"
+    # Print logs in order
+    for i in "${!USERS[@]}"; do
+        section "LOG — ${USERS[$i]}"
+        cat "${LOG_FILES[$i]}"
+    done
 
-    # ── Step 3: install + tests ─────────────────────────────────
-    info "Installation et tests (install.sh --with-tests)..."
-    INSTALL_OUT=$(ssh_run "$USER" "$PWD" \
-        "cd /home/${USER}/tradinebotte && bash scripts/install.sh --with-tests 2>&1")
+# ── Sequential mode ───────────────────────────────────────────────
+else
+    for i in "${!USERS[@]}"; do
+        USER="${USERS[$i]}"
+        PWD="${PASSWORDS[$i]}"
+        ACCOUNT_NUM=$((i + 1))
+        LOG_FILE="${TMPDIR_LOCAL}/${USER}.log"
+        RESULT_FILE="${TMPDIR_LOCAL}/${USER}.result"
+        > "$LOG_FILE"
+        rm -f "$RESULT_FILE"
 
-    if echo "$INSTALL_OUT" | grep -q "^Ran [0-9]* tests"; then
-        TEST_LINE=$(echo "$INSTALL_OUT" | grep "^Ran [0-9]* tests")
-        if echo "$INSTALL_OUT" | grep -qE "^OK$"; then
-            ok "Tests : ${TEST_LINE} — OK"
-            RESULTS+=("${USER}: OK")
-        else
-            FAIL_LINE=$(echo "$INSTALL_OUT" | grep -E "^FAILED" | head -1)
-            err "Tests : ${TEST_LINE} — ${FAIL_LINE}"
-            RESULTS+=("${USER}: FAILED — ${FAIL_LINE}")
-            echo "$INSTALL_OUT" | grep -A5 "^ERROR\|^FAIL:" | head -30 || true
+        section "COMPTE ${ACCOUNT_NUM}/${TOTAL} — ${USER}@${HOST}"
+        run_account "$USER" "$PWD" "$LOG_FILE" "$RESULT_FILE"
+        cat "$LOG_FILE"
+
+        if [[ $ACCOUNT_NUM -lt $TOTAL && $DELAY -gt 0 ]]; then
+            info "Pause ${DELAY}s avant le prochain compte..."
+            sleep "$DELAY"
         fi
-    else
-        err "install.sh a échoué avant les tests"
-        RESULTS+=("${USER}: INSTALL ERROR")
-        echo "$INSTALL_OUT" | tail -20
-    fi
-
-    # ── Step 4: wait before next account ────────────────────────
-    if [[ $ACCOUNT_NUM -lt $TOTAL && $DELAY -gt 0 ]]; then
-        info "Pause ${DELAY}s avant le prochain compte..."
-        sleep "$DELAY"
-    fi
-done
+    done
+fi
 
 # ── Summary ───────────────────────────────────────────────────────
 ELAPSED=$(( $(date +%s) - START_TOTAL ))
 section "RÉSUMÉ — ${ELAPSED}s total"
 
 ALL_OK=true
-for r in "${RESULTS[@]}"; do
-    if [[ "$r" == *": OK" ]]; then
-        ok "$r"
+for i in "${!USERS[@]}"; do
+    USER="${USERS[$i]}"
+    RESULT_FILE="${TMPDIR_LOCAL}/${USER}.result"
+    if [[ -f "$RESULT_FILE" ]]; then
+        RESULT=$(cat "$RESULT_FILE")
     else
-        err "$r"
+        RESULT="NO RESULT (job crash?)"
+    fi
+    if [[ "$RESULT" == "OK" ]]; then
+        ok "${USER}: ${RESULT}"
+    else
+        err "${USER}: ${RESULT}"
         ALL_OK=false
     fi
 done
