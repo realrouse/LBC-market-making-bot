@@ -84,13 +84,13 @@ fi
 if [ -d "$INSTALL_DIR/venv" ]; then
     echo "=== Mise à jour des packages Python (venv existant) ==="
     "$INSTALL_DIR/venv/bin/pip" install --quiet --upgrade pip
-    "$INSTALL_DIR/venv/bin/pip" install --quiet --upgrade aiohttp websockets web3 py-clob-client
+    "$INSTALL_DIR/venv/bin/pip" install --quiet --upgrade -r "$REPO_DIR/requirements.txt"
 else
     echo "=== Création de l'environnement virtuel ==="
     python3 -m venv "$INSTALL_DIR/venv"
     echo "=== Installation des packages Python ==="
     "$INSTALL_DIR/venv/bin/pip" install --quiet --upgrade pip
-    "$INSTALL_DIR/venv/bin/pip" install --quiet aiohttp websockets web3 py-clob-client
+    "$INSTALL_DIR/venv/bin/pip" install --quiet -r "$REPO_DIR/requirements.txt"
 fi
 
 # Wrapper d'exécution avec TRADINEBOTTE_DIR exportée
