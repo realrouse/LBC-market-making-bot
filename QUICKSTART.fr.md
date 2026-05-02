@@ -10,11 +10,13 @@
 
 ---
 
-## Option A — Un compte (bot seul)
+## Installer depuis une release officielle (tar.gz)
 
 ```bash
-git clone https://github.com/neofutur/tradinebotte.git
-cd tradinebotte
+# Télécharger la dernière release (remplacer v0.40 par la version actuelle)
+wget https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.40.tar.gz
+tar -xzf v0.40.tar.gz
+cd tradinebotte-0.40
 bash scripts/install.sh        # détecte automatiquement les paquets système manquants
 python3 scripts/setup.py       # Entrée = mode simulation
 bash scripts/start_bot.sh
@@ -28,31 +30,9 @@ Redémarrage automatique au reboot : `bash scripts/install_service.sh` (puis sui
 
 ---
 
-## Option B — Plusieurs comptes (WebSocket partagé)
+## Autres méthodes d'installation
 
-```bash
-git clone https://github.com/neofutur/tradinebotte.git
-cd tradinebotte
-bash scripts/install.sh
-TRADINEBOTTE_DIR=~/account-a python3 scripts/setup.py   # clé du compte A
-TRADINEBOTTE_DIR=~/account-b python3 scripts/setup.py   # clé du compte B
-TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
-TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
-```
-
-Le feed (`feed.py`) démarre automatiquement — aucune étape manuelle nécessaire.
-
-**Arrêt :** `pkill -f feed.py; pkill -f account_bot.py`
-
-Architecture complète : [docs/multi.fr.md](docs/multi.fr.md)
-
----
-
-## Quelle option choisir ?
-
-| Situation | Option |
-|---|---|
-| Compte unique | **Option A** |
-| Plusieurs wallets ou utilisateurs Linux | **Option B** |
-| Comparer des stratégies en parallèle | **Option B** |
-| Setup le plus simple possible | **Option A** |
+Voir [INSTALL.fr.md](INSTALL.fr.md) pour :
+- **git clone** — recommandé si GitHub est accessible depuis la machine cible
+- **rsync** — recommandé pour VPS sans git (déploiement depuis une machine de développement locale)
+- Détails complets sur la configuration multi-compte (Option B — WebSocket partagé ZeroMQ)
