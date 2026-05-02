@@ -9,7 +9,10 @@ Toutes les modifications notables de ce projet sont documentées ici.
 ## [Non publié]
 
 ### Fonctionnalité
-- **`scripts/test_all_accounts.sh`** — nouveau script qui vide et réinstalle la dernière version sur tous les comptes de test configurés en séquence ; lit le serveur et les credentials depuis `~/.tradinebotte-test.conf` (même fichier que `test_multibot_deploy.sh`) ; utilise `sshpass` partout ; attend un délai configurable entre les comptes (180 s par défaut) ; options : `--delay SECONDES`, `--no-wait` ; affiche un résumé final avec statut par compte
+- **`scripts/test_all_accounts.sh`** — nouveau script qui vide et réinstalle la dernière version sur tous les comptes de test configurés en séquence ; lit le serveur et les credentials depuis `~/.tradinebotte-test.conf` (même fichier que `test_multibot_deploy.sh`) ; utilise `sshpass` partout ; attend un délai configurable entre les comptes (180 s par défaut) ; options : `--delay SECONDES`, `--no-wait`, `--parallel` ; affiche un résumé final avec statut par compte
+
+### Correctif
+- **`tests/test_multibot.py`** — `TEST_PORT` était codé en dur à `15557` ; quand plusieurs utilisateurs Linux lançaient les tests en parallèle sur le même serveur, tous tentaient de `bind()` sur `tcp://127.0.0.1:15557` simultanément, provoquant `ZMQError: Address already in use` ; le port est désormais dérivé de `os.getuid() % 900 + 15000` pour que chaque utilisateur OS obtienne un port loopback distinct dans la plage 15000–15899
 
 ### Refactorisation
 - **Répertoires temporaires** — seul le feed partagé reste dans `/tmp` ; tous les chemins per-user déplacés dans `~/tmp/` :
