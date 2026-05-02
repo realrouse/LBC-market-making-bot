@@ -8,11 +8,19 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+---
+
+## [0.32] - 2026-05-02
+
 ### Feature
 - **`bot/live_bot.py` — volatility filter** — new entry guard that blocks trades when the market has been oscillating heavily over the last 60 seconds; three complementary metrics computed on a 12-sample rolling window (sampled every 5s): `vol_bid` (std dev of best_bid, threshold 0.07), `range_bid` (max−min amplitude, threshold 0.30), `obi_vol` (std dev of OBI, threshold 0.40); a trade is skipped if any metric exceeds its threshold and at least 6 samples are available (30s warm-up); calibrated on live data 2026-04-25→05-01 (301 trades): losses 8→1, win rate 97.3%→99.5%, EV −$0.050→+$0.160 per trade; toggle with `VOL_FILTER_ENABLED`; calibration results in `volstop.txt`
 - **`bot/live_bot.py` — `VOL_FILTER_WEEKDAY_ONLY`** — flag that suspends the volatility filter during the weekend session (Fri 20:00 UTC → Mon 13:30 UTC); now defaults to `True` — multi-DB backtest shows better overall EV (+0.1284 vs +0.1196) and avoids over-rejecting valid weekend signals where BTC liquidity patterns differ; new helper `_in_weekend_session()` encapsulates the boundary logic and is covered by 10 unit tests
 - **`data/liveweek.db`** — live bot database from VPS London (2026-04-25 to 2026-05-01, 110 883 snapshots, 301 resolved trades) added as a backtest dataset; used for volatility filter calibration
 - **`scripts/backtest_volfilter.py`** — simulation script: loads snapshot and trade data, computes per-trade volatility indicators at entry time on a rolling window, sweeps thresholds for `vol_bid`/`range_bid`/`obi_vol`, and reports baseline vs. filtered performance with a top-10 configuration ranking by EV/trade
+
+### Refactoring
+- **`bot/bot_utils.py`** — new utility module split out of `live_bot.py`: `print_dashboard`, `generate_status_html`, `write_web_status`, `setup_htaccess`, `_htpasswd_sha1`; configuration injected via module-level variables synced from `live_bot` after config.json is loaded; no circular imports; `live_bot.py` shrinks from 991 to 847 lines
+- **`bot/live_bot.py`** — module stays focused on trading logic: signal processing, state classes, WebSocket loop, trade management, DB init
 
 ### Fix
 - **`scripts/install.sh`** — `sqlite3` CLI check downgraded from a hard error to a non-blocking warning; the bot uses Python's built-in `sqlite3` module (always available) and never calls the CLI — only `monitor.sh` needs it for manual DB queries; the warning still prints the install command but no longer exits 1

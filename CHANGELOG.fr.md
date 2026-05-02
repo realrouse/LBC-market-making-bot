@@ -8,11 +8,19 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ## [Non publié]
 
+---
+
+## [0.32] - 2026-05-02
+
 ### Fonctionnalité
 - **`bot/live_bot.py` — filtre de volatilité** — nouvelle garde d'entrée qui bloque les trades lorsque le marché a fortement oscillé au cours des 60 dernières secondes ; trois métriques complémentaires calculées sur une fenêtre glissante de 12 échantillons (prélevés toutes les 5s) : `vol_bid` (écart-type du best_bid, seuil 0.07), `range_bid` (amplitude max−min, seuil 0.30), `obi_vol` (écart-type de l'OBI, seuil 0.40) ; un trade est ignoré si une métrique dépasse son seuil et qu'au moins 6 échantillons sont disponibles (30s de chauffe) ; calibré sur les données live du 2026-04-25 au 05-01 (301 trades) : pertes 8→1, win rate 97.3%→99.5%, EV −$0.050→+$0.160 par trade ; activé/désactivé via `VOL_FILTER_ENABLED` ; résultats de calibration dans `volstop.txt`
 - **`bot/live_bot.py` — `VOL_FILTER_WEEKDAY_ONLY`** — option qui suspend le filtre de volatilité pendant la session weekend (ven. 20h00 UTC → lun. 13h30 UTC) ; désormais à `True` par défaut — le backtest multi-DB montre un meilleur EV global (+0.1284 vs +0.1196) et évite de bloquer des signaux valides le weekend où les patterns de liquidité BTC diffèrent ; nouveau helper `_in_weekend_session()` qui encapsule la logique de détection, couvert par 10 tests unitaires
 - **`data/liveweek.db`** — base de données du bot live VPS Londres (2026-04-25 au 05-01, 110 883 snapshots, 301 trades résolus) ajoutée comme dataset de backtest ; utilisée pour la calibration du filtre de volatilité
 - **`scripts/backtest_volfilter.py`** — script de simulation : charge snapshots et trades depuis une DB, calcule les indicateurs de volatilité au moment de l'entrée sur une fenêtre glissante, balaye les seuils de `vol_bid`/`range_bid`/`obi_vol`, et présente les performances baseline vs. filtrées avec un classement des 10 meilleures configurations par EV/trade
+
+### Refactoring
+- **`bot/bot_utils.py`** — nouveau module utilitaire extrait de `live_bot.py` : `print_dashboard`, `generate_status_html`, `write_web_status`, `setup_htaccess`, `_htpasswd_sha1` ; la configuration est injectée via des variables de module synchronisées depuis `live_bot` après chargement de `config.json` ; aucune dépendance circulaire ; `live_bot.py` passe de 991 à 847 lignes
+- **`bot/live_bot.py`** — le module reste centré sur la logique de trading : traitement des signaux, classes d'état, boucle WebSocket, gestion des trades, initialisation de la DB
 
 ### Correction de bug
 - **`scripts/install.sh`** — la vérification du CLI `sqlite3` est rétrogradée de l'erreur bloquante à un avertissement non-bloquant ; le bot utilise le module Python `sqlite3` intégré (toujours disponible) et n'appelle jamais le CLI — seul `monitor.sh` en a besoin pour les requêtes manuelles ; l'avertissement affiche toujours la commande d'installation mais ne bloque plus avec `exit 1`
