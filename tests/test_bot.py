@@ -18,6 +18,7 @@ os.makedirs("/tmp/tradinebotte-test", exist_ok=True)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bot"))
 import live_bot as bot
 import api_polymarket as api_poly
+import bot_utils
 
 
 # ── Test helpers ──────────────────────────────────────────────────────────────
@@ -639,17 +640,17 @@ class TestRestoreState(unittest.TestCase):
 class TestHtpasswd(unittest.TestCase):
 
     def test_prefix(self):
-        self.assertTrue(bot._htpasswd_sha1("anything").startswith("{SHA}"))
+        self.assertTrue(bot_utils._htpasswd_sha1("anything").startswith("{SHA}"))
 
     def test_known_value(self):
         import base64, hashlib
         expected = "{SHA}" + base64.b64encode(
             hashlib.sha1(b"password").digest()
         ).decode()
-        self.assertEqual(bot._htpasswd_sha1("password"), expected)
+        self.assertEqual(bot_utils._htpasswd_sha1("password"), expected)
 
     def test_different_passwords_differ(self):
-        self.assertNotEqual(bot._htpasswd_sha1("abc"), bot._htpasswd_sha1("xyz"))
+        self.assertNotEqual(bot_utils._htpasswd_sha1("abc"), bot_utils._htpasswd_sha1("xyz"))
 
 
 # ─── generate_status_html ─────────────────────────────────────────────────────
@@ -667,18 +668,18 @@ class TestGenerateStatusHtml(unittest.TestCase):
         return state
 
     def test_contains_capital(self):
-        self.assertIn("123.45", bot.generate_status_html(self._state()))
+        self.assertIn("123.45", bot_utils.generate_status_html(self._state()))
 
     def test_contains_table(self):
-        html = bot.generate_status_html(self._state())
+        html = bot_utils.generate_status_html(self._state())
         self.assertIn("<table>", html)
         self.assertIn("Direction", html)
 
     def test_no_trades_message_when_empty(self):
-        self.assertIn("Aucun trade", bot.generate_status_html(self._state()))
+        self.assertIn("Aucun trade", bot_utils.generate_status_html(self._state()))
 
     def test_win_rate_shown(self):
-        self.assertIn("80.0%", bot.generate_status_html(self._state()))
+        self.assertIn("80.0%", bot_utils.generate_status_html(self._state()))
 
 
 # ─── handle_book_update (integration) ────────────────────────────────────────
