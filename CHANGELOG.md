@@ -8,6 +8,11 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Fix
+- **`tests/test_bot.py`** — test directory was hardcoded to `/tmp/tradinebotte-test`, causing `PermissionError` when two users ran tests concurrently on the same server; now uses `/tmp/tradinebotte-test-<user>` via `getpass.getuser()`
+- **`scripts/install.sh`** — `--with-tests` flag could fail with "source and destination are the same file" when `REPO_DIR == INSTALL_DIR` (repo cloned directly into the install target); copy block now skipped in that case, mirroring the existing `strategies/` guard
+- **`scripts/install.sh`** — pip install commands replaced by `-r requirements.txt` so all dependencies (including `pyzmq` for `feed.py` / multibot) are installed automatically without maintaining a duplicate list in the script
+
 ---
 
 ## [0.32] - 2026-05-02
