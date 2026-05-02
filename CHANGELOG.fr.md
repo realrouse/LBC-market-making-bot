@@ -9,7 +9,7 @@ Toutes les modifications notables de ce projet sont documentées ici.
 ## [Non publié]
 
 ### Fonctionnalité
-- **`scripts/test_all_accounts.sh`** — nouveau script qui vide et réinstalle la dernière version sur les trois comptes de test (claude1/2/3 sur the-vps-host) en séquence ; utilise `sshpass` partout ; attend un délai configurable entre les comptes (180 s par défaut) ; options : `--delay SECONDES`, `--no-wait` ; affiche un résumé final avec statut par compte
+- **`scripts/test_all_accounts.sh`** — nouveau script qui vide et réinstalle la dernière version sur tous les comptes de test configurés en séquence ; lit le serveur et les credentials depuis `~/.tradinebotte-test.conf` (même fichier que `test_multibot_deploy.sh`) ; utilise `sshpass` partout ; attend un délai configurable entre les comptes (180 s par défaut) ; options : `--delay SECONDES`, `--no-wait` ; affiche un résumé final avec statut par compte
 
 ### Refactorisation
 - **Répertoires temporaires** — seul le feed partagé reste dans `/tmp` ; tous les chemins per-user déplacés dans `~/tmp/` :

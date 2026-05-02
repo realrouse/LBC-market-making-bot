@@ -1,18 +1,25 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════
-#  test_all_accounts.sh — Clean install + test on claude1/2/3
+#  test_all_accounts.sh — Clean install + test on all configured accounts
 #
 #  For each account (in order):
 #    1. Kill any running bot
 #    2. Wipe ~/tradinebotte and ~/account-sim
 #    3. rsync latest repo from local machine
-#    4. bash scripts/install.sh --with-tests  (creates venv + runs 163 tests)
+#    4. bash scripts/install.sh --with-tests  (creates venv + runs tests)
 #    5. Wait DELAY seconds before moving to the next account
+#
+#  Configuration (required — same file as test_multibot_deploy.sh):
+#    cp scripts/test_multibot.conf.example ~/.tradinebotte-test.conf
+#    editor ~/.tradinebotte-test.conf   # set TEST_SERVER, TEST_PORT, TEST_USERS, TEST_PASSWORDS
 #
 #  Usage:
 #    bash scripts/test_all_accounts.sh            # default 180s delay
 #    bash scripts/test_all_accounts.sh --delay 60 # custom delay
 #    bash scripts/test_all_accounts.sh --no-wait  # no delay between accounts
+#
+#  Custom conf location:
+#    TEST_MULTIBOT_CONF=/path/to/conf bash scripts/test_all_accounts.sh
 #
 #  Requirements: sshpass (apt install sshpass)
 # ═══════════════════════════════════════════════════════════════════
@@ -21,16 +28,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 
-# ── Config ────────────────────────────────────────────────────────
-HOST="the-vps-host"
-PORT="2222"
 DELAY=180   # seconds between accounts (default 3 min)
-
-ACCOUNTS=(
-    "claude1:REDACTED"
-    "claude2:REDACTED"
-    "claude3:REDACTED"
-)
 
 # ── Argument parsing ──────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -41,13 +39,38 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# ── Helpers ───────────────────────────────────────────────────────
+# ── Load configuration ────────────────────────────────────────────
 BOLD="\033[1m"; GREEN="\033[32m"; RED="\033[31m"; YELLOW="\033[33m"; NC="\033[0m"
 
-ok()   { echo -e "  ${GREEN}✓${NC} $*"; }
-err()  { echo -e "  ${RED}✗${NC} $*"; }
-info() { echo -e "  ${YELLOW}→${NC} $*"; }
+CONF="${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
+if [[ ! -f "$CONF" ]]; then
+    echo -e "${RED}Configuration manquante : $CONF${NC}"
+    echo ""
+    echo "Créer le fichier de configuration depuis le template :"
+    echo "  cp scripts/test_multibot.conf.example ~/.tradinebotte-test.conf"
+    echo "  editor ~/.tradinebotte-test.conf"
+    echo ""
+    echo "Ou pointer vers un fichier personnalisé :"
+    echo "  TEST_MULTIBOT_CONF=/chemin/vers/conf bash scripts/test_all_accounts.sh"
+    exit 1
+fi
+# shellcheck source=/dev/null
+source "$CONF"
 
+HOST="${TEST_SERVER:?TEST_SERVER manquant dans $CONF}"
+PORT="${TEST_PORT:-22}"
+USERS=("${TEST_USERS[@]:?TEST_USERS manquant dans $CONF}")
+PASSWORDS=("${TEST_PASSWORDS[@]:?TEST_PASSWORDS manquant dans $CONF}")
+
+if [[ ${#USERS[@]} -ne ${#PASSWORDS[@]} ]; then
+    echo -e "${RED}TEST_USERS et TEST_PASSWORDS doivent avoir la même longueur.${NC}" >&2
+    exit 1
+fi
+
+# ── Helpers ───────────────────────────────────────────────────────
+ok()      { echo -e "  ${GREEN}✓${NC} $*"; }
+err()     { echo -e "  ${RED}✗${NC} $*"; }
+info()    { echo -e "  ${YELLOW}→${NC} $*"; }
 section() {
     echo ""
     echo -e "${BOLD}══════════════════════════════════════════${NC}"
@@ -56,13 +79,13 @@ section() {
 }
 
 ssh_run() {
-    local user="$1"; local pwd="$2"; shift 2
+    local user="$1" pwd="$2"; shift 2
     sshpass -p "$pwd" ssh -p "$PORT" -o StrictHostKeyChecking=no \
         -o ConnectTimeout=10 "${user}@${HOST}" "$@"
 }
 
 rsync_to() {
-    local user="$1"; local pwd="$2"
+    local user="$1" pwd="$2"
     sshpass -p "$pwd" rsync -a \
         --exclude='*.db' --exclude='__pycache__' \
         --exclude='.git' --exclude='venv' \
@@ -79,10 +102,11 @@ fi
 # ── Main loop ─────────────────────────────────────────────────────
 RESULTS=()
 START_TOTAL=$(date +%s)
-TOTAL=${#ACCOUNTS[@]}
+TOTAL=${#USERS[@]}
 
-for i in "${!ACCOUNTS[@]}"; do
-    IFS=":" read -r USER PWD <<< "${ACCOUNTS[$i]}"
+for i in "${!USERS[@]}"; do
+    USER="${USERS[$i]}"
+    PWD="${PASSWORDS[$i]}"
     ACCOUNT_NUM=$((i + 1))
 
     section "COMPTE ${ACCOUNT_NUM}/${TOTAL} — ${USER}@${HOST}"
@@ -105,7 +129,6 @@ for i in "${!ACCOUNTS[@]}"; do
     INSTALL_OUT=$(ssh_run "$USER" "$PWD" \
         "cd /home/${USER}/tradinebotte && bash scripts/install.sh --with-tests 2>&1")
 
-    # Parse result
     if echo "$INSTALL_OUT" | grep -q "^Ran [0-9]* tests"; then
         TEST_LINE=$(echo "$INSTALL_OUT" | grep "^Ran [0-9]* tests")
         if echo "$INSTALL_OUT" | grep -qE "^OK$"; then
@@ -115,7 +138,6 @@ for i in "${!ACCOUNTS[@]}"; do
             FAIL_LINE=$(echo "$INSTALL_OUT" | grep -E "^FAILED" | head -1)
             err "Tests : ${TEST_LINE} — ${FAIL_LINE}"
             RESULTS+=("${USER}: FAILED — ${FAIL_LINE}")
-            echo ""
             echo "$INSTALL_OUT" | grep -A5 "^ERROR\|^FAIL:" | head -30 || true
         fi
     else
