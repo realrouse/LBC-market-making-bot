@@ -87,17 +87,10 @@ SNAPSHOT_INTERVAL  = 5    # seconds between SQLite price snapshots per token
 ENABLE_SNAPSHOTS   = not _NO_SNAPSHOTS  # pass --no-snapshots to skip snapshot writes
 
 # ─── VOLATILITY FILTER ───────────────────────────────────────────────────────
-# Blocks new trade entries when recent bid/OBI history shows a choppy market.
-# Sampled at SNAPSHOT_INTERVAL (every 5s). Window = VOL_WINDOW × 5s = 60s.
-# Calibrated on live data (2026-04-25 to 2026-05-01): see volstop.txt.
-#   vol_bid  : std dev of best_bid  over window — oscillation amplitude
-#   range_bid: max-min of best_bid  over window — peak-to-peak range
-#   obi_vol  : std dev of OBI       over window — order book instability
-# A trade is skipped if any indicator exceeds its threshold AND the window
-# has at least VOL_MIN_SAMPLES samples (avoid blocking on fresh markets).
-# VOL_FILTER_WEEKDAY_ONLY suspends the filter during the weekend session
-# (Fri 20:00 UTC → Mon 13:30 UTC) where BTC liquidity and volatility patterns
-# differ from weekday sessions — calibration data was weekday-only.
+# Blocks entries when bid/OBI oscillated heavily over the last 60s.
+# Metrics (window = VOL_WINDOW × 5s): vol_bid (std dev), range_bid (max-min),
+# obi_vol (std dev OBI). Calibrated on live data 2026-04-25→05-01 (volstop.txt).
+# VOL_FILTER_WEEKDAY_ONLY suspends the filter Fri 20:00→Mon 13:30 UTC.
 VOL_FILTER_ENABLED      = True
 VOL_FILTER_WEEKDAY_ONLY = False  # True = suspend filter from Fri 20:00 to Mon 13:30 UTC
 VOL_WINDOW              = 12    # samples × 5s = 60s
@@ -393,19 +386,13 @@ async def handle_book_update(state: BotState, parsed: dict[str, Any]) -> None:
 # ─── SIGNAL & TRADE LOGIC ─────────────────────────────────────────────────────
 
 def _in_weekend_session(ts_ms: Optional[int] = None) -> bool:
-    """Return True if the given time falls within the weekend session.
-
-    The weekend session spans from the US weekly close to the US weekly open:
-      Fri ≥ 20:00 UTC  →  Mon < 13:30 UTC
-    Boundaries match the US_WEEKLY_CLOSE / US_WEEKLY_OPEN constants so that
-    VOL_FILTER_WEEKDAY_ONLY and the hour filter use the same definition.
-    """
+    """Return True if timestamp falls in the weekend session (Fri 20:00 → Mon 13:30 UTC)."""
     dt     = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc) if ts_ms is not None \
              else datetime.now(timezone.utc)
     dow    = dt.weekday()   # 0=Mon … 6=Sun
     hour   = dt.hour
     minute = dt.minute
-    if dow == 5 or dow == 6:                          # Sat / Sun: always weekend
+    if dow in (5, 6):                                  # Sat / Sun: always weekend
         return True
     if dow == 4 and hour >= 20:                       # Fri from US weekly close
         return True
@@ -415,18 +402,7 @@ def _in_weekend_session(ts_ms: Optional[int] = None) -> bool:
 
 
 def is_trading_hour(ts_ms: Optional[int] = None) -> bool:
-    """
-    Return True if the given timestamp (or now) falls within the configured
-    trading window. Always returns True when HOUR_FILTER_ENABLED is False.
-
-    Window logic:
-      - Weekends (Sat/Sun): allowed only if WEEKEND_UTC_RANGES is non-empty.
-      - Weekdays (Mon–Fri): allowed by WEEKDAY_UTC_RANGES (empty = all hours).
-      - Monday before 13:30 UTC: blocked when US_WEEKLY_OPEN is True
-        (US markets have not yet opened for the week).
-      - Friday from 20:00 UTC: blocked when US_WEEKLY_CLOSE is True
-        (US markets have closed for the week).
-    """
+    """Return True if the timestamp (or now) falls in the configured trading window."""
     if not HOUR_FILTER_ENABLED:
         return True
     dt     = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc) if ts_ms is not None \
@@ -455,36 +431,12 @@ def is_trading_hour(ts_ms: Optional[int] = None) -> bool:
 
 async def check_signal(state: BotState, ts: TokenState, _t_ws: Optional[float] = None) -> None:
     """
-    Evaluate all entry conditions for the given token and enter a trade if met.
+    Evaluate entry conditions (cheapest first) and enter a trade if all pass.
 
-    _t_ws: monotonic timestamp captured at the start of handle_book_update.
-    Passed through to enter_live_trade for latency measurement. None means
-    no latency tracking (e.g. direct calls from tests).
-
-    The guards are ordered from cheapest to most expensive to evaluate, and
-    from most common rejection to least. Each guard has a specific reason:
-
-      signalled      — one entry per market per session; prevents pyramiding
-      market_ended   — no point entering a market that has already settled
-      best_bid       — core signal: 0.96 means the market prices this at 96%
-      best_bid > max — sanity cap; at 0.999 there is no profitable ask price
-      best_ask >= 1.0 — catches markets that slipped through the time filter:
-                        expired markets still emit messages with ask=1.0
-      best_ask > max — second safety: don't buy above the settlement cap
-      ask_vol        — skip if ask_vol=0 (no first snapshot yet) or too thin;
-                        ask_vol starts at 0.0 before the first book message,
-                        so `ask_vol > 0` is also the "snapshot received" check
-      secs_remaining — at least 45s must remain so the order has time to fill
-      obi            — reject if the order book is heavily ask-dominated
-      vol_filter     — skip if bid or OBI were highly volatile over the last 60s;
-                        a bid that oscillates ±0.30 before signalling is a
-                        false signal — the market is undecided, not trending;
-                        calibrated on live data 2026-04-25→05-01 (volstop.txt):
-                        wins had median bid range 0.13, losses 0.37;
-                        suspended during weekend session (Fri 20:00→Mon 13:30 UTC)
-                        when VOL_FILTER_WEEKDAY_ONLY is True
-      capital        — ensure enough capital remains for the stake
-      daily_stop     — halt for the day if losses exceeded the daily limit
+    Guards: signalled, market_ended, is_trading_hour, best_bid threshold,
+    best_bid/ask caps, ask_vol, secs_remaining, obi, vol_filter, capital,
+    daily_stop_loss.  _t_ws is passed through to enter_live_trade for latency
+    tracking (None = no tracking).
     """
     if ts.market_id in state.signalled: return
     if ts.market_ended: return
@@ -499,16 +451,6 @@ async def check_signal(state: BotState, ts: TokenState, _t_ws: Optional[float] =
     if VOL_FILTER_ENABLED \
             and not (VOL_FILTER_WEEKDAY_ONLY and _in_weekend_session()) \
             and len(ts.bid_history) >= VOL_MIN_SAMPLES:
-        # Volatility filter: reject signals when the bid or OBI has been
-        # oscillating heavily over the last VOL_WINDOW × 5s seconds.
-        # A market trending cleanly to 0.99 moves in one direction; a
-        # "false signal" market bounces back and forth (range >> 0.13).
-        # Three complementary metrics, all computed on the rolling window:
-        #   vol_bid   — population std dev of best_bid (threshold 0.07)
-        #   range_bid — peak-to-peak amplitude max-min  (threshold 0.30)
-        #   obi_vol   — population std dev of OBI       (threshold 0.40)
-        # Live calibration (301 trades, 2026-04-25→05-01): this configuration
-        # reduced losses from 8 to 1 and flipped EV from -0.050 to +0.160.
         bids = list(ts.bid_history)
         obis = list(ts.obi_history)
         mean_b    = sum(bids) / len(bids)
