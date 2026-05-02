@@ -4,16 +4,18 @@ Automated tests for bot/live_bot.py
 Run with:
     bash scripts/run_tests.sh
     # or directly:
-    TRADINEBOTTE_DIR=/tmp/tradinebotte-test .venv/bin/python3 -m unittest discover tests/ -v
+    TRADINEBOTTE_DIR=/tmp/tradinebotte-test-<user> .venv/bin/python3 -m unittest discover tests/ -v
 """
 
-import os, sys, time, sqlite3, unittest
+import os, sys, time, sqlite3, unittest, getpass
 from datetime import datetime, timezone, timedelta
 
 # Redirect all bot I/O to /tmp before importing live_bot, so it never tries
 # to create /opt/polymarket-live or open files outside the project tree.
-os.environ["TRADINEBOTTE_DIR"] = "/tmp/tradinebotte-test"
-os.makedirs("/tmp/tradinebotte-test", exist_ok=True)
+# User-specific path avoids PermissionError on shared servers (e.g. multi-user CI).
+_TEST_DIR = f"/tmp/tradinebotte-test-{getpass.getuser()}"
+os.environ["TRADINEBOTTE_DIR"] = _TEST_DIR
+os.makedirs(_TEST_DIR, exist_ok=True)
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bot"))
 import live_bot as bot
