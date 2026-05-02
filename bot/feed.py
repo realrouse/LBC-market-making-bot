@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# pylint: disable=duplicate-code  # ws recv loop mirrors live_bot.py by design
 """
 feed.py — Shared WebSocket feed broadcaster (Option B multi-bot architecture)
 

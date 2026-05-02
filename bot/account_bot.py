@@ -32,7 +32,7 @@ Message types consumed from feed.py:
 """
 # pylint: disable=duplicate-code  # market-expiry purge loop mirrors feed.py by design
 
-import argparse, asyncio, fcntl, getpass, logging, os, subprocess, sys, time
+import argparse, asyncio, fcntl, logging, os, subprocess, sys, time
 import zmq, zmq.asyncio
 
 logging.basicConfig(
