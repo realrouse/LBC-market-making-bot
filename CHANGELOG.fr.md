@@ -8,6 +8,10 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ## [Non publié]
 
+---
+
+## [0.40] - 2026-05-02
+
 ### Correctif
 - **`tests/test_bot.py`** — le répertoire de test était codé en dur à `/tmp/tradinebotte-test`, provoquant une `PermissionError` quand deux utilisateurs lancaient les tests simultanément sur le même serveur ; utilise désormais `/tmp/tradinebotte-test-<user>` via `getpass.getuser()`
 - **`scripts/install.sh`** — l'option `--with-tests` pouvait échouer avec « source et destination identiques » quand `REPO_DIR == INSTALL_DIR` (repo cloné directement dans le répertoire d'installation) ; le bloc de copie est maintenant ignoré dans ce cas, en miroir de la garde existante pour `strategies/`

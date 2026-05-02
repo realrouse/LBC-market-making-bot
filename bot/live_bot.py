@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-POLYMARKET LIVE BOT v0.32 — BTC Up/Down 5-minute markets
+POLYMARKET LIVE BOT v0.40 — BTC Up/Down 5-minute markets
 
 Strategy:
   Watch active "Bitcoin Up or Down — 5 minutes" markets via the Polymarket
@@ -812,7 +812,7 @@ async def main() -> None:
     logger.info("=" * 65)
     if _SIMULATE:
         logger.warning("  MODE SIMULATION — donnees isolees dans %s", INSTALL_DIR)
-    logger.info("  LIVE BOT v0.32 — Threshold=%.2f Stake=$%.0f MinAskVol=%.0f",
+    logger.info("  LIVE BOT v0.40 — Threshold=%.2f Stake=$%.0f MinAskVol=%.0f",
                 SIGNAL_THRESHOLD, STAKE, MIN_ASK_VOL)
     if _strategy_loaded:
         logger.info("  Strategie : %s", os.path.basename(_strategy_loaded))
