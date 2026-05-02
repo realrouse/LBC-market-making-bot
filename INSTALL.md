@@ -64,6 +64,75 @@ and Dependabot opens PRs when newer versions are available.
 Dev dependencies (`pylint`, `pip-audit`, `mypy`) are declared in `requirements-dev.txt`.
 
 
+## Obtaining the source code
+
+Three methods are available depending on your setup. All three lead to the same
+`bash scripts/install.sh` step.
+
+### Method 1 — Git clone (recommended when GitHub is accessible)
+
+```bash
+git clone https://github.com/neofutur/tradinebotte.git
+cd tradinebotte
+bash scripts/install.sh
+```
+
+To install a specific release:
+
+```bash
+git clone --branch v0.40 https://github.com/neofutur/tradinebotte.git
+cd tradinebotte
+bash scripts/install.sh
+```
+
+### Method 2 — rsync from a local dev machine (recommended for VPS without git)
+
+From your local machine where the repo is already cloned:
+
+```bash
+rsync -a --exclude='*.db' --exclude='__pycache__' --exclude='.git' --exclude='venv' \
+  /path/to/tradinebotte/ user@server:~/tradinebotte/
+ssh user@server "cd ~/tradinebotte && bash scripts/install.sh"
+```
+
+To update an existing install (preserves `config.json`):
+
+```bash
+rsync -a --exclude='*.db' --exclude='__pycache__' --exclude='.git' --exclude='venv' \
+  --exclude='config.json' \
+  /path/to/tradinebotte/ user@server:~/tradinebotte/
+ssh user@server "cd ~/tradinebotte && bash scripts/install.sh"
+```
+
+> The `--exclude='config.json'` flag is critical on updates — without it rsync
+> overwrites the live credentials file.
+
+### Method 3 — Official release tar.gz (no git required)
+
+Download the latest release archive from the
+[Releases page](https://github.com/neofutur/tradinebotte/releases):
+
+```bash
+# Replace v0.40 with the version you want
+wget https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.40.tar.gz
+tar -xzf v0.40.tar.gz
+cd tradinebotte-0.40
+bash scripts/install.sh
+```
+
+Or with `curl`:
+
+```bash
+curl -L https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.40.tar.gz \
+  | tar -xz
+cd tradinebotte-0.40
+bash scripts/install.sh
+```
+
+The directory is named `tradinebotte-<version>` after extraction. The install
+script detects its own location automatically — no path adjustment needed.
+
+
 ## Installation directory
 
 All scripts read the `TRADINEBOTTE_DIR` environment variable to determine

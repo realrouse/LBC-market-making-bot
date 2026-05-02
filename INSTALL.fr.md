@@ -65,6 +65,76 @@ et Dependabot ouvre des PRs lorsque de nouvelles versions sont disponibles.
 Les dépendances de développement (`pylint`, `pip-audit`, `mypy`) sont déclarées dans `requirements-dev.txt`.
 
 
+## Obtenir le code source
+
+Trois méthodes sont disponibles selon votre configuration. Les trois aboutissent
+à la même étape `bash scripts/install.sh`.
+
+### Méthode 1 — Git clone (recommandée si GitHub est accessible)
+
+```bash
+git clone https://github.com/neofutur/tradinebotte.git
+cd tradinebotte
+bash scripts/install.sh
+```
+
+Pour installer une version précise :
+
+```bash
+git clone --branch v0.40 https://github.com/neofutur/tradinebotte.git
+cd tradinebotte
+bash scripts/install.sh
+```
+
+### Méthode 2 — rsync depuis une machine de développement (recommandée pour VPS sans git)
+
+Depuis votre machine locale où le dépôt est déjà cloné :
+
+```bash
+rsync -a --exclude='*.db' --exclude='__pycache__' --exclude='.git' --exclude='venv' \
+  /chemin/vers/tradinebotte/ user@serveur:~/tradinebotte/
+ssh user@serveur "cd ~/tradinebotte && bash scripts/install.sh"
+```
+
+Pour mettre à jour une installation existante (préserve `config.json`) :
+
+```bash
+rsync -a --exclude='*.db' --exclude='__pycache__' --exclude='.git' --exclude='venv' \
+  --exclude='config.json' \
+  /chemin/vers/tradinebotte/ user@serveur:~/tradinebotte/
+ssh user@serveur "cd ~/tradinebotte && bash scripts/install.sh"
+```
+
+> Le flag `--exclude='config.json'` est critique lors des mises à jour — sans lui,
+> rsync écrase le fichier de credentials de production.
+
+### Méthode 3 — Archive tar.gz de release officielle (sans git)
+
+Télécharger la dernière archive de release depuis la
+[page Releases](https://github.com/neofutur/tradinebotte/releases) :
+
+```bash
+# Remplacer v0.40 par la version souhaitée
+wget https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.40.tar.gz
+tar -xzf v0.40.tar.gz
+cd tradinebotte-0.40
+bash scripts/install.sh
+```
+
+Ou avec `curl` :
+
+```bash
+curl -L https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.40.tar.gz \
+  | tar -xz
+cd tradinebotte-0.40
+bash scripts/install.sh
+```
+
+Le répertoire s'appelle `tradinebotte-<version>` après extraction. Le script
+d'installation détecte automatiquement son emplacement — aucun ajustement de
+chemin n'est nécessaire.
+
+
 ## Répertoire d'installation
 
 Tous les scripts lisent la variable d'environnement `TRADINEBOTTE_DIR` pour
