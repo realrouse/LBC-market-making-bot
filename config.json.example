@@ -1,15 +1,39 @@
 {
+  "// CREDENTIALS — obligatoires pour les trades réels": "",
+  "// Clé privée EOA Polygon (wallet avec USDC.e). Sans cette clé, le bot tourne en mode simulation (ordres simulés, pas de transaction on-chain).": "",
   "private_key":    "0xYOUR_PRIVATE_KEY",
+
+  "// Clé API Polymarket — obtenue via python3 scripts/setup.py ou create_or_derive_api_creds()": "",
   "api_key":        "YOUR_API_KEY",
+
+  "// Secret API Polymarket — encodé en base64 urlsafe, dérivé depuis la clé privée": "",
   "api_secret":     "YOUR_API_SECRET",
+
+  "// Passphrase API Polymarket — défini lors de la création des clés API": "",
   "api_passphrase": "YOUR_PASSPHRASE",
 
+  "// STRATÉGIE — paramètres de trading (seuils, mise, filtres)": "",
+  "// Chemin vers le fichier de stratégie JSON (relatif à TRADINEBOTTE_DIR ou absolu).": "",
+  "// Contient : signal_threshold, stake, capital_start, daily_stop_loss, hour_filter, etc.": "",
+  "// Défaut : strategies/polymarket_BTC5M.json — NE PAS modifier les seuils sans re-backtester.": "",
   "strategy": "strategies/polymarket_BTC5M.json",
 
+  "// BASE DE DONNÉES — options avancées (optionnel, safe à omettre)": "",
+  "// db_mmap_mb : active le memory-mapping SQLite pour les lectures. 0 = désactivé.": "",
+  "// N'améliore pas les écritures (INSERT snapshots) car celles-ci passent par le WAL.": "",
+  "// Profiling : aucune différence mesurée sur ce workload (voir audispeed.txt).": "",
   "db_mmap_mb": 0,
 
+  "// PAGE DE STATUT WEB — tableau de bord HTML statique (optionnel)": "",
+  "// webstatuspage_html : true pour écrire une page HTML de statut après chaque trade et toutes les 5 min.": "",
   "webstatuspage_html": false,
+
+  "// Chemin du fichier HTML généré (doit être dans un répertoire servi par un serveur web).": "",
   "webstatuspage_path": "~/public_html/tradinebot_status.html",
+
+  "// Login pour la protection Basic Auth du tableau de bord (.htaccess générée automatiquement).": "",
   "webstatus_user":     "tradinebot",
+
+  "// Mot de passe Basic Auth. Laisser vide pour désactiver la protection (déconseillé).": "",
   "webstatus_password": ""
 }

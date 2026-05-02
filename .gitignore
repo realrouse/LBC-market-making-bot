@@ -30,6 +30,9 @@ venv/
 # Credentials — never commit
 config.json
 
+# Private AI context — contains infrastructure details, keep local only
+docs/CONTEXT_AI.md
+
 # Integration test configuration — contains server addresses and passwords
 scripts/test_multibot.conf
 
@@ -42,3 +45,4 @@ scripts/test_multibot.conf
 !data/backtest_sample_btc5m_range_2026.db
 !data/calmsaturday.db
 !data/basicsunday.db
+!data/liveweek.db

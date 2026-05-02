@@ -553,29 +553,42 @@ The feed publishes three JSON message types over ZeroMQ PUB:
 - If the feed restarts, account bots automatically recover — they will miss book updates during the gap but will not place duplicate orders because the `signalled` set is persisted to the DB between sessions.
 - The ZeroMQ PUB/SUB pattern is one-way: account bots never send messages back to the feed.
 
-### Integration test
+### Integration tests
 
-`scripts/test_multibot_deploy.sh` automates a full clean-install and end-to-end integration test across a configurable set of Linux test accounts. Requires `sshpass` on the local machine. Server address, port, usernames, and passwords are read from `~/.tradinebotte-test.conf` — copy the template and fill in your values:
+Two SSH integration tests cover the shared-server scenarios. Both read from the same `~/.tradinebotte-test.conf`:
 
 ```bash
 cp scripts/test_multibot.conf.example ~/.tradinebotte-test.conf
 editor ~/.tradinebotte-test.conf
 ```
 
-```bash
-# Full clean install + 3-minute multibot test
-bash scripts/test_multibot_deploy.sh
+**Run all integration tests (recommended):**
 
-# Reuse an existing install, extend the test to 5 minutes
-bash scripts/test_multibot_deploy.sh --skip-deploy --duration 300
+```bash
+bash scripts/run_integration_tests.sh              # both tests in sequence
+bash scripts/run_integration_tests.sh --standalone # Option A only
+bash scripts/run_integration_tests.sh --multibot   # Option B only
 ```
 
-What the script verifies:
-- Feed auto-starts when 3 bots are launched simultaneously (race-safe file lock)
-- Exactly one `feed.py` process is visible across all Linux users (`ps aux`)
+**`test_standalone_deploy.sh`** — Option A multi-user (standalone `live_bot.py`):
+- Deploys to 2 Linux users on the same server
+- User 1 starts `start_bot.sh` → must succeed
+- User 2 starts `start_bot.sh` while user 1 is running → must also succeed
+- Verifies no "une instance est déjà en cours" error in either log (catches the `pgrep` scope class of bugs)
+- Both WebSocket connections confirmed in logs
+
+**`test_multibot_deploy.sh`** — Option B multi-user (ZeroMQ feed + account bots):
+- Feed auto-starts when 3 bots launch simultaneously (race-safe file lock)
+- Exactly one `feed.py` process visible across all Linux users
 - All 3 `account_bot.py` processes connect and receive book updates
-- No ERROR/CRITICAL log lines during the test window
-- All processes are stopped cleanly after the test
+- No ERROR/CRITICAL log lines during the 3-minute test window
+- All processes stopped cleanly after the test
+
+```bash
+# Individual runs with options:
+bash scripts/test_standalone_deploy.sh --skip-deploy
+bash scripts/test_multibot_deploy.sh --skip-deploy --duration 300
+```
 
 
 ## Monitoring

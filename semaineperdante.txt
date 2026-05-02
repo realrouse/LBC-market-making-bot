@@ -1,0 +1,76 @@
+================================================================
+  LIVE BOT — BILAN SEMAINE (VPS Londres, /home/botte/polymarket/live.db)
+  Date du rapport : 2026-05-01
+================================================================
+
+--- RÉSUMÉ GLOBAL (300 trades résolus) ---
+  Wins            : 292  (97.33%)
+  Losses          :   8  ( 2.67%)
+  Gain moyen/WIN  : +$0.222
+  Perte moyen/LOSS: -$10.035
+  PnL total       : -$15.45
+  Capital actuel  : ~$84.28  (départ : $100.00)
+
+--- PAR JOUR ---
+  2026-04-25 :  3 trades  100.0% WR  +$0.72
+  2026-04-27 : 36 trades  100.0% WR  +$7.44
+  2026-04-28 : 74 trades  100.0% WR  +$16.83
+  2026-04-29 : 62 trades   96.8% WR  -$5.92
+  2026-04-30 : 62 trades   91.9% WR  -$37.31  ← 5 losses en une journée
+  2026-05-01 : 62 trades   98.4% WR  +$2.53
+
+--- DISTRIBUTION DES ENTRÉES ---
+  entry=0.97  n=192  WR=97.4%  EV≈-$0.193/trade
+  entry=0.98  n= 68  WR=97.1%  EV≈-$0.130/trade
+  entry=0.99  n= 39  WR=97.4%  EV≈+$0.006/trade
+
+================================================================
+  ANALYSE EV
+================================================================
+
+  Win rate live       : 97.33%
+  Win rate breakeven  : 97.84%   ← seuil de rentabilité
+  Win rate backtest   : 98.30%   ← objectif
+
+  EV live             : -$0.052/trade
+  EV backtest         : +$0.088/trade
+
+  L'asymétrie win/loss est brutale (ratio 46:1) :
+    - Chaque win rapporte en moyenne +$0.22
+    - Chaque loss coûte -$10.03
+    → Il faut >97.84% WR pour être profitable.
+    → Le backtest (1663 trades) donnait 98.3% — confortable.
+    → Le live (300 trades) donne 97.33% — sous le seuil.
+
+  Intervalle de confiance 95% sur le WR live : [95.2% — 98.6%]
+  → 300 trades insuffisants pour trancher statistiquement.
+  → Signal préoccupant mais pas encore concluant.
+
+================================================================
+  DIAGNOSTIC : LE 30 AVRIL
+================================================================
+
+  5 losses en 62 trades = 8% loss rate (vs moyenne 2.67%)
+  Cause probable : journée BTC très volatile, marché parti
+  dans la mauvaise direction après signal 0.96.
+  Ce n'est pas un bug — c'est le risque inhérent à la stratégie.
+
+  Avec stake=$10 fixe et capital=$100 :
+    - Une loss = -10% du capital de départ
+    - Une journée à 5 losses = -50% du capital de départ
+    - 3 semaines de gains effacées en une journée
+
+================================================================
+  PISTES D'AMÉLIORATION
+================================================================
+
+  1. Augmenter SIGNAL_THRESHOLD à 0.97
+     → Moins de trades mais meilleure qualité de signal
+     → Les entrées à 0.99 ont EV ≈ 0, peu d'intérêt
+
+  2. Kelly sizing (mise proportionnelle au capital)
+     → $10 fixe sur $84 = 11.9% du capital, trop agressif
+     → Réduire automatiquement la mise après pertes
+
+  3. Collecter 1000+ trades live pour valider statistiquement
+     → La CI à 95% se resserre à ±0.6% à 1000 trades

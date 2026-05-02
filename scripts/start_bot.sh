@@ -20,10 +20,10 @@ if [ ! -f "$CONFIG" ]; then
     exit 1
 fi
 
-# ── Vérification instance unique ─────────────────────────────────
-if pgrep -f live_bot.py > /dev/null; then
-    echo "❌ ERREUR : une instance est déjà en cours (PID: $(pgrep -f live_bot.py))"
-    echo "   Arrêtez-la d'abord : pkill -f live_bot.py"
+# ── Vérification instance unique (utilisateur courant uniquement) ──
+if pgrep -u "$(id -u)" -f live_bot.py > /dev/null; then
+    echo "❌ ERREUR : une instance est déjà en cours (PID: $(pgrep -u "$(id -u)" -f live_bot.py))"
+    echo "   Arrêtez-la d'abord : pkill -u \$(id -u) -f live_bot.py"
     exit 1
 fi
 
@@ -45,8 +45,8 @@ nohup "$PYTHON" "$INSTALL_DIR/live_bot.py" >> "$LOG" 2>&1 &
 echo "PID: $!"
 sleep 3
 
-if pgrep -f live_bot.py > /dev/null; then
-    echo "✅ Bot en cours — PID: $(pgrep -f live_bot.py)"
+if pgrep -u "$(id -u)" -f live_bot.py > /dev/null; then
+    echo "✅ Bot en cours — PID: $(pgrep -u "$(id -u)" -f live_bot.py)"
     echo "Logs: tail -f $DISPLAY_LOG"
 else
     echo "❌ Bot arrêté — dernières lignes du log:"

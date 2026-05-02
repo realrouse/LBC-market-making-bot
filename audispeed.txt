@@ -1,0 +1,157 @@
+================================================================
+  TIMEIT — fonctions synchrones (20,000 itérations)
+================================================================
+
+  Fonction                                  total ms   µs/appel
+  ----------------------------------------  ---------  ---------
+  save_snapshot (SQLite INSERT)                375.6      18.78
+  is_trading_hour()                              1.5       0.08
+  check_resolution (pas de trade ouvert)         1.3       0.06
+
+================================================================
+  TIMEIT — chemin async complet (20,000 itérations)
+================================================================
+
+  Fonction                                      total ms     µs/msg
+  --------------------------------------------  ---------  ---------
+  handle_book_update (bid=0.50, bas)                17.0       0.85
+  handle_book_update (bid=0.96, signalled)          10.9       0.55
+  check_signal (bid=0.50, sous seuil)                6.9       0.34
+
+================================================================
+  cPROFILE — handle_book_update × 20,000 (bid=0.50, chemin nominal)
+================================================================
+         200401 function calls (200399 primitive calls) in 0.059 seconds
+
+   Ordered by: internal time
+   List reduced from 149 to 15 due to restriction <15>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+    20000    0.024    0.000    0.053    0.000 /home/claude/tradinebotte/tradinebotte/scripts/../bot/live_bot.py:334(handle_book_update)
+    20000    0.008    0.000    0.018    0.000 /home/claude/tradinebotte/tradinebotte/scripts/../bot/live_bot.py:401(check_signal)
+    20000    0.007    0.000    0.008    0.000 /home/claude/tradinebotte/tradinebotte/scripts/../bot/live_bot.py:295(market_ended)
+    60000    0.006    0.000    0.006    0.000 {built-in method time.time}
+        1    0.005    0.005    0.059    0.059 /home/claude/tradinebotte/tradinebotte/scripts/profile_hotpath.py:127(run_profiled)
+    20002    0.003    0.000    0.003    0.000 {method 'get' of 'dict' objects}
+    20006    0.002    0.000    0.002    0.000 {built-in method time.monotonic}
+    20000    0.002    0.000    0.002    0.000 /home/claude/tradinebotte/tradinebotte/scripts/../bot/live_bot.py:519(check_resolution)
+    20000    0.002    0.000    0.002    0.000 /home/claude/tradinebotte/tradinebotte/scripts/../bot/live_bot.py:362(is_trading_hour)
+        6    0.000    0.000    0.059    0.010 /usr/lib/python3.13/asyncio/base_events.py:1962(_run_once)
+        1    0.000    0.000    0.000    0.000 {method 'disable' of '_lsprof.Profiler' objects}
+        6    0.000    0.000    0.059    0.010 {method 'run' of '_contextvars.Context' objects}
+        3    0.000    0.000    0.059    0.020 /usr/lib/python3.13/asyncio/base_events.py:689(run_until_complete)
+        2    0.000    0.000    0.000    0.000 {function socket.close at 0x7f8038e905e0}
+        3    0.000    0.000    0.000    0.000 /usr/lib/python3.13/asyncio/base_events.py:181(_run_until_complete_cb)
+
+
+
+================================================================
+  cPROFILE — run_backtest (basicsunday.db — 24 870 snapshots)
+================================================================
+         22575 function calls in 0.010 seconds
+
+   Ordered by: internal time
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.008    0.008    0.010    0.010 /home/claude/tradinebotte/tradinebotte/scripts/backtest.py:168(run_backtest)
+    21841    0.002    0.000    0.002    0.000 /home/claude/tradinebotte/tradinebotte/scripts/backtest.py:140(_is_trading_hour)
+      129    0.000    0.000    0.000    0.000 {method 'strftime' of 'datetime.date' objects}
+      129    0.000    0.000    0.000    0.000 {built-in method fromtimestamp}
+      129    0.000    0.000    0.001    0.000 /home/claude/tradinebotte/tradinebotte/scripts/backtest.py:134(_date)
+       86    0.000    0.000    0.000    0.000 {method 'get' of 'dict' objects}
+        1    0.000    0.000    0.000    0.000 {method 'disable' of '_lsprof.Profiler' objects}
+       43    0.000    0.000    0.000    0.000 <string>:2(__init__)
+       43    0.000    0.000    0.000    0.000 /home/claude/tradinebotte/tradinebotte/scripts/backtest.py:130(_fee)
+       43    0.000    0.000    0.000    0.000 {method 'add' of 'set' objects}
+       43    0.000    0.000    0.000    0.000 {method 'append' of 'list' objects}
+       43    0.000    0.000    0.000    0.000 {built-in method builtins.min}
+       43    0.000    0.000    0.000    0.000 {built-in method builtins.len}
+        1    0.000    0.000    0.000    0.000 {method 'values' of 'dict' objects}
+
+
+
+================================================================
+  cPROFILE — save_snapshot × 20,000 (SQLite INSERT)
+================================================================
+         140001 function calls in 0.429 seconds
+
+   Ordered by: internal time
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+    20000    0.190    0.000    0.190    0.000 {method 'execute' of 'sqlite3.Connection' objects}
+    20000    0.184    0.000    0.184    0.000 {method 'commit' of 'sqlite3.Connection' objects}
+    20000    0.036    0.000    0.429    0.000 /home/claude/tradinebotte/tradinebotte/scripts/../bot/live_bot.py:573(save_snapshot)
+    20000    0.011    0.000    0.016    0.000 /home/claude/tradinebotte/tradinebotte/scripts/../bot/live_bot.py:283(secs_remaining)
+    40000    0.005    0.000    0.005    0.000 {built-in method time.time}
+    20000    0.003    0.000    0.003    0.000 {built-in method builtins.max}
+        1    0.000    0.000    0.000    0.000 {method 'disable' of '_lsprof.Profiler' objects}
+
+
+
+
+================================================================
+  ANALYSE — save_snapshot : nécessaire ou optionnel ?
+================================================================
+
+save_snapshot est purement analytique — aucun rôle dans le trading.
+
+Rôles distincts :
+  - Trades (entrée, résolution, PnL) → check_signal + check_resolution
+    opèrent sur l'état EN MÉMOIRE (TokenState, BotState). Pas de DB.
+  - Table snapshots → uniquement pour reconstituer les données post-session
+    et alimenter le backtest (c'est ainsi qu'ont été créés basicsunday.db,
+    calmsaturday.db, etc.)
+  - Le garde ask_vol > 0 dans check_signal (live_bot.py:419) vérifie
+    l'état en mémoire, pas la base de données.
+
+Coût réel en production (50 tokens actifs) :
+  50 tokens × 1 snapshot/5s = 10 INSERT/s = 10 fsyncs SQLite/s en continu
+  Chaque INSERT coûte ~19 µs dont ~9 µs execute + ~9 µs commit (fsync).
+  Non critique mais I/O inutile si la collecte de données n'est pas souhaitée.
+
+Solution proposée — constante optionnelle :
+
+  ENABLE_SNAPSHOTS = True  # False pour réduire les écritures SQLite
+
+  Dans handle_book_update :
+    if ENABLE_SNAPSHOTS and now - ts.last_snapshot_ts >= SNAPSHOT_INTERVAL:
+        save_snapshot(state, ts)
+        ts.last_snapshot_ts = now
+
+  Alternative : argument CLI --no-snapshots au lancement,
+  sans modification du code source.
+
+========================================================================
+  CAS 1 — DÉFAUT  (snapshots ON, mmap OFF)
+========================================================================
+  save_snapshot × 20,000        :    412.3 ms  |    20.61 µs/appel
+  handle_book_update × 20,000   :     17.0 ms  |     0.85 µs/msg
+
+========================================================================
+  CAS 2 — MMAP 256 MB  (snapshots ON, mmap ON)
+========================================================================
+  save_snapshot × 20,000        :    415.8 ms  |    20.79 µs/appel
+  handle_book_update × 20,000   :     18.7 ms  |     0.93 µs/msg
+
+========================================================================
+  CAS 3 — NO-SNAPSHOTS  (snapshots OFF, mmap OFF)
+========================================================================
+  save_snapshot × 20,000        :      N/A       |       N/A
+  handle_book_update × 20,000   :     16.3 ms  |     0.81 µs/msg
+
+========================================================================
+  TABLEAU COMPARATIF (20,000 itérations)
+========================================================================
+
+  Mesure                                   Cas 1 défaut     Cas 2 mmap  Cas 3 no-snap
+  --------------------------------------  --------------  --------------  --------------
+  save_snapshot (µs/appel)                       20.61          20.79               —
+  save_snapshot (ms total)                       412.3          415.8               —
+  handle_book_update (µs/msg)                     0.85           0.93           0.81
+  handle_book_update (ms total)                   17.0           18.7           16.3
+
+  Écarts (base = Cas 1 défaut) :
+    save_snapshot  : Cas2 vs Cas1 = +0.9%
+    handle_book_update : Cas2 vs Cas1 = +9.6%
+    handle_book_update : Cas3 vs Cas1 = -4.6%
+

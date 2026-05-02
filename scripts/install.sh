@@ -47,10 +47,6 @@ if command -v python3 &>/dev/null && ! python3 -c "import ensurepip" &>/dev/null
     _MISSING+=("python3-venv" "python3.${_PY_MINOR}-venv")
 fi
 
-if ! command -v sqlite3 &>/dev/null; then
-    _MISSING+=("sqlite3")
-fi
-
 if [ ${#_MISSING[@]} -gt 0 ]; then
     echo ""
     echo "ERREUR : paquets système manquants. Lance cette commande en root (une seule fois par machine) :"
@@ -58,6 +54,13 @@ if [ ${#_MISSING[@]} -gt 0 ]; then
     echo "  sudo apt-get install -y ${_MISSING[*]}"
     echo ""
     exit 1
+fi
+
+# sqlite3 CLI — optionnel : uniquement nécessaire pour monitor.sh (requêtes
+# manuelles). Le bot utilise le module Python sqlite3 intégré, toujours dispo.
+if ! command -v sqlite3 &>/dev/null; then
+    echo "Avertissement : sqlite3 CLI absent — monitor.sh ne fonctionnera pas."
+    echo "  Pour l'installer : sudo apt-get install -y sqlite3"
 fi
 
 echo "Dépendances système OK."
@@ -69,14 +72,25 @@ echo "=== Copie du bot ==="
 cp bot/live_bot.py       "$INSTALL_DIR/live_bot.py"
 cp bot/api_polymarket.py "$INSTALL_DIR/api_polymarket.py"
 mkdir -p "$INSTALL_DIR/strategies"
-cp strategies/*.json     "$INSTALL_DIR/strategies/"
+# Guard against same-file error when the repo is cloned directly into
+# INSTALL_DIR (e.g. git clone → ~/tradinebotte, install → ~/tradinebotte).
+_STRAT_SRC="$(cd strategies && pwd)"
+_STRAT_DST="$(cd "$INSTALL_DIR/strategies" && pwd)"
+if [ "$_STRAT_SRC" != "$_STRAT_DST" ]; then
+    cp strategies/*.json "$INSTALL_DIR/strategies/"
+fi
 
-echo "=== Création de l'environnement virtuel ==="
-python3 -m venv "$INSTALL_DIR/venv"
-
-echo "=== Installation des packages Python ==="
-"$INSTALL_DIR/venv/bin/pip" install --quiet --upgrade pip
-"$INSTALL_DIR/venv/bin/pip" install --quiet aiohttp websockets web3 py-clob-client
+if [ -d "$INSTALL_DIR/venv" ]; then
+    echo "=== Mise à jour des packages Python (venv existant) ==="
+    "$INSTALL_DIR/venv/bin/pip" install --quiet --upgrade pip
+    "$INSTALL_DIR/venv/bin/pip" install --quiet --upgrade aiohttp websockets web3 py-clob-client
+else
+    echo "=== Création de l'environnement virtuel ==="
+    python3 -m venv "$INSTALL_DIR/venv"
+    echo "=== Installation des packages Python ==="
+    "$INSTALL_DIR/venv/bin/pip" install --quiet --upgrade pip
+    "$INSTALL_DIR/venv/bin/pip" install --quiet aiohttp websockets web3 py-clob-client
+fi
 
 # Wrapper d'exécution avec TRADINEBOTTE_DIR exportée
 cat > "$INSTALL_DIR/run.sh" << EOF

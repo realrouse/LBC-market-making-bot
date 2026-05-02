@@ -559,29 +559,42 @@ Le feed publie trois types de messages JSON via ZeroMQ PUB :
 - Si le feed redémarre, les account bots récupèrent automatiquement — ils rateront les mises à jour pendant l'interruption mais ne placeront pas d'ordres en double car l'ensemble `signalled` est persisté dans la DB entre les sessions.
 - Le pattern PUB/SUB ZeroMQ est unidirectionnel : les account bots n'envoient jamais de messages au feed.
 
-### Test d'intégration
+### Tests d'intégration
 
-`scripts/test_multibot_deploy.sh` automatise un install propre complet et un test d'intégration de bout en bout sur un ensemble configurable de comptes Linux de test. Requiert `sshpass` sur la machine locale. L'adresse serveur, le port, les noms d'utilisateur et les mots de passe sont lus depuis `~/.tradinebotte-test.conf` — copier le template et renseigner les valeurs :
+Deux tests d'intégration SSH couvrent les scénarios de serveur partagé. Les deux lisent depuis le même `~/.tradinebotte-test.conf` :
 
 ```bash
 cp scripts/test_multibot.conf.example ~/.tradinebotte-test.conf
 editor ~/.tradinebotte-test.conf
 ```
 
-```bash
-# Install propre + test multibot 3 minutes
-bash scripts/test_multibot_deploy.sh
+**Lancer tous les tests d'intégration (recommandé) :**
 
-# Réutiliser une install existante, étendre à 5 minutes
-bash scripts/test_multibot_deploy.sh --skip-deploy --duration 300
+```bash
+bash scripts/run_integration_tests.sh              # les deux tests en séquence
+bash scripts/run_integration_tests.sh --standalone # Option A seulement
+bash scripts/run_integration_tests.sh --multibot   # Option B seulement
 ```
 
-Ce que le script vérifie :
+**`test_standalone_deploy.sh`** — Option A multi-utilisateur (`live_bot.py` standalone) :
+- Déploie sur 2 utilisateurs Linux du même serveur
+- L'utilisateur 1 lance `start_bot.sh` → doit réussir
+- L'utilisateur 2 lance `start_bot.sh` pendant que l'utilisateur 1 tourne → doit aussi réussir
+- Vérifie l'absence de "une instance est déjà en cours" dans les logs (détecte la classe de bugs `pgrep` scope)
+- Connexions WebSocket confirmées dans les deux logs
+
+**`test_multibot_deploy.sh`** — Option B multi-utilisateur (feed ZeroMQ + account bots) :
 - Feed auto-démarré quand 3 bots se lancent simultanément (verrou fichier sans race condition)
-- Exactement un processus `feed.py` visible depuis tous les utilisateurs Linux (`ps aux`)
+- Exactement un processus `feed.py` visible depuis tous les utilisateurs Linux
 - Les 3 processus `account_bot.py` se connectent et reçoivent des book updates
-- Aucune ligne ERROR/CRITICAL dans les logs pendant la fenêtre de test
+- Aucune ligne ERROR/CRITICAL dans les logs pendant la fenêtre de 3 minutes
 - Tous les processus arrêtés proprement après le test
+
+```bash
+# Lancements individuels avec options :
+bash scripts/test_standalone_deploy.sh --skip-deploy
+bash scripts/test_multibot_deploy.sh --skip-deploy --duration 300
+```
 
 
 ## Monitoring

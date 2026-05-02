@@ -154,7 +154,7 @@ for idx in "${!USERS[@]}"; do
         pkill -9 -f '[f]eed.py'        2>/dev/null || true
         fuser -k 5557/tcp 2>/dev/null || true
         rm -rf $REMOTE_INSTALL_DIR $REMOTE_BOT_DIR || true
-        rm -f /tmp/tradinebotte-feed-*.lock /tmp/tradinebotte-feed-*.log || true
+        rm -rf /tmp/tradinebotte-\$USER || true
         exit 0
     " && ok "$user nettoyé" || warn "$user nettoyage partiel"
 done
@@ -241,10 +241,21 @@ for idx in "${!USERS[@]}"; do
     fi
 done
 
-FEED_LOG_PATH=$(run 0 "ls -t /tmp/tradinebotte-feed-*.log 2>/dev/null | head -1 || echo '(introuvable)'")
-info "Log feed : $FEED_LOG_PATH"
+# Le feed a été lancé par le gagnant de la race — cherche son log dans son
+# propre répertoire /tmp/tradinebotte-<user>/ (un par utilisateur Linux).
+FEED_LOG_PATH="(introuvable)"
+FEED_LOG_IDX=0
+for idx in "${!USERS[@]}"; do
+    fp=$(run $idx "ls -t /tmp/tradinebotte-\${USER}/feed-*.log 2>/dev/null | head -1")
+    if [[ -n "$fp" ]]; then
+        FEED_LOG_PATH="$fp"
+        FEED_LOG_IDX=$idx
+        break
+    fi
+done
+info "Log feed : $FEED_LOG_PATH (compte : ${USERS[$FEED_LOG_IDX]})"
 if [[ "$FEED_LOG_PATH" != "(introuvable)" ]]; then
-    FEED_LOG=$(run 0 "cat $FEED_LOG_PATH 2>/dev/null | head -60 || echo '(vide)'")
+    FEED_LOG=$(run $FEED_LOG_IDX "cat $FEED_LOG_PATH 2>/dev/null | head -60 || echo '(vide)'")
     if echo "$FEED_LOG" | grep -qE "WebSocket connecte|Souscription|Marches BTC"; then
         ok "Feed : WebSocket Polymarket connecté"
     else
@@ -298,15 +309,15 @@ done
 echo ""
 echo -e "${BOLD}--- Feed log (30 premières + 10 dernières lignes) ---${NC}"
 if [[ "${FEED_LOG_PATH:-}" != "(introuvable)" && -n "${FEED_LOG_PATH:-}" ]]; then
-    FEED_LOG_HEAD=$(run 0 "head -30 $FEED_LOG_PATH 2>/dev/null || echo '(vide)'")
-    FEED_LOG_TAIL=$(run 0 "tail -10 $FEED_LOG_PATH 2>/dev/null || echo '(vide)'")
+    FEED_LOG_HEAD=$(run $FEED_LOG_IDX "head -30 $FEED_LOG_PATH 2>/dev/null || echo '(vide)'")
+    FEED_LOG_TAIL=$(run $FEED_LOG_IDX "tail -10 $FEED_LOG_PATH 2>/dev/null || echo '(vide)'")
     echo "$FEED_LOG_HEAD"
     echo "..."
     echo "$FEED_LOG_TAIL"
     # Grep sur le serveur pour éviter de transférer un log de plusieurs Mo
-    run 0 "grep -qE 'WebSocket connecte|Souscription|Connected' $FEED_LOG_PATH 2>/dev/null" && \
+    run $FEED_LOG_IDX "grep -qE 'WebSocket connecte|Souscription|Connected' $FEED_LOG_PATH 2>/dev/null" && \
         ok "Feed : WebSocket confirmé dans le log final" || err "Feed : WebSocket non confirmé"
-    run 0 "grep -qiE 'BTC|bitcoin|Marche' $FEED_LOG_PATH 2>/dev/null" && \
+    run $FEED_LOG_IDX "grep -qiE 'BTC|bitcoin|Marche' $FEED_LOG_PATH 2>/dev/null" && \
         ok "Feed : marchés BTC trouvés" || warn "Feed : marchés BTC non trouvés"
 else
     warn "Feed log introuvable — impossible d'analyser"
@@ -329,6 +340,7 @@ for idx in "${!USERS[@]}"; do
         pkill -9 -f '[a]ccount_bot.py' 2>/dev/null || true
         pkill -9 -f '[f]eed.py'        2>/dev/null || true
         fuser -k 5557/tcp 2>/dev/null || true
+        rm -rf /tmp/tradinebotte-\$USER || true
         exit 0
     " && info "$user : processus arrêtés" || true
 done
