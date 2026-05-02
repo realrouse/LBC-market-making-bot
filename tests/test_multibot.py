@@ -23,8 +23,9 @@ import time
 import unittest
 from datetime import datetime, timezone, timedelta
 
-os.environ.setdefault("TRADINEBOTTE_DIR", "/tmp/tradinebotte-test")
-os.makedirs("/tmp/tradinebotte-test", exist_ok=True)
+_TEST_DIR = os.path.join(os.path.expanduser("~"), "tmp", "tradinebotte-test")
+os.environ.setdefault("TRADINEBOTTE_DIR", _TEST_DIR)
+os.makedirs(_TEST_DIR, exist_ok=True)
 
 BOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "bot"))
 sys.path.insert(0, BOT_DIR)

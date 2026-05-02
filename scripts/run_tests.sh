@@ -23,8 +23,8 @@ fi
 
 cd "$PROJECT_DIR"
 
-# Redirect bot I/O to /tmp so tests never touch /opt or write credentials.
-export TRADINEBOTTE_DIR="/tmp/tradinebotte-test"
+# Redirect bot I/O to ~/tmp so tests never touch /opt or write credentials.
+export TRADINEBOTTE_DIR="${HOME}/tmp/tradinebotte-test"
 
 echo "Python : $PYTHON ($("$PYTHON" --version))"
 echo "Tests  : $PROJECT_DIR/tests/"

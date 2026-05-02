@@ -154,7 +154,7 @@ for idx in "${!USERS[@]}"; do
         pkill -9 -f '[f]eed.py'        2>/dev/null || true
         fuser -k 5557/tcp 2>/dev/null || true
         rm -rf $REMOTE_INSTALL_DIR $REMOTE_BOT_DIR || true
-        rm -rf /tmp/tradinebotte-\$USER || true
+        rm -rf /tmp/tradinebotte-feed || true
         exit 0
     " && ok "$user nettoyé" || warn "$user nettoyage partiel"
 done
@@ -241,12 +241,12 @@ for idx in "${!USERS[@]}"; do
     fi
 done
 
-# Le feed a été lancé par le gagnant de la race — cherche son log dans son
-# propre répertoire /tmp/tradinebotte-<user>/ (un par utilisateur Linux).
+# Le feed a été lancé par le gagnant de la race — cherche son log dans le
+# répertoire partagé /tmp/tradinebotte-feed/ (commun à tous les utilisateurs).
 FEED_LOG_PATH="(introuvable)"
 FEED_LOG_IDX=0
 for idx in "${!USERS[@]}"; do
-    fp=$(run $idx "ls -t /tmp/tradinebotte-\${USER}/feed-*.log 2>/dev/null | head -1")
+    fp=$(run $idx "ls -t /tmp/tradinebotte-feed/feed-*.log 2>/dev/null | head -1")
     if [[ -n "$fp" ]]; then
         FEED_LOG_PATH="$fp"
         FEED_LOG_IDX=$idx
@@ -262,7 +262,7 @@ if [[ "$FEED_LOG_PATH" != "(introuvable)" ]]; then
         warn "Feed : pas encore de confirmation WebSocket"
     fi
 else
-    warn "Feed log introuvable dans /tmp/"
+    warn "Feed log introuvable dans /tmp/tradinebotte-feed/"
 fi
 
 # ─── Phase 6 : Opération soutenue ──────────────────────────────────────────────
@@ -340,7 +340,7 @@ for idx in "${!USERS[@]}"; do
         pkill -9 -f '[a]ccount_bot.py' 2>/dev/null || true
         pkill -9 -f '[f]eed.py'        2>/dev/null || true
         fuser -k 5557/tcp 2>/dev/null || true
-        rm -rf /tmp/tradinebotte-\$USER || true
+        rm -rf /tmp/tradinebotte-feed || true
         exit 0
     " && info "$user : processus arrêtés" || true
 done

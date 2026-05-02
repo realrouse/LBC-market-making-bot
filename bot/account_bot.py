@@ -67,10 +67,11 @@ logger = logging.getLogger("account")
 # warn and keep waiting (feed may reconnect to the exchange automatically).
 FEED_TIMEOUT = 60  # seconds
 
-# Per-user /tmp directory — prevents permission errors when multiple Linux
-# users share the same host: the sticky bit stops one user from removing
-# another's files, so each user owns their own subdirectory entirely.
-_FEED_TMP_DIR   = f"/tmp/tradinebotte-{getpass.getuser()}"
+# Shared /tmp directory for the feed — common to all Linux users so the file
+# lock coordinates a single feed.py instance across users. Created with
+# sticky-bit + world-writable (1777) so every user can create lock/log files
+# inside it while the sticky bit prevents cross-user deletion.
+_FEED_TMP_DIR   = "/tmp/tradinebotte-feed"
 # Lock filename includes a hash of the feed address so multiple feed addresses
 # can coexist on the same machine without colliding.
 _FEED_LOCK_PATH = f"{_FEED_TMP_DIR}/feed-{abs(hash(_FEED_ADDR)) % 100000}.lock"
@@ -121,6 +122,10 @@ def _ensure_feed() -> None:
         return
 
     os.makedirs(_FEED_TMP_DIR, exist_ok=True)
+    try:
+        os.chmod(_FEED_TMP_DIR, 0o1777)
+    except PermissionError:
+        pass  # another user created it first; trust it is already world-writable
     lock_file = open(_FEED_LOCK_PATH, "w", encoding="utf-8")  # pylint: disable=consider-using-with
     try:
         fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)

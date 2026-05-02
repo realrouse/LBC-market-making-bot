@@ -7,7 +7,8 @@ USER_NAME=$(id -un)
 TDIR="${TRADINEBOTTE_DIR:-$HOME/tradinebotte}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE="$SCRIPT_DIR/tradinebotte.service"
-OUTPUT="/tmp/tradinebotte.service"
+OUTPUT="${HOME}/tmp/tradinebotte.service"
+mkdir -p "${HOME}/tmp"
 
 if [[ ! -f "$TEMPLATE" ]]; then
     echo "ERROR: template not found: $TEMPLATE" >&2

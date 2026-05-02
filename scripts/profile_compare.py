@@ -5,11 +5,11 @@ Comparaison de performance sur trois configurations :
   CAS 2 — mmap 256 MB   : snapshots activés, mmap SQLite
   CAS 3 — no-snapshots  : snapshots désactivés (pas d'I/O SQLite)
 
-Usage : TRADINEBOTTE_DIR=/tmp/profile-bot python3 scripts/profile_compare.py
+Usage : python3 scripts/profile_compare.py
 """
 import asyncio, time, timeit, sys, os, shutil, glob, sqlite3
 
-PROFILE_DIR = "/tmp/profile-bot"
+PROFILE_DIR = os.path.join(os.path.expanduser("~"), "tmp", "profile-bot")
 os.makedirs(f"{PROFILE_DIR}/strategies", exist_ok=True)
 os.environ["TRADINEBOTTE_DIR"] = PROFILE_DIR
 
