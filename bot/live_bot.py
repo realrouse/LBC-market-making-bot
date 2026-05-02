@@ -23,7 +23,8 @@ Launch:
   bash scripts/start_bot.sh     # starts the bot in the background
 """
 
-import asyncio, json, logging, logging.handlers, os, queue, sqlite3, sys, time
+import asyncio, json, logging, logging.handlers, math, os, queue, sqlite3, sys, time
+from collections import deque
 from datetime import datetime, timezone
 from typing import Any, Optional
 import aiohttp, websockets
@@ -38,8 +39,9 @@ import aiohttp, websockets
 # --no-log:   skip the log file entirely (NullHandler); SQLite DB is unaffected.
 #             Use in production for minimum disk I/O. Stdout still active with
 #             --simulate so interactive testing remains usable.
-_SIMULATE = "--simulate" in sys.argv
-_NO_LOG   = "--no-log"   in sys.argv
+_SIMULATE     = "--simulate"     in sys.argv
+_NO_LOG       = "--no-log"       in sys.argv
+_NO_SNAPSHOTS = "--no-snapshots" in sys.argv
 if _SIMULATE and "TRADINEBOTTE_DIR" not in os.environ:
     os.environ["TRADINEBOTTE_DIR"] = os.path.expanduser("~/tradinebotte-sim")
 
@@ -82,6 +84,27 @@ US_WEEKLY_CLOSE:        bool                  = True   # block Fri from 20:00 UT
 
 # ─── TIMING ──────────────────────────────────────────────────────────────────
 SNAPSHOT_INTERVAL  = 5    # seconds between SQLite price snapshots per token
+ENABLE_SNAPSHOTS   = not _NO_SNAPSHOTS  # pass --no-snapshots to skip snapshot writes
+
+# ─── VOLATILITY FILTER ───────────────────────────────────────────────────────
+# Blocks new trade entries when recent bid/OBI history shows a choppy market.
+# Sampled at SNAPSHOT_INTERVAL (every 5s). Window = VOL_WINDOW × 5s = 60s.
+# Calibrated on live data (2026-04-25 to 2026-05-01): see volstop.txt.
+#   vol_bid  : std dev of best_bid  over window — oscillation amplitude
+#   range_bid: max-min of best_bid  over window — peak-to-peak range
+#   obi_vol  : std dev of OBI       over window — order book instability
+# A trade is skipped if any indicator exceeds its threshold AND the window
+# has at least VOL_MIN_SAMPLES samples (avoid blocking on fresh markets).
+# VOL_FILTER_WEEKDAY_ONLY suspends the filter during the weekend session
+# (Fri 20:00 UTC → Mon 13:30 UTC) where BTC liquidity and volatility patterns
+# differ from weekday sessions — calibration data was weekday-only.
+VOL_FILTER_ENABLED      = True
+VOL_FILTER_WEEKDAY_ONLY = False  # True = suspend filter from Fri 20:00 to Mon 13:30 UTC
+VOL_WINDOW              = 12    # samples × 5s = 60s
+VOL_MIN_SAMPLES         = 6     # require at least 6 samples before filtering
+VOL_BID_MAX             = 0.07  # std dev threshold
+RANGE_BID_MAX           = 0.30  # max-min threshold
+OBI_VOL_MAX             = 0.40  # OBI std dev threshold
 DASHBOARD_INTERVAL = 300  # seconds between log dashboard prints
 MARKET_REFRESH     = 30   # seconds between Gamma API polls to discover new markets
 
@@ -262,7 +285,8 @@ class TokenState:
                  "market_end_ms", "market_start_ms",
                  "best_bid", "best_ask", "spread",
                  "bid_vol", "ask_vol", "obi",
-                 "last_update_ts", "last_snapshot_ts")
+                 "last_update_ts", "last_snapshot_ts",
+                 "bid_history", "obi_history")
 
     def __init__(self, token_id: str, market_id: str, direction: str, question: str,
                  market_start_ms: int, market_end_ms: int) -> None:
@@ -279,6 +303,10 @@ class TokenState:
         # explicitly to avoid entering trades with no visible ask-side liquidity.
         self.bid_vol = 0.0; self.ask_vol = 0.0; self.obi = 0.0
         self.last_update_ts = 0.0; self.last_snapshot_ts = 0.0
+        # Rolling windows sampled every SNAPSHOT_INTERVAL seconds.
+        # Used by the volatility filter in check_signal to detect choppy markets.
+        self.bid_history: deque[float] = deque(maxlen=VOL_WINDOW)
+        self.obi_history: deque[float] = deque(maxlen=VOL_WINDOW)
 
     @property
     def secs_remaining(self) -> float:
@@ -353,11 +381,38 @@ async def handle_book_update(state: BotState, parsed: dict[str, Any]) -> None:
     check_resolution(state, ts)
     now = time.time()
     if now - ts.last_snapshot_ts >= SNAPSHOT_INTERVAL:
-        save_snapshot(state, ts)
+        # Sample bid and OBI into rolling windows regardless of snapshot saving.
+        # The volatility filter in check_signal reads these windows.
+        ts.bid_history.append(ts.best_bid)
+        ts.obi_history.append(ts.obi)
+        if ENABLE_SNAPSHOTS:
+            save_snapshot(state, ts)
         ts.last_snapshot_ts = now
 
 
 # ─── SIGNAL & TRADE LOGIC ─────────────────────────────────────────────────────
+
+def _in_weekend_session(ts_ms: Optional[int] = None) -> bool:
+    """Return True if the given time falls within the weekend session.
+
+    The weekend session spans from the US weekly close to the US weekly open:
+      Fri ≥ 20:00 UTC  →  Mon < 13:30 UTC
+    Boundaries match the US_WEEKLY_CLOSE / US_WEEKLY_OPEN constants so that
+    VOL_FILTER_WEEKDAY_ONLY and the hour filter use the same definition.
+    """
+    dt     = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc) if ts_ms is not None \
+             else datetime.now(timezone.utc)
+    dow    = dt.weekday()   # 0=Mon … 6=Sun
+    hour   = dt.hour
+    minute = dt.minute
+    if dow == 5 or dow == 6:                          # Sat / Sun: always weekend
+        return True
+    if dow == 4 and hour >= 20:                       # Fri from US weekly close
+        return True
+    if dow == 0 and (hour < 13 or (hour == 13 and minute < 30)):  # Mon before US open
+        return True
+    return False
+
 
 def is_trading_hour(ts_ms: Optional[int] = None) -> bool:
     """
@@ -421,6 +476,13 @@ async def check_signal(state: BotState, ts: TokenState, _t_ws: Optional[float] =
                         so `ask_vol > 0` is also the "snapshot received" check
       secs_remaining — at least 45s must remain so the order has time to fill
       obi            — reject if the order book is heavily ask-dominated
+      vol_filter     — skip if bid or OBI were highly volatile over the last 60s;
+                        a bid that oscillates ±0.30 before signalling is a
+                        false signal — the market is undecided, not trending;
+                        calibrated on live data 2026-04-25→05-01 (volstop.txt):
+                        wins had median bid range 0.13, losses 0.37;
+                        suspended during weekend session (Fri 20:00→Mon 13:30 UTC)
+                        when VOL_FILTER_WEEKDAY_ONLY is True
       capital        — ensure enough capital remains for the stake
       daily_stop     — halt for the day if losses exceeded the daily limit
     """
@@ -434,6 +496,30 @@ async def check_signal(state: BotState, ts: TokenState, _t_ws: Optional[float] =
     if ts.ask_vol > 0 and ts.ask_vol < MIN_ASK_VOL: return  # 0.0 = not yet initialized
     if ts.secs_remaining < MIN_SECS_REMAINING: return
     if ts.obi < OBI_REJECT_THRESH: return
+    if VOL_FILTER_ENABLED \
+            and not (VOL_FILTER_WEEKDAY_ONLY and _in_weekend_session()) \
+            and len(ts.bid_history) >= VOL_MIN_SAMPLES:
+        # Volatility filter: reject signals when the bid or OBI has been
+        # oscillating heavily over the last VOL_WINDOW × 5s seconds.
+        # A market trending cleanly to 0.99 moves in one direction; a
+        # "false signal" market bounces back and forth (range >> 0.13).
+        # Three complementary metrics, all computed on the rolling window:
+        #   vol_bid   — population std dev of best_bid (threshold 0.07)
+        #   range_bid — peak-to-peak amplitude max-min  (threshold 0.30)
+        #   obi_vol   — population std dev of OBI       (threshold 0.40)
+        # Live calibration (301 trades, 2026-04-25→05-01): this configuration
+        # reduced losses from 8 to 1 and flipped EV from -0.050 to +0.160.
+        bids = list(ts.bid_history)
+        obis = list(ts.obi_history)
+        mean_b    = sum(bids) / len(bids)
+        vol_bid   = math.sqrt(sum((b - mean_b) ** 2 for b in bids) / len(bids))
+        range_bid = max(bids) - min(bids)
+        mean_o    = sum(obis) / len(obis)
+        obi_vol   = math.sqrt(sum((o - mean_o) ** 2 for o in obis) / len(obis))
+        if vol_bid > VOL_BID_MAX or range_bid > RANGE_BID_MAX or obi_vol > OBI_VOL_MAX:
+            logger.debug("VOL FILTER bid_vol=%.3f range=%.3f obi_vol=%.3f — skip %s",
+                         vol_bid, range_bid, obi_vol, ts.market_id[:12])
+            return
     if state.capital - len(state.open_trades) * STAKE < STAKE: return
 
     # Check daily net PnL from midnight UTC to now.

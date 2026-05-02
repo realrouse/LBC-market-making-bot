@@ -798,5 +798,43 @@ class TestIsTradingHour(unittest.TestCase):
         self.assertIsInstance(result, bool)
 
 
+class TestInWeekendSession(unittest.TestCase):
+    """Tests for _in_weekend_session() — Fri 20:00 UTC → Mon 13:30 UTC."""
+
+    def _ts(self, iso: str) -> int:
+        return int(datetime.fromisoformat(iso).replace(tzinfo=timezone.utc).timestamp() * 1000)
+
+    def test_saturday_is_weekend(self):
+        self.assertTrue(bot._in_weekend_session(self._ts("2026-04-26 12:00:00")))  # Sat noon
+
+    def test_sunday_is_weekend(self):
+        self.assertTrue(bot._in_weekend_session(self._ts("2026-04-27 00:00:00")))  # Sun midnight
+
+    def test_friday_before_close_is_not_weekend(self):
+        self.assertFalse(bot._in_weekend_session(self._ts("2026-05-01 19:59:00")))  # Fri 19:59
+
+    def test_friday_at_close_is_weekend(self):
+        self.assertTrue(bot._in_weekend_session(self._ts("2026-05-01 20:00:00")))  # Fri 20:00
+
+    def test_friday_after_close_is_weekend(self):
+        self.assertTrue(bot._in_weekend_session(self._ts("2026-05-01 22:00:00")))  # Fri 22:00
+
+    def test_monday_before_open_is_weekend(self):
+        self.assertTrue(bot._in_weekend_session(self._ts("2026-04-27 07:00:00")))  # Mon 7h
+
+    def test_monday_at_open_is_not_weekend(self):
+        self.assertFalse(bot._in_weekend_session(self._ts("2026-04-27 13:30:00")))  # Mon 13:30
+
+    def test_monday_after_open_is_not_weekend(self):
+        self.assertFalse(bot._in_weekend_session(self._ts("2026-04-27 14:00:00")))  # Mon 14h
+
+    def test_tuesday_is_not_weekend(self):
+        self.assertFalse(bot._in_weekend_session(self._ts("2026-04-28 10:00:00")))  # Tue
+
+    def test_no_args_uses_current_time(self):
+        result = bot._in_weekend_session()
+        self.assertIsInstance(result, bool)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
