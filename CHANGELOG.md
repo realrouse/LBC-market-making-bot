@@ -8,6 +8,9 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Feature
+- **`scripts/test_all_accounts.sh`** — new script that wipes and reinstalls the latest version on all three test accounts (claude1/2/3 on the-vps-host) in sequence; uses `sshpass` throughout; waits a configurable delay between accounts (default 180 s); options: `--delay SECONDS`, `--no-wait`; prints a final summary with pass/fail per account
+
 ### Refactoring
 - **Temp directory layout** — only the shared feed uses `/tmp`; all per-user paths moved to `~/tmp/`:
   - `bot/account_bot.py`: `_FEED_TMP_DIR` changed from `/tmp/tradinebotte-<user>` to `/tmp/tradinebotte-feed` (no user suffix); created with chmod 1777 so every Linux user can write lock/log files into it while the sticky bit prevents cross-user deletion; this makes the file lock truly cross-user, ensuring a single `feed.py` instance across all accounts
