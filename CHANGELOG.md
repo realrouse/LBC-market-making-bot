@@ -12,6 +12,8 @@ All notable changes to this project are documented here.
 - **`scripts/test_all_accounts.sh`** — new script that wipes and reinstalls the latest version on all configured test accounts in sequence; reads server and credentials from `~/.tradinebotte-test.conf` (same file as `test_multibot_deploy.sh`); uses `sshpass` throughout; waits a configurable delay between accounts (default 180 s); options: `--delay SECONDS`, `--no-wait`, `--parallel`; prints a final summary with pass/fail per account
 
 ### Fix
+- **`bot/account_bot.py`** — leftover `getpass` import removed (unused since the `~/tmp` refactor); pylint score restored to 10.00/10
+- **`bot/feed.py`** — added `# pylint: disable=duplicate-code` (WebSocket recv loop intentionally mirrors `live_bot.py`)
 - **`tests/test_multibot.py`** — `TEST_PORT` was hardcoded to `15557`; when multiple Linux users ran tests in parallel on the same server all processes attempted to `bind()` to `tcp://127.0.0.1:15557` simultaneously, causing `ZMQError: Address already in use`; port is now derived from `os.getuid() % 900 + 15000` so each OS user gets a distinct loopback port in the 15000–15899 range
 
 ### Refactoring
