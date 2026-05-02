@@ -8,6 +8,15 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ## [Non publié]
 
+### Refactorisation
+- **Répertoires temporaires** — seul le feed partagé reste dans `/tmp` ; tous les chemins per-user déplacés dans `~/tmp/` :
+  - `bot/account_bot.py` : `_FEED_TMP_DIR` passe de `/tmp/tradinebotte-<user>` à `/tmp/tradinebotte-feed` (sans suffixe utilisateur) ; créé avec chmod 1777 pour que chaque utilisateur Linux puisse y écrire ses fichiers lock/log, le sticky bit empêchant la suppression inter-utilisateurs ; le verrou fichier est désormais vraiment cross-user, garantissant une seule instance de `feed.py` pour tous les comptes
+  - `tests/test_bot.py`, `tests/test_multibot.py` : sandbox de test déplacé dans `~/tmp/tradinebotte-test`
+  - `scripts/run_tests.sh` : `TRADINEBOTTE_DIR` mis à jour vers `${HOME}/tmp/tradinebotte-test`
+  - `scripts/profile_hotpath.py`, `scripts/profile_compare.py` : sandbox de profiling déplacé dans `~/tmp/profile-bot`
+  - `scripts/install_service.sh`, `install_account_service.sh`, `install_feed_service.sh` : fichiers `.service` générés déplacés dans `~/tmp/`
+  - `scripts/test_standalone_deploy.sh`, `test_multibot_deploy.sh` : chemins de nettoyage et de recherche du log feed mis à jour
+
 ---
 
 ## [0.40] - 2026-05-02
