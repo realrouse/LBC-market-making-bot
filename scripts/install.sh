@@ -109,13 +109,14 @@ echo "=== Vérification syntaxe ==="
 
 if [ "$WITH_TESTS" = "1" ]; then
     echo "=== Copie des fichiers de test ==="
-    mkdir -p "$INSTALL_DIR/tests" "$INSTALL_DIR/scripts"
-    cp tests/test_bot.py      "$INSTALL_DIR/tests/test_bot.py"
-    cp tests/test_backtest.py "$INSTALL_DIR/tests/test_backtest.py"
-    cp scripts/backtest.py    "$INSTALL_DIR/scripts/backtest.py"
-    cp scripts/run_tests.sh   "$INSTALL_DIR/scripts/run_tests.sh"
-    mkdir -p "$INSTALL_DIR/data"
-    cp data/backtest_sample_btc5m_range_2026.db "$INSTALL_DIR/data/backtest_sample_btc5m_range_2026.db"
+    mkdir -p "$INSTALL_DIR/tests" "$INSTALL_DIR/scripts" "$INSTALL_DIR/data"
+    if [ "$REPO_DIR" != "$INSTALL_DIR" ]; then
+        cp tests/test_bot.py      "$INSTALL_DIR/tests/test_bot.py"
+        cp tests/test_backtest.py "$INSTALL_DIR/tests/test_backtest.py"
+        cp scripts/backtest.py    "$INSTALL_DIR/scripts/backtest.py"
+        cp scripts/run_tests.sh   "$INSTALL_DIR/scripts/run_tests.sh"
+        cp data/backtest_sample_btc5m_range_2026.db "$INSTALL_DIR/data/backtest_sample_btc5m_range_2026.db"
+    fi
     echo "=== Lancement des tests ==="
     cd "$INSTALL_DIR"
     TRADINEBOTTE_DIR="$INSTALL_DIR" "$INSTALL_DIR/venv/bin/python3" \
