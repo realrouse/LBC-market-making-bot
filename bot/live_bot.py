@@ -92,7 +92,7 @@ ENABLE_SNAPSHOTS   = not _NO_SNAPSHOTS  # pass --no-snapshots to skip snapshot w
 # obi_vol (std dev OBI). Calibrated on live data 2026-04-25→05-01 (volstop.txt).
 # VOL_FILTER_WEEKDAY_ONLY suspends the filter Fri 20:00→Mon 13:30 UTC.
 VOL_FILTER_ENABLED      = True
-VOL_FILTER_WEEKDAY_ONLY = False  # True = suspend filter from Fri 20:00 to Mon 13:30 UTC
+VOL_FILTER_WEEKDAY_ONLY = True   # True = suspend filter from Fri 20:00 to Mon 13:30 UTC
 VOL_WINDOW              = 12    # samples × 5s = 60s
 VOL_MIN_SAMPLES         = 6     # require at least 6 samples before filtering
 VOL_BID_MAX             = 0.07  # std dev threshold
