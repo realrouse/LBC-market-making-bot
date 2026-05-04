@@ -30,3 +30,16 @@ echo "Python : $PYTHON ($("$PYTHON" --version))"
 echo "Tests  : $PROJECT_DIR/tests/"
 echo ""
 "$PYTHON" -W ignore::ResourceWarning -m unittest discover -s tests/ -p "test_*.py" -v
+
+# ── Documentation audit ───────────────────────────────────────────
+if command -v claude &>/dev/null; then
+    echo ""
+    echo "=== Audit documentation CLI ==="
+    claude --agent doc-sync -p "Run the documentation audit" \
+        --allowedTools "Read,Bash,Glob,Grep" \
+        --dangerously-skip-permissions --print \
+        || echo "⚠️  Audit doc non bloquant — vérifier manuellement"
+else
+    echo ""
+    echo "ℹ️  claude CLI absent — audit doc ignoré (agent : .claude/agents/doc-sync.md)"
+fi
