@@ -253,7 +253,14 @@ else:
     _log_listener = logging.handlers.QueueListener(
         _log_queue, _file_handler, respect_handler_level=True)
     _log_listener.start()   # starts the daemon writer thread
-    _log_handlers = [logging.handlers.QueueHandler(_log_queue)]
+    # QueueHandler.prepare() calls self.format() and stores the result in
+    # record.msg before enqueuing. Without an explicit formatter, basicConfig
+    # would set the full _LOG_FMT on the QueueHandler, causing the record to
+    # be formatted twice (once here, once by the FileHandler). The passthrough
+    # formatter prevents that by only evaluating the raw message text.
+    _qh = logging.handlers.QueueHandler(_log_queue)
+    _qh.setFormatter(logging.Formatter("%(message)s"))
+    _log_handlers = [_qh]
     if _SIMULATE:
         # In simulate mode, mirror all records to stdout so the terminal
         # shows live output without needing `tail -f`.
