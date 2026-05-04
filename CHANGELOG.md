@@ -9,6 +9,7 @@ All notable changes to this project are documented here.
 ## [Unreleased]
 
 ### Feature
+- **`.claude/agents/doc-sync.md`** — Claude Code subagent (Haiku) that audits all user-facing CLI flags in scripts against the four main doc files (README.md, README.fr.md, INSTALL.md, INSTALL.fr.md); reports gaps only, never edits; integrated into `scripts/run_tests.sh` as a non-blocking post-suite step when the `claude` CLI is present
 - **`scripts/start_bot.sh` — `--reset-db` option**: backs up `live.db` to `live.db.bak.YYYYMMDD_HHMMSS`, then deletes it before launch so the bot starts fresh (zero capital, zero trade history); prompts for `yes` confirmation before proceeding; safe no-op if the file does not exist
 - **`bot/live_bot.py` v0.41 — optimised default parameters** (grid-search sweep on liveweek.db, 110 952 snapshots):
   - `SIGNAL_THRESHOLD` 0.96 → **0.95** (more trades, same 99.3% WR, +$14.73 vs +$13.14)
