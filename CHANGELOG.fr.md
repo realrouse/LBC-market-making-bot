@@ -9,6 +9,13 @@ Toutes les modifications notables de ce projet sont documentées ici.
 ## [Non publié]
 
 ### Fonctionnalité
+- **`bot/live_bot.py` — refonte du format des logs** (5 améliorations + uptime) :
+  - Horodatage sans millisecondes : `2026-05-04 20:04:03` (était `2026-05-04 20:04:03,123`)
+  - Niveau à largeur fixe : `[INFO ]` / `[WARN ]` / `[ERROR]` / `[CRIT ]` — les messages s'alignent dans le fichier
+  - Couleurs ANSI sur stdout uniquement (le fichier reste plain) : jaune pour WARN, rouge pour ERROR, magenta pour CRIT
+  - Séparateurs visuels sur les événements de trade : `▶ TRADE`, `✓ WIN `, `✗ LOSS`
+  - Espacement des métriques plus lisible : `entry=0.9710  bid=0.9700  secs=52s` (double espace entre les champs)
+  - Uptime dans la bannière de démarrage : `LIVE BOT v0.40 | start=2026-05-04 19:11:48 UTC | up 1h02m03s | ...`
 - **`scripts/test_all_accounts.sh`** — nouveau script qui vide et réinstalle la dernière version sur tous les comptes de test configurés en séquence ; lit le serveur et les credentials depuis `~/.tradinebotte-test.conf` (même fichier que `test_multibot_deploy.sh`) ; utilise `sshpass` partout ; attend un délai configurable entre les comptes (180 s par défaut) ; options : `--delay SECONDES`, `--no-wait`, `--parallel` ; affiche un résumé final avec statut par compte
 
 ### Correctif

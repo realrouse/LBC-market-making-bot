@@ -23,7 +23,7 @@ Launch:
   bash scripts/start_bot.sh     # starts the bot in the background
 """
 
-import asyncio, json, logging, logging.handlers, math, os, queue, sqlite3, sys, time
+import asyncio, copy, json, logging, logging.handlers, math, os, queue, sqlite3, sys, time
 from collections import deque
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -42,6 +42,7 @@ import aiohttp, websockets
 _SIMULATE     = "--simulate"     in sys.argv
 _NO_LOG       = "--no-log"       in sys.argv
 _NO_SNAPSHOTS = "--no-snapshots" in sys.argv
+_BOT_START: float = time.time()   # process start epoch — used for uptime display
 if _SIMULATE and "TRADINEBOTTE_DIR" not in os.environ:
     os.environ["TRADINEBOTTE_DIR"] = os.path.expanduser("~/tradinebotte-sim")
 
@@ -192,6 +193,38 @@ bot_utils.INSTALL_DIR        = INSTALL_DIR
 # which require the directory to already exist.
 os.makedirs(INSTALL_DIR, exist_ok=True)
 
+# ── Log formatters ────────────────────────────────────────────────
+_LEVEL_ABBR: dict[str, str] = {
+    "DEBUG": "DEBUG", "INFO": "INFO ", "WARNING": "WARN ",
+    "ERROR": "ERROR", "CRITICAL": "CRIT ",
+}
+# ANSI colors applied to stdout only; log file stays plain.
+_ANSI_COLOR: dict[str, str] = {
+    "WARN ": "\033[33m",   # yellow
+    "ERROR": "\033[31m",   # red
+    "CRIT ": "\033[35m",   # magenta
+}
+_ANSI_RESET = "\033[0m"
+_LOG_FMT  = "%(asctime)s [%(levelname)s] %(message)s"
+_LOG_DATE = "%Y-%m-%d %H:%M:%S"
+
+class _PlainFmt(logging.Formatter):
+    """File formatter: no colors, fixed-width level abbreviation."""
+    def format(self, record: logging.LogRecord) -> str:
+        r = copy.copy(record)
+        r.levelname = _LEVEL_ABBR.get(r.levelname, r.levelname[:5])
+        return super().format(r)
+
+class _ColorFmt(logging.Formatter):
+    """Stdout formatter: same as _PlainFmt plus ANSI color on WARN/ERROR."""
+    def format(self, record: logging.LogRecord) -> str:
+        abbr = _LEVEL_ABBR.get(record.levelname, record.levelname[:5])
+        r = copy.copy(record)
+        r.levelname = abbr
+        msg = super().format(r)
+        color = _ANSI_COLOR.get(abbr, "")
+        return f"{color}{msg}{_ANSI_RESET}" if color else msg
+
 # _log_listener is module-level so the __main__ block can call .stop() on exit
 # to flush any buffered records before the process terminates. None when
 # --no-log is active (NullHandler has no queue to drain).
@@ -201,8 +234,12 @@ _log_handlers: list[logging.Handler]
 if _NO_LOG:
     # --no-log: drop all log records (no file created, no disk I/O).
     # In --simulate mode we keep stdout so interactive runs stay observable.
-    _log_handlers = [logging.StreamHandler(sys.stdout)] if _SIMULATE \
-                    else [logging.NullHandler()]
+    if _SIMULATE:
+        _h = logging.StreamHandler(sys.stdout)
+        _h.setFormatter(_ColorFmt(_LOG_FMT, datefmt=_LOG_DATE))
+        _log_handlers = [_h]
+    else:
+        _log_handlers = [logging.NullHandler()]
 else:
     # Async logging: logger.info() just enqueues a LogRecord in _log_queue
     # (nanoseconds, no syscall). The QueueListener runs a daemon thread that
@@ -212,6 +249,7 @@ else:
     # are applied in the background thread, not the caller's thread.
     _log_queue: queue.Queue[logging.LogRecord] = queue.Queue()
     _file_handler = logging.FileHandler(LOG_PATH)
+    _file_handler.setFormatter(_PlainFmt(_LOG_FMT, datefmt=_LOG_DATE))
     _log_listener = logging.handlers.QueueListener(
         _log_queue, _file_handler, respect_handler_level=True)
     _log_listener.start()   # starts the daemon writer thread
@@ -219,11 +257,14 @@ else:
     if _SIMULATE:
         # In simulate mode, mirror all records to stdout so the terminal
         # shows live output without needing `tail -f`.
-        _log_handlers.append(logging.StreamHandler(sys.stdout))
+        _h = logging.StreamHandler(sys.stdout)
+        _h.setFormatter(_ColorFmt(_LOG_FMT, datefmt=_LOG_DATE))
+        _log_handlers.append(_h)
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+    format=_LOG_FMT,
+    datefmt=_LOG_DATE,
     handlers=_log_handlers,
 )
 logger = logging.getLogger("live")
@@ -537,7 +578,7 @@ async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[floa
     state.traded_direction[ts.market_id] = ts.direction
     state.total_trades += 1
     logger.info(
-        "TRADE #%d | %s %s | entry=%.4f | bid=%.4f | secs=%.0f | order=%s",
+        "▶ TRADE #%d | %s %s | entry=%.4f  bid=%.4f  secs=%.0fs | order=%s",
         tid, ts.direction, ts.market_id[:12], ep, ts.best_bid,
         ts.secs_remaining, oid or "sim"
     )
@@ -600,9 +641,11 @@ def close_trade(state: BotState, ts: TokenState, trade_id: int, outcome: str) ->
     else: state.losses += 1
     del state.open_trades[ts.market_id]
     del state.traded_direction[ts.market_id]
+    _icon    = "✓" if won else "✗"
+    _outcome = "WIN " if won else "LOSS"
     logger.info(
-        "%s #%d | %s %s | pnl=$%+.2f (%.1f%%) | WR=%.1f%% | capital=$%.2f",
-        "WIN" if won else "LOSS", trade_id, ts.direction, ts.market_id[:12],
+        "%s %s #%d | %s %s | pnl=$%+.2f (%.1f%%) | WR=%.1f%% | capital=$%.2f",
+        _icon, _outcome, trade_id, ts.direction, ts.market_id[:12],
         pn, roi, state.win_rate, state.capital
     )
     write_web_status(state)
@@ -809,11 +852,17 @@ def restore_state_from_db(state: BotState) -> None:
                 state.capital, row[0], state.win_rate)
 
 async def main() -> None:
+    _up = int(time.time() - _BOT_START)
+    _start_str = datetime.fromtimestamp(_BOT_START, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     logger.info("=" * 65)
     if _SIMULATE:
         logger.warning("  MODE SIMULATION — donnees isolees dans %s", INSTALL_DIR)
-    logger.info("  LIVE BOT v0.40 — Threshold=%.2f Stake=$%.0f MinAskVol=%.0f",
-                SIGNAL_THRESHOLD, STAKE, MIN_ASK_VOL)
+    logger.info(
+        "  LIVE BOT v0.40 | start=%s UTC | up %dh%02dm%02ds"
+        " | seuil=%.2f mise=$%.0f minAskVol=%.0f",
+        _start_str, _up // 3600, (_up % 3600) // 60, _up % 60,
+        SIGNAL_THRESHOLD, STAKE, MIN_ASK_VOL,
+    )
     if _strategy_loaded:
         logger.info("  Strategie : %s", os.path.basename(_strategy_loaded))
     else:
