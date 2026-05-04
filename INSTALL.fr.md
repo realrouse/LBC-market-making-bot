@@ -346,6 +346,8 @@ disponible (`After=network-online.target`).
 **Flags :**
 - *(aucun flag)* — mode normal : les écritures de logs sont asynchrones (thread daemon, ne bloque jamais le event loop)
 - `--no-log` — supprime le fichier log pour un I/O disque minimal ; la DB SQLite (trades + snapshots) n'est pas affectée ; combiner avec `--simulate` pour conserver la sortie stdout
+- `--no-snapshots` — ne pas écrire les snapshots de prix toutes les 5 s dans la DB ; les trades continuent d'être enregistrés ; réduit la pression d'écriture sur les longues sessions ; à utiliser quand les données de snapshots ne sont pas nécessaires pour l'analyse post-session
+- `--reset-db` — sauvegarde `live.db` dans `live.db.bak.YYYYMMDD_HHMMSS` puis le supprime avant le lancement ; le bot repart de zéro (capital et historique de trades) ; demande une confirmation `yes` ; sans effet si la DB est absente
 - `--simulate` — isole tous les fichiers dans `~/tradinebotte-sim` par défaut, aucun ordre réel. Si `TRADINEBOTTE_DIR` est déjà défini dans l'environnement, ce chemin est utilisé à la place — ce qui permet de faire tourner plusieurs bots en parallèle sans conflit :
   ```bash
   TRADINEBOTTE_DIR=~/compte-a python3 live_bot.py --simulate
@@ -425,6 +427,16 @@ python3 scripts/backtest.py --all --sweep
 ```
 
 Quand plusieurs fichiers sont traités, chaque fichier tourne avec le capital réinitialisé à `capital_start` (simulation indépendante), et un bloc AGGREGATE résume les wins, losses, PnL, taux de victoire et pire drawdown combinés de tous les fichiers.
+
+**Flags de paramètres** (écrasent les valeurs par défaut du JSON de stratégie pour un seul run) :
+
+| Flag | Défaut | Description |
+|---|---|---|
+| `--threshold FLOAT` | 0.95 | Seuil du signal d'entrée (`best_bid >= seuil`) |
+| `--min-secs FLOAT` | 30.0 | Secondes minimum restantes à l'entrée |
+| `--min-ask FLOAT` | 10.0 | Volume minimum côté ask en USD à l'entrée |
+| `--obi FLOAT` | −0.25 | Seuil de rejet OBI (les entrées avec un OBI inférieur à cette valeur sont ignorées) |
+| `--stake FLOAT` | 10.0 | Mise en USD par trade |
 
 
 ## Filtre heure / jour
@@ -604,6 +616,10 @@ Adresse personnalisée (port ou hôte différent) :
 TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash scripts/start_feed.sh
 TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
 ```
+
+**Flags de l'account bot** (`scripts/start_account.sh` les transmet à `bot/account_bot.py`) :
+
+- `--verbose` — active le logging DEBUG pour le diagnostic ; affiche chaque book update, évaluation de signal et message ZMQ reçu ; utile lors de la mise en place initiale ou du débogage
 
 ### Arrêt
 
