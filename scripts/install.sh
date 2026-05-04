@@ -17,6 +17,7 @@
 set -e
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_DIR"   # ensure relative paths (bot/, tests/, etc.) resolve correctly
 
 WITH_TESTS=0
 ARGS=()
