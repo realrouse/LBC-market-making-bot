@@ -7,7 +7,16 @@
 #  Répertoire d'installation (par ordre de priorité) :
 #    1. Variable d'environnement : TRADINEBOTTE_DIR=~/tradinebotte bash scripts/start_bot.sh
 #    2. Valeur par défaut : ~/tradinebotte (aucun accès root requis)
+#
+#  Options :
+#    --reset-db   sauvegarde live.db puis le supprime avant de lancer
+#                 (le bot repart à zéro : capital, trades, historique)
 # ═══════════════════════════════════════════════════════════════════
+
+RESET_DB=0
+for _arg in "$@"; do
+    [ "$_arg" = "--reset-db" ] && RESET_DB=1
+done
 
 INSTALL_DIR="${TRADINEBOTTE_DIR:-$HOME/tradinebotte}"
 INSTALL_DIR="$(eval echo "$INSTALL_DIR")"
@@ -25,6 +34,25 @@ if pgrep -u "$(id -u)" -f live_bot.py > /dev/null; then
     echo "❌ ERREUR : une instance est déjà en cours (PID: $(pgrep -u "$(id -u)" -f live_bot.py))"
     echo "   Arrêtez-la d'abord : pkill -u \$(id -u) -f live_bot.py"
     exit 1
+fi
+
+# ── Réinitialisation DB (--reset-db) ──────────────────────────────
+if [ "$RESET_DB" = "1" ]; then
+    DB="$INSTALL_DIR/live.db"
+    if [ -f "$DB" ]; then
+        BAK="${DB}.bak.$(date +%Y%m%d_%H%M%S)"
+        echo "⚠️  --reset-db : sauvegarde → $(basename "$BAK")"
+        read -r -p "   Confirmer la réinitialisation (yes/N) : " _confirm
+        if [ "$_confirm" != "yes" ]; then
+            echo "Annulé."
+            exit 0
+        fi
+        cp "$DB" "$BAK"
+        rm "$DB"
+        echo "✅ live.db réinitialisé (backup : $BAK)"
+    else
+        echo "live.db absent — rien à réinitialiser."
+    fi
 fi
 
 # ── Vérification venv ─────────────────────────────────────────────

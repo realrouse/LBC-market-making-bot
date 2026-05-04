@@ -9,6 +9,7 @@ All notable changes to this project are documented here.
 ## [Unreleased]
 
 ### Feature
+- **`scripts/start_bot.sh` — `--reset-db` option**: backs up `live.db` to `live.db.bak.YYYYMMDD_HHMMSS`, then deletes it before launch so the bot starts fresh (zero capital, zero trade history); prompts for `yes` confirmation before proceeding; safe no-op if the file does not exist
 - **`bot/live_bot.py` v0.41 — optimised default parameters** (grid-search sweep on liveweek.db, 110 952 snapshots):
   - `SIGNAL_THRESHOLD` 0.96 → **0.95** (more trades, same 99.3% WR, +$14.73 vs +$13.14)
   - `MIN_SECS_REMAINING` 45 → **30 s** (gains ~+$7 PnL at equal WR; 45 s was over-restrictive)
