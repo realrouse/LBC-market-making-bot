@@ -13,7 +13,7 @@ All notable changes to this project are documented here.
   - `SIGNAL_THRESHOLD` 0.96 → **0.95** (more trades, same 99.3% WR, +$14.73 vs +$13.14)
   - `MIN_SECS_REMAINING` 45 → **30 s** (gains ~+$7 PnL at equal WR; 45 s was over-restrictive)
   - `OBI_REJECT_THRESH` -0.50 → **-0.25** (tighter order-book filter — flips liveweek PnL from −$2.43 to +$4.97 for the 0.96/45 s config)
-  - Same defaults applied to `scripts/backtest.py` (`Params` dataclass + CLI defaults)
+  - Same defaults applied to `scripts/backtest.py` (`Params` dataclass + CLI defaults) and `strategies/polymarket_BTC5M.json`
   - Tests updated: `test_blocked_bid_below_threshold` (0.95→0.94), `test_at_min_secs_remaining_blocked` (44s→29s), `test_no_signal_insufficient_secs` (30s→29s)
 - **`bot/live_bot.py` — log format overhaul** (5 improvements + uptime):
   - Timestamp without milliseconds: `2026-05-04 20:04:03` (was `2026-05-04 20:04:03,123`)
