@@ -110,8 +110,8 @@ class TestRunBacktestBasic(unittest.TestCase):
         self.assertEqual(len(trades), 0)
 
     def test_no_signal_insufficient_secs(self):
-        rows = [snap(best_bid=0.97, best_ask=0.975, secs_remaining=30)]
-        # MIN_SECS_REMAINING=45 by default
+        rows = [snap(best_bid=0.97, best_ask=0.975, secs_remaining=29)]
+        # MIN_SECS_REMAINING=30 by default
         trades, _ = bt.run_backtest(rows, bt.Params())
         self.assertEqual(len(trades), 0)
 

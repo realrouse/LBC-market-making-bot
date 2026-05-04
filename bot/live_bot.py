@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-POLYMARKET LIVE BOT v0.40 — BTC Up/Down 5-minute markets
+POLYMARKET LIVE BOT v0.41 — BTC Up/Down 5-minute markets
 
 Strategy:
   Watch active "Bitcoin Up or Down — 5 minutes" markets via the Polymarket
@@ -69,13 +69,13 @@ from bot_utils import print_dashboard, write_web_status
 CAPITAL_START      = 100.0
 STAKE              = 10.0
 GAS_FEE_USD        = 0.03
-SIGNAL_THRESHOLD   = 0.96
+SIGNAL_THRESHOLD   = 0.95   # was 0.96 — sweep: +$14.73 vs +$13.14 on liveweek (30s/-0.25)
 ENTRY_MAX          = 0.998
-MIN_SECS_REMAINING = 45.0
+MIN_SECS_REMAINING = 30.0   # was 45.0 — sweep: 30s gains ~+$7 PnL on liveweek vs 45s
 MIN_ASK_VOL        = 10.0
 WIN_THRESHOLD      = 0.99
 LOSS_THRESHOLD     = 0.01
-OBI_REJECT_THRESH  = -0.50
+OBI_REJECT_THRESH  = -0.25  # was -0.50 — sweep: -0.25 flips PnL positive on liveweek
 DAILY_STOP_LOSS    = 30.0
 
 # ─── HOUR FILTER (defaults — overridden by strategy JSON) ────────────────────
@@ -858,7 +858,7 @@ async def main() -> None:
     if _SIMULATE:
         logger.warning("  MODE SIMULATION — donnees isolees dans %s", INSTALL_DIR)
     logger.info(
-        "  LIVE BOT v0.40 | start=%s UTC | up %dh%02dm%02ds"
+        "  LIVE BOT v0.41 | start=%s UTC | up %dh%02dm%02ds"
         " | seuil=%.2f mise=$%.0f minAskVol=%.0f",
         _start_str, _up // 3600, (_up % 3600) // 60, _up % 60,
         SIGNAL_THRESHOLD, STAKE, MIN_ASK_VOL,

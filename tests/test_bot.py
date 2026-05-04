@@ -387,7 +387,7 @@ class TestCheckSignal(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("mkt1", self.state.signalled)
 
     async def test_blocked_bid_below_threshold(self):
-        await bot.check_signal(self.state, make_token(best_bid=0.95))
+        await bot.check_signal(self.state, make_token(best_bid=0.94))
         self.assertNotIn("mkt1", self.state.signalled)
 
     async def test_blocked_bid_above_entry_max(self):
@@ -437,12 +437,12 @@ class TestCheckSignal(unittest.IsolatedAsyncioTestCase):
         self.assertIn("mkt1", self.state.signalled)
 
     async def test_at_min_secs_remaining_blocked(self):
-        await bot.check_signal(self.state, make_token(secs_remaining=44))
+        await bot.check_signal(self.state, make_token(secs_remaining=29))
         self.assertNotIn("mkt1", self.state.signalled)
 
     async def test_above_min_secs_remaining_fires(self):
         # secs_remaining is computed live from time.time(), so use a value
-        # safely above the 45 s limit rather than testing the exact boundary.
+        # safely above the 30 s limit rather than testing the exact boundary.
         await bot.check_signal(self.state, make_token(secs_remaining=60))
         self.assertIn("mkt1", self.state.signalled)
 

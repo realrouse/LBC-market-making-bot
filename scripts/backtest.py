@@ -82,13 +82,13 @@ GAS_FEE_USD = 0.03    # estimated gas cost per order
 @dataclass
 class Params:
     """All tunable parameters for one backtest run."""
-    signal_threshold:   float = 0.96
+    signal_threshold:   float = 0.95
     entry_max:          float = 0.998
-    min_secs_remaining: float = 45.0
+    min_secs_remaining: float = 30.0
     min_ask_vol:        float = 10.0
     win_threshold:      float = 0.99
     loss_threshold:     float = 0.01
-    obi_reject_thresh:  float = -0.50
+    obi_reject_thresh:  float = -0.25
     stake:              float = 10.0
     daily_stop_loss:    float = 30.0
     capital_start:      float = 100.0
@@ -415,13 +415,13 @@ def main():
                         help="one or more .db files to replay (the shell expands globs)")
     parser.add_argument("--all",        action="store_true",
                         help="replay all .db files in data/ and live.db if usable")
-    parser.add_argument("--threshold",  type=float, default=0.96,
+    parser.add_argument("--threshold",  type=float, default=0.95,
                         help="entry signal threshold (best_bid >= X)")
-    parser.add_argument("--min-secs",   type=float, default=45.0,
+    parser.add_argument("--min-secs",   type=float, default=30.0,
                         help="minimum seconds remaining at entry")
     parser.add_argument("--min-ask",    type=float, default=10.0,
                         help="minimum ask-side volume in USD")
-    parser.add_argument("--obi",        type=float, default=-0.50,
+    parser.add_argument("--obi",        type=float, default=-0.25,
                         help="OBI reject threshold (below = no entry)")
     parser.add_argument("--stake",      type=float, default=10.0,
                         help="USD stake per trade")
