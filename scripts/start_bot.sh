@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════
-#  POLYMARKET LIVE BOT v3 — Lancement
+#  POLYMARKET LIVE BOT v3 — Lancement / Launch
 #  Prérequis : TRADINEBOTTE_DIR=<dir> python3 scripts/setup.py
 #  (génère <TRADINEBOTTE_DIR>/config.json)
 #
@@ -22,61 +22,79 @@ INSTALL_DIR="${TRADINEBOTTE_DIR:-$HOME/tradinebotte}"
 INSTALL_DIR="$(eval echo "$INSTALL_DIR")"
 CONFIG="$INSTALL_DIR/config.json"
 
-# ── Vérification ──────────────────────────────────────────────────
+# ── Language ──────────────────────────────────────────────────────
+# Read the language preference saved by setup.py in config.json.
+# Defaults to EN if config.json is absent or does not contain "lang".
+LANG="EN"
+if [ -f "$CONFIG" ]; then
+    LANG=$(python3 -c "
+import json, sys
+try:
+    print(json.load(open('$CONFIG')).get('lang', 'EN'))
+except Exception:
+    print('EN')
+" 2>/dev/null || echo "EN")
+fi
+
+# _t "EN text" "FR text" — print the string for the current language (no trailing newline)
+_t() { [ "$LANG" = "FR" ] && printf '%s' "$2" || printf '%s' "$1"; }
+
+# ── Check config ──────────────────────────────────────────────────
 if [ ! -f "$CONFIG" ]; then
-    echo "❌ ERREUR : config.json introuvable dans $INSTALL_DIR"
-    echo "   Lance d'abord : TRADINEBOTTE_DIR=\"$INSTALL_DIR\" python3 scripts/setup.py"
+    echo "$(_t "❌ ERROR: config.json not found in" "❌ ERREUR : config.json introuvable dans") $INSTALL_DIR"
+    echo "   $(_t "Run first:" "Lance d'abord :") TRADINEBOTTE_DIR=\"$INSTALL_DIR\" python3 scripts/setup.py"
     exit 1
 fi
 
-# ── Vérification instance unique (utilisateur courant uniquement) ──
+# ── Check for a running instance (current user only) ──────────────
 if pgrep -u "$(id -u)" -f live_bot.py > /dev/null; then
-    echo "❌ ERREUR : une instance est déjà en cours (PID: $(pgrep -u "$(id -u)" -f live_bot.py))"
-    echo "   Arrêtez-la d'abord : pkill -u \$(id -u) -f live_bot.py"
+    _pid=$(pgrep -u "$(id -u)" -f live_bot.py)
+    echo "$(_t "❌ ERROR: an instance is already running (PID:" "❌ ERREUR : une instance est déjà en cours (PID:") $_pid)"
+    echo "   $(_t "Stop it first:" "Arrêtez-la d'abord :") pkill -u \$(id -u) -f live_bot.py"
     exit 1
 fi
 
-# ── Réinitialisation DB (--reset-db) ──────────────────────────────
+# ── --reset-db ────────────────────────────────────────────────────
 if [ "$RESET_DB" = "1" ]; then
     DB="$INSTALL_DIR/live.db"
     if [ -f "$DB" ]; then
         BAK="${DB}.bak.$(date +%Y%m%d_%H%M%S)"
-        echo "⚠️  --reset-db : sauvegarde → $(basename "$BAK")"
-        read -r -p "   Confirmer la réinitialisation (yes/N) : " _confirm
+        echo "⚠️  --reset-db : $(_t "backup →" "sauvegarde →") $(basename "$BAK")"
+        read -r -p "   $(_t "Confirm reset (yes/N): " "Confirmer la réinitialisation (yes/N) : ")" _confirm
         if [ "$_confirm" != "yes" ]; then
-            echo "Annulé."
+            echo "$(_t "Cancelled." "Annulé.")"
             exit 0
         fi
         cp "$DB" "$BAK"
         rm "$DB"
-        echo "✅ live.db réinitialisé (backup : $BAK)"
+        echo "✅ $(_t "live.db reset (backup:" "live.db réinitialisé (backup :") $BAK)"
     else
-        echo "live.db absent — rien à réinitialiser."
+        echo "$(_t "live.db not found — nothing to reset." "live.db absent — rien à réinitialiser.")"
     fi
 fi
 
-# ── Vérification venv ─────────────────────────────────────────────
+# ── Check venv ────────────────────────────────────────────────────
 PYTHON="$INSTALL_DIR/venv/bin/python3"
 if [ ! -x "$PYTHON" ]; then
-    echo "❌ ERREUR : virtualenv introuvable dans $INSTALL_DIR/venv"
-    echo "   Lance d'abord : bash scripts/install.sh"
+    echo "$(_t "❌ ERROR: virtualenv not found in" "❌ ERREUR : virtualenv introuvable dans") $INSTALL_DIR/venv"
+    echo "   $(_t "Run first:" "Lance d'abord :") bash scripts/install.sh"
     exit 1
 fi
 
-# ── Lancement ─────────────────────────────────────────────────────
+# ── Launch ────────────────────────────────────────────────────────
 LOG="$INSTALL_DIR/live.log"
 DISPLAY_LOG="${LOG/$HOME/\~}"
 DISPLAY_DIR="${INSTALL_DIR/$HOME/\~}"
-echo "Lancement du bot depuis $DISPLAY_DIR..."
+echo "$(_t "Starting bot from" "Lancement du bot depuis") $DISPLAY_DIR..."
 export TRADINEBOTTE_DIR="$INSTALL_DIR"
 nohup "$PYTHON" "$INSTALL_DIR/live_bot.py" >> "$LOG" 2>&1 &
 echo "PID: $!"
 sleep 3
 
 if pgrep -u "$(id -u)" -f live_bot.py > /dev/null; then
-    echo "✅ Bot en cours — PID: $(pgrep -u "$(id -u)" -f live_bot.py)"
-    echo "Logs: tail -f $DISPLAY_LOG"
+    echo "✅ $(_t "Bot running — PID:" "Bot en cours — PID:") $(pgrep -u "$(id -u)" -f live_bot.py)"
+    echo "$(_t "Logs:" "Logs :") tail -f $DISPLAY_LOG"
 else
-    echo "❌ Bot arrêté — dernières lignes du log:"
+    echo "$(_t "❌ Bot stopped — last log lines:" "❌ Bot arrêté — dernières lignes du log :")"
     tail -20 "$LOG"
 fi

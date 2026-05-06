@@ -175,7 +175,7 @@ bash scripts/install.sh [install_dir] [--with-tests]
 **Options:**
 - `--with-tests` — Also copy `tests/`, `scripts/backtest.py`, and
   `data/backtest_sample_btc5m_range_2026.db`, then run the
-  full test suite (153 tests) immediately after installation.
+  full test suite (163 tests) immediately after installation.
   The backtest uses `live.db` only if it contains ≥ 100 snapshots;
   otherwise it falls back to the bundled sample dataset automatically.
 
@@ -771,3 +771,89 @@ Expected output (printed directly to the terminal):
 ```
 
 The `.venv/` directory is listed in `.gitignore` and must not be committed.
+
+
+## Bilingual interface
+
+All interactive scripts prompt for a language at startup:
+
+```
+Language / Langue :  [E] English   [F] Français
+>>>
+```
+
+The choice is persisted as `"lang": "EN"` or `"lang": "FR"` in `config.json` by `setup.py`.
+Subsequent scripts (`start_bot.sh`, `monitor.sh`) read this key automatically — no re-prompting.
+
+If `config.json` is absent (before the first `setup.py` run), `start_bot.sh` and `monitor.sh`
+default to English. `install.sh` always asks interactively since it runs before `setup.py`.
+
+To change the language after initial setup, edit `config.json`:
+
+```json
+{ "lang": "FR" }
+```
+
+or re-run `python3 scripts/setup.py` and choose again.
+
+
+## CEX connectors (Binance, MEXC)
+
+Two additional exchange adapters are included as drop-in replacements for `api_polymarket.py`:
+
+| File | Exchange | Fee | WebSocket stream |
+|---|---|---|---|
+| `bot/api_binance.py` | Binance spot | 0.1% taker | `btcusdt@depth5@100ms` |
+| `bot/api_mexc.py` | MEXC spot | 0.2% taker | `spot@public.limit.depth.v3.api@BTCUSDT@5` |
+
+Both implement the identical public interface: `get_markets`, `post_order`,
+`parse_book_update`, `compute_fee`, and market metadata helpers.
+
+**Credentials** — set via environment variables or `config.json`:
+
+```bash
+export BINANCE_API_KEY=...
+export BINANCE_API_SECRET=...
+export MEXC_API_KEY=...
+export MEXC_API_SECRET=...
+```
+
+**Switch exchange** — change one line in `live_bot.py` (line 62):
+
+```python
+import api_binance as api   # instead of api_polymarket
+# or
+import api_mexc as api
+```
+
+**Important**: the Polymarket signal (`best_bid >= 0.96`) operates on a 0–1 probability
+scale. Binance/MEXC prices are absolute USDT values (e.g. 65000). Strategy thresholds in
+`strategies/*.json` must be recalibrated before using a CEX connector.
+
+
+## API latency benchmark
+
+Compare REST and WebSocket latency across all three exchanges:
+
+```bash
+python3 scripts/benchmark_api.py             # 15 rounds, all exchanges
+python3 scripts/benchmark_api.py --rounds 30 # more samples
+python3 scripts/benchmark_api.py --no-ws     # REST only (faster)
+```
+
+Results are saved to `latence_api.txt` if redirected:
+
+```bash
+python3 scripts/benchmark_api.py 2>&1 | tee latence_api.txt
+```
+
+Reference latencies measured from an Amsterdam VPS:
+
+| Exchange | REST mean | REST p99 | WS mean |
+|---|---|---|---|
+| Polymarket Gamma | ~14 ms | ~20 ms | ~65 ms |
+| MEXC | ~15 ms | ~80 ms | ~905 ms |
+| Binance | ~225 ms | ~232 ms | ~990 ms |
+
+Binance latency from Europe is high due to geographic routing; from an Asian VPS
+the numbers would be reversed.

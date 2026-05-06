@@ -1,5 +1,18 @@
 {
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git commit*)",
+            "command": "echo '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"additionalContext\": \"SECURITY CHECK: Before committing, verify the diff contains NO infrastructure details: no server hostnames, no IP addresses, no usernames, no private domain names. These must NEVER appear in public files (CHANGELOG, README, INSTALL, etc.). The git pre-commit hook will also block the commit if patterns from ~/.tradinebotte-test.conf are found in the staged diff.\"}}'",
+            "statusMessage": "Vérification données d'infrastructure..."
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Bash",

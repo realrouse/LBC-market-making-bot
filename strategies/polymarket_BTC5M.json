@@ -1,14 +1,14 @@
 {
     "_name": "Polymarket BTC 5-minute Up/Down",
-    "_description": "Grid-search optimised 2026-05-04: threshold=0.95/min_secs=30/obi=-0.25 → +$14.73 PnL, 99.3% WR on liveweek.db. Do not modify thresholds without re-running the full backtest.",
+    "_description": "Grid-search optimised 2026-05-05: threshold=0.96/min_secs=45/obi=-0.75 → +$187.40 PnL, 98.6% WR on paper3.db (764k snapshots). Do not modify thresholds without re-running the full backtest.",
 
-    "signal_threshold":   0.95,
+    "signal_threshold":   0.96,
     "entry_max":          0.998,
-    "min_secs_remaining": 30,
+    "min_secs_remaining": 45,
     "min_ask_vol":        10.0,
     "win_threshold":      0.99,
     "loss_threshold":     0.01,
-    "obi_reject_thresh":  -0.25,
+    "obi_reject_thresh":  -0.75,
     "daily_stop_loss":    30.0,
     "stake":              10.0,
     "capital_start":      100.0,

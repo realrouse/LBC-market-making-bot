@@ -6,6 +6,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **tradinebotte** is a Polymarket prediction market trading bot targeting Bitcoin Up/Down 5-minute markets on Polygon. It uses a quantitative signal-based strategy (best_bid >= 0.96 threshold) backtested at 98.3% win rate across 1663 trades.
 
+## Données d'infrastructure — règle obligatoire
+
+**Ne jamais inclure dans un fichier public (CHANGELOG, README, INSTALL, etc.) :**
+- Noms de serveurs ou domaines (ex. `monserveur.example.com`, noms d'hôtes internes)
+- Adresses IP
+- Noms d'utilisateurs de déploiement (ex. `claude1`, `claude2`, `claude3`)
+- Mots de passe ou tokens
+
+**Formulations génériques à utiliser à la place :**
+- "the three VPS deployment accounts" / "les trois comptes de déploiement VPS"
+- "the test server" / "le serveur de test"
+- "the production VPS" / "le VPS de production"
+
+Un hook git (`core.hooksPath = .git-hooks`) bloque tout commit contenant les patterns du fichier `~/.tradinebotte-test.conf`. Un hook Claude Code `PreToolUse` rappelle cette règle avant chaque `git commit`.
+
+---
+
 ## Documentation bilingue — règle obligatoire
 
 Ce projet maintient dix fichiers de documentation en deux langues :

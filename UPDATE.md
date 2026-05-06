@@ -61,12 +61,13 @@ ssh user@server 'pkill -f live_bot.py; bash ~/tradinebotte/scripts/start_bot.sh'
 ```
 
 **Critical exclusions:**
-- `--exclude='config.json'` — prevents wiping live credentials
+- `--exclude='config.json'` — prevents wiping live credentials **and language preference** (`"lang"` field set by `setup.py` / `install.sh`)
 - `--exclude='live.db'` — preserves trade history
 - `--exclude='venv/'` — avoids transferring hundreds of MB over the network
 
 Without `--exclude='config.json'`, `rsync --delete` will delete the file and
-`start_bot.sh` will refuse to start. Re-run `setup.py` if that happens.
+`start_bot.sh` will refuse to start. Re-run `setup.py` if that happens (it will
+re-prompt for language and regenerate the file).
 
 ---
 

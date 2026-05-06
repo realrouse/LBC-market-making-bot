@@ -12,6 +12,20 @@
   "// Passphrase API Polymarket — défini lors de la création des clés API": "",
   "api_passphrase": "YOUR_PASSPHRASE",
 
+  "// ─── BINANCE (optionnel — utilisé si import api_binance as api dans live_bot.py) ───": "",
+  "// Clé API Binance — créée sur https://www.binance.com/en/my/settings/api-management": "",
+  "binance_api_key":    "YOUR_BINANCE_API_KEY",
+
+  "// Secret API Binance": "",
+  "binance_api_secret": "YOUR_BINANCE_API_SECRET",
+
+  "// ─── MEXC (optionnel — utilisé si import api_mexc as api dans live_bot.py) ───": "",
+  "// Clé API MEXC — créée sur https://www.mexc.com/user/openapi": "",
+  "mexc_api_key":    "YOUR_MEXC_API_KEY",
+
+  "// Secret API MEXC": "",
+  "mexc_api_secret": "YOUR_MEXC_API_SECRET",
+
   "// STRATÉGIE — paramètres de trading (seuils, mise, filtres)": "",
   "// Chemin vers le fichier de stratégie JSON (relatif à TRADINEBOTTE_DIR ou absolu).": "",
   "// Contient : signal_threshold, stake, capital_start, daily_stop_loss, hour_filter, etc.": "",

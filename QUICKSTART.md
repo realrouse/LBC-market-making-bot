@@ -17,8 +17,8 @@
 wget https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.40.tar.gz
 tar -xzf v0.40.tar.gz
 cd tradinebotte-0.40
-bash scripts/install.sh        # detects missing system packages automatically
-python3 scripts/setup.py       # Enter = simulation mode
+bash scripts/install.sh        # detects missing system packages; prompts for language (E/F)
+python3 scripts/setup.py       # prompts for language (saved to config.json); Enter = simulation mode
 bash scripts/start_bot.sh
 tail -f ~/tradinebotte/live.log
 ```
