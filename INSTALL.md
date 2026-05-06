@@ -64,6 +64,75 @@ and Dependabot opens PRs when newer versions are available.
 Dev dependencies (`pylint`, `pip-audit`, `mypy`) are declared in `requirements-dev.txt`.
 
 
+## Obtaining the source code
+
+Three methods are available depending on your setup. All three lead to the same
+`bash scripts/install.sh` step.
+
+### Method 1 — Git clone (recommended when GitHub is accessible)
+
+```bash
+git clone https://github.com/neofutur/tradinebotte.git
+cd tradinebotte
+bash scripts/install.sh
+```
+
+To install a specific release:
+
+```bash
+git clone --branch v0.40 https://github.com/neofutur/tradinebotte.git
+cd tradinebotte
+bash scripts/install.sh
+```
+
+### Method 2 — rsync from a local dev machine (recommended for VPS without git)
+
+From your local machine where the repo is already cloned:
+
+```bash
+rsync -a --exclude='*.db' --exclude='__pycache__' --exclude='.git' --exclude='venv' \
+  /path/to/tradinebotte/ user@server:~/tradinebotte/
+ssh user@server "cd ~/tradinebotte && bash scripts/install.sh"
+```
+
+To update an existing install (preserves `config.json`):
+
+```bash
+rsync -a --exclude='*.db' --exclude='__pycache__' --exclude='.git' --exclude='venv' \
+  --exclude='config.json' \
+  /path/to/tradinebotte/ user@server:~/tradinebotte/
+ssh user@server "cd ~/tradinebotte && bash scripts/install.sh"
+```
+
+> The `--exclude='config.json'` flag is critical on updates — without it rsync
+> overwrites the live credentials file.
+
+### Method 3 — Official release tar.gz (no git required)
+
+Download the latest release archive from the
+[Releases page](https://github.com/neofutur/tradinebotte/releases):
+
+```bash
+# Replace v0.40 with the version you want
+wget https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.40.tar.gz
+tar -xzf v0.40.tar.gz
+cd tradinebotte-0.40
+bash scripts/install.sh
+```
+
+Or with `curl`:
+
+```bash
+curl -L https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.40.tar.gz \
+  | tar -xz
+cd tradinebotte-0.40
+bash scripts/install.sh
+```
+
+The directory is named `tradinebotte-<version>` after extraction. The install
+script detects its own location automatically — no path adjustment needed.
+
+
 ## Installation directory
 
 All scripts read the `TRADINEBOTTE_DIR` environment variable to determine
@@ -100,13 +169,15 @@ export TRADINEBOTTE_DIR=~/tradinebotte
 Run the install script from the repository root:
 
 ```bash
-bash scripts/install.sh [install_dir] [--with-tests]
+bash scripts/install.sh [install_dir] [--lang EN|FR] [--with-tests]
 ```
 
 **Options:**
+- `--lang EN|FR` — Set language non-interactively (useful for CI or automated deploys).
+  Without this flag the script prompts at startup as before.
 - `--with-tests` — Also copy `tests/`, `scripts/backtest.py`, and
   `data/backtest_sample_btc5m_range_2026.db`, then run the
-  full test suite (153 tests) immediately after installation.
+  full test suite (163 tests) immediately after installation.
   The backtest uses `live.db` only if it contains ≥ 100 snapshots;
   otherwise it falls back to the bundled sample dataset automatically.
 
@@ -271,6 +342,8 @@ is online (`After=network-online.target`).
 **Flags:**
 - *(no flag)* — normal mode: log writes are asynchronous (daemon thread, never blocks the event loop)
 - `--no-log` — suppress the log file entirely for minimum disk I/O; SQLite DB (trades + snapshots) is unaffected; combine with `--simulate` to keep stdout output
+- `--no-snapshots` — skip writing 5-second price snapshots to the DB; trades are still recorded; reduces write pressure during long sessions; use when snapshot data is not needed for post-analysis
+- `--reset-db` — back up `live.db` to `live.db.bak.YYYYMMDD_HHMMSS` then delete it before launch; bot starts from zero capital and trade history; prompts for `yes` confirmation; safe no-op if DB is absent
 - `--simulate` — isolate all file I/O to `~/tradinebotte-sim` by default, no real orders placed. If `TRADINEBOTTE_DIR` is already set in the environment, that path is used instead — allowing multiple bots to run in parallel without conflict:
   ```bash
   TRADINEBOTTE_DIR=~/account-a python3 live_bot.py --simulate
@@ -350,6 +423,16 @@ python3 scripts/backtest.py --all --sweep
 ```
 
 When more than one file is processed, each file runs with capital reset to `capital_start` (independent simulation), and an AGGREGATE block summarises combined wins, losses, PnL, win rate, and worst drawdown across all files.
+
+**Parameter flags** (override strategy JSON defaults for a single run):
+
+| Flag | Default | Description |
+|---|---|---|
+| `--threshold FLOAT` | 0.95 | Entry signal threshold (`best_bid >= threshold`) |
+| `--min-secs FLOAT` | 30.0 | Minimum seconds remaining at entry |
+| `--min-ask FLOAT` | 10.0 | Minimum ask-side volume in USD at entry |
+| `--obi FLOAT` | −0.25 | OBI reject threshold (entries with OBI below this are skipped) |
+| `--stake FLOAT` | 10.0 | USD stake per trade |
 
 
 ## Hour / Day Filter
@@ -529,6 +612,10 @@ TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash scripts/start_feed.sh
 TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
 ```
 
+**Account bot flags** (`scripts/start_account.sh` passes these through to `bot/account_bot.py`):
+
+- `--verbose` — enable DEBUG logging for diagnostics; prints every book update, signal evaluation, and ZMQ message received; useful during initial setup or troubleshooting
+
 ### Stopping
 
 ```bash
@@ -686,3 +773,89 @@ Expected output (printed directly to the terminal):
 ```
 
 The `.venv/` directory is listed in `.gitignore` and must not be committed.
+
+
+## Bilingual interface
+
+All interactive scripts prompt for a language at startup:
+
+```
+Language / Langue :  [E] English   [F] Français
+>>>
+```
+
+The choice is persisted as `"lang": "EN"` or `"lang": "FR"` in `config.json` by `setup.py`.
+Subsequent scripts (`start_bot.sh`, `monitor.sh`) read this key automatically — no re-prompting.
+
+If `config.json` is absent (before the first `setup.py` run), `start_bot.sh` and `monitor.sh`
+default to English. `install.sh` always asks interactively since it runs before `setup.py`.
+
+To change the language after initial setup, edit `config.json`:
+
+```json
+{ "lang": "FR" }
+```
+
+or re-run `python3 scripts/setup.py` and choose again.
+
+
+## CEX connectors (Binance, MEXC)
+
+Two additional exchange adapters are included as drop-in replacements for `api_polymarket.py`:
+
+| File | Exchange | Fee | WebSocket stream |
+|---|---|---|---|
+| `bot/api_binance.py` | Binance spot | 0.1% taker | `btcusdt@depth5@100ms` |
+| `bot/api_mexc.py` | MEXC spot | 0.2% taker | `spot@public.limit.depth.v3.api@BTCUSDT@5` |
+
+Both implement the identical public interface: `get_markets`, `post_order`,
+`parse_book_update`, `compute_fee`, and market metadata helpers.
+
+**Credentials** — set via environment variables or `config.json`:
+
+```bash
+export BINANCE_API_KEY=...
+export BINANCE_API_SECRET=...
+export MEXC_API_KEY=...
+export MEXC_API_SECRET=...
+```
+
+**Switch exchange** — change one line in `live_bot.py` (line 62):
+
+```python
+import api_binance as api   # instead of api_polymarket
+# or
+import api_mexc as api
+```
+
+**Important**: the Polymarket signal (`best_bid >= 0.96`) operates on a 0–1 probability
+scale. Binance/MEXC prices are absolute USDT values (e.g. 65000). Strategy thresholds in
+`strategies/*.json` must be recalibrated before using a CEX connector.
+
+
+## API latency benchmark
+
+Compare REST and WebSocket latency across all three exchanges:
+
+```bash
+python3 scripts/benchmark_api.py             # 15 rounds, all exchanges
+python3 scripts/benchmark_api.py --rounds 30 # more samples
+python3 scripts/benchmark_api.py --no-ws     # REST only (faster)
+```
+
+Results are saved to `latence_api.txt` if redirected:
+
+```bash
+python3 scripts/benchmark_api.py 2>&1 | tee latence_api.txt
+```
+
+Reference latencies measured from an Amsterdam VPS:
+
+| Exchange | REST mean | REST p99 | WS mean |
+|---|---|---|---|
+| Polymarket Gamma | ~14 ms | ~20 ms | ~65 ms |
+| MEXC | ~15 ms | ~80 ms | ~905 ms |
+| Binance | ~225 ms | ~232 ms | ~990 ms |
+
+Binance latency from Europe is high due to geographic routing; from an Asian VPS
+the numbers would be reversed.

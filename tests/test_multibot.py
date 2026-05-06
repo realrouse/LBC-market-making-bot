@@ -23,8 +23,9 @@ import time
 import unittest
 from datetime import datetime, timezone, timedelta
 
-os.environ.setdefault("TRADINEBOTTE_DIR", "/tmp/tradinebotte-test")
-os.makedirs("/tmp/tradinebotte-test", exist_ok=True)
+_TEST_DIR = os.path.join(os.path.expanduser("~"), "tmp", "tradinebotte-test")
+os.environ.setdefault("TRADINEBOTTE_DIR", _TEST_DIR)
+os.makedirs(_TEST_DIR, exist_ok=True)
 
 BOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "bot"))
 sys.path.insert(0, BOT_DIR)
@@ -203,7 +204,8 @@ class TestAccountBotRegister(unittest.TestCase):
 
 # ── 3 & 4. Integration: ZMQ round-trip ───────────────────────────────────────
 
-TEST_PORT = 15557   # loopback TCP port used only during tests
+import os as _os
+TEST_PORT = 15000 + (_os.getuid() % 900)  # per-uid to avoid conflicts on shared servers
 TEST_ADDR = f"tcp://127.0.0.1:{TEST_PORT}"
 
 

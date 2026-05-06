@@ -14,7 +14,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 TEMPLATE="$SCRIPT_DIR/tradinebotte-feed.service"
-OUTPUT="/tmp/tradinebotte-feed.service"
+OUTPUT="${HOME}/tmp/tradinebotte-feed.service"
+mkdir -p "${HOME}/tmp"
 
 USER_NAME=$(id -un)
 BOT_DIR="$PROJECT_DIR/bot"

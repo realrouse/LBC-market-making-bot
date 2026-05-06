@@ -5,11 +5,11 @@ Profil de performance du chemin critique du bot.
 Chemin chaud réel (par message WebSocket) :
   handle_book_update → check_signal → [check_resolution] → [save_snapshot]
 
-Usage : TRADINEBOTTE_DIR=/tmp/profile-bot python3 scripts/profile_hotpath.py
+Usage : python3 scripts/profile_hotpath.py
 """
 import asyncio, cProfile, pstats, io, time, sys, os, timeit, shutil, glob
 
-PROFILE_DIR = "/tmp/profile-bot"
+PROFILE_DIR = os.path.join(os.path.expanduser("~"), "tmp", "profile-bot")
 os.makedirs(f"{PROFILE_DIR}/strategies", exist_ok=True)
 os.environ["TRADINEBOTTE_DIR"] = PROFILE_DIR
 

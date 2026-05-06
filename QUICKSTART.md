@@ -10,13 +10,15 @@
 
 ---
 
-## Option A — One account (standalone)
+## Install from official release (tar.gz)
 
 ```bash
-git clone https://github.com/neofutur/tradinebotte.git
-cd tradinebotte
-bash scripts/install.sh        # detects missing system packages automatically
-python3 scripts/setup.py       # Enter = simulation mode
+# Download the latest release (replace v0.40 with the current version)
+wget https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.40.tar.gz
+tar -xzf v0.40.tar.gz
+cd tradinebotte-0.40
+bash scripts/install.sh        # detects missing system packages; prompts for language (E/F)
+python3 scripts/setup.py       # prompts for language (saved to config.json); Enter = simulation mode
 bash scripts/start_bot.sh
 tail -f ~/tradinebotte/live.log
 ```
@@ -28,31 +30,9 @@ Auto-restart on reboot: `bash scripts/install_service.sh` (then follow the print
 
 ---
 
-## Option B — Multiple accounts (shared WebSocket)
+## Other installation methods
 
-```bash
-git clone https://github.com/neofutur/tradinebotte.git
-cd tradinebotte
-bash scripts/install.sh
-TRADINEBOTTE_DIR=~/account-a python3 scripts/setup.py   # key for account A
-TRADINEBOTTE_DIR=~/account-b python3 scripts/setup.py   # key for account B
-TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
-TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
-```
-
-The feed (`feed.py`) starts automatically — no manual step needed.
-
-**Stop:** `pkill -f feed.py; pkill -f account_bot.py`
-
-Full architecture: [docs/multi.md](docs/multi.md)
-
----
-
-## Which option?
-
-| Situation | Use |
-|---|---|
-| Single account | **Option A** |
-| Multiple wallets or Linux users | **Option B** |
-| Comparing strategies in parallel | **Option B** |
-| Simplest possible setup | **Option A** |
+See [INSTALL.md](INSTALL.md) for:
+- **git clone** — recommended when GitHub is accessible from the target machine
+- **rsync** — recommended for VPS without git (deploy from a local dev machine)
+- Full details on multi-account setup (Option B — ZeroMQ shared WebSocket)

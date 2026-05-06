@@ -65,7 +65,8 @@ fi
 # Derive a short name for the unit from the account directory basename.
 ACCOUNT_NAME="$(basename "$ACCOUNT_DIR")"
 SERVICE_NAME="tradinebotte-account-${ACCOUNT_NAME}"
-OUTPUT="/tmp/${SERVICE_NAME}.service"
+OUTPUT="${HOME}/tmp/${SERVICE_NAME}.service"
+mkdir -p "${HOME}/tmp"
 
 # ── Generate unit file ────────────────────────────────────────────────────────
 sed \

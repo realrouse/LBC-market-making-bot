@@ -36,6 +36,17 @@ docs/CONTEXT_AI.md
 # Integration test configuration — contains server addresses and passwords
 scripts/test_multibot.conf
 
+# Local notes — may contain infrastructure details (server names, IPs), never commit
+*.txt
+!docs/*.txt
+
+# Claude Code local settings — may contain server addresses and credentials
+.claude/settings.local.json
+
+# Vim swap files
+*.swp
+*.swo
+
 # Claude Code internal files
 .claude/scheduled_tasks.lock
 

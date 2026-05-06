@@ -8,6 +8,50 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Changed
+- **`scripts/install.sh` refactor** — `--lang EN|FR` flag for non-interactive runs; safe tilde expansion (`${var/#\~/$HOME}` replaces `eval echo`); `_check_syntax` and `_pip_install` helpers eliminate repeated code; bot file copy and syntax check now driven by a shared loop; `set -eo pipefail` replaces bare `set -e`
+
+### Feature
+- **Test suite expanded to 163 tests** — `tests/test_bot.py` now contains 105 tests (up from 95); `test_backtest.py` and `test_multibot.py` unchanged at 28 and 30; confirmed passing on all three VPS deployment accounts in ~11s each
+- **`bot/api_binance.py`** — new Binance spot API connector implementing the same public interface as `api_polymarket.py` (`get_markets`, `post_order`, `parse_book_update`, `compute_fee`, market metadata helpers); credentials via `BINANCE_API_KEY` / `BINANCE_API_SECRET` env vars or kwargs; HMAC-SHA256 signing; dry-run mode when credentials absent; fee rate 0.1%; `WS_URL` targets `wss://stream.binance.com:9443/stream` (combined depth stream); switch exchange with a single import change in `live_bot.py`
+- **`bot/api_mexc.py`** — new MEXC spot API connector with the same interface; MEXC v3 REST is Binance-compatible but uses different WebSocket framing (`SUBSCRIPTION` method, `spot@public.limit.depth.v3.api@SYMBOL@5` streams, `{"d": {...}, "s": "SYMBOL"}` message envelope); MEXC LIMIT orders do not require `timeInForce` (server defaults to GTC); fee rate 0.2%; credentials via `MEXC_API_KEY` / `MEXC_API_SECRET`
+- **`scripts/benchmark_api.py`** — new latency benchmark tool; measures HTTP round-trip time over N sequential requests per endpoint (Polymarket Gamma, Binance, MEXC) and WebSocket time-to-first-message for each exchange; reports min/mean/p50/p90/p99/max/σ with ASCII spark bars; `--rounds N` (default 15) and `--no-ws` options; uses `aiohttp` WS client as built-in fallback when `websockets` is not installed; fetches a live Polymarket token dynamically for the WS subscription test; results on Amsterdam VPS: Polymarket 12–20 ms REST / 52–103 ms WS, MEXC 10–30 ms REST / 880–960 ms WS, Binance 218–235 ms REST / 930–1090 ms WS
+- **Bilingual interface** — `scripts/setup.py`, `install.sh`, `start_bot.sh`, and `monitor.sh` now prompt `[E] English / [F] Français` at startup; `setup.py` persists the choice as `"lang": "EN"|"FR"` in `config.json`; subsequent scripts read that key automatically — no re-prompting; all user-facing strings are translated in both directions via a `T` dict (Python) or `_t()` function (bash); SQL column aliases in `monitor.sh` are translated too (`wins`/`victoires`, `current_capital`/`capital_actuel`)
+- **`.claude/agents/bilingual-quality.md`** — new Claude Code subagent (Sonnet) that audits, updates, and translates across all 10 bilingual documentation files; three modes: AUDIT (gap report, no edits), UPDATE (adds content to both languages simultaneously), TRANSLATE (EN↔FR with project vocabulary); invoked automatically by the post-commit hook reminder and on demand via `/bilingual-quality`
+- **`config.json.example`** — added `binance_api_key`, `binance_api_secret`, `mexc_api_key`, `mexc_api_secret` credential fields with comments; added `lang` field (written by `setup.py`, read by shell scripts)
+- **`.claude/agents/doc-sync.md`** — Claude Code subagent (Haiku) that audits all user-facing CLI flags in scripts against the four main doc files (README.md, README.fr.md, INSTALL.md, INSTALL.fr.md); reports gaps only, never edits; integrated into `scripts/run_tests.sh` as a non-blocking post-suite step when the `claude` CLI is present
+- **`scripts/start_bot.sh` — `--reset-db` option**: backs up `live.db` to `live.db.bak.YYYYMMDD_HHMMSS`, then deletes it before launch so the bot starts fresh (zero capital, zero trade history); prompts for `yes` confirmation before proceeding; safe no-op if the file does not exist
+- **`bot/live_bot.py` v0.41 — optimised default parameters** (grid-search sweep on liveweek.db, 110 952 snapshots):
+  - `SIGNAL_THRESHOLD` 0.96 → **0.95** (more trades, same 99.3% WR, +$14.73 vs +$13.14)
+  - `MIN_SECS_REMAINING` 45 → **30 s** (gains ~+$7 PnL at equal WR; 45 s was over-restrictive)
+  - `OBI_REJECT_THRESH` -0.50 → **-0.25** (tighter order-book filter — flips liveweek PnL from −$2.43 to +$4.97 for the 0.96/45 s config)
+  - Same defaults applied to `scripts/backtest.py` (`Params` dataclass + CLI defaults) and `strategies/polymarket_BTC5M.json`
+  - Tests updated: `test_blocked_bid_below_threshold` (0.95→0.94), `test_at_min_secs_remaining_blocked` (44s→29s), `test_no_signal_insufficient_secs` (30s→29s)
+- **`bot/live_bot.py` — log format overhaul** (5 improvements + uptime):
+  - Timestamp without milliseconds: `2026-05-04 20:04:03` (was `2026-05-04 20:04:03,123`)
+  - Fixed-width level: `[INFO ]` / `[WARN ]` / `[ERROR]` / `[CRIT ]` — messages align in the file
+  - ANSI colors on stdout only (file stays plain): yellow for WARN, red for ERROR, magenta for CRIT
+  - Visual separators on trade events: `▶ TRADE`, `✓ WIN `, `✗ LOSS`
+  - Cleaner metric spacing: `entry=0.9710  bid=0.9700  secs=52s` (double-space between fields)
+  - Uptime in the startup banner: `LIVE BOT v0.40 | start=2026-05-04 19:11:48 UTC | up 1h02m03s | ...`
+- **`scripts/test_all_accounts.sh`** — new script that wipes and reinstalls the latest version on all configured test accounts in sequence; reads server and credentials from `~/.tradinebotte-test.conf` (same file as `test_multibot_deploy.sh`); uses `sshpass` throughout; waits a configurable delay between accounts (default 180 s); options: `--delay SECONDS`, `--no-wait`, `--parallel`; prints a final summary with pass/fail per account
+
+### Fix
+- **`bot/live_bot.py`** — `QueueHandler.prepare()` was pre-formatting records (calling `self.format()` and storing the result in `record.msg`) before enqueuing; when `logging.basicConfig` assigned the full `_LOG_FMT` formatter to the `QueueHandler`, every record got formatted twice — once by the queue handler, once by the `FileHandler` — producing duplicate timestamps and level tags in `live.log`; fixed by setting a passthrough `Formatter("%(message)s")` on the `QueueHandler` so only the raw message text is stored in the queue
+- **`scripts/install.sh`** — added `cd "$REPO_DIR"` after REPO_DIR is computed; relative paths (`bot/live_bot.py`, `tests/`, etc.) now resolve correctly regardless of the working directory from which the script is invoked (was failing on the VPS where the script was called from `~` instead of the repo root)
+- **`bot/account_bot.py`** — leftover `getpass` import removed (unused since the `~/tmp` refactor); pylint score restored to 10.00/10
+- **`bot/feed.py`** — added `# pylint: disable=duplicate-code` (WebSocket recv loop intentionally mirrors `live_bot.py`)
+- **`tests/test_multibot.py`** — `TEST_PORT` was hardcoded to `15557`; when multiple Linux users ran tests in parallel on the same server all processes attempted to `bind()` to `tcp://127.0.0.1:15557` simultaneously, causing `ZMQError: Address already in use`; port is now derived from `os.getuid() % 900 + 15000` so each OS user gets a distinct loopback port in the 15000–15899 range
+
+### Refactoring
+- **Temp directory layout** — only the shared feed uses `/tmp`; all per-user paths moved to `~/tmp/`:
+  - `bot/account_bot.py`: `_FEED_TMP_DIR` changed from `/tmp/tradinebotte-<user>` to `/tmp/tradinebotte-feed` (no user suffix); created with chmod 1777 so every Linux user can write lock/log files into it while the sticky bit prevents cross-user deletion; this makes the file lock truly cross-user, ensuring a single `feed.py` instance across all accounts
+  - `tests/test_bot.py`, `tests/test_multibot.py`: test sandbox moved to `~/tmp/tradinebotte-test`
+  - `scripts/run_tests.sh`: `TRADINEBOTTE_DIR` updated to `${HOME}/tmp/tradinebotte-test`
+  - `scripts/profile_hotpath.py`, `scripts/profile_compare.py`: profiling sandbox moved to `~/tmp/profile-bot`
+  - `scripts/install_service.sh`, `install_account_service.sh`, `install_feed_service.sh`: generated `.service` staging files moved to `~/tmp/`
+  - `scripts/test_standalone_deploy.sh`, `test_multibot_deploy.sh`: cleanup and feed log search paths updated accordingly
+
 ---
 
 ## [0.40] - 2026-05-02

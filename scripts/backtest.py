@@ -8,7 +8,8 @@ with configurable parameters, and produces simulated trade statistics.
 
 Database resolution when no --db / --all flag is given (first match wins):
     1. $TRADINEBOTTE_DIR/live.db  (or ~/tradinebotte/live.db by default)
-    2. data/backtest_sample_btc5m_range_2026.db  (bundled sample dataset)
+    2. data/paper3.db             (paper-trading session — 764k snapshots)
+    3. data/backtest_sample_btc5m_range_2026.db  (bundled sample dataset)
 
 Usage:
     python3 scripts/backtest.py                              # default DB
@@ -28,8 +29,9 @@ from typing import List, Optional, Tuple
 
 INSTALL_DIR = os.path.expanduser(os.environ.get("TRADINEBOTTE_DIR", "~/tradinebotte"))
 _live_db    = os.path.join(INSTALL_DIR, "live.db")
-_sample_db  = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                            "data", "backtest_sample_btc5m_range_2026.db")
+_data_dir   = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+_sample_db  = os.path.join(_data_dir, "backtest_sample_btc5m_range_2026.db")
+_paper3_db  = os.path.join(_data_dir, "paper3.db")
 
 _LIVE_DB_MIN_SNAPSHOTS = 100  # below this, fall back to the sample dataset
 
@@ -45,8 +47,6 @@ def _live_db_usable(path: str) -> bool:
     except Exception:
         return False
 
-DB_PATH = _live_db if _live_db_usable(_live_db) else _sample_db
-
 def _collect_dbs(db_args: Optional[List[str]], scan_all: bool) -> List[str]:
     """
     Resolve the ordered list of database files to replay.
@@ -54,24 +54,28 @@ def _collect_dbs(db_args: Optional[List[str]], scan_all: bool) -> List[str]:
     Priority:
       --all              → all .db files in data/, then live.db if usable
       --db path [path…]  → exactly those paths (shell expands globs)
-      (neither)          → default DB_PATH (live.db → sample fallback)
+      (neither)          → live.db (if usable) + paper3.db (if present),
+                           falling back to the bundled sample dataset
     """
     if scan_all:
-        data_dir = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data"
-        )
         found = sorted(
-            os.path.join(data_dir, f)
-            for f in os.listdir(data_dir)
+            os.path.join(_data_dir, f)
+            for f in os.listdir(_data_dir)
             if f.endswith(".db")
-        ) if os.path.isdir(data_dir) else []
+        ) if os.path.isdir(_data_dir) else []
         # Prepend live.db when it has enough data so it appears first.
         if _live_db_usable(_live_db) and _live_db not in found:
             found = [_live_db] + found
         return found
     if db_args:
         return list(db_args)
-    return [DB_PATH]
+    # Default: live.db then paper3.db; fall back to sample when neither is available.
+    defaults = []
+    if _live_db_usable(_live_db):
+        defaults.append(_live_db)
+    if os.path.exists(_paper3_db):
+        defaults.append(_paper3_db)
+    return defaults if defaults else [_sample_db]
 
 FEE_RATE    = 0.02    # Polymarket taker fee rate
 GAS_FEE_USD = 0.03    # estimated gas cost per order
@@ -82,13 +86,13 @@ GAS_FEE_USD = 0.03    # estimated gas cost per order
 @dataclass
 class Params:
     """All tunable parameters for one backtest run."""
-    signal_threshold:   float = 0.96
+    signal_threshold:   float = 0.95
     entry_max:          float = 0.998
-    min_secs_remaining: float = 45.0
+    min_secs_remaining: float = 30.0
     min_ask_vol:        float = 10.0
     win_threshold:      float = 0.99
     loss_threshold:     float = 0.01
-    obi_reject_thresh:  float = -0.50
+    obi_reject_thresh:  float = -0.25
     stake:              float = 10.0
     daily_stop_loss:    float = 30.0
     capital_start:      float = 100.0
@@ -415,13 +419,13 @@ def main():
                         help="one or more .db files to replay (the shell expands globs)")
     parser.add_argument("--all",        action="store_true",
                         help="replay all .db files in data/ and live.db if usable")
-    parser.add_argument("--threshold",  type=float, default=0.96,
+    parser.add_argument("--threshold",  type=float, default=0.95,
                         help="entry signal threshold (best_bid >= X)")
-    parser.add_argument("--min-secs",   type=float, default=45.0,
+    parser.add_argument("--min-secs",   type=float, default=30.0,
                         help="minimum seconds remaining at entry")
     parser.add_argument("--min-ask",    type=float, default=10.0,
                         help="minimum ask-side volume in USD")
-    parser.add_argument("--obi",        type=float, default=-0.50,
+    parser.add_argument("--obi",        type=float, default=-0.25,
                         help="OBI reject threshold (below = no entry)")
     parser.add_argument("--stake",      type=float, default=10.0,
                         help="USD stake per trade")
@@ -456,7 +460,10 @@ def main():
             print(f"WARNING: not found, skipping: {db_path}")
             continue
 
-        tag = "(sample)" if db_path == _sample_db else ("(live)" if db_path == _live_db else "")
+        if db_path == _sample_db:   tag = "(sample)"
+        elif db_path == _live_db:   tag = "(live)"
+        elif db_path == _paper3_db: tag = "(paper3)"
+        else:                       tag = ""
         print(f"DB: {db_path} {tag}".rstrip())
 
         conn        = sqlite3.connect(db_path)

@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# pre-commit — block commits that expose infrastructure details
+#
+# Install once:
+#   git config core.hooksPath .git-hooks
+#
+# Checks staged content against a list of sensitive patterns loaded from
+# ~/.tradinebotte-test.conf (server hostname, usernames) plus static patterns.
+
+set -euo pipefail
+
+CONF="${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
+PATTERNS=()
+
+# Load dynamic patterns from test config if available
+if [[ -f "$CONF" ]]; then
+    # shellcheck source=/dev/null
+    source "$CONF" 2>/dev/null || true
+    [[ -n "${TEST_SERVER:-}" ]] && PATTERNS+=("$TEST_SERVER")
+    if [[ -n "${TEST_USERS[*]:-}" ]]; then
+        for u in "${TEST_USERS[@]}"; do PATTERNS+=("$u@"); done
+    fi
+fi
+
+# Static patterns — add any domain/IP that should never appear in public docs
+PATTERNS+=(
+    "\.ww7\.be"
+)
+
+STAGED=$(git diff --cached --name-only)
+[[ -z "$STAGED" ]] && exit 0
+
+FOUND=0
+for pat in "${PATTERNS[@]}"; do
+    # Exclude .git-hooks/ (contains patterns as code) and CLAUDE.md (meta-doc)
+    HITS=$(git diff --cached -U0 -- ':!.git-hooks/' ':!CLAUDE.md' \
+        | grep "^+" | grep -vE "^\+\+\+" | grep -E "$pat" || true)
+    if [[ -n "$HITS" ]]; then
+        echo "🔴 COMMIT BLOQUÉ — données d'infrastructure dans le diff :"
+        echo "   Pattern : $pat"
+        echo "$HITS" | head -5 | sed 's/^/   /'
+        FOUND=1
+    fi
+done
+
+if [[ $FOUND -ne 0 ]]; then
+    echo ""
+    echo "Retirer ces informations avant de committer."
+    echo "Pour forcer malgré tout (non recommandé) : git commit --no-verify"
+    exit 1
+fi
+
+exit 0

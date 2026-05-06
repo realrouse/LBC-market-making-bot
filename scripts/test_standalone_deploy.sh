@@ -121,7 +121,7 @@ for idx in 0 1; do
         sleep 2
         pkill -9 -u \$(id -u) -f '[l]ive_bot.py' 2>/dev/null || true
         rm -rf $INSTALL_DIR
-        rm -rf /tmp/tradinebotte-\$(whoami)
+        rm -rf "\${HOME}/tmp/tradinebotte-test"
         exit 0
     " && ok "${USERS[$idx]} nettoyé" || warn "${USERS[$idx]} nettoyage partiel"
 done

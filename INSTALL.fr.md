@@ -65,6 +65,76 @@ et Dependabot ouvre des PRs lorsque de nouvelles versions sont disponibles.
 Les dépendances de développement (`pylint`, `pip-audit`, `mypy`) sont déclarées dans `requirements-dev.txt`.
 
 
+## Obtenir le code source
+
+Trois méthodes sont disponibles selon votre configuration. Les trois aboutissent
+à la même étape `bash scripts/install.sh`.
+
+### Méthode 1 — Git clone (recommandée si GitHub est accessible)
+
+```bash
+git clone https://github.com/neofutur/tradinebotte.git
+cd tradinebotte
+bash scripts/install.sh
+```
+
+Pour installer une version précise :
+
+```bash
+git clone --branch v0.40 https://github.com/neofutur/tradinebotte.git
+cd tradinebotte
+bash scripts/install.sh
+```
+
+### Méthode 2 — rsync depuis une machine de développement (recommandée pour VPS sans git)
+
+Depuis votre machine locale où le dépôt est déjà cloné :
+
+```bash
+rsync -a --exclude='*.db' --exclude='__pycache__' --exclude='.git' --exclude='venv' \
+  /chemin/vers/tradinebotte/ user@serveur:~/tradinebotte/
+ssh user@serveur "cd ~/tradinebotte && bash scripts/install.sh"
+```
+
+Pour mettre à jour une installation existante (préserve `config.json`) :
+
+```bash
+rsync -a --exclude='*.db' --exclude='__pycache__' --exclude='.git' --exclude='venv' \
+  --exclude='config.json' \
+  /chemin/vers/tradinebotte/ user@serveur:~/tradinebotte/
+ssh user@serveur "cd ~/tradinebotte && bash scripts/install.sh"
+```
+
+> Le flag `--exclude='config.json'` est critique lors des mises à jour — sans lui,
+> rsync écrase le fichier de credentials de production.
+
+### Méthode 3 — Archive tar.gz de release officielle (sans git)
+
+Télécharger la dernière archive de release depuis la
+[page Releases](https://github.com/neofutur/tradinebotte/releases) :
+
+```bash
+# Remplacer v0.40 par la version souhaitée
+wget https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.40.tar.gz
+tar -xzf v0.40.tar.gz
+cd tradinebotte-0.40
+bash scripts/install.sh
+```
+
+Ou avec `curl` :
+
+```bash
+curl -L https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.40.tar.gz \
+  | tar -xz
+cd tradinebotte-0.40
+bash scripts/install.sh
+```
+
+Le répertoire s'appelle `tradinebotte-<version>` après extraction. Le script
+d'installation détecte automatiquement son emplacement — aucun ajustement de
+chemin n'est nécessaire.
+
+
 ## Répertoire d'installation
 
 Tous les scripts lisent la variable d'environnement `TRADINEBOTTE_DIR` pour
@@ -103,13 +173,15 @@ export TRADINEBOTTE_DIR=~/tradinebotte
 Exécuter le script d'installation depuis la racine du dépôt :
 
 ```bash
-bash scripts/install.sh [répertoire_installation] [--with-tests]
+bash scripts/install.sh [répertoire_installation] [--lang EN|FR] [--with-tests]
 ```
 
 **Options :**
+- `--lang EN|FR` — Définit la langue sans prompt interactif (utile pour CI ou déploiements automatisés).
+  Sans ce flag, le script propose le choix au démarrage comme avant.
 - `--with-tests` — Copie aussi `tests/`, `scripts/backtest.py` et
   `data/backtest_sample_btc5m_range_2026.db`, puis lance
-  la suite complète de tests (153 tests) juste après l'installation.
+  la suite complète de tests (163 tests) juste après l'installation.
   Le backtest utilise `live.db` uniquement s'il contient ≥ 100 snapshots ;
   sinon il bascule automatiquement sur le dataset embarqué.
 
@@ -276,6 +348,8 @@ disponible (`After=network-online.target`).
 **Flags :**
 - *(aucun flag)* — mode normal : les écritures de logs sont asynchrones (thread daemon, ne bloque jamais le event loop)
 - `--no-log` — supprime le fichier log pour un I/O disque minimal ; la DB SQLite (trades + snapshots) n'est pas affectée ; combiner avec `--simulate` pour conserver la sortie stdout
+- `--no-snapshots` — ne pas écrire les snapshots de prix toutes les 5 s dans la DB ; les trades continuent d'être enregistrés ; réduit la pression d'écriture sur les longues sessions ; à utiliser quand les données de snapshots ne sont pas nécessaires pour l'analyse post-session
+- `--reset-db` — sauvegarde `live.db` dans `live.db.bak.YYYYMMDD_HHMMSS` puis le supprime avant le lancement ; le bot repart de zéro (capital et historique de trades) ; demande une confirmation `yes` ; sans effet si la DB est absente
 - `--simulate` — isole tous les fichiers dans `~/tradinebotte-sim` par défaut, aucun ordre réel. Si `TRADINEBOTTE_DIR` est déjà défini dans l'environnement, ce chemin est utilisé à la place — ce qui permet de faire tourner plusieurs bots en parallèle sans conflit :
   ```bash
   TRADINEBOTTE_DIR=~/compte-a python3 live_bot.py --simulate
@@ -355,6 +429,16 @@ python3 scripts/backtest.py --all --sweep
 ```
 
 Quand plusieurs fichiers sont traités, chaque fichier tourne avec le capital réinitialisé à `capital_start` (simulation indépendante), et un bloc AGGREGATE résume les wins, losses, PnL, taux de victoire et pire drawdown combinés de tous les fichiers.
+
+**Flags de paramètres** (écrasent les valeurs par défaut du JSON de stratégie pour un seul run) :
+
+| Flag | Défaut | Description |
+|---|---|---|
+| `--threshold FLOAT` | 0.95 | Seuil du signal d'entrée (`best_bid >= seuil`) |
+| `--min-secs FLOAT` | 30.0 | Secondes minimum restantes à l'entrée |
+| `--min-ask FLOAT` | 10.0 | Volume minimum côté ask en USD à l'entrée |
+| `--obi FLOAT` | −0.25 | Seuil de rejet OBI (les entrées avec un OBI inférieur à cette valeur sont ignorées) |
+| `--stake FLOAT` | 10.0 | Mise en USD par trade |
 
 
 ## Filtre heure / jour
@@ -535,6 +619,10 @@ TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash scripts/start_feed.sh
 TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
 ```
 
+**Flags de l'account bot** (`scripts/start_account.sh` les transmet à `bot/account_bot.py`) :
+
+- `--verbose` — active le logging DEBUG pour le diagnostic ; affiche chaque book update, évaluation de signal et message ZMQ reçu ; utile lors de la mise en place initiale ou du débogage
+
 ### Arrêt
 
 ```bash
@@ -693,3 +781,89 @@ Sortie attendue (affichée directement dans le terminal) :
 ```
 
 Le répertoire `.venv/` est listé dans `.gitignore` et ne doit pas être commité.
+
+
+## Interface bilingue
+
+Tous les scripts interactifs proposent un choix de langue au démarrage :
+
+```
+Language / Langue :  [E] English   [F] Français
+>>>
+```
+
+Le choix est persisté sous la clé `"lang": "EN"` ou `"lang": "FR"` dans `config.json` par `setup.py`.
+Les scripts suivants (`start_bot.sh`, `monitor.sh`) lisent cette clé automatiquement — aucune re-saisie.
+
+Si `config.json` est absent (avant le premier `setup.py`), `start_bot.sh` et `monitor.sh`
+utilisent l'anglais par défaut. `install.sh` demande toujours interactivement car il s'exécute avant `setup.py`.
+
+Pour changer la langue après la configuration initiale, éditez `config.json` :
+
+```json
+{ "lang": "FR" }
+```
+
+ou relancez `python3 scripts/setup.py` et choisissez à nouveau.
+
+
+## Connecteurs CEX (Binance, MEXC)
+
+Deux adaptateurs d'exchange supplémentaires sont inclus comme remplaçants directs de `api_polymarket.py` :
+
+| Fichier | Exchange | Frais | Flux WebSocket |
+|---|---|---|---|
+| `bot/api_binance.py` | Binance spot | 0,1 % taker | `btcusdt@depth5@100ms` |
+| `bot/api_mexc.py` | MEXC spot | 0,2 % taker | `spot@public.limit.depth.v3.api@BTCUSDT@5` |
+
+Les deux implémentent l'interface publique identique : `get_markets`, `post_order`,
+`parse_book_update`, `compute_fee` et les helpers de métadonnées de marché.
+
+**Credentials** — via variables d'environnement ou `config.json` :
+
+```bash
+export BINANCE_API_KEY=...
+export BINANCE_API_SECRET=...
+export MEXC_API_KEY=...
+export MEXC_API_SECRET=...
+```
+
+**Changer d'exchange** — modifier une seule ligne dans `live_bot.py` (ligne 62) :
+
+```python
+import api_binance as api   # à la place de api_polymarket
+# ou
+import api_mexc as api
+```
+
+**Important** : le signal Polymarket (`best_bid >= 0.96`) opère sur une échelle 0–1 (probabilités).
+Les prix Binance/MEXC sont des valeurs USDT absolues (ex. 65000). Les seuils de stratégie dans
+`strategies/*.json` doivent être recalibrés avant d'utiliser un connecteur CEX.
+
+
+## Benchmark de latence API
+
+Comparer la latence REST et WebSocket des trois exchanges :
+
+```bash
+python3 scripts/benchmark_api.py             # 15 rounds, tous les exchanges
+python3 scripts/benchmark_api.py --rounds 30 # plus d'échantillons
+python3 scripts/benchmark_api.py --no-ws     # REST uniquement (plus rapide)
+```
+
+Les résultats peuvent être sauvegardés :
+
+```bash
+python3 scripts/benchmark_api.py 2>&1 | tee latence_api.txt
+```
+
+Latences de référence mesurées depuis un VPS Amsterdam :
+
+| Exchange | REST moyen | REST p99 | WS moyen |
+|---|---|---|---|
+| Polymarket Gamma | ~14 ms | ~20 ms | ~65 ms |
+| MEXC | ~15 ms | ~80 ms | ~905 ms |
+| Binance | ~225 ms | ~232 ms | ~990 ms |
+
+La latence Binance élevée depuis l'Europe s'explique par le routage géographique ;
+depuis un VPS asiatique les chiffres seraient inversés.

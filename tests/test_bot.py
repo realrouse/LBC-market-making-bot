@@ -4,16 +4,15 @@ Automated tests for bot/live_bot.py
 Run with:
     bash scripts/run_tests.sh
     # or directly:
-    TRADINEBOTTE_DIR=/tmp/tradinebotte-test-<user> .venv/bin/python3 -m unittest discover tests/ -v
+    .venv/bin/python3 -m unittest discover tests/ -v
 """
 
-import os, sys, time, sqlite3, unittest, getpass
+import os, sys, time, sqlite3, unittest
 from datetime import datetime, timezone, timedelta
 
-# Redirect all bot I/O to /tmp before importing live_bot, so it never tries
-# to create /opt/polymarket-live or open files outside the project tree.
-# User-specific path avoids PermissionError on shared servers (e.g. multi-user CI).
-_TEST_DIR = f"/tmp/tradinebotte-test-{getpass.getuser()}"
+# Redirect all bot I/O to ~/tmp so tests never touch /opt or write credentials.
+# ~/tmp is per-user by definition — no PermissionError on shared servers.
+_TEST_DIR = os.path.join(os.path.expanduser("~"), "tmp", "tradinebotte-test")
 os.environ["TRADINEBOTTE_DIR"] = _TEST_DIR
 os.makedirs(_TEST_DIR, exist_ok=True)
 
@@ -388,7 +387,7 @@ class TestCheckSignal(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("mkt1", self.state.signalled)
 
     async def test_blocked_bid_below_threshold(self):
-        await bot.check_signal(self.state, make_token(best_bid=0.95))
+        await bot.check_signal(self.state, make_token(best_bid=0.94))
         self.assertNotIn("mkt1", self.state.signalled)
 
     async def test_blocked_bid_above_entry_max(self):
@@ -438,12 +437,12 @@ class TestCheckSignal(unittest.IsolatedAsyncioTestCase):
         self.assertIn("mkt1", self.state.signalled)
 
     async def test_at_min_secs_remaining_blocked(self):
-        await bot.check_signal(self.state, make_token(secs_remaining=44))
+        await bot.check_signal(self.state, make_token(secs_remaining=29))
         self.assertNotIn("mkt1", self.state.signalled)
 
     async def test_above_min_secs_remaining_fires(self):
         # secs_remaining is computed live from time.time(), so use a value
-        # safely above the 45 s limit rather than testing the exact boundary.
+        # safely above the 30 s limit rather than testing the exact boundary.
         await bot.check_signal(self.state, make_token(secs_remaining=60))
         self.assertIn("mkt1", self.state.signalled)
 
