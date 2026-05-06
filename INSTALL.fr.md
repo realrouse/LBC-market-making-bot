@@ -173,10 +173,12 @@ export TRADINEBOTTE_DIR=~/tradinebotte
 Exécuter le script d'installation depuis la racine du dépôt :
 
 ```bash
-bash scripts/install.sh [répertoire_installation] [--with-tests]
+bash scripts/install.sh [répertoire_installation] [--lang EN|FR] [--with-tests]
 ```
 
 **Options :**
+- `--lang EN|FR` — Définit la langue sans prompt interactif (utile pour CI ou déploiements automatisés).
+  Sans ce flag, le script propose le choix au démarrage comme avant.
 - `--with-tests` — Copie aussi `tests/`, `scripts/backtest.py` et
   `data/backtest_sample_btc5m_range_2026.db`, puis lance
   la suite complète de tests (163 tests) juste après l'installation.

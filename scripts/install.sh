@@ -12,53 +12,73 @@
 #    3. Valeur par défaut : ~/tradinebotte
 #
 #  Options :
+#    --lang EN|FR   langue (défaut : prompt interactif)
 #    --with-tests   copie aussi tests/ et scripts/backtest.py
 # ═══════════════════════════════════════════════════════════════════
-set -e
+set -eo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$REPO_DIR"   # ensure relative paths (bot/, tests/, etc.) resolve correctly
+cd "$REPO_DIR"
 
 # ── Argument parsing ──────────────────────────────────────────────
 WITH_TESTS=0
-ARGS=()
-for arg in "$@"; do
-    if [ "$arg" = "--with-tests" ]; then
-        WITH_TESTS=1
-    else
-        ARGS+=("$arg")
-    fi
+LANG_ARG=""
+POSITIONAL=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --with-tests) WITH_TESTS=1; shift ;;
+        --lang)       LANG_ARG="${2:-}"; shift 2 ;;
+        --lang=*)     LANG_ARG="${1#--lang=}"; shift ;;
+        *)            POSITIONAL+=("$1"); shift ;;
+    esac
 done
 
-INSTALL_DIR="${ARGS[0]:-${TRADINEBOTTE_DIR:-$HOME/tradinebotte}}"
-INSTALL_DIR="$(eval echo "$INSTALL_DIR")"   # développe ~ si présent
+INSTALL_DIR="${POSITIONAL[0]:-${TRADINEBOTTE_DIR:-$HOME/tradinebotte}}"
+INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"   # safe tilde expansion (no eval)
 
 # ── Language selection ────────────────────────────────────────────
 # install.sh runs before setup.py so there is no config.json yet;
-# the choice is asked interactively here and later persisted by setup.py.
-echo "Language / Langue :  [E] English   [F] Français"
-read -r _lang_raw || _lang_raw="E"
-case "$_lang_raw" in
-    [Ff]*) LANG="FR" ;;
-    *)     LANG="EN" ;;
-esac
+# the choice is asked interactively unless --lang is passed.
+if [ -n "$LANG_ARG" ]; then
+    case "$LANG_ARG" in
+        [Ff]*) LANG="FR" ;;
+        *)     LANG="EN" ;;
+    esac
+else
+    echo "Language / Langue :  [E] English   [F] Français"
+    read -r _lang_raw || _lang_raw="E"
+    case "$_lang_raw" in
+        [Ff]*) LANG="FR" ;;
+        *)     LANG="EN" ;;
+    esac
+fi
 
 # _t "EN text" "FR text" — print the string for the current language (no trailing newline)
 _t() { [ "$LANG" = "FR" ] && printf '%s' "$2" || printf '%s' "$1"; }
 
+# ── Helpers ───────────────────────────────────────────────────────
+_check_syntax() {
+    local file="$1"
+    "$INSTALL_DIR/venv/bin/python3" -c \
+        "import ast, sys; ast.parse(open(sys.argv[1]).read()); print(sys.argv[2])" \
+        "$file" "$(basename "$file") : $(_t 'SYNTAX OK' 'SYNTAXE OK')"
+}
+
+_pip_install() {
+    local pip="$INSTALL_DIR/venv/bin/pip"
+    "$pip" install --quiet --upgrade pip
+    "$pip" install --quiet "$@" -r "$REPO_DIR/requirements.txt"
+}
+
 # ── System dependencies ───────────────────────────────────────────
 echo ""
 echo "=== $(_t "Installation directory" "Répertoire d'installation") : $INSTALL_DIR ==="
-
 echo "=== $(_t "Checking system dependencies" "Vérification des dépendances système") ==="
 
 _MISSING=()
-
 if ! command -v python3 &>/dev/null; then
     _MISSING+=("python3")
 fi
-
-# python3 -m venv requires ensurepip (package python3-venv + python3.X-venv on Ubuntu)
 if command -v python3 &>/dev/null && ! python3 -c "import ensurepip" &>/dev/null 2>&1; then
     _PY_MINOR=$(python3 -c "import sys; print(sys.version_info.minor)")
     _MISSING+=("python3-venv" "python3.${_PY_MINOR}-venv")
@@ -75,7 +95,6 @@ if [ ${#_MISSING[@]} -gt 0 ]; then
 fi
 
 # sqlite3 CLI — optional: only needed by monitor.sh for manual queries.
-# The bot itself uses Python's built-in sqlite3 module, always available.
 if ! command -v sqlite3 &>/dev/null; then
     echo "$(_t "Warning: sqlite3 CLI missing — monitor.sh will not work." \
               "Avertissement : sqlite3 CLI absent — monitor.sh ne fonctionnera pas.")"
@@ -89,12 +108,11 @@ echo "=== $(_t "Creating directories" "Création des répertoires") ==="
 mkdir -p "$INSTALL_DIR"
 
 echo "=== $(_t "Copying bot files" "Copie du bot") ==="
-cp bot/live_bot.py       "$INSTALL_DIR/live_bot.py"
-cp bot/api_polymarket.py "$INSTALL_DIR/api_polymarket.py"
-cp bot/bot_utils.py      "$INSTALL_DIR/bot_utils.py"
+for _f in live_bot.py api_polymarket.py bot_utils.py; do
+    cp "bot/$_f" "$INSTALL_DIR/$_f"
+done
+
 mkdir -p "$INSTALL_DIR/strategies"
-# Guard against same-file error when the repo is cloned directly into
-# INSTALL_DIR (e.g. git clone → ~/tradinebotte, install → ~/tradinebotte).
 _STRAT_SRC="$(cd strategies && pwd)"
 _STRAT_DST="$(cd "$INSTALL_DIR/strategies" && pwd)"
 if [ "$_STRAT_SRC" != "$_STRAT_DST" ]; then
@@ -104,14 +122,12 @@ fi
 # ── Python virtual environment ────────────────────────────────────
 if [ -d "$INSTALL_DIR/venv" ]; then
     echo "=== $(_t "Updating Python packages (existing venv)" "Mise à jour des packages Python (venv existant)") ==="
-    "$INSTALL_DIR/venv/bin/pip" install --quiet --upgrade pip
-    "$INSTALL_DIR/venv/bin/pip" install --quiet --upgrade -r "$REPO_DIR/requirements.txt"
+    _pip_install --upgrade
 else
     echo "=== $(_t "Creating virtual environment" "Création de l'environnement virtuel") ==="
     python3 -m venv "$INSTALL_DIR/venv"
     echo "=== $(_t "Installing Python packages" "Installation des packages Python") ==="
-    "$INSTALL_DIR/venv/bin/pip" install --quiet --upgrade pip
-    "$INSTALL_DIR/venv/bin/pip" install --quiet -r "$REPO_DIR/requirements.txt"
+    _pip_install
 fi
 
 # Convenience wrapper that exports TRADINEBOTTE_DIR and activates the venv
@@ -124,14 +140,10 @@ EOF
 chmod +x "$INSTALL_DIR/run.sh"
 
 # ── Syntax check ──────────────────────────────────────────────────
-_ok=$(_t "SYNTAX OK" "SYNTAXE OK")
 echo "=== $(_t "Checking syntax" "Vérification syntaxe") ==="
-"$INSTALL_DIR/venv/bin/python3" -c \
-    "import ast; ast.parse(open('$INSTALL_DIR/live_bot.py').read()); print('live_bot.py : $_ok')"
-"$INSTALL_DIR/venv/bin/python3" -c \
-    "import ast; ast.parse(open('$INSTALL_DIR/api_polymarket.py').read()); print('api_polymarket.py : $_ok')"
-"$INSTALL_DIR/venv/bin/python3" -c \
-    "import ast; ast.parse(open('$INSTALL_DIR/bot_utils.py').read()); print('bot_utils.py : $_ok')"
+for _f in live_bot.py api_polymarket.py bot_utils.py; do
+    _check_syntax "$INSTALL_DIR/$_f"
+done
 
 # ── Optional: tests ───────────────────────────────────────────────
 if [ "$WITH_TESTS" = "1" ]; then
@@ -146,14 +158,11 @@ if [ "$WITH_TESTS" = "1" ]; then
            "$INSTALL_DIR/data/backtest_sample_btc5m_range_2026.db"
     fi
     echo "=== $(_t "Running tests" "Lancement des tests") ==="
-    cd "$INSTALL_DIR"
     TRADINEBOTTE_DIR="$INSTALL_DIR" "$INSTALL_DIR/venv/bin/python3" \
-        -W ignore::ResourceWarning -m unittest discover tests/ -v
-    cd - > /dev/null
+        -W ignore::ResourceWarning -m unittest discover "$INSTALL_DIR/tests/" -v
 fi
 
 # ── Next steps ────────────────────────────────────────────────────
-# Prefix TRADINEBOTTE_DIR=... only when the user chose a non-default dir.
 if [ "$INSTALL_DIR" = "$HOME/tradinebotte" ]; then
     _TD=""
 else

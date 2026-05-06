@@ -8,6 +8,9 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ## [Non publié]
 
+### Modifié
+- **Refactorisation de `scripts/install.sh`** — flag `--lang EN|FR` pour les exécutions non interactives ; expansion du tilde sécurisée (`${var/#\~/$HOME}` remplace `eval echo`) ; helpers `_check_syntax` et `_pip_install` pour éliminer le code dupliqué ; copie des fichiers bot et vérification de syntaxe pilotées par une boucle commune ; `set -eo pipefail` remplace le simple `set -e`
+
 ### Fonctionnalité
 - **Suite de tests étendue à 163 tests** — `tests/test_bot.py` contient désormais 105 tests (contre 95 auparavant) ; `test_backtest.py` et `test_multibot.py` inchangés à 28 et 30 ; passage confirmé sur les trois comptes de déploiement VPS en ~11s chacun
 - **`bot/api_binance.py`** — nouveau connecteur API Binance spot implémentant la même interface publique que `api_polymarket.py` (`get_markets`, `post_order`, `parse_book_update`, `compute_fee`, helpers de métadonnées de marché) ; credentials via les variables d'environnement `BINANCE_API_KEY` / `BINANCE_API_SECRET` ou en kwargs ; signature HMAC-SHA256 ; mode simulation quand les credentials sont absents ; taux de frais 0,1 % ; `WS_URL` pointe sur `wss://stream.binance.com:9443/stream` (flux depth combiné) ; changer d'exchange ne nécessite qu'une modification d'import dans `live_bot.py`
