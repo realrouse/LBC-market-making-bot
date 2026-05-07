@@ -30,8 +30,6 @@ Message types consumed from feed.py:
    "spread": ..., "bid_vol": ..., "ask_vol": ..., "obi": ...}
   {"t": "ping",  "ts": ...}
 """
-# pylint: disable=duplicate-code  # market-expiry purge loop mirrors feed.py by design
-
 import argparse, asyncio, fcntl, logging, os, subprocess, sys, time
 import zmq, zmq.asyncio
 
@@ -246,16 +244,7 @@ async def _run(state: bot.BotState) -> None:
             elif t == "ping":
                 pass  # keepalive — no action needed
 
-            # Purge expired markets periodically.
-            expired = [
-                tid for tid, ts in list(state.tokens.items())
-                if ts.market_ended and ts.market_id not in state.open_trades
-            ]
-            for tid in expired:
-                ts_obj = state.tokens.pop(tid, None)
-                if ts_obj:
-                    state.market_tokens.pop(ts_obj.market_id, None)
-                    state.signalled.discard(ts_obj.market_id)
+            bot.purge_expired_markets(state)
     finally:
         sock.close(linger=0)
         ctx.term()

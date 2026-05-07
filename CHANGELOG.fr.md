@@ -8,6 +8,9 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ## [Non publié]
 
+### Refactorisation
+- **`purge_expired_markets(state)` extrait dans `live_bot.py`** : la boucle de nettoyage des marchés expirés (suppression dans `tokens`, `market_tokens`, `signalled`), identique en 9 lignes et dupliquée entre `_market_refresh_loop` et `account_bot._run`, est désormais une fonction partagée unique ; `account_bot.py` appelle `bot.purge_expired_markets(state)` ; commentaire `pylint: disable=duplicate-code` supprimé
+
 ### Performance
 - **`check_signal` — cache mémoire du PnL journalier** (`state.daily_pnl`) : supprime le `SELECT SUM(pnl_net)` SQL exécuté à chaque message WebSocket ; `close_trade` met à jour le compteur de façon incrémentale ; le passage à minuit UTC est détecté en tête de `check_signal` (s'exécute à chaque mise à jour du carnet, pas seulement lors d'une tentative de signal) et remet le compteur à zéro ; `restore_state_from_db` l'initialise depuis la DB au démarrage pour que le cache soit exact après un redémarrage ; 7 nouveaux tests dans `TestDailyPnlCache`
 

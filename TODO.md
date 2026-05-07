@@ -24,10 +24,6 @@
 - **Versionnage de schéma DB** — table `schema_version` + dict `MIGRATIONS = {1: "ALTER TABLE …", 2: …}` ; `init_db()` applique les migrations manquantes dans l'ordre ; garantit la compatibilité ascendante sur les VPS avec DB existante
   > 📋 *ameliorationarchitecture.txt item IV (P2, ~30 lignes)*
 
-### Maintenabilité
-- **Dédupliquer `live_bot.py` / `account_bot.py`** — extraire la logique partagée (purge des marchés expirés, traitement book/market) dans `bot_state_manager.py` (option A, ambiteuse) ou factoriser au minimum la boucle de purge dans `bot_utils.py` (option B)
-  > 📋 *ameliorationarchitecture.txt item V (P3, effort élevé option A / moyen option B)*
-
 ### Qualité de code
 - ~~**Fermeture des connexions SQLite dans les tests**~~ — ✅ done (setUp/tearDown + addCleanup sur toutes les classes)
 - ~~**mypy strict**~~ — ✅ done (0 erreur, workflow CI `.github/workflows/mypy.yml`)

@@ -793,6 +793,22 @@ def save_snapshot(state: BotState, ts: TokenState) -> None:
 
 # ─── MARKET DISCOVERY ─────────────────────────────────────────────────────────
 
+def purge_expired_markets(state: BotState) -> int:
+    """
+    Remove tokens whose market has ended (plus grace period) and has no open
+    trade, cleaning up tokens, market_tokens, and signalled in one pass.
+    Returns the number of tokens removed.
+    """
+    expired = [tid for tid, ts in list(state.tokens.items())
+               if ts.market_ended and ts.market_id not in state.open_trades]
+    for tid in expired:
+        ts = state.tokens.pop(tid, None)
+        if ts:
+            state.market_tokens.pop(ts.market_id, None)
+            state.signalled.discard(ts.market_id)
+    return len(expired)
+
+
 def register_market(state: BotState, market: dict[str, Any]) -> list[str]:
     """
     Add a market's UP and DOWN tokens to the state if not already tracked.
@@ -853,16 +869,9 @@ async def _market_refresh_loop(state: BotState, session: aiohttp.ClientSession, 
                     await ws.send(api.make_subscribe_msg(ni[i:i + api.WS_BATCH_SIZE]))
                 logger.info("Nouveaux tokens : %d", len(ni))
 
-            # Purge expired markets so the token dict doesn't grow indefinitely.
-            expired = [tid for tid, ts in list(state.tokens.items())
-                       if ts.market_ended and ts.market_id not in state.open_trades]
-            for tid in expired:
-                ts = state.tokens.pop(tid, None)
-                if ts:
-                    state.market_tokens.pop(ts.market_id, None)
-                    state.signalled.discard(ts.market_id)
-            if expired:
-                logger.info("Tokens expires purges : %d", len(expired))
+            n = purge_expired_markets(state)
+            if n:
+                logger.info("Tokens expires purges : %d", n)
         except asyncio.CancelledError:
             raise
         except Exception as e:
