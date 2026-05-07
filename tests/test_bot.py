@@ -33,9 +33,9 @@ def make_db():
     return conn
 
 
-def make_state():
-    """BotState backed by an in-memory database."""
-    return bot.BotState(make_db())
+def make_state(conn=None):
+    """BotState backed by an in-memory database (or a provided connection)."""
+    return bot.BotState(conn if conn is not None else make_db())
 
 
 def make_token(
@@ -450,18 +450,11 @@ class TestCheckSignal(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("mkt1", self.state.signalled)
 
     async def test_blocked_daily_stop_loss(self):
-        today_ms = int(
-            datetime.now(timezone.utc)
-            .replace(hour=0, minute=0, second=0, microsecond=0)
-            .timestamp() * 1000
-        )
-        self.state.conn.execute(
-            "INSERT INTO trades "
-            "(market_id, token_id, direction, stake, capital_before, resolved, pnl_net, signal_ts_ms) "
-            "VALUES ('old','tok','UP',10,100,1,-35.0,?)",
-            (today_ms + 1000,),
-        )
-        self.state.conn.commit()
+        # daily_pnl is now an in-memory cache; set it directly so the
+        # midnight-reset guard doesn't clear it before the check.
+        import time as _time
+        self.state.daily_pnl = -35.0
+        self.state._daily_pnl_day = int(_time.time() // 86400)
         await bot.check_signal(self.state, make_token())
         self.assertNotIn("mkt1", self.state.signalled)
 
@@ -724,6 +717,183 @@ class TestRestoreState(unittest.TestCase):
         bot.restore_state_from_db(fresh)
         self.assertEqual(fresh.losses, 5)
         self.assertEqual(fresh.wins, 0)
+
+
+# ─── Daily PnL cache (amelioration II) ───────────────────────────────────────
+
+class TestDailyPnlCache(unittest.TestCase):
+    """
+    Verify that close_trade updates state.daily_pnl incrementally and that
+    restore_state_from_db initialises it from the DB on startup.
+    """
+
+    def setUp(self):
+        self.conn = make_db()
+        self.addCleanup(self.conn.close)
+
+    def _close_via_resolution(self, direction, best_bid):
+        state = make_state(conn=self.conn)
+        tid = insert_trade(self.conn, direction=direction)
+        state.open_trades["mkt1"]      = tid
+        state.traded_direction["mkt1"] = direction
+        ts = make_token(best_bid=best_bid)
+        bot.check_resolution(state, ts)
+        return state
+
+    def test_win_increments_daily_pnl(self):
+        state = self._close_via_resolution("UP", bot.WIN_THRESHOLD)
+        self.assertGreater(state.daily_pnl, 0,
+                           "daily_pnl should be positive after a WIN")
+
+    def test_loss_decrements_daily_pnl(self):
+        state = self._close_via_resolution("UP", bot.LOSS_THRESHOLD)
+        self.assertLess(state.daily_pnl, 0,
+                        "daily_pnl should be negative after a LOSS")
+
+    def test_daily_pnl_matches_pnl_net_in_db(self):
+        state = self._close_via_resolution("UP", bot.WIN_THRESHOLD)
+        row = self.conn.execute(
+            "SELECT pnl_net FROM trades WHERE resolved=1 LIMIT 1"
+        ).fetchone()
+        self.assertAlmostEqual(state.daily_pnl, row[0])
+
+    def test_daily_pnl_accumulates_across_trades(self):
+        state = make_state(conn=self.conn)
+        for i in range(3):
+            mid = f"mkt{i}"
+            tid = insert_trade(self.conn, market_id=mid)
+            state.open_trades[mid]      = tid
+            state.traded_direction[mid] = "UP"
+            ts = make_token(market_id=mid, best_bid=bot.WIN_THRESHOLD)
+            bot.check_resolution(state, ts)
+        self.assertGreater(state.daily_pnl, 0)
+        # daily_pnl must equal sum of all pnl_net rows
+        total = self.conn.execute(
+            "SELECT COALESCE(SUM(pnl_net),0) FROM trades WHERE resolved=1"
+        ).fetchone()[0]
+        self.assertAlmostEqual(state.daily_pnl, total)
+
+    def test_midnight_reset_clears_daily_pnl(self):
+        import time as _time
+        state = make_state(conn=self.conn)
+        state.daily_pnl = -25.0
+        # Simulate "yesterday" by setting the day counter one behind current
+        state._daily_pnl_day = int(_time.time() // 86400) - 1
+        # check_signal reads state._daily_pnl_day and resets on rollover
+        state.config = bot.BotConfig(signal_threshold=0.95)
+        ts = make_token(best_bid=0.90)  # below threshold — signal won't fire
+        import asyncio
+        asyncio.run(bot.check_signal(state, ts))
+        self.assertEqual(state.daily_pnl, 0.0,
+                         "daily_pnl should reset to 0 after midnight rollover")
+        self.assertEqual(state._daily_pnl_day, int(_time.time() // 86400))
+
+    def test_restore_loads_today_pnl(self):
+        import time as _time
+        today_ms = int(
+            datetime.now(timezone.utc)
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            .timestamp() * 1000
+        )
+        self.conn.executemany(
+            "INSERT INTO trades "
+            "(market_id, token_id, direction, stake, capital_before, "
+            "resolved, outcome, pnl_net, signal_ts_ms) "
+            "VALUES (?,?,?,10,100,1,'WIN',?,?)",
+            [(f"m{i}", "t", "UP", 3.0, today_ms + i * 1000) for i in range(4)],
+        )
+        self.conn.commit()
+        fresh = bot.BotState(self.conn)
+        bot.restore_state_from_db(fresh)
+        self.assertAlmostEqual(fresh.daily_pnl, 12.0,
+                               msg="restore should sum today's pnl_net from DB")
+
+    def test_restore_excludes_yesterday_pnl(self):
+        yesterday_ms = int(
+            datetime.now(timezone.utc)
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            .timestamp() * 1000
+        ) - 86_400_000
+        self.conn.execute(
+            "INSERT INTO trades "
+            "(market_id, token_id, direction, stake, capital_before, "
+            "resolved, outcome, pnl_net, signal_ts_ms) "
+            "VALUES ('m0','t','UP',10,100,1,'WIN',5.0,?)",
+            (yesterday_ms,),
+        )
+        self.conn.commit()
+        fresh = bot.BotState(self.conn)
+        bot.restore_state_from_db(fresh)
+        self.assertAlmostEqual(fresh.daily_pnl, 0.0,
+                               msg="yesterday's pnl_net must not count in daily_pnl")
+
+
+# ─── Signalled restore for recent resolved trades (amelioration VI) ───────────
+
+class TestSignalledRestore(unittest.TestCase):
+    """
+    restore_state_from_db must add recently resolved markets to signalled
+    to prevent re-entry if the bot restarts within the same market window.
+    """
+
+    def setUp(self):
+        self.conn = make_db()
+        self.addCleanup(self.conn.close)
+
+    def _insert_resolved(self, market_id: str, signal_ts_ms: int,
+                         outcome: str = "WIN") -> None:
+        self.conn.execute(
+            "INSERT INTO trades "
+            "(market_id, token_id, direction, stake, capital_before, "
+            "resolved, outcome, pnl_net, signal_ts_ms) "
+            "VALUES (?,?,?,10,100,1,?,1.0,?)",
+            (market_id, "tok", "UP", outcome, signal_ts_ms),
+        )
+        self.conn.commit()
+
+    def test_recent_resolved_added_to_signalled(self):
+        now_ms = int(time.time() * 1000)
+        self._insert_resolved("recent_mkt", now_ms - 120_000)  # 2 min ago
+        fresh = bot.BotState(self.conn)
+        bot.restore_state_from_db(fresh)
+        self.assertIn("recent_mkt", fresh.signalled)
+
+    def test_old_resolved_not_added_to_signalled(self):
+        now_ms = int(time.time() * 1000)
+        self._insert_resolved("old_mkt", now_ms - 700_000)  # 11+ min ago
+        fresh = bot.BotState(self.conn)
+        bot.restore_state_from_db(fresh)
+        self.assertNotIn("old_mkt", fresh.signalled)
+
+    def test_open_trade_still_in_signalled(self):
+        # Unresolved trades must remain in signalled regardless of this feature.
+        insert_trade(self.conn, market_id="open_mkt")
+        fresh = bot.BotState(self.conn)
+        bot.restore_state_from_db(fresh)
+        self.assertIn("open_mkt", fresh.signalled)
+
+    def test_boundary_just_inside_window(self):
+        now_ms = int(time.time() * 1000)
+        self._insert_resolved("edge_mkt", now_ms - 599_000)  # 9m59s ago — inside
+        fresh = bot.BotState(self.conn)
+        bot.restore_state_from_db(fresh)
+        self.assertIn("edge_mkt", fresh.signalled)
+
+    def test_boundary_just_outside_window(self):
+        now_ms = int(time.time() * 1000)
+        self._insert_resolved("edge2_mkt", now_ms - 601_000)  # 10m01s ago — outside
+        fresh = bot.BotState(self.conn)
+        bot.restore_state_from_db(fresh)
+        self.assertNotIn("edge2_mkt", fresh.signalled)
+
+    def test_multiple_recent_markets_all_signalled(self):
+        now_ms = int(time.time() * 1000)
+        for i in range(4):
+            self._insert_resolved(f"m{i}", now_ms - i * 60_000)
+        fresh = bot.BotState(self.conn)
+        bot.restore_state_from_db(fresh)
+        for i in range(4):
+            self.assertIn(f"m{i}", fresh.signalled)
 
 
 # ─── _htpasswd_sha1 ──────────────────────────────────────────────────────────

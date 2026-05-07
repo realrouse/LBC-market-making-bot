@@ -525,6 +525,10 @@ class BotState:
         self.wins = 0
         self.losses = 0
         self.total_pnl = 0.0
+        # Daily PnL cache — updated incrementally in close_trade, reset at UTC
+        # midnight by check_signal. Eliminates the SQL SELECT on the hot path.
+        self.daily_pnl: float = 0.0
+        self._daily_pnl_day: int = -1   # UTC day number (days since epoch)
 
     @property
     def win_rate(self) -> float:
@@ -616,6 +620,14 @@ async def check_signal(state: BotState, ts: TokenState, _t_ws: Optional[float] =
     tracking (None = no tracking).
     """
     cfg = state.config
+
+    # Midnight UTC reset — runs on every book update so the counter resets
+    # promptly at midnight regardless of whether any signal fires that day.
+    today_day = int(time.time() // 86400)
+    if state._daily_pnl_day != today_day:
+        state.daily_pnl = 0.0
+        state._daily_pnl_day = today_day
+
     if ts.market_id in state.signalled: return
     if ts.market_ended: return
     if not is_trading_hour(cfg): return
@@ -641,18 +653,7 @@ async def check_signal(state: BotState, ts: TokenState, _t_ws: Optional[float] =
                          vol_bid, range_bid, obi_vol, ts.market_id[:12])
             return
     if state.capital - len(state.open_trades) * cfg.stake < cfg.stake: return
-
-    # Check daily net PnL from midnight UTC to now.
-    today_ms = int(
-        datetime.now(timezone.utc)
-        .replace(hour=0, minute=0, second=0, microsecond=0)
-        .timestamp() * 1000
-    )
-    pnl = state.conn.execute(
-        "SELECT COALESCE(SUM(pnl_net),0) FROM trades WHERE resolved=1 AND signal_ts_ms>=?",
-        (today_ms,)
-    ).fetchone()[0]
-    if pnl < -cfg.daily_stop_loss: return
+    if state.daily_pnl < -cfg.daily_stop_loss: return
 
     state.signalled.add(ts.market_id)
     await enter_live_trade(state, ts, _t_ws=_t_ws)
@@ -764,6 +765,7 @@ def close_trade(state: BotState, ts: TokenState, trade_id: int, outcome: str) ->
     state.conn.commit()
     state.capital = ca
     state.total_pnl += pn
+    state.daily_pnl += pn
     if won: state.wins += 1
     else: state.losses += 1
     del state.open_trades[ts.market_id]
@@ -961,6 +963,21 @@ def restore_state_from_db(state: BotState) -> None:
         state.traded_direction[mid] = d
         state.signalled.add(mid)
     if rows: logger.info("Restaure %d trade(s)", len(rows))
+
+    # Mark recently resolved markets as signalled to prevent re-entry if the
+    # bot restarts within the same 5-minute market window (e.g. a restart 30s
+    # after resolution could see the price still at the signal level).
+    now_ms = int(time.time() * 1000)
+    recent_rows = state.conn.execute(
+        "SELECT DISTINCT market_id FROM trades "
+        "WHERE resolved=1 AND signal_ts_ms>=?",
+        (now_ms - 600_000,)   # 10 minutes back
+    ).fetchall()
+    for (mid,) in recent_rows:
+        state.signalled.add(mid)
+    if recent_rows:
+        logger.info("Signalles recents : %d marche(s) exclus du re-signal", len(recent_rows))
+
     row = state.conn.execute(
         "SELECT COUNT(*), "
         "COALESCE(SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END),0), "
@@ -973,8 +990,24 @@ def restore_state_from_db(state: BotState) -> None:
     state.losses = row[2] or 0
     state.total_pnl = row[3] or 0.0
     state.capital = state.config.capital_start + state.total_pnl
-    logger.info("State : capital=$%.2f | %d trades | WR=%.1f%%",
-                state.capital, row[0], state.win_rate)
+
+    # Initialize daily PnL cache from DB so the in-memory counter starts
+    # accurate after a restart, not at zero.
+    today_ms = int(
+        datetime.now(timezone.utc)
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+        .timestamp() * 1000
+    )
+    daily_row = state.conn.execute(
+        "SELECT COALESCE(SUM(pnl_net),0) FROM trades "
+        "WHERE resolved=1 AND signal_ts_ms>=?",
+        (today_ms,)
+    ).fetchone()
+    state.daily_pnl = daily_row[0] or 0.0
+    state._daily_pnl_day = int(time.time() // 86400)
+
+    logger.info("State : capital=$%.2f | %d trades | WR=%.1f%% | daily_pnl=$%+.2f",
+                state.capital, row[0], state.win_rate, state.daily_pnl)
 
 async def main() -> None:
     args   = _parse_args()

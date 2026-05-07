@@ -8,6 +8,12 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Performance
+- **`check_signal` — daily PnL in-memory cache** (`state.daily_pnl`): eliminates the SQL `SELECT SUM(pnl_net)` executed on every WebSocket book update; `close_trade` increments the counter incrementally; midnight UTC rollover is detected at the top of `check_signal` (runs on every book update, not just signal attempts) and resets the counter to 0; `restore_state_from_db` initialises it from the DB on startup so the cache is accurate after a restart; 7 new tests in `TestDailyPnlCache`
+
+### Fixed
+- **`restore_state_from_db` — re-entry guard for recently resolved markets**: trades resolved in the last 10 minutes are now added to `state.signalled` on startup; previously, a restart within the same 5-minute market window could re-enter a market whose price still showed a 96+ bid after resolution; 6 new tests in `TestSignalledRestore`
+
 ### Changed
 - **`scripts/install.sh` refactor** — `--lang EN|FR` flag for non-interactive runs; safe tilde expansion (`${var/#\~/$HOME}` replaces `eval echo`); `_check_syntax` and `_pip_install` helpers eliminate repeated code; bot file copy and syntax check now driven by a shared loop; `set -eo pipefail` replaces bare `set -e`
 

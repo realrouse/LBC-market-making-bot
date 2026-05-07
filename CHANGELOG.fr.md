@@ -8,6 +8,12 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ## [Non publié]
 
+### Performance
+- **`check_signal` — cache mémoire du PnL journalier** (`state.daily_pnl`) : supprime le `SELECT SUM(pnl_net)` SQL exécuté à chaque message WebSocket ; `close_trade` met à jour le compteur de façon incrémentale ; le passage à minuit UTC est détecté en tête de `check_signal` (s'exécute à chaque mise à jour du carnet, pas seulement lors d'une tentative de signal) et remet le compteur à zéro ; `restore_state_from_db` l'initialise depuis la DB au démarrage pour que le cache soit exact après un redémarrage ; 7 nouveaux tests dans `TestDailyPnlCache`
+
+### Correction
+- **`restore_state_from_db` — garde anti-réentrée pour les marchés récemment résolus** : les trades résolus dans les 10 dernières minutes sont désormais ajoutés à `state.signalled` au démarrage ; auparavant, un redémarrage dans la même fenêtre de 5 minutes pouvait re-entrer sur un marché dont le prix affichait encore un bid ≥ 0.96 après résolution ; 6 nouveaux tests dans `TestSignalledRestore`
+
 ### Modifié
 - **Refactorisation de `scripts/install.sh`** — flag `--lang EN|FR` pour les exécutions non interactives ; expansion du tilde sécurisée (`${var/#\~/$HOME}` remplace `eval echo`) ; helpers `_check_syntax` et `_pip_install` pour éliminer le code dupliqué ; copie des fichiers bot et vérification de syntaxe pilotées par une boucle commune ; `set -eo pipefail` remplace le simple `set -e`
 
