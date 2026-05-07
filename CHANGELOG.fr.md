@@ -9,6 +9,7 @@ Toutes les modifications notables de ce projet sont documentées ici.
 ## [Non publié]
 
 ### Correction
+- **`scripts/test_all_accounts.sh` — le parseur de résultat reconnaît désormais `OK (skipped=N)`** : le regex `^OK$` échouait quand unittest produit `OK (skipped=13)` ; changé en `^OK( |$)` pour que les déploiements avec des tests ignorés rapportent le succès correctement
 - **`live_bot.py` — restauration du `import aiohttp, websockets` manquant** : supprimé par erreur lors du refactor BotConfig ; détecté par pylint 4.0 (`E0602 undefined-variable`) ; avertissement `global-statement` dans `_setup_logging` supprimé par directive inline (singleton légitime au niveau processus) ; score 9,44 → **10,00/10**
 
 ### Refactorisation
