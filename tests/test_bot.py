@@ -9,6 +9,7 @@ Run with:
 
 import os, sys, time, sqlite3, unittest
 from datetime import datetime, timezone, timedelta
+from unittest.mock import patch
 
 # Redirect all bot I/O to ~/tmp so tests never touch /opt or write credentials.
 # ~/tmp is per-user by definition — no PermissionError on shared servers.
@@ -213,6 +214,38 @@ class TestParseBookMessage(unittest.TestCase):
             ],
         ))
         self.assertAlmostEqual(r["best_ask"], 0.96)
+
+    def test_non_numeric_price_skipped(self):
+        # "N/A" prices (emitted during reconnect) must be silently discarded.
+        r = api_poly.parse_book_update(self._msg(
+            bids=[{"price": "N/A", "size": "100"}, {"price": "0.95", "size": "50"}],
+            asks=[{"price": "0.97", "size": "80"}],
+        ))
+        self.assertIsNotNone(r)
+        self.assertAlmostEqual(r["best_bid"], 0.95)
+
+    def test_all_non_numeric_prices_returns_none(self):
+        # If every level has an unparseable price the message is useless.
+        r = api_poly.parse_book_update(self._msg(
+            bids=[{"price": "N/A", "size": "100"}],
+            asks=[{"price": "N/A", "size": "80"}],
+        ))
+        self.assertIsNone(r)
+
+    def test_missing_bids_and_asks_keys(self):
+        # asset_id present but bids/asks keys completely absent → None.
+        msg = {"event_type": "book", "asset_id": "tok1"}
+        self.assertIsNone(api_poly.parse_book_update(msg))
+
+    def test_bids_key_absent_asks_valid(self):
+        # Only asks present — bids defaults to [] internally; result is valid
+        # because asks alone can still produce a snapshot.
+        msg = {"event_type": "book", "asset_id": "tok1",
+               "asks": [{"price": "0.97", "size": "80"}]}
+        r = api_poly.parse_book_update(msg)
+        self.assertIsNotNone(r)
+        self.assertAlmostEqual(r["best_ask"], 0.97)
+        self.assertAlmostEqual(r["best_bid"], 0.0)
 
 
 # ── Market metadata helpers ───────────────────────────────────────────────────
@@ -446,6 +479,20 @@ class TestCheckSignal(unittest.IsolatedAsyncioTestCase):
         await bot.check_signal(self.state, make_token(secs_remaining=60))
         self.assertIn("mkt1", self.state.signalled)
 
+    async def test_blocked_by_hour_filter(self):
+        # When is_trading_hour() returns False (filter active, outside window)
+        # check_signal must not fire regardless of other conditions.
+        with patch.object(bot, "is_trading_hour", return_value=False):
+            await bot.check_signal(self.state, make_token())
+        self.assertNotIn("mkt1", self.state.signalled)
+        self.assertEqual(self.state.total_trades, 0)
+
+    async def test_fires_when_hour_filter_allows(self):
+        # Explicit guard: signal fires when is_trading_hour() returns True.
+        with patch.object(bot, "is_trading_hour", return_value=True):
+            await bot.check_signal(self.state, make_token())
+        self.assertIn("mkt1", self.state.signalled)
+
 
 # ── check_resolution ─────────────────────────────────────────────────────────
 
@@ -635,6 +682,49 @@ class TestRestoreState(unittest.TestCase):
         bot.restore_state_from_db(fresh)
         self.assertAlmostEqual(fresh.win_rate, 75.0)
 
+    def test_capital_goes_negative_on_all_losses(self):
+        # 15 losses × -$10 = -$150 PnL → capital = $100 - $150 = -$50
+        self.conn.executemany(
+            "INSERT INTO trades "
+            "(market_id, token_id, direction, stake, capital_before, resolved, outcome, pnl_net) "
+            "VALUES (?,?,?,10,100,1,'LOSS',-10.0)",
+            [(f"m{i}", "t", "UP") for i in range(15)],
+        )
+        self.conn.commit()
+        fresh = bot.BotState(self.conn)
+        bot.restore_state_from_db(fresh)
+        self.assertLess(fresh.capital, 0,
+                        "capital should be negative after enough losses")
+
+    def test_negative_capital_equals_start_plus_pnl(self):
+        # Formula holds even when total_pnl drives capital below zero.
+        pnl_each = -10.0
+        n = 15
+        self.conn.executemany(
+            "INSERT INTO trades "
+            "(market_id, token_id, direction, stake, capital_before, resolved, outcome, pnl_net) "
+            "VALUES (?,?,?,10,100,1,'LOSS',?)",
+            [(f"m{i}", "t", "UP", pnl_each) for i in range(n)],
+        )
+        self.conn.commit()
+        fresh = bot.BotState(self.conn)
+        bot.restore_state_from_db(fresh)
+        expected = bot.CAPITAL_START + pnl_each * n
+        self.assertAlmostEqual(fresh.capital, expected)
+
+    def test_negative_capital_loss_counter_correct(self):
+        self.conn.executemany(
+            "INSERT INTO trades "
+            "(market_id, token_id, direction, stake, capital_before, resolved, outcome, pnl_net) "
+            "VALUES (?,?,?,10,100,1,'LOSS',-10.0)",
+            [(f"m{i}", "t", "UP") for i in range(5)],
+        )
+        self.conn.commit()
+        fresh = bot.BotState(self.conn)
+        bot.restore_state_from_db(fresh)
+        self.assertEqual(fresh.losses, 5)
+        self.assertEqual(fresh.wins, 0)
+
 
 # ─── _htpasswd_sha1 ──────────────────────────────────────────────────────────
 
@@ -716,87 +806,80 @@ class TestHandleBookUpdate(unittest.IsolatedAsyncioTestCase):
 class TestIsTradingHour(unittest.TestCase):
     """Tests for is_trading_hour() with various UTC times and filter configs."""
 
-    def _enable(self, weekday=None, weekend=None, us_open=True, us_close=True):
-        bot.HOUR_FILTER_ENABLED  = True
-        bot.WEEKDAY_UTC_RANGES   = weekday if weekday is not None else [(0, 8), (13, 22)]
-        bot.WEEKEND_UTC_RANGES   = weekend if weekend is not None else []
-        bot.US_WEEKLY_OPEN       = us_open
-        bot.US_WEEKLY_CLOSE      = us_close
-
-    def tearDown(self):
-        bot.HOUR_FILTER_ENABLED  = False
-        bot.WEEKDAY_UTC_RANGES   = []
-        bot.WEEKEND_UTC_RANGES   = []
-        bot.US_WEEKLY_OPEN       = True
-        bot.US_WEEKLY_CLOSE      = True
+    def _enable(self, weekday=None, weekend=None, us_open=True, us_close=True) -> bot.BotConfig:
+        return bot.BotConfig(
+            hour_filter_enabled=True,
+            weekday_utc_ranges=weekday if weekday is not None else [(0, 8), (13, 22)],
+            weekend_utc_ranges=weekend if weekend is not None else [],
+            us_weekly_open=us_open,
+            us_weekly_close=us_close,
+        )
 
     def _ts(self, iso: str) -> int:
         return int(datetime.fromisoformat(iso).replace(tzinfo=timezone.utc).timestamp() * 1000)
 
     def test_disabled_always_true(self):
-        # Filter off → all times allowed regardless of config
-        self.assertTrue(bot.is_trading_hour(self._ts("2026-04-27 03:00:00")))  # Monday 3h
+        cfg = bot.BotConfig()   # hour_filter_enabled=False by default
+        self.assertTrue(bot.is_trading_hour(cfg, self._ts("2026-04-27 03:00:00")))  # Monday 3h
 
     def test_weekday_in_range(self):
-        self._enable()
-        self.assertTrue(bot.is_trading_hour(self._ts("2026-04-28 06:00:00")))  # Tuesday 6h
+        cfg = self._enable()
+        self.assertTrue(bot.is_trading_hour(cfg, self._ts("2026-04-28 06:00:00")))  # Tuesday 6h
 
     def test_weekday_outside_range(self):
-        self._enable()
-        self.assertFalse(bot.is_trading_hour(self._ts("2026-04-28 10:00:00")))  # Tuesday 10h
+        cfg = self._enable()
+        self.assertFalse(bot.is_trading_hour(cfg, self._ts("2026-04-28 10:00:00")))  # Tuesday 10h
 
     def test_monday_before_us_open_blocked(self):
-        self._enable()
-        self.assertFalse(bot.is_trading_hour(self._ts("2026-04-27 12:00:00")))  # Monday 12h
+        cfg = self._enable()
+        self.assertFalse(bot.is_trading_hour(cfg, self._ts("2026-04-27 12:00:00")))  # Monday 12h
 
     def test_monday_before_us_open_minute_precision(self):
-        self._enable()
-        self.assertFalse(bot.is_trading_hour(self._ts("2026-04-27 13:29:00")))  # Monday 13h29
+        cfg = self._enable()
+        self.assertFalse(bot.is_trading_hour(cfg, self._ts("2026-04-27 13:29:00")))  # Monday 13h29
 
     def test_monday_after_us_open_allowed(self):
-        self._enable()
-        self.assertTrue(bot.is_trading_hour(self._ts("2026-04-27 14:00:00")))   # Monday 14h
+        cfg = self._enable()
+        self.assertTrue(bot.is_trading_hour(cfg, self._ts("2026-04-27 14:00:00")))   # Monday 14h
 
     def test_friday_after_us_close_blocked(self):
-        self._enable()
-        self.assertFalse(bot.is_trading_hour(self._ts("2026-05-01 21:00:00")))  # Friday 21h
+        cfg = self._enable()
+        self.assertFalse(bot.is_trading_hour(cfg, self._ts("2026-05-01 21:00:00")))  # Friday 21h
 
     def test_friday_before_us_close_allowed(self):
-        self._enable()
-        self.assertTrue(bot.is_trading_hour(self._ts("2026-05-01 15:00:00")))   # Friday 15h
+        cfg = self._enable()
+        self.assertTrue(bot.is_trading_hour(cfg, self._ts("2026-05-01 15:00:00")))   # Friday 15h
 
     def test_weekend_blocked_by_default(self):
-        self._enable(weekend=[])
-        self.assertFalse(bot.is_trading_hour(self._ts("2026-04-26 15:00:00")))  # Saturday
+        cfg = self._enable(weekend=[])
+        self.assertFalse(bot.is_trading_hour(cfg, self._ts("2026-04-26 15:00:00")))  # Saturday
 
     def test_weekend_allowed_when_configured(self):
-        self._enable(weekend=[(13, 20)])
-        self.assertTrue(bot.is_trading_hour(self._ts("2026-04-26 15:00:00")))   # Saturday 15h
+        cfg = self._enable(weekend=[(13, 20)])
+        self.assertTrue(bot.is_trading_hour(cfg, self._ts("2026-04-26 15:00:00")))   # Saturday 15h
 
     def test_weekend_outside_range_blocked(self):
-        self._enable(weekend=[(13, 20)])
-        self.assertFalse(bot.is_trading_hour(self._ts("2026-04-26 10:00:00")))  # Saturday 10h
+        cfg = self._enable(weekend=[(13, 20)])
+        self.assertFalse(bot.is_trading_hour(cfg, self._ts("2026-04-26 10:00:00")))  # Saturday 10h
 
     def test_empty_weekday_ranges_allows_all_hours(self):
-        self._enable(weekday=[])
-        self.assertTrue(bot.is_trading_hour(self._ts("2026-04-28 10:00:00")))   # Tuesday 10h
+        cfg = self._enable(weekday=[])
+        self.assertTrue(bot.is_trading_hour(cfg, self._ts("2026-04-28 10:00:00")))   # Tuesday 10h
 
     def test_us_open_flag_disabled(self):
         # Monday 7h is in range (0-8) but would be blocked by US_WEEKLY_OPEN=True.
         # With us_open=False the special Monday constraint is lifted → allowed.
-        self._enable(us_open=False)
-        self.assertTrue(bot.is_trading_hour(self._ts("2026-04-27 07:00:00")))   # Monday 7h ok
+        cfg = self._enable(us_open=False)
+        self.assertTrue(bot.is_trading_hour(cfg, self._ts("2026-04-27 07:00:00")))   # Monday 7h ok
 
     def test_us_close_flag_disabled(self):
-        self._enable(us_close=False)
-        self.assertTrue(bot.is_trading_hour(self._ts("2026-05-01 21:00:00")))   # Friday 21h ok
+        cfg = self._enable(us_close=False)
+        self.assertTrue(bot.is_trading_hour(cfg, self._ts("2026-05-01 21:00:00")))   # Friday 21h ok
 
     def test_now_uses_current_time(self):
-        bot.HOUR_FILTER_ENABLED = True
-        bot.WEEKDAY_UTC_RANGES  = []
-        bot.WEEKEND_UTC_RANGES  = []
+        cfg = bot.BotConfig(hour_filter_enabled=True, weekday_utc_ranges=[], weekend_utc_ranges=[])
         # No ts_ms → uses datetime.now() — just check it doesn't crash
-        result = bot.is_trading_hour()
+        result = bot.is_trading_hour(cfg)
         self.assertIsInstance(result, bool)
 
 
@@ -836,6 +919,221 @@ class TestInWeekendSession(unittest.TestCase):
     def test_no_args_uses_current_time(self):
         result = bot._in_weekend_session()
         self.assertIsInstance(result, bool)
+
+
+# ── enter_live_trade ──────────────────────────────────────────────────────────
+
+class TestEnterLiveTrade(unittest.IsolatedAsyncioTestCase):
+    """
+    enter_live_trade writes a DB row, updates BotState, and skips the CLOB API
+    when state.session is None (simulation mode — no network calls in tests).
+    """
+
+    def setUp(self):
+        self.state = make_state()
+
+    def tearDown(self):
+        self.state.conn.close()
+
+    async def test_db_row_written(self):
+        await bot.enter_live_trade(self.state, make_token())
+        count = self.state.conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+        self.assertEqual(count, 1)
+
+    async def test_resolved_is_zero(self):
+        await bot.enter_live_trade(self.state, make_token())
+        resolved = self.state.conn.execute("SELECT resolved FROM trades").fetchone()[0]
+        self.assertEqual(resolved, 0)
+
+    async def test_entry_price_is_best_ask(self):
+        ts = make_token(best_ask=0.975)
+        await bot.enter_live_trade(self.state, ts)
+        ep = self.state.conn.execute("SELECT entry_price FROM trades").fetchone()[0]
+        self.assertAlmostEqual(ep, 0.975)
+
+    async def test_stake_stored(self):
+        await bot.enter_live_trade(self.state, make_token())
+        stake = self.state.conn.execute("SELECT stake FROM trades").fetchone()[0]
+        self.assertAlmostEqual(stake, bot.STAKE)
+
+    async def test_tokens_bought_correct(self):
+        ts = make_token(best_ask=0.975)
+        await bot.enter_live_trade(self.state, ts)
+        expected = bot.STAKE / 0.975
+        tb = self.state.conn.execute("SELECT tokens_bought FROM trades").fetchone()[0]
+        self.assertAlmostEqual(tb, expected, places=6)
+
+    async def test_fee_stored(self):
+        ts = make_token(best_ask=0.975)
+        await bot.enter_live_trade(self.state, ts)
+        ep = 0.975
+        expected_fee = api_poly.compute_fee(ep, bot.STAKE / ep)
+        fee = self.state.conn.execute("SELECT fee FROM trades").fetchone()[0]
+        self.assertAlmostEqual(fee, expected_fee, places=8)
+
+    async def test_cost_total_is_stake_plus_fee(self):
+        ts = make_token(best_ask=0.975)
+        await bot.enter_live_trade(self.state, ts)
+        row = self.state.conn.execute("SELECT stake, fee, cost_total FROM trades").fetchone()
+        self.assertAlmostEqual(row[2], row[0] + row[1], places=8)
+
+    async def test_capital_before_stored(self):
+        capital_before = self.state.capital
+        await bot.enter_live_trade(self.state, make_token())
+        cb = self.state.conn.execute("SELECT capital_before FROM trades").fetchone()[0]
+        self.assertAlmostEqual(cb, capital_before)
+
+    async def test_capital_unchanged(self):
+        capital_before = self.state.capital
+        await bot.enter_live_trade(self.state, make_token())
+        self.assertAlmostEqual(self.state.capital, capital_before)
+
+    async def test_direction_stored(self):
+        await bot.enter_live_trade(self.state, make_token(direction="DOWN"))
+        direction = self.state.conn.execute("SELECT direction FROM trades").fetchone()[0]
+        self.assertEqual(direction, "DOWN")
+
+    async def test_market_id_stored(self):
+        await bot.enter_live_trade(self.state, make_token(market_id="mkt_abc"))
+        mid = self.state.conn.execute("SELECT market_id FROM trades").fetchone()[0]
+        self.assertEqual(mid, "mkt_abc")
+
+    async def test_open_trades_updated(self):
+        ts = make_token(market_id="mkt1")
+        await bot.enter_live_trade(self.state, ts)
+        self.assertIn("mkt1", self.state.open_trades)
+        self.assertIsInstance(self.state.open_trades["mkt1"], int)
+
+    async def test_traded_direction_updated(self):
+        await bot.enter_live_trade(self.state, make_token(direction="UP"))
+        self.assertEqual(self.state.traded_direction["mkt1"], "UP")
+
+    async def test_total_trades_incremented(self):
+        self.assertEqual(self.state.total_trades, 0)
+        await bot.enter_live_trade(self.state, make_token())
+        self.assertEqual(self.state.total_trades, 1)
+
+    async def test_no_clob_call_without_session(self):
+        # state.session is None → api.post_order is never called;
+        # clob_order_id must be NULL in DB (not a real order ID).
+        await bot.enter_live_trade(self.state, make_token())
+        oid = self.state.conn.execute("SELECT clob_order_id FROM trades").fetchone()[0]
+        self.assertIsNone(oid)
+
+    async def test_two_markets_independent(self):
+        await bot.enter_live_trade(self.state, make_token(market_id="mktA", token_id="tokA"))
+        await bot.enter_live_trade(self.state, make_token(market_id="mktB", token_id="tokB"))
+        self.assertEqual(self.state.total_trades, 2)
+        self.assertIn("mktA", self.state.open_trades)
+        self.assertIn("mktB", self.state.open_trades)
+        self.assertNotEqual(
+            self.state.open_trades["mktA"],
+            self.state.open_trades["mktB"],
+        )
+
+
+# ── save_snapshot ─────────────────────────────────────────────────────────────
+
+class TestSaveSnapshot(unittest.TestCase):
+    """
+    save_snapshot writes one row to the `snapshots` table per call.
+    All TokenState fields must be persisted verbatim; ts_ms must be a
+    recent millisecond timestamp; has_open_trade must reflect whether the
+    market currently has an open trade in BotState.
+    """
+
+    def setUp(self):
+        self.state = make_state()
+
+    def tearDown(self):
+        self.state.conn.close()
+
+    def _snap(self, **kw):
+        ts = make_token(**kw)
+        bot.save_snapshot(self.state, ts)
+        return ts, self.state.conn.execute("SELECT * FROM snapshots").fetchone()
+
+    def test_row_inserted(self):
+        bot.save_snapshot(self.state, make_token())
+        count = self.state.conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
+        self.assertEqual(count, 1)
+
+    def test_ts_ms_is_recent(self):
+        _, row = self._snap()
+        now_ms = int(time.time() * 1000)
+        # ts_ms must be within 2 seconds of now
+        self.assertAlmostEqual(row[1], now_ms, delta=2000)
+
+    def test_ts_ms_is_integer(self):
+        _, row = self._snap()
+        self.assertIsInstance(row[1], int)
+
+    def test_market_id_stored(self):
+        ts, row = self._snap(market_id="mkt_snap")
+        self.assertEqual(row[2], "mkt_snap")
+
+    def test_token_id_stored(self):
+        ts, row = self._snap(token_id="tok_snap")
+        self.assertEqual(row[3], "tok_snap")
+
+    def test_direction_stored(self):
+        ts, row = self._snap(direction="DOWN")
+        self.assertEqual(row[4], "DOWN")
+
+    def test_secs_remaining_stored(self):
+        ts, row = self._snap(secs_remaining=120)
+        # secs_remaining is computed live from time.time(); allow 2 s tolerance
+        self.assertAlmostEqual(row[5], ts.secs_remaining, delta=2.0)
+
+    def test_best_bid_stored(self):
+        _, row = self._snap(best_bid=0.963)
+        self.assertAlmostEqual(row[6], 0.963)
+
+    def test_best_ask_stored(self):
+        _, row = self._snap(best_ask=0.968)
+        self.assertAlmostEqual(row[7], 0.968)
+
+    def test_spread_stored(self):
+        ts, row = self._snap(best_bid=0.963, best_ask=0.968)
+        self.assertAlmostEqual(row[8], ts.spread)
+
+    def test_ask_vol_stored(self):
+        _, row = self._snap(ask_vol=42.5)
+        self.assertAlmostEqual(row[9], 42.5)
+
+    def test_obi_stored(self):
+        _, row = self._snap(obi=-0.10)
+        self.assertAlmostEqual(row[10], -0.10)
+
+    def test_has_open_trade_false_when_no_trade(self):
+        _, row = self._snap(market_id="mkt1")
+        self.assertEqual(row[11], 0)
+
+    def test_has_open_trade_true_when_open_trade_exists(self):
+        self.state.open_trades["mkt1"] = 99
+        _, row = self._snap(market_id="mkt1")
+        self.assertEqual(row[11], 1)
+
+    def test_has_open_trade_false_for_different_market(self):
+        self.state.open_trades["mktOther"] = 99
+        _, row = self._snap(market_id="mkt1")
+        self.assertEqual(row[11], 0)
+
+    def test_multiple_snapshots_accumulate(self):
+        ts = make_token()
+        bot.save_snapshot(self.state, ts)
+        bot.save_snapshot(self.state, ts)
+        bot.save_snapshot(self.state, ts)
+        count = self.state.conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
+        self.assertEqual(count, 3)
+
+    def test_two_tokens_stored_independently(self):
+        bot.save_snapshot(self.state, make_token(token_id="tokA", market_id="mktA"))
+        bot.save_snapshot(self.state, make_token(token_id="tokB", market_id="mktB"))
+        rows = self.state.conn.execute(
+            "SELECT token_id FROM snapshots ORDER BY id"
+        ).fetchall()
+        self.assertEqual([r[0] for r in rows], ["tokA", "tokB"])
 
 
 if __name__ == "__main__":

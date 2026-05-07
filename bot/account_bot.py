@@ -51,14 +51,11 @@ def _parse_args() -> argparse.Namespace:
                    help="Enable DEBUG logging — very detailed, for diagnostics only")
     return p.parse_args()
 
-# ─── CONFIGURE INSTALL DIR BEFORE IMPORTING live_bot ─────────────────────────
-# live_bot reads TRADINEBOTTE_DIR at module level (INSTALL_DIR, DB_PATH, etc.)
-# so the env var must be set before the import statement.
 _FEED_ADDR = os.environ.get("TRADINEBOTTE_FEED_ADDR", "tcp://127.0.0.1:5557")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Import live_bot after path setup — this triggers all module-level config loads.
+# live_bot no longer has module-level side effects — safe to import anywhere.
 import live_bot as bot
 
 logger = logging.getLogger("account")
@@ -265,25 +262,27 @@ async def _run(state: bot.BotState) -> None:
 
 
 async def main() -> None:
+    config = bot.make_config()
+
     logger.info("=" * 65)
-    logger.info("  ACCOUNT BOT — dir=%s", bot.INSTALL_DIR)
+    logger.info("  ACCOUNT BOT — dir=%s", config.install_dir)
     logger.info("  Feed : %s", _FEED_ADDR)
     if VERBOSE:
         logger.info("  Mode VERBOSE actif — logs DEBUG complets")
     logger.info("=" * 65)
 
     if VERBOSE:
-        logger.debug("[INIT] TRADINEBOTTE_DIR=%s", os.environ.get("TRADINEBOTTE_DIR", "(non défini)"))
-        logger.debug("[INIT] SIGNAL_THRESHOLD=%.2f", bot.SIGNAL_THRESHOLD)
+        logger.debug("[INIT] TRADINEBOTTE_DIR=%s", config.install_dir)
+        logger.debug("[INIT] SIGNAL_THRESHOLD=%.2f", config.signal_threshold)
         logger.debug("[INIT] STAKE=%.2f WIN=%.2f LOSS=%.2f",
-                     bot.STAKE, bot.WIN_THRESHOLD, bot.LOSS_THRESHOLD)
+                     config.stake, config.win_threshold, config.loss_threshold)
 
     _ensure_feed()
 
     if VERBOSE:
         logger.debug("[INIT] init_db...")
-    conn  = bot.init_db()
-    state = bot.BotState(conn)
+    conn  = bot.init_db(config)
+    state = bot.BotState(conn, config)
     bot.restore_state_from_db(state)
     if VERBOSE:
         logger.debug("[INIT] capital restauré=%.2f trades_ouverts=%d",
