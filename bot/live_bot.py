@@ -24,6 +24,7 @@ Launch:
 """
 
 import argparse, asyncio, copy, json, logging, logging.handlers, math, os, queue, sqlite3, sys, time
+import aiohttp, websockets
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -365,7 +366,7 @@ def _setup_logging(config: "BotConfig") -> Optional[logging.handlers.QueueListen
     Async logging: logger.info() enqueues a LogRecord nanoseconds; the
     QueueListener daemon thread calls FileHandler.emit() — the only disk I/O.
     """
-    global _log_listener
+    global _log_listener  # pylint: disable=global-statement
 
     if config.no_log:
         if config.simulate:

@@ -8,6 +8,9 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ## [Non publié]
 
+### Correction
+- **`live_bot.py` — restauration du `import aiohttp, websockets` manquant** : supprimé par erreur lors du refactor BotConfig ; détecté par pylint 4.0 (`E0602 undefined-variable`) ; avertissement `global-statement` dans `_setup_logging` supprimé par directive inline (singleton légitime au niveau processus) ; score 9,44 → **10,00/10**
+
 ### Refactorisation
 - **`purge_expired_markets(state)` extrait dans `live_bot.py`** : la boucle de nettoyage des marchés expirés (suppression dans `tokens`, `market_tokens`, `signalled`), identique en 9 lignes et dupliquée entre `_market_refresh_loop` et `account_bot._run`, est désormais une fonction partagée unique ; `account_bot.py` appelle `bot.purge_expired_markets(state)` ; commentaire `pylint: disable=duplicate-code` supprimé
 
