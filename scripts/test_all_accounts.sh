@@ -149,7 +149,7 @@ run_account() {
             echo "INSTALL ERROR (exit $rc)" > "$result_file"
         elif echo "$INSTALL_OUT" | grep -q "^Ran [0-9]* tests"; then
             TEST_LINE=$(echo "$INSTALL_OUT" | grep "^Ran [0-9]* tests")
-            if echo "$INSTALL_OUT" | grep -qE "^OK$"; then
+            if echo "$INSTALL_OUT" | grep -qE "^OK( |$)"; then
                 echo "✓ ${TEST_LINE} — OK"
                 echo "OK" > "$result_file"
             else
