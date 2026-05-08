@@ -20,6 +20,7 @@ All notable changes to this project are documented here.
 - **Deploy scripts — `StrictHostKeyChecking=no` → `accept-new`**: blind host-key acceptance replaced with `accept-new` (trusts on first connect, rejects changed keys) in all 3 deploy scripts
 
 ### Fixed
+- **pylint 10.00/10 restored** after security commit: `_today_ms_utc()` helper extracted to `bot_utils.py` (eliminates R0801 duplicate-code between `generate_status_html` and `restore_state_from_db`); stdlib `from`-imports moved before third-party in `live_bot.py` (C0411); `max-module-lines=1200` added to `.pylintrc` (live_bot grew past 1000 after BotConfig + daily PnL cache additions)
 - **`scripts/test_all_accounts.sh` — result parser now matches `OK (skipped=N)`**: regex `^OK$` failed when unittest emits `OK (skipped=13)`; changed to `^OK( |$)` so deployments with skipped tests report success correctly
 - **`live_bot.py` — restore missing `import aiohttp, websockets`** dropped during the BotConfig refactor; pylint 4.0 detected them as `E0602 undefined-variable`; `global-statement` warning on `_setup_logging` suppressed with inline disable (legitimate process-level singleton); score 9.44 → **10.00/10**
 

@@ -20,6 +20,7 @@ Toutes les modifications notables de ce projet sont documentées ici.
 - **Scripts de déploiement — `StrictHostKeyChecking=no` → `accept-new`** : l'acceptation aveugle des clés SSH remplacée par `accept-new` (confiance au premier contact, rejet si la clé change) dans les 3 scripts de déploiement
 
 ### Correction
+- **pylint 10,00/10 rétabli** après le commit sécurité : helper `_today_ms_utc()` extrait dans `bot_utils.py` (élimine R0801 duplicate-code entre `generate_status_html` et `restore_state_from_db`) ; imports `from` stdlib déplacés avant les tiers-partis dans `live_bot.py` (C0411) ; `max-module-lines=1200` ajouté au `.pylintrc` (live_bot a dépassé 1000 lignes après BotConfig + cache PnL journalier)
 - **`scripts/test_all_accounts.sh` — le parseur de résultat reconnaît désormais `OK (skipped=N)`** : le regex `^OK$` échouait quand unittest produit `OK (skipped=13)` ; changé en `^OK( |$)` pour que les déploiements avec des tests ignorés rapportent le succès correctement
 - **`live_bot.py` — restauration du `import aiohttp, websockets` manquant** : supprimé par erreur lors du refactor BotConfig ; détecté par pylint 4.0 (`E0602 undefined-variable`) ; avertissement `global-statement` dans `_setup_logging` supprimé par directive inline (singleton légitime au niveau processus) ; score 9,44 → **10,00/10**
 
