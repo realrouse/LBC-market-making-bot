@@ -1432,5 +1432,46 @@ class TestSchemaVersioning(unittest.TestCase):
         conn.close()
 
 
+class TestStrategyLoading(unittest.TestCase):
+    """Verify the v2 strategy JSON exists, loads correctly, and has the sweep-optimised params."""
+
+    _STRAT_DIR = os.path.join(os.path.dirname(__file__), "..", "strategies")
+
+    def _load(self, name):
+        return bot.load_strategy(os.path.join(self._STRAT_DIR, name))
+
+    def test_v2_file_exists(self):
+        path = os.path.join(self._STRAT_DIR, "polymarket_BTC5M_v2.json")
+        self.assertTrue(os.path.exists(path))
+
+    def test_v1_file_still_present(self):
+        path = os.path.join(self._STRAT_DIR, "polymarket_BTC5M.json")
+        self.assertTrue(os.path.exists(path))
+
+    def test_missing_file_returns_none(self):
+        self.assertIsNone(bot.load_strategy("/nonexistent/strategy.json"))
+
+    def test_v2_threshold(self):
+        s = self._load("polymarket_BTC5M_v2.json")
+        self.assertAlmostEqual(s["signal_threshold"], 0.95)
+
+    def test_v2_min_secs(self):
+        s = self._load("polymarket_BTC5M_v2.json")
+        self.assertEqual(s["min_secs_remaining"], 45)
+
+    def test_v2_obi(self):
+        s = self._load("polymarket_BTC5M_v2.json")
+        self.assertAlmostEqual(s["obi_reject_thresh"], -0.75)
+
+    def test_v2_dsl(self):
+        s = self._load("polymarket_BTC5M_v2.json")
+        self.assertAlmostEqual(s["daily_stop_loss"], 30.0)
+
+    def test_v2_lower_threshold_than_v1(self):
+        v1 = self._load("polymarket_BTC5M.json")
+        v2 = self._load("polymarket_BTC5M_v2.json")
+        self.assertLess(v2["signal_threshold"], v1["signal_threshold"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
