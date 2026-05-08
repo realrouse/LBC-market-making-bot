@@ -171,6 +171,9 @@ python3 scripts/backtest.py --threshold 0.95       # custom threshold
 python3 scripts/backtest.py --detail               # print per-trade table
 python3 scripts/backtest.py --compare              # compare vs actual bot trades
 python3 scripts/backtest.py --sweep                # grid search (135 combinations)
+python3 scripts/backtest.py --sweep-all            # extended grid (405 combos, all DBs)
+python3 scripts/backtest.py --sweep-all --sort pnl # sort sweep by pnl|ratio|wr
+python3 scripts/backtest.py --sweep-all --top 10   # show top-10 unique configs (deduped)
 python3 scripts/backtest.py --db data/s1.db data/s2.db  # explicit files
 python3 scripts/backtest.py --db data/*.db         # shell glob (independent capital per file)
 python3 scripts/backtest.py --all                  # scan data/ + live.db if ≥ 100 snapshots

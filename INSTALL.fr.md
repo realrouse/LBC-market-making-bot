@@ -426,6 +426,11 @@ python3 scripts/backtest.py --all
 # Recherche en grille sur 135 combinaisons seuil/mise
 python3 scripts/backtest.py --sweep
 python3 scripts/backtest.py --all --sweep
+
+# Grille étendue (405 combos) sur toutes les BDs — optimisation de stratégie
+python3 scripts/backtest.py --sweep-all
+python3 scripts/backtest.py --sweep-all --sort pnl   # trier par pnl|ratio|wr
+python3 scripts/backtest.py --sweep-all --top 10     # top-10 configs uniques (dédupliqué)
 ```
 
 Quand plusieurs fichiers sont traités, chaque fichier tourne avec le capital réinitialisé à `capital_start` (simulation indépendante), et un bloc AGGREGATE résume les wins, losses, PnL, taux de victoire et pire drawdown combinés de tous les fichiers.
@@ -439,6 +444,9 @@ Quand plusieurs fichiers sont traités, chaque fichier tourne avec le capital r�
 | `--min-ask FLOAT` | 10.0 | Volume minimum côté ask en USD à l'entrée |
 | `--obi FLOAT` | −0.25 | Seuil de rejet OBI (les entrées avec un OBI inférieur à cette valeur sont ignorées) |
 | `--stake FLOAT` | 10.0 | Mise en USD par trade |
+| `--sweep-all` | — | Grille étendue (405 combos) sur toutes les BDs (ajoute les axes OBI et DSL) |
+| `--sort METRIC` | `ratio` | Trier les résultats du sweep par `ratio` (PnL/MaxDD), `pnl` ou `wr` |
+| `--top N` | 0 (tous) | Afficher uniquement les top-N configs uniques (dédupliqué sur seuil/min_secs/obi) |
 
 
 ## Filtre heure / jour

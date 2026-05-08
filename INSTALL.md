@@ -420,6 +420,11 @@ python3 scripts/backtest.py --all
 # Grid search across 135 threshold/stake combinations
 python3 scripts/backtest.py --sweep
 python3 scripts/backtest.py --all --sweep
+
+# Extended grid search (405 combos) across all DBs — strategy optimisation
+python3 scripts/backtest.py --sweep-all
+python3 scripts/backtest.py --sweep-all --sort pnl   # sort by pnl|ratio|wr
+python3 scripts/backtest.py --sweep-all --top 10     # top-10 unique configs (deduped)
 ```
 
 When more than one file is processed, each file runs with capital reset to `capital_start` (independent simulation), and an AGGREGATE block summarises combined wins, losses, PnL, win rate, and worst drawdown across all files.
@@ -433,6 +438,9 @@ When more than one file is processed, each file runs with capital reset to `capi
 | `--min-ask FLOAT` | 10.0 | Minimum ask-side volume in USD at entry |
 | `--obi FLOAT` | −0.25 | OBI reject threshold (entries with OBI below this are skipped) |
 | `--stake FLOAT` | 10.0 | USD stake per trade |
+| `--sweep-all` | — | Extended 405-combo grid search across all DBs (adds OBI and DSL axes) |
+| `--sort METRIC` | `ratio` | Sort sweep results by `ratio` (PnL/MaxDD), `pnl`, or `wr` |
+| `--top N` | 0 (all) | Show only top-N unique configs in sweep table (deduped on threshold/min_secs/obi) |
 
 
 ## Hour / Day Filter

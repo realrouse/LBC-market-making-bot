@@ -171,6 +171,9 @@ python3 scripts/backtest.py --threshold 0.95       # seuil personnalisé
 python3 scripts/backtest.py --detail               # tableau trade par trade
 python3 scripts/backtest.py --compare              # comparaison avec les trades réels
 python3 scripts/backtest.py --sweep                # recherche en grille (135 combinaisons)
+python3 scripts/backtest.py --sweep-all            # grille étendue (405 combos, toutes les BDs)
+python3 scripts/backtest.py --sweep-all --sort pnl # trier par pnl|ratio|wr
+python3 scripts/backtest.py --sweep-all --top 10   # top-10 configs uniques (dédupliqué)
 python3 scripts/backtest.py --db data/s1.db data/s2.db  # fichiers explicites
 python3 scripts/backtest.py --db data/*.db         # glob shell (capital indépendant par fichier)
 python3 scripts/backtest.py --all                  # scanne data/ + live.db si ≥ 100 snapshots
