@@ -68,7 +68,7 @@ US_WEEKLY_OPEN:         bool                  = True
 US_WEEKLY_CLOSE:        bool                  = True
 
 # ─── TIMING / SNAPSHOT DEFAULTS ───────────────────────────────────────────────
-SNAPSHOT_INTERVAL  = 5
+SNAPSHOT_INTERVAL  = 1
 DASHBOARD_INTERVAL = 300
 MARKET_REFRESH     = 30
 

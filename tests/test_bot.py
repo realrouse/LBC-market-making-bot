@@ -1526,7 +1526,7 @@ class TestUsHolidays(unittest.TestCase):
 class TestSnapshotInterval(unittest.IsolatedAsyncioTestCase):
     """
     BotConfig.snapshot_interval controls how often handle_book_update writes a
-    snapshot row.  The default is SNAPSHOT_INTERVAL (5s); it can be overridden
+    snapshot row.  The default is SNAPSHOT_INTERVAL (1s); it can be overridden
     at construction time.  handle_book_update must respect the configured value.
     """
 
@@ -1542,7 +1542,7 @@ class TestSnapshotInterval(unittest.IsolatedAsyncioTestCase):
     def test_default_is_five(self):
         cfg = bot.BotConfig()
         self.assertEqual(cfg.snapshot_interval, bot.SNAPSHOT_INTERVAL)
-        self.assertEqual(cfg.snapshot_interval, 5)
+        self.assertEqual(cfg.snapshot_interval, 1)
 
     def test_custom_value_stored(self):
         cfg = bot.BotConfig(snapshot_interval=1)
