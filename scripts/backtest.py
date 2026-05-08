@@ -635,16 +635,17 @@ def _ratio(pnl: float, dd: float) -> float:
     return pnl / dd
 
 
-def print_sweep_table(results: list, sort_by: str = "wr", show_dsl: bool = False) -> None:
+def print_sweep_table(results: list, sort_by: str = "ratio", show_dsl: bool = False,
+                      top_n: int = 0) -> None:
     """
     Print a comparison table of all parameter combinations.
 
-    sort_by: 'wr'    → sort by win rate (default)
+    sort_by: 'wr'    → sort by win rate
              'pnl'   → sort by total PnL
-             'ratio' → sort by PnL/MaxDD (risk-adjusted, recommended for strategy selection)
-    show_dsl: include the daily_stop_loss column (set True when the sweep varies it)
+             'ratio' → sort by PnL/MaxDD (risk-adjusted, recommended)
+    show_dsl: include the daily_stop_loss column (set True when sweep varies it)
+    top_n:    if > 0, show only the top-N unique configs (deduped on thr/secs/obi)
     """
-    dsl_col = " | {'dsl':>6}" if show_dsl else ""
     header = (
         f"{'threshold':>9} | {'min_secs':>8} | {'min_ask':>7} | {'obi':>6}"
         + (f" | {'dsl':>6}" if show_dsl else "")
@@ -657,10 +658,26 @@ def print_sweep_table(results: list, sort_by: str = "wr", show_dsl: bool = False
         "pnl":   lambda x: -x[1]["total_pnl"],
         "ratio": lambda x: -(x[1].get("ratio") or _ratio(x[1]["total_pnl"], x[1]["max_drawdown"])),
     }
-    key_fn = sort_keys.get(sort_by, sort_keys["wr"])
+    key_fn = sort_keys.get(sort_by, sort_keys["ratio"])
+    sorted_results = sorted(results, key=key_fn)
 
-    print(f"\n{header}\n{sep}")
-    for params, stats in sorted(results, key=key_fn):
+    if top_n > 0:
+        seen_keys: set = set()
+        rows_to_print = []
+        for params, stats in sorted_results:
+            key = (params.signal_threshold, params.min_secs_remaining, params.obi_reject_thresh)
+            if key not in seen_keys:
+                seen_keys.add(key)
+                rows_to_print.append((params, stats))
+                if len(rows_to_print) >= top_n:
+                    break
+        note = f"  (top {top_n} configs uniques thr/secs/obi — {len(results)} combos au total)"
+    else:
+        rows_to_print = sorted_results
+        note = ""
+
+    print(f"\n{header}\n{sep}{note}")
+    for params, stats in rows_to_print:
         ratio = stats.get("ratio") or _ratio(stats["total_pnl"], stats["max_drawdown"])
         ratio_str = f"{ratio:>7.2f}" if ratio != float("inf") else "    ∞"
         dsl_part = f" {params.daily_stop_loss:>5.0f} |" if show_dsl else ""
@@ -765,6 +782,8 @@ def main():
     parser.add_argument("--sort",       default="ratio",
                         choices=["wr", "pnl", "ratio"],
                         help="sweep sort order: wr=win rate, pnl=total PnL, ratio=PnL/MaxDD")
+    parser.add_argument("--top",        type=int, default=0, metavar="N",
+                        help="show only the top-N unique configs in sweep (deduped on thr/secs/obi); 0=all")
     args = parser.parse_args()
 
     db_paths = _collect_dbs(args.db, args.all or args.sweep_all)
@@ -836,7 +855,7 @@ def main():
                 trades, capital_final = run_backtest(rows, sp)
                 stats = summarize(trades, sp, capital_final)
                 sweep_results.append((sp, stats))
-            print_sweep_table(sweep_results, sort_by=args.sort, show_dsl=True)
+            print_sweep_table(sweep_results, sort_by=args.sort, show_dsl=True, top_n=args.top)
             print_recommendations(sweep_results)
 
         else:
@@ -936,7 +955,7 @@ def main():
             }
             sweep_results.append((sp, agg_stats))
 
-        print_sweep_table(sweep_results, sort_by=args.sort, show_dsl=True)
+        print_sweep_table(sweep_results, sort_by=args.sort, show_dsl=True, top_n=args.top)
         print_recommendations(sweep_results)
         return
 
