@@ -22,6 +22,15 @@ except ImportError:
 
 logger = logging.getLogger("live")
 
+
+def _today_ms_utc() -> int:
+    """UTC midnight of the current day, in milliseconds — for daily DB aggregations."""
+    return int(
+        datetime.now(timezone.utc)
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+        .timestamp() * 1000
+    )
+
 # ─── WEB STATUS CONFIG (set by live_bot after config load) ───────────────────
 WEBSTATUS_ENABLED:  bool = False
 WEBSTATUS_PATH:     str  = ""
@@ -109,11 +118,7 @@ def _status_html_trade_rows(conn: sqlite3.Connection) -> str:
 def generate_status_html(state: Any) -> str:
     """Build a self-contained HTML status page from current bot state."""
     now_str  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    today_ms = int(
-        datetime.now(timezone.utc)
-        .replace(hour=0, minute=0, second=0, microsecond=0)
-        .timestamp() * 1000
-    )
+    today_ms = _today_ms_utc()
     daily_row = state.conn.execute(
         "SELECT COALESCE(SUM(pnl_net),0), "
         "COALESCE(SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END),0), "

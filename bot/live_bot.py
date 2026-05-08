@@ -24,11 +24,11 @@ Launch:
 """
 
 import argparse, asyncio, copy, json, logging, logging.handlers, math, os, queue, sqlite3, sys, time
-import aiohttp, websockets
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
+import aiohttp, websockets
 
 # process start epoch — used for uptime display; harmless to capture at import
 _BOT_START: float = time.time()
@@ -1003,11 +1003,7 @@ def restore_state_from_db(state: BotState) -> None:
 
     # Initialize daily PnL cache from DB so the in-memory counter starts
     # accurate after a restart, not at zero.
-    today_ms = int(
-        datetime.now(timezone.utc)
-        .replace(hour=0, minute=0, second=0, microsecond=0)
-        .timestamp() * 1000
-    )
+    today_ms = bot_utils._today_ms_utc()
     daily_row = state.conn.execute(
         "SELECT COALESCE(SUM(pnl_net),0) FROM trades "
         "WHERE resolved=1 AND signal_ts_ms>=?",
