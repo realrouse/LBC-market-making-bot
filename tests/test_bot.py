@@ -1432,6 +1432,97 @@ class TestSchemaVersioning(unittest.TestCase):
         conn.close()
 
 
+class TestUsHolidays(unittest.TestCase):
+    """
+    _us_holidays returns the correct observed dates for each of the 10 US
+    federal holidays.  _is_us_holiday and is_trading_hour must block on those
+    days when us_holiday_filter=True.
+    """
+
+    def _holidays(self, year):
+        return bot._us_holidays(year)
+
+    # ── fixed-date holidays ──────────────────────────────────────────────────
+
+    def test_new_years_day_2026(self):
+        from datetime import date
+        self.assertIn(date(2026, 1, 1), self._holidays(2026))
+
+    def test_independence_day_observed_2026(self):
+        # July 4 2026 is a Saturday → observed Fri July 3
+        from datetime import date
+        self.assertIn(date(2026, 7, 3), self._holidays(2026))
+        self.assertNotIn(date(2026, 7, 4), self._holidays(2026))
+
+    def test_christmas_2026(self):
+        # Dec 25 2026 is a Friday → no shift
+        from datetime import date
+        self.assertIn(date(2026, 12, 25), self._holidays(2026))
+
+    def test_juneteenth_observed_2023(self):
+        # June 19 2023 is a Monday → no shift
+        from datetime import date
+        self.assertIn(date(2023, 6, 19), self._holidays(2023))
+
+    # ── floating holidays ────────────────────────────────────────────────────
+
+    def test_thanksgiving_2025(self):
+        # 4th Thursday of November 2025 = Nov 27
+        from datetime import date
+        self.assertIn(date(2025, 11, 27), self._holidays(2025))
+
+    def test_memorial_day_2026(self):
+        # Last Monday of May 2026 = May 25
+        from datetime import date
+        self.assertIn(date(2026, 5, 25), self._holidays(2026))
+
+    def test_mlk_day_2026(self):
+        # 3rd Monday of January 2026 = Jan 19
+        from datetime import date
+        self.assertIn(date(2026, 1, 19), self._holidays(2026))
+
+    def test_good_friday_2025(self):
+        # Easter 2025 = Apr 20 → Good Friday = Apr 18
+        from datetime import date
+        self.assertIn(date(2025, 4, 18), self._holidays(2025))
+
+    def test_ten_holidays_per_year(self):
+        self.assertEqual(len(self._holidays(2026)), 10)
+
+    def test_lru_cache_same_object(self):
+        # lru_cache means same year returns identical frozenset
+        self.assertIs(self._holidays(2026), self._holidays(2026))
+
+    # ── is_trading_hour integration ──────────────────────────────────────────
+
+    def test_blocks_on_holiday_when_filter_enabled(self):
+        from datetime import datetime, timezone
+        # Christmas 2026 (Fri Dec 25), 15:00 UTC
+        cfg = bot.BotConfig(us_holiday_filter=True)
+        dt = datetime(2026, 12, 25, 15, 0, 0, tzinfo=timezone.utc)
+        self.assertFalse(bot.is_trading_hour(cfg, int(dt.timestamp() * 1000)))
+
+    def test_allows_on_holiday_when_filter_disabled(self):
+        from datetime import datetime, timezone
+        cfg = bot.BotConfig(us_holiday_filter=False)
+        dt = datetime(2026, 12, 25, 15, 0, 0, tzinfo=timezone.utc)
+        self.assertTrue(bot.is_trading_hour(cfg, int(dt.timestamp() * 1000)))
+
+    def test_normal_weekday_not_blocked(self):
+        from datetime import datetime, timezone
+        cfg = bot.BotConfig(us_holiday_filter=True)
+        # Wednesday 2026-05-06, 15:00 UTC — not a holiday
+        dt = datetime(2026, 5, 6, 15, 0, 0, tzinfo=timezone.utc)
+        self.assertTrue(bot.is_trading_hour(cfg, int(dt.timestamp() * 1000)))
+
+    def test_holiday_blocks_independently_of_hour_filter(self):
+        from datetime import datetime, timezone
+        # us_holiday_filter=True blocks even when hour_filter_enabled=False
+        cfg = bot.BotConfig(us_holiday_filter=True, hour_filter_enabled=False)
+        dt = datetime(2026, 12, 25, 15, 0, 0, tzinfo=timezone.utc)
+        self.assertFalse(bot.is_trading_hour(cfg, int(dt.timestamp() * 1000)))
+
+
 class TestSnapshotInterval(unittest.IsolatedAsyncioTestCase):
     """
     BotConfig.snapshot_interval controls how often handle_book_update writes a
