@@ -350,6 +350,7 @@ disponible (`After=network-online.target`).
 - `--no-log` — supprime le fichier log pour un I/O disque minimal ; la DB SQLite (trades + snapshots) n'est pas affectée ; combiner avec `--simulate` pour conserver la sortie stdout
 - `--no-snapshots` — ne pas écrire les snapshots de prix toutes les 5 s dans la DB ; les trades continuent d'être enregistrés ; réduit la pression d'écriture sur les longues sessions ; à utiliser quand les données de snapshots ne sont pas nécessaires pour l'analyse post-session
 - `--reset-db` — sauvegarde `live.db` dans `live.db.bak.YYYYMMDD_HHMMSS` puis le supprime avant le lancement ; le bot repart de zéro (capital et historique de trades) ; demande une confirmation `yes` ; sans effet si la DB est absente
+- `--snapshot-interval SECS` — remplace l'intervalle d'écriture des snapshots en secondes (défaut : 5) ; utiliser `1` pour le mode collecte de données où une résolution à la seconde est nécessaire pour la recherche de stratégie
 - `--simulate` — isole tous les fichiers dans `~/tradinebotte-sim` par défaut, aucun ordre réel. Si `TRADINEBOTTE_DIR` est déjà défini dans l'environnement, ce chemin est utilisé à la place — ce qui permet de faire tourner plusieurs bots en parallèle sans conflit :
   ```bash
   TRADINEBOTTE_DIR=~/compte-a python3 live_bot.py --simulate
@@ -426,6 +427,11 @@ python3 scripts/backtest.py --all
 # Recherche en grille sur 135 combinaisons seuil/mise
 python3 scripts/backtest.py --sweep
 python3 scripts/backtest.py --all --sweep
+
+# Grille étendue (405 combos) sur toutes les BDs — optimisation de stratégie
+python3 scripts/backtest.py --sweep-all
+python3 scripts/backtest.py --sweep-all --sort pnl   # trier par pnl|ratio|wr
+python3 scripts/backtest.py --sweep-all --top 10     # top-10 configs uniques (dédupliqué)
 ```
 
 Quand plusieurs fichiers sont traités, chaque fichier tourne avec le capital réinitialisé à `capital_start` (simulation indépendante), et un bloc AGGREGATE résume les wins, losses, PnL, taux de victoire et pire drawdown combinés de tous les fichiers.
@@ -439,6 +445,9 @@ Quand plusieurs fichiers sont traités, chaque fichier tourne avec le capital r�
 | `--min-ask FLOAT` | 10.0 | Volume minimum côté ask en USD à l'entrée |
 | `--obi FLOAT` | −0.25 | Seuil de rejet OBI (les entrées avec un OBI inférieur à cette valeur sont ignorées) |
 | `--stake FLOAT` | 10.0 | Mise en USD par trade |
+| `--sweep-all` | — | Grille étendue (405 combos) sur toutes les BDs (ajoute les axes OBI et DSL) |
+| `--sort METRIC` | `ratio` | Trier les résultats du sweep par `ratio` (PnL/MaxDD), `pnl` ou `wr` |
+| `--top N` | 0 (tous) | Afficher uniquement les top-N configs uniques (dédupliqué sur seuil/min_secs/obi) |
 
 
 ## Filtre heure / jour
@@ -719,6 +728,55 @@ Confirmer les ordres réels on-chain (pas simulés) :
 
 ```bash
 grep "order=" ~/tradinebotte/live.log | grep -v "order=sim" | tail -20
+```
+
+
+## Collecte de données
+
+Le premier compte de déploiement VPS fait tourner le bot en mode simulation avec des snapshots à 1 seconde d'intervalle, afin de constituer un jeu de données haute résolution pour la recherche de stratégie et les backtests.
+
+### Scripts de collecte
+
+**`scripts/start_collector.sh`** — déployer et gérer le processus de collecte :
+
+| Flag | Description |
+|---|---|
+| *(aucun flag)* | Déploie les fichiers sources sur le compte collecteur et démarre `live_bot.py --simulate --snapshot-interval 1` |
+| `--status` | Vérifie si le processus collecteur tourne et affiche le nombre de lignes de snapshots à distance |
+| `--stop` | Arrête le processus collecteur en cours |
+
+```bash
+bash scripts/start_collector.sh           # déploiement + lancement
+bash scripts/start_collector.sh --status  # vérifier si en cours
+bash scripts/start_collector.sh --stop    # arrêter
+```
+
+**`scripts/collect_db.sh`** — télécharger et archiver la base de données de snapshots hebdomadaire :
+
+| Flag | Description |
+|---|---|
+| `--status` | Affiche le nombre de lignes distant pour les tables `snapshots` et `trades` sans télécharger |
+| `--rotate` | Télécharge `live.db` depuis le collecteur, l'archive dans `data/` avec un horodatage, puis redémarre le collecteur avec une base vide |
+
+```bash
+bash scripts/collect_db.sh --status    # compteurs distants de lignes
+bash scripts/collect_db.sh --rotate    # télécharger + archiver + redémarrer
+```
+
+Le fichier téléchargé est archivé dans `data/collect_YYYYMMDD.db`. Log du collecteur : `~/tradinebotte/collect.log`.
+
+**`scripts/schedule_collect.sh`** — automatiser la rotation hebdomadaire via cron :
+
+| Flag | Description |
+|---|---|
+| `--install` | Installe une entrée cron qui exécute `collect_db.sh --rotate` tous les dimanches à 03:00 UTC |
+| `--status` | Affiche l'entrée cron actuelle pour la tâche de collecte |
+| `--run-now` | Exécute la rotation immédiatement (équivalent à `collect_db.sh --rotate`) |
+
+```bash
+bash scripts/schedule_collect.sh --install    # tous les dimanches à 03:00 UTC
+bash scripts/schedule_collect.sh --status     # afficher l'entrée cron
+bash scripts/schedule_collect.sh --run-now    # exécuter immédiatement
 ```
 
 

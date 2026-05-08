@@ -26,7 +26,7 @@ if [[ -f "$PROJECT_DIR/.venv/bin/python3" ]]; then
     INSTALL_DIR="$PROJECT_DIR"
 elif [[ -f "${TRADINEBOTTE_DIR:-$HOME/tradinebotte}/venv/bin/python3" ]]; then
     INSTALL_DIR="${TRADINEBOTTE_DIR:-$HOME/tradinebotte}"
-    INSTALL_DIR="$(eval echo "$INSTALL_DIR")"
+    INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
 else
     echo "ERROR: no virtualenv found." >&2
     echo "  Expected: $PROJECT_DIR/.venv  or  ~/tradinebotte/venv" >&2

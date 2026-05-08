@@ -10,11 +10,26 @@ config.json is loaded:
     ...
 """
 
-import base64, hashlib, logging, os, sqlite3
+import base64, hashlib, html, logging, os, sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
+try:
+    import bcrypt as _bcrypt
+    _BCRYPT_AVAILABLE = True
+except ImportError:
+    _BCRYPT_AVAILABLE = False
+
 logger = logging.getLogger("live")
+
+
+def _today_ms_utc() -> int:
+    """UTC midnight of the current day, in milliseconds — for daily DB aggregations."""
+    return int(
+        datetime.now(timezone.utc)
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+        .timestamp() * 1000
+    )
 
 # ─── WEB STATUS CONFIG (set by live_bot after config load) ───────────────────
 WEBSTATUS_ENABLED:  bool = False
@@ -40,8 +55,14 @@ def print_dashboard(state: Any) -> None:
 
 # ─── WEB STATUS PAGE ─────────────────────────────────────────────────────────
 
-def _htpasswd_sha1(password: str) -> str:
-    """Return an Apache {SHA} htpasswd hash (no external dependencies)."""
+def _htpasswd(password: str) -> str:
+    """Return an Apache-compatible htpasswd hash. Uses bcrypt ($2y$) when available,
+    falls back to unsalted SHA-1 with a warning when bcrypt is not installed."""
+    if _BCRYPT_AVAILABLE:
+        return _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
+    logger.warning(
+        "bcrypt non installé — htpasswd utilise SHA-1 (faible). Exécutez: pip install bcrypt"
+    )
     return "{SHA}" + base64.b64encode(hashlib.sha1(password.encode()).digest()).decode()
 
 
@@ -56,7 +77,7 @@ def setup_htaccess(html_path: str) -> None:
     htpasswd_path = os.path.join(INSTALL_DIR, ".webstatus_htpasswd")
     htaccess_path = os.path.join(os.path.dirname(html_path), ".htaccess")
     with open(htpasswd_path, "w", encoding="utf-8") as f:
-        f.write(f"{WEBSTATUS_USER}:{_htpasswd_sha1(WEBSTATUS_PASSWORD)}\n")
+        f.write(f"{WEBSTATUS_USER}:{_htpasswd(WEBSTATUS_PASSWORD)}\n")
     os.chmod(htpasswd_path, 0o640)
     if not os.path.exists(htaccess_path):
         with open(htaccess_path, "w", encoding="utf-8") as f:
@@ -82,13 +103,14 @@ def _status_html_trade_rows(conn: sqlite3.Connection) -> str:
     for tid, direction, outcome, entry, pnl, cap, ts_ms, question in rows:
         ts_str = datetime.fromtimestamp(ts_ms / 1000).strftime("%H:%M:%S") if ts_ms else "—"
         css = "win" if outcome == "WIN" else "loss"
-        q_short = (question or "")[:42] + ("…" if len(question or "") > 42 else "")
+        q_safe  = html.escape(question or "")
+        q_short = q_safe[:42] + ("…" if len(q_safe) > 42 else "")
         parts.append(
             f'<tr class="{css}">'
             f'<td>#{tid}</td><td>{ts_str}</td><td>{direction}</td>'
             f'<td>{outcome}</td><td>{entry:.4f}</td>'
             f'<td>${pnl:+.2f}</td><td>${cap:.2f}</td>'
-            f'<td title="{question or ""}">{q_short}</td></tr>'
+            f'<td title="{q_safe}">{q_short}</td></tr>'
         )
     return "\n".join(parts)
 
@@ -96,11 +118,7 @@ def _status_html_trade_rows(conn: sqlite3.Connection) -> str:
 def generate_status_html(state: Any) -> str:
     """Build a self-contained HTML status page from current bot state."""
     now_str  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    today_ms = int(
-        datetime.now(timezone.utc)
-        .replace(hour=0, minute=0, second=0, microsecond=0)
-        .timestamp() * 1000
-    )
+    today_ms = _today_ms_utc()
     daily_row = state.conn.execute(
         "SELECT COALESCE(SUM(pnl_net),0), "
         "COALESCE(SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END),0), "

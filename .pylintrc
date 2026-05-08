@@ -1,6 +1,8 @@
 [FORMAT]
 # 100 chars (pylint default) is tight for async code with long identifiers.
 max-line-length=120
+# live_bot.py is a single-file async state machine; 1000 is too tight.
+max-module-lines=1200
 
 [MESSAGES CONTROL]
 disable=
@@ -71,3 +73,8 @@ disable=
     R0911,
     R0912,
     R0915,
+
+[TYPECHECK]
+# websockets is installed in the project venv but not in the system Python
+# that runs pylint; suppress the false-positive import-error it would raise.
+ignored-modules = websockets

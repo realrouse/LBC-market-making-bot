@@ -19,9 +19,11 @@ Usage:
     python3 scripts/backtest.py --all                        # all data/*.db + live.db
     python3 scripts/backtest.py --all --threshold 0.95 --detail
     python3 scripts/backtest.py --sweep                      # grid search
+    python3 scripts/backtest.py --db data/paper3.db --compare
+        → three-way table: backtest(user) | backtest(aligned to actual) | actual bot
 """
 
-import argparse, os, sqlite3, sys
+import argparse, math, os, sqlite3, sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import product
@@ -280,6 +282,140 @@ def summarize(trades: List[SimTrade], params: Params, capital_final: float) -> d
         "total_pnl":     total_pnl,
         "max_drawdown":  max_dd,
         "capital_final": capital_final,
+        "pnl_pct":       (total_pnl / params.capital_start * 100) if params.capital_start > 0 else 0.0,
+    }
+
+
+# ─── Actual-params detection ──────────────────────────────────────────────────
+
+def _percentile(conn: sqlite3.Connection, col: str, table: str,
+                where: str, pct: float) -> Optional[float]:
+    """
+    Return the value at the given percentile (0–1) for a numeric column.
+    Uses an ORDER BY + OFFSET approach compatible with SQLite.
+    """
+    n_row = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE {where}").fetchone()
+    if not n_row or not n_row[0]:
+        return None
+    offset = max(0, int(pct * n_row[0]))
+    row = conn.execute(
+        f"SELECT {col} FROM {table} WHERE {where} ORDER BY {col} LIMIT 1 OFFSET ?",
+        (offset,),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def detect_actual_params(conn: sqlite3.Connection) -> Optional[dict]:
+    """
+    Infer the bot's actual runtime config from the trades table.
+
+    Returns a dict with:
+      stake         — most common stake value (modal)
+      threshold     — 5th-percentile of signal_best_bid, rounded down to 0.01
+                      (robust against outliers from old bot versions)
+      min_secs      — 5th-percentile of signal_secs_remaining > 0, rounded down to 5s
+      capital_start — minimum capital_before across all resolved trades
+      stops         — count of STOP-outcome trades (daily stop-loss hits)
+      ghosts        — count of GHOST-outcome trades (markets expired without result)
+    Returns None when the trades table is empty or required columns are missing.
+    """
+    try:
+        stake_row = conn.execute(
+            "SELECT stake, COUNT(*) FROM trades WHERE resolved=1 "
+            "GROUP BY stake ORDER BY COUNT(*) DESC LIMIT 1"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    if not stake_row:
+        return None
+
+    try:
+        bid_p5   = _percentile(conn, "signal_best_bid", "trades",
+                               "resolved=1 AND signal_best_bid IS NOT NULL", 0.05)
+        secs_p5  = _percentile(conn, "signal_secs_remaining", "trades",
+                               "resolved=1 AND signal_secs_remaining > 0", 0.05)
+        cap_row  = conn.execute(
+            "SELECT capital_before FROM trades WHERE resolved=1 AND capital_before IS NOT NULL "
+            "ORDER BY signal_ts_ms ASC LIMIT 1"
+        ).fetchone()
+        capital_start = cap_row[0] if cap_row and cap_row[0] else None
+        # Estimate daily_stop_loss from the worst observed day: the bot must have
+        # run all day through that loss, so the actual limit was at least that large.
+        # We add 20 % headroom and round up to the nearest $50.
+        worst_row = conn.execute("""
+            SELECT MIN(day_pnl) FROM (
+                SELECT SUM(pnl_net) AS day_pnl
+                FROM trades
+                WHERE resolved=1 AND pnl_net IS NOT NULL AND signal_ts_ms IS NOT NULL
+                GROUP BY strftime('%Y-%m-%d', signal_ts_ms/1000, 'unixepoch')
+            )
+        """).fetchone()
+        worst_day = worst_row[0] if worst_row and worst_row[0] else None
+        if worst_day and worst_day < 0:
+            raw_dsl = abs(worst_day) * 1.20
+            daily_stop_loss = math.ceil(raw_dsl / 50) * 50
+        else:
+            daily_stop_loss = None
+        # If estimated DSL exceeds 5× stake, it can't be trusted: when
+        # stake > DSL a single loss already triggers the daily stop, so the
+        # worst-day heuristic always overestimates.
+        if daily_stop_loss and daily_stop_loss > 5 * stake_row[0]:
+            daily_stop_loss = None
+    except sqlite3.OperationalError:
+        bid_p5, secs_p5, capital_start, daily_stop_loss = None, None, None, None
+
+    stops_row = conn.execute(
+        "SELECT "
+        "  SUM(CASE WHEN outcome='STOP'  THEN 1 ELSE 0 END), "
+        "  SUM(CASE WHEN outcome='GHOST' THEN 1 ELSE 0 END) "
+        "FROM trades WHERE resolved=1"
+    ).fetchone()
+
+    # Round threshold down to nearest 0.01, min_secs down to nearest 5s.
+    threshold = math.floor((bid_p5 or 0.95) * 100) / 100 if bid_p5 else None
+    min_secs  = max(30.0, math.floor((secs_p5 or 30.0) / 5) * 5) if secs_p5 else None
+
+    return {
+        "stake":           stake_row[0],
+        "threshold":       threshold,
+        "min_secs":        min_secs,
+        "capital_start":   capital_start,
+        "daily_stop_loss": daily_stop_loss,
+        "raw_min_bid":     bid_p5,
+        "raw_min_secs":    secs_p5,
+        "stops":           stops_row[0] or 0,
+        "ghosts":          stops_row[1] or 0,
+    }
+
+
+def _actual_stats(conn: sqlite3.Connection) -> Optional[dict]:
+    """Query aggregate statistics from the actual trades table."""
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*), "
+            "  SUM(CASE WHEN outcome='WIN'  THEN 1 ELSE 0 END), "
+            "  SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END), "
+            "  SUM(CASE WHEN outcome='STOP' THEN 1 ELSE 0 END), "
+            "  SUM(CASE WHEN outcome='GHOST' THEN 1 ELSE 0 END), "
+            "  COALESCE(SUM(pnl_net), 0) "
+            "FROM trades WHERE resolved=1"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    if not row or not row[0]:
+        return None
+    total, wins, losses, stops, ghosts, pnl = (
+        row[0] or 0, row[1] or 0, row[2] or 0,
+        row[3] or 0, row[4] or 0, row[5] or 0.0,
+    )
+    return {
+        "total":    total,
+        "wins":     wins,
+        "losses":   losses,
+        "stops":    stops,
+        "ghosts":   ghosts,
+        "win_rate": (wins / total * 100) if total else 0.0,
+        "total_pnl": pnl,
     }
 
 
@@ -299,12 +435,13 @@ def _stat_block(label: str, params: Params, stats: dict, n_snapshots: int) -> st
     ]
     if stats["open"]:
         lines.append(f"  Open     : {stats['open']}  (unresolved at end of data)")
+    pnl_pct = stats.get("pnl_pct", 0.0)
     lines += [
+        f"  Stake    : ${params.stake:.2f}  (capital start: ${params.capital_start:.2f})",
         f"  Win rate : {stats['win_rate']:.1f}%",
-        f"  Total PnL: ${stats['total_pnl']:+.2f}",
+        f"  Total PnL: ${stats['total_pnl']:+.2f}  ({pnl_pct:+.1f}%)",
         f"  Max DD   : ${stats['max_drawdown']:.2f}",
-        f"  Capital  : ${stats['capital_final']:.2f}"
-        f"  (start: ${params.capital_start:.2f})",
+        f"  Capital  : ${stats['capital_final']:.2f}",
         "=" * 62,
     ]
     return "\n".join(lines)
@@ -354,46 +491,284 @@ def print_aggregate(results: List[dict]) -> None:
         print(f"  Open     : {total_open}  (unresolved at end of data)")
     print(f"  Win rate : {win_rate:.1f}%")
     print(f"  Total PnL: ${total_pnl:+.2f}")
+    total_capital = sum(r.get("capital_start", 100.0) for r in results)
+    if total_capital > 0:
+        print(f"  PnL%     : {total_pnl / total_capital * 100:+.1f}%  (sur capital total ${total_capital:.2f})")
     print(f"  Worst DD : ${worst_dd:.2f}  (worst single session)")
     print("=" * 62)
 
 
-def print_actual(conn: sqlite3.Connection, params: Params, n_snapshots: int) -> None:
-    """Print actual bot performance from the trades table for comparison."""
-    row = conn.execute(
-        "SELECT COUNT(*), "
-        "  SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END), "
-        "  SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END), "
-        "  COALESCE(SUM(pnl_net),0) "
-        "FROM trades WHERE resolved=1"
-    ).fetchone()
-    total, wins, losses, pnl = row[0] or 0, row[1] or 0, row[2] or 0, row[3] or 0.0
-    wr = (wins / total * 100) if total else 0.0
-    print("=" * 62)
-    print("  ACTUAL BOT RESULTS (for comparison)")
-    print("=" * 62)
-    print(f"  Trades   : {total}")
-    print(f"  Wins     : {wins}")
-    print(f"  Losses   : {losses}")
-    print(f"  Win rate : {wr:.1f}%")
-    print(f"  Total PnL: ${pnl:+.2f}")
-    print("=" * 62)
+def print_comparison(
+    db_name:        str,
+    user_params:    Params,
+    user_stats:     dict,
+    matched_params: Optional[Params],
+    matched_stats:  Optional[dict],
+    actual:         Optional[dict],
+    detected:       Optional[dict],
+) -> None:
+    """
+    Three-column comparison table:
+      BACKTEST (user params) | BACKTEST (aligned to actual) | ACTUAL BOT RESULTS
+
+    The matched column is omitted when no trades table is found or when the
+    detected params are identical to the user params (no mismatch to show).
+    """
+    W = 16   # column width
+
+    def _row(label: str, a: str, b: str, c: str) -> str:
+        return f"  {label:<20} {a:>{W}} {b:>{W}} {c:>{W}}"
+
+    show_matched = matched_params is not None and matched_stats is not None
+
+    print()
+    print("=" * (22 + W * 3 + 2))
+    print(f"  COMPARAISON — {db_name}")
+    print("=" * (22 + W * 3 + 2))
+    print(_row("", "BACKTEST", "BACKTEST", "BOT"))
+    print(_row("", "(paramètres)", "(aligné)", "RÉEL"))
+    print("  " + "-" * (20 + W * 3 + 2))
+    # Config rows
+    thr_b = f"{user_params.signal_threshold}"
+    thr_m = f"{matched_params.signal_threshold}" if show_matched else "—"
+    thr_a = f"≈{detected['raw_min_bid']:.4f}" if detected and detected.get("raw_min_bid") else "—"
+    print(_row("Threshold", thr_b, thr_m, thr_a))
+
+    secs_b = f"{user_params.min_secs_remaining:.0f}s"
+    secs_m = f"{matched_params.min_secs_remaining:.0f}s" if show_matched else "—"
+    secs_a = f"≈{detected['raw_min_secs']:.0f}s" if detected and detected.get("raw_min_secs") else "—"
+    print(_row("Min secs", secs_b, secs_m, secs_a))
+
+    stake_b = f"${user_params.stake:.0f}"
+    stake_m = f"${matched_params.stake:.0f}" if show_matched else "—"
+    stake_a = f"${detected['stake']:.0f} (modal)" if detected else "—"
+    print(_row("Stake", stake_b, stake_m, stake_a))
+
+    cap_b = f"${user_params.capital_start:.0f}"
+    cap_m = f"${matched_params.capital_start:.0f}" if show_matched else "—"
+    cap_a = f"${detected['capital_start']:.0f}" if detected and detected.get("capital_start") else "—"
+    print(_row("Capital start", cap_b, cap_m, cap_a))
+
+    dsl_b = f"${user_params.daily_stop_loss:.0f}"
+    dsl_m = f"${matched_params.daily_stop_loss:.0f}" if show_matched else "—"
+    dsl_a = f"≈${detected['daily_stop_loss']:.0f}" if detected and detected.get("daily_stop_loss") else "—"
+    print(_row("Daily stop-loss", dsl_b, dsl_m, dsl_a))
+
+    print("  " + "-" * (20 + W * 3 + 2))
+
+    # Results rows
+    def _fmt_int(v: Optional[int], fallback: str = "—") -> str:
+        return f"{v:,}" if v is not None else fallback
+
+    def _fmt_pct(v: Optional[float]) -> str:
+        return f"{v:.1f}%" if v is not None else "—"
+
+    def _fmt_pnl(v: Optional[float]) -> str:
+        return f"${v:+.2f}" if v is not None else "—"
+
+    def _fmt_dd(v: Optional[float]) -> str:
+        return f"${v:.2f}" if v is not None else "—"
+
+    a_total = actual["total"] if actual else None
+    m_total = matched_stats["total"] if matched_stats else None
+    print(_row("Trades", _fmt_int(user_stats["total"]), _fmt_int(m_total), _fmt_int(a_total)))
+
+    a_wins = actual["wins"] if actual else None
+    m_wins = matched_stats["wins"] if matched_stats else None
+    print(_row("Wins", _fmt_int(user_stats["wins"]), _fmt_int(m_wins), _fmt_int(a_wins)))
+
+    a_losses = actual["losses"] if actual else None
+    m_losses = matched_stats["losses"] if matched_stats else None
+    print(_row("Losses", _fmt_int(user_stats["losses"]), _fmt_int(m_losses), _fmt_int(a_losses)))
+
+    if actual and (actual.get("stops") or actual.get("ghosts")):
+        stops  = actual.get("stops",  0)
+        ghosts = actual.get("ghosts", 0)
+        if stops:
+            print(_row("Stops (daily SL)", "—", "—", _fmt_int(stops)))
+        if ghosts:
+            print(_row("Ghosts (no exit)", "—", "—", _fmt_int(ghosts)))
+
+    if user_stats.get("open"):
+        m_open = _fmt_int(matched_stats["open"]) if matched_stats else "—"
+        print(_row("Open (end of data)", _fmt_int(user_stats["open"]), m_open, "—"))
+
+    print(_row("Win rate",
+               _fmt_pct(user_stats["win_rate"]),
+               _fmt_pct(matched_stats["win_rate"] if matched_stats else None),
+               _fmt_pct(actual["win_rate"] if actual else None)))
+
+    print(_row("Total PnL",
+               _fmt_pnl(user_stats["total_pnl"]),
+               _fmt_pnl(matched_stats["total_pnl"] if matched_stats else None),
+               _fmt_pnl(actual["total_pnl"] if actual else None)))
+
+    def _fmt_pnl_pct(pnl: Optional[float], capital: Optional[float]) -> str:
+        if pnl is None or not capital:
+            return "—"
+        return f"{pnl / capital * 100:+.1f}%"
+
+    cap_actual = detected["capital_start"] if detected and detected.get("capital_start") else None
+    print(_row("PnL%",
+               _fmt_pnl_pct(user_stats["total_pnl"], user_params.capital_start),
+               _fmt_pnl_pct(matched_stats["total_pnl"] if matched_stats else None,
+                             matched_params.capital_start if matched_params else None),
+               _fmt_pnl_pct(actual["total_pnl"] if actual else None, cap_actual)))
+
+    print(_row("Max DD",
+               _fmt_dd(user_stats["max_drawdown"]),
+               _fmt_dd(matched_stats["max_drawdown"] if matched_stats else None),
+               "—"))
+
+    print("=" * (22 + W * 3 + 2))
+
+    # Config-mismatch warning
+    if detected:
+        mismatches = []
+        if abs(detected["stake"] - user_params.stake) > 1:
+            ratio = detected["stake"] / user_params.stake
+            mismatches.append(
+                f"stake: backtest=${user_params.stake:.0f}, "
+                f"actual=${detected['stake']:.0f} (×{ratio:.0f})"
+            )
+        if detected["threshold"] and abs(detected["threshold"] - user_params.signal_threshold) >= 0.01:
+            mismatches.append(
+                f"threshold: backtest={user_params.signal_threshold}, "
+                f"actual≈{detected['threshold']}"
+            )
+        if detected["min_secs"] and abs(detected["min_secs"] - user_params.min_secs_remaining) >= 10:
+            mismatches.append(
+                f"min_secs: backtest={user_params.min_secs_remaining:.0f}s, "
+                f"actual≈{detected['min_secs']:.0f}s"
+            )
+        if mismatches:
+            print()
+            print("  ⚠  Paramètres divergents :")
+            for m in mismatches:
+                print(f"     {m}")
+            parts = [f"--stake {detected['stake']:.0f}"]
+            if detected["threshold"]:
+                parts.append(f"--threshold {detected['threshold']}")
+            if detected["min_secs"]:
+                parts.append(f"--min-secs {detected['min_secs']:.0f}")
+            print(f"\n     Pour une comparaison exacte (colonne alignée) :")
+            print(f"     python3 scripts/backtest.py --db <fichier> --compare {' '.join(parts)}")
+            print()
 
 
-def print_sweep_table(results: list) -> None:
-    """Print a comparison table of all parameter combinations."""
-    header = (f"{'threshold':>9} | {'min_secs':>8} | {'min_ask':>7} | {'obi':>6} | "
-              f"{'trades':>6} | {'wins':>5} | {'WR%':>6} | {'PnL':>8} | {'MaxDD':>7}")
+def _ratio(pnl: float, dd: float) -> float:
+    """PnL / MaxDD risk-adjusted ratio (Calmar-style). Inf when DD=0 and PnL>0."""
+    if dd <= 0:
+        return float("inf") if pnl > 0 else 0.0
+    return pnl / dd
+
+
+def print_sweep_table(results: list, sort_by: str = "ratio", show_dsl: bool = False,
+                      top_n: int = 0) -> None:
+    """
+    Print a comparison table of all parameter combinations.
+
+    sort_by: 'wr'    → sort by win rate
+             'pnl'   → sort by total PnL
+             'ratio' → sort by PnL/MaxDD (risk-adjusted, recommended)
+    show_dsl: include the daily_stop_loss column (set True when sweep varies it)
+    top_n:    if > 0, show only the top-N unique configs (deduped on thr/secs/obi)
+    """
+    header = (
+        f"{'threshold':>9} | {'min_secs':>8} | {'min_ask':>7} | {'obi':>6}"
+        + (f" | {'dsl':>6}" if show_dsl else "")
+        + f" | {'trades':>6} | {'wins':>5} | {'WR%':>6} | {'PnL':>9} | {'PnL%':>7} | {'MaxDD':>7} | {'PnL/DD':>7}"
+    )
     sep = "-" * len(header)
-    print(f"\n{header}\n{sep}")
-    for params, stats in sorted(results, key=lambda x: -x[1]["win_rate"]):
+
+    sort_keys = {
+        "wr":    lambda x: -x[1]["win_rate"],
+        "pnl":   lambda x: -x[1]["total_pnl"],
+        "ratio": lambda x: -(x[1].get("ratio") or _ratio(x[1]["total_pnl"], x[1]["max_drawdown"])),
+    }
+    key_fn = sort_keys.get(sort_by, sort_keys["ratio"])
+    sorted_results = sorted(results, key=key_fn)
+
+    if top_n > 0:
+        seen_keys: set = set()
+        rows_to_print = []
+        for params, stats in sorted_results:
+            key = (params.signal_threshold, params.min_secs_remaining, params.obi_reject_thresh)
+            if key not in seen_keys:
+                seen_keys.add(key)
+                rows_to_print.append((params, stats))
+                if len(rows_to_print) >= top_n:
+                    break
+        note = f"  (top {top_n} configs uniques thr/secs/obi — {len(results)} combos au total)"
+    else:
+        rows_to_print = sorted_results
+        note = ""
+
+    print(f"\n{header}\n{sep}{note}")
+    for params, stats in rows_to_print:
+        ratio = stats.get("ratio") or _ratio(stats["total_pnl"], stats["max_drawdown"])
+        ratio_str = f"{ratio:>7.2f}" if ratio != float("inf") else "    ∞"
+        dsl_part = f" {params.daily_stop_loss:>5.0f} |" if show_dsl else ""
+        pnl_pct = stats.get("pnl_pct", stats["total_pnl"] / 100.0)  # params.capital_start always 100 in sweep
+        pnl_pct_str = f"{pnl_pct:>+6.1f}%"
         print(
             f"  {params.signal_threshold:>7.2f} | {params.min_secs_remaining:>8.0f} |"
             f" {params.min_ask_vol:>7.0f} | {params.obi_reject_thresh:>6.2f} |"
+            f"{dsl_part}"
             f" {stats['total']:>6} | {stats['wins']:>5} |"
-            f" {stats['win_rate']:>5.1f}% | ${stats['total_pnl']:>+7.2f} |"
-            f" ${stats['max_drawdown']:>6.2f}"
+            f" {stats['win_rate']:>5.1f}% | ${stats['total_pnl']:>+8.2f} |"
+            f" {pnl_pct_str} |"
+            f" ${stats['max_drawdown']:>6.2f} | {ratio_str}"
         )
+
+
+def print_recommendations(results: list, n: int = 5) -> None:
+    """Print top-N configs by three criteria: PnL/DD ratio, total PnL, win rate."""
+    def _r(x):
+        return x[1].get("ratio") or _ratio(x[1]["total_pnl"], x[1]["max_drawdown"])
+
+    def _row(rank: int, params: Params, stats: dict) -> str:
+        ratio = _r((params, stats))
+        ratio_s = f"{ratio:.2f}" if ratio != float("inf") else "∞"
+        pnl_pct = stats.get("pnl_pct", stats["total_pnl"] / 100.0)
+        return (
+            f"  {rank}. thr={params.signal_threshold}  secs={params.min_secs_remaining:.0f}  "
+            f"ask={params.min_ask_vol:.0f}  obi={params.obi_reject_thresh}  "
+            f"dsl={params.daily_stop_loss:.0f}"
+            f"  → trades={stats['total']}  WR={stats['win_rate']:.1f}%"
+            f"  PnL=${stats['total_pnl']:+.2f} ({pnl_pct:+.1f}%)"
+            f"  DD=${stats['max_drawdown']:.2f}"
+            f"  ratio={ratio_s}"
+        )
+
+    filtered = [(p, s) for p, s in results if s["total"] >= 50]  # ignore thin configs
+
+    print("\n" + "=" * 80)
+    print("  RECOMMANDATIONS — top configs par critère (configs avec ≥50 trades)")
+    print("=" * 80)
+
+    print("\n  ── Par ratio PnL/MaxDD (risque ajusté — recommandé) ──")
+    for i, (p, s) in enumerate(sorted(filtered, key=lambda x: -_r(x))[:n], 1):
+        print(_row(i, p, s))
+
+    print("\n  ── Par PnL total ──")
+    for i, (p, s) in enumerate(sorted(filtered, key=lambda x: -x[1]["total_pnl"])[:n], 1):
+        print(_row(i, p, s))
+
+    print("\n  ── Par win rate ──")
+    for i, (p, s) in enumerate(sorted(filtered, key=lambda x: -x[1]["win_rate"])[:n], 1):
+        print(_row(i, p, s))
+
+    # Single best recommendation
+    if filtered:
+        best_p, best_s = sorted(filtered, key=lambda x: -_r(x))[0]
+        print("\n  ★  MEILLEURE CONFIG GLOBALE (ratio PnL/DD) :")
+        print(f"     python3 scripts/backtest.py --threshold {best_p.signal_threshold}"
+              f" --min-secs {best_p.min_secs_remaining:.0f}"
+              f" --min-ask {best_p.min_ask_vol:.0f}"
+              f" --obi {best_p.obi_reject_thresh}"
+              f" --stake {best_p.stake:.0f}")
+    print("=" * 80)
 
 
 # ─── DB loading ───────────────────────────────────────────────────────────────
@@ -432,12 +807,19 @@ def main():
     parser.add_argument("--detail",     action="store_true",
                         help="print individual simulated trade table")
     parser.add_argument("--compare",    action="store_true",
-                        help="show actual bot results alongside backtest (single file only)")
+                        help="three-way comparison: backtest(user) | backtest(aligned) | actual bot")
     parser.add_argument("--sweep",      action="store_true",
-                        help="grid search over multiple parameter combinations")
+                        help="grid search over multiple parameter combinations (per file)")
+    parser.add_argument("--sweep-all",  action="store_true",
+                        help="grid search aggregated across all DB files (more robust than per-file)")
+    parser.add_argument("--sort",       default="ratio",
+                        choices=["wr", "pnl", "ratio"],
+                        help="sweep sort order: wr=win rate, pnl=total PnL, ratio=PnL/MaxDD")
+    parser.add_argument("--top",        type=int, default=0, metavar="N",
+                        help="show only the top-N unique configs in sweep (deduped on thr/secs/obi); 0=all")
     args = parser.parse_args()
 
-    db_paths = _collect_dbs(args.db, args.all)
+    db_paths = _collect_dbs(args.db, args.all or args.sweep_all)
     if not db_paths:
         print("No database files found. Use --db PATH, --all, or run the bot first.")
         sys.exit(1)
@@ -455,6 +837,9 @@ def main():
 
     file_results: List[dict] = []  # accumulate for aggregate summary
 
+    # ── Collect rows for all DBs (needed by --sweep-all) ─────────────────────
+    all_db_rows: List[Tuple[str, list]] = []  # (db_name, rows) pairs
+
     for db_path in db_paths:
         if not os.path.exists(db_path):
             print(f"WARNING: not found, skipping: {db_path}")
@@ -464,60 +849,174 @@ def main():
         elif db_path == _live_db:   tag = "(live)"
         elif db_path == _paper3_db: tag = "(paper3)"
         else:                       tag = ""
-        print(f"DB: {db_path} {tag}".rstrip())
 
         conn        = sqlite3.connect(db_path)
         n_snapshots = conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
 
         if n_snapshots == 0:
-            print("  No snapshots — skipping.")
             conn.close()
             continue
 
         rows = load_rows(conn)
+        all_db_rows.append((os.path.basename(db_path), rows))
+
+        if args.sweep_all:
+            conn.close()
+            continue   # rows collected; per-file output skipped for sweep-all
+
+        print(f"DB: {db_path} {tag}".rstrip())
 
         if args.sweep:
-            # Grid search — run per file; no cross-file aggregate for sweep.
+            # Per-file grid search — original behaviour extended with daily_sl.
             thresholds = [0.94, 0.95, 0.96, 0.97, 0.98]
             min_secs   = [30,   45,   60]
             min_asks   = [5,    10,   20]
             obi_vals   = [-0.75, -0.50, -0.25]
-            combos     = len(thresholds) * len(min_secs) * len(min_asks) * len(obi_vals)
+            dsl_vals   = [30, 100, 500]
+            combos     = (len(thresholds) * len(min_secs) * len(min_asks)
+                          * len(obi_vals) * len(dsl_vals))
             print(f"Grid search: {len(thresholds)}×{len(min_secs)}×{len(min_asks)}"
-                  f"×{len(obi_vals)} = {combos} combinations")
+                  f"×{len(obi_vals)}×{len(dsl_vals)} = {combos} combinations")
             print(f"Snapshots  : {n_snapshots:,}")
 
             sweep_results = []
-            for thr, secs, ask, obi in product(thresholds, min_secs, min_asks, obi_vals):
+            for thr, secs, ask, obi, dsl in product(
+                    thresholds, min_secs, min_asks, obi_vals, dsl_vals):
                 sp = Params(signal_threshold=thr, min_secs_remaining=secs,
-                            min_ask_vol=ask, obi_reject_thresh=obi, stake=args.stake)
+                            min_ask_vol=ask, obi_reject_thresh=obi,
+                            daily_stop_loss=dsl, stake=args.stake)
                 trades, capital_final = run_backtest(rows, sp)
                 stats = summarize(trades, sp, capital_final)
                 sweep_results.append((sp, stats))
-            print_sweep_table(sweep_results)
+            print_sweep_table(sweep_results, sort_by=args.sort, show_dsl=True, top_n=args.top)
+            print_recommendations(sweep_results)
 
         else:
             trades, capital_final = run_backtest(rows, p)
             stats = summarize(trades, p, capital_final)
-            # Show filename in label when replaying multiple files.
-            label = f"BACKTEST — {os.path.basename(db_path)}" if multi else "BACKTEST"
-            print(_stat_block(label, p, stats, n_snapshots))
+
+            if args.compare:
+                detected = detect_actual_params(conn)
+                actual   = _actual_stats(conn)
+
+                matched_params = None
+                matched_stats  = None
+                if detected and actual:
+                    matched_params = Params(
+                        signal_threshold   = detected["threshold"]       or p.signal_threshold,
+                        min_secs_remaining = detected["min_secs"]        or p.min_secs_remaining,
+                        min_ask_vol        = p.min_ask_vol,
+                        obi_reject_thresh  = p.obi_reject_thresh,
+                        stake              = detected["stake"],
+                        capital_start      = detected["capital_start"]   or detected["stake"] * 10,
+                        # When DSL cannot be reliably detected (stake > DSL),
+                        # fall back to the user's own DSL so aligned vs user columns
+                        # remain comparable on that dimension.
+                        daily_stop_loss    = detected["daily_stop_loss"] or p.daily_stop_loss,
+                    )
+                    m_trades, m_capital = run_backtest(rows, matched_params)
+                    matched_stats = summarize(m_trades, matched_params, m_capital)
+
+                # When the bot ran with a different stake/capital than the strategy
+                # defaults, re-run the user-params backtest with the same stake and
+                # capital_start so all three columns share the same economic base.
+                # Signal parameters (threshold, min_secs, obi) are kept as-is.
+                user_params_cmp = p
+                user_stats_cmp  = stats
+                if matched_params is not None and (
+                    abs(matched_params.stake         - p.stake)         > 1 or
+                    abs(matched_params.capital_start - p.capital_start) > 1
+                ):
+                    user_params_cmp = Params(
+                        signal_threshold   = p.signal_threshold,
+                        min_secs_remaining = p.min_secs_remaining,
+                        min_ask_vol        = p.min_ask_vol,
+                        obi_reject_thresh  = p.obi_reject_thresh,
+                        stake              = matched_params.stake,
+                        capital_start      = matched_params.capital_start,
+                        daily_stop_loss    = p.daily_stop_loss,
+                    )
+                    u_trades, u_capital = run_backtest(rows, user_params_cmp)
+                    user_stats_cmp = summarize(u_trades, user_params_cmp, u_capital)
+
+                label = f"BACKTEST — {os.path.basename(db_path)}" if multi else "BACKTEST"
+                print(_stat_block(label, p, stats, n_snapshots))
+                print_comparison(
+                    db_name        = os.path.basename(db_path),
+                    user_params    = user_params_cmp,
+                    user_stats     = user_stats_cmp,
+                    matched_params = matched_params,
+                    matched_stats  = matched_stats,
+                    actual         = actual,
+                    detected       = detected,
+                )
+            else:
+                label = f"BACKTEST — {os.path.basename(db_path)}" if multi else "BACKTEST"
+                print(_stat_block(label, p, stats, n_snapshots))
 
             if args.detail:
                 print_detail(trades)
 
-            # --compare only makes sense for a single file (needs a trades table).
-            if args.compare and not multi:
-                print()
-                print_actual(conn, p, n_snapshots)
-
             file_results.append({
-                "label":       os.path.basename(db_path),
-                "stats":       stats,
-                "n_snapshots": n_snapshots,
+                "label":         os.path.basename(db_path),
+                "stats":         stats,
+                "n_snapshots":   n_snapshots,
+                "capital_start": p.capital_start,
             })
 
         conn.close()
+
+    # ── --sweep-all: aggregate grid search across all DB files ────────────────
+    if args.sweep_all and all_db_rows:
+        total_snaps = sum(len(r) for _, r in all_db_rows)
+        thresholds  = [0.94, 0.95, 0.96, 0.97, 0.98]
+        min_secs    = [30,   45,   60]
+        min_asks    = [5,    10,   20]
+        obi_vals    = [-0.75, -0.50, -0.25]
+        dsl_vals    = [30, 100, 500]
+        combos      = (len(thresholds) * len(min_secs) * len(min_asks)
+                       * len(obi_vals) * len(dsl_vals))
+        db_names    = ", ".join(n for n, _ in all_db_rows)
+        print(f"SWEEP-ALL — {len(all_db_rows)} DB(s): {db_names}")
+        print(f"Grid search: {len(thresholds)}×{len(min_secs)}×{len(min_asks)}"
+              f"×{len(obi_vals)}×{len(dsl_vals)} = {combos} combinations")
+        print(f"Snapshots  : {total_snaps:,} (agrégés — capital reset par fichier)")
+
+        sweep_results = []
+        for thr, secs, ask, obi, dsl in product(
+                thresholds, min_secs, min_asks, obi_vals, dsl_vals):
+            sp = Params(signal_threshold=thr, min_secs_remaining=secs,
+                        min_ask_vol=ask, obi_reject_thresh=obi,
+                        daily_stop_loss=dsl, stake=args.stake)
+            agg_wins = agg_losses = agg_open = 0
+            agg_pnl  = 0.0
+            worst_dd = 0.0
+            for _, rows in all_db_rows:
+                trades, cap = run_backtest(rows, sp)
+                s = summarize(trades, sp, cap)
+                agg_wins    += s["wins"]
+                agg_losses  += s["losses"]
+                agg_open    += s["open"]
+                agg_pnl     += s["total_pnl"]
+                worst_dd     = max(worst_dd, s["max_drawdown"])
+            resolved = agg_wins + agg_losses
+            wr = (agg_wins / resolved * 100) if resolved else 0.0
+            agg_stats = {
+                "total":        resolved + agg_open,
+                "wins":         agg_wins,
+                "losses":       agg_losses,
+                "open":         agg_open,
+                "win_rate":     wr,
+                "total_pnl":    agg_pnl,
+                "max_drawdown": worst_dd,
+                "ratio":        _ratio(agg_pnl, worst_dd),
+                "capital_final": 0.0,
+            }
+            sweep_results.append((sp, agg_stats))
+
+        print_sweep_table(sweep_results, sort_by=args.sort, show_dsl=True, top_n=args.top)
+        print_recommendations(sweep_results)
+        return
 
     # Print cross-file aggregate when more than one file was replayed.
     if multi and len(file_results) > 1 and not args.sweep:

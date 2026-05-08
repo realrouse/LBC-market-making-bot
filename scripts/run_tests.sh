@@ -31,6 +31,17 @@ echo "Tests  : $PROJECT_DIR/tests/"
 echo ""
 "$PYTHON" -W ignore::ResourceWarning -m unittest discover -s tests/ -p "test_*.py" -v
 
+# ── Backtest multi-DB ─────────────────────────────────────────────
+if ls "$PROJECT_DIR"/data/*.db >/dev/null 2>&1; then
+    echo ""
+    echo "=== Backtest multi-DB (data/*.db) ==="
+    "$PYTHON" scripts/backtest.py --all \
+        || { echo "⚠️  Backtest --all non bloquant — vérifier manuellement"; true; }
+else
+    echo ""
+    echo "ℹ️  Aucun fichier data/*.db — backtest multi-DB ignoré"
+fi
+
 # ── Documentation audit ───────────────────────────────────────────
 if command -v claude &>/dev/null; then
     echo ""

@@ -23,7 +23,7 @@ USER_NAME=$(id -un)
 ACCOUNT_DIR="${TRADINEBOTTE_DIR:-}"
 FEED_ADDR="${TRADINEBOTTE_FEED_ADDR:-tcp://127.0.0.1:5557}"
 INSTALL_DIR="${TRADINEBOTTE_INSTALL_DIR:-$HOME/tradinebotte}"
-INSTALL_DIR="$(eval echo "$INSTALL_DIR")"
+INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
 BOT_DIR="$PROJECT_DIR/bot"
 
 # ── Validations ───────────────────────────────────────────────────────────────
@@ -33,7 +33,7 @@ if [[ -z "$ACCOUNT_DIR" ]]; then
     exit 1
 fi
 
-ACCOUNT_DIR="$(eval echo "$ACCOUNT_DIR")"
+ACCOUNT_DIR="${ACCOUNT_DIR/#\~/$HOME}"
 
 if [[ ! -f "$ACCOUNT_DIR/config.json" ]]; then
     echo "ERROR: config.json not found in $ACCOUNT_DIR" >&2

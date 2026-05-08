@@ -77,19 +77,19 @@ INSTALL_DIR="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
 # ─── Helpers ───────────────────────────────────────────────────────────────────
 run() {
     local idx="$1"; shift
-    /usr/bin/sshpass -p "${PASSWORDS[$idx]}" \
-        ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 -o BatchMode=no \
+    SSHPASS="${PASSWORDS[$idx]}" /usr/bin/sshpass -e \
+        ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o BatchMode=no \
         -p "$PORT" "${USERS[$idx]}@$SERVER" "$@" 2>&1
 }
 
 deploy_code() {
     local idx="$1"
-    /usr/bin/sshpass -p "${PASSWORDS[$idx]}" \
+    SSHPASS="${PASSWORDS[$idx]}" /usr/bin/sshpass -e \
         rsync -az --delete \
         --exclude='.git' --exclude='__pycache__' --exclude='*.pyc' \
         --exclude='.venv' --exclude='venv/' \
         --exclude='config.json' --exclude='live.db' --exclude='*.log' \
-        -e "ssh -p $PORT -o StrictHostKeyChecking=no" \
+        -e "ssh -p $PORT -o StrictHostKeyChecking=accept-new" \
         "$LOCAL_REPO/" "${USERS[$idx]}@$SERVER:$INSTALL_DIR/" 2>&1
 }
 

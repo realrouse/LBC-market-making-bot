@@ -28,7 +28,19 @@ Automated trading bot for [Polymarket](https://polymarket.com) prediction market
 - **mypy type checking** — `mypy bot/ --ignore-missing-imports` reports 0 errors; CI workflow runs on every push and pull request
 - **Integration test script** — `scripts/test_multibot_deploy.sh` automates a full clean-install and end-to-end test on a configurable set of Linux test accounts: cleanup, rsync deploy, venv creation, simultaneous launch of all N bots in `--verbose` mode (stress-tests the race-safe feed auto-start), 30s heartbeat monitoring, log analysis (WebSocket, book update count, error lines), teardown; server, port, users, and passwords are read from `~/.tradinebotte-test.conf` (template: `scripts/test_multibot.conf.example`); `--skip-deploy` reuses an existing install; `--duration N` adjusts the test window; exits 0 on full pass
 - **Continuous security audit** — `pip-audit` runs on every push and weekly to detect CVEs in runtime deps (`aiohttp`, `websockets`, `web3`, `py-clob-client`); Dependabot opens automated PRs when newer versions are available
-- **Async logging + latency tracking** — log writes never block the event loop; each trade emits a `[LATENCY]` line with `signal_ms` (WS message → order decision) and `order_rtt_ms` (CLOB API round-trip); `scripts/latency.py` parses the log and prints min/mean/p50/p90/p99/max for each metric; a `QueueListener` daemon thread drains the log queue to disk in the background; add `--no-log` to suppress the log file entirely (SQLite DB is unaffected) for minimum disk I/O in production; add `--no-snapshots` to skip writing 5-second price snapshots to the DB (trades are still recorded) — reduces write pressure during long sessions; add `--reset-db` to back up `live.db` to a timestamped file and delete it before launch so the bot starts from zero capital and trade history (prompts for confirmation; safe no-op if DB absent)
+- **Async logging + latency tracking** — log writes never block the event loop; each trade emits a `[LATENCY]` line with `signal_ms` (WS message → order decision) and `order_rtt_ms` (CLOB API round-trip); `scripts/latency.py` parses the log and prints min/mean/p50/p90/p99/max for each metric; a `QueueListener` daemon thread drains the log queue to disk in the background; add `--no-log` to suppress the log file entirely (SQLite DB is unaffected) for minimum disk I/O in production; add `--no-snapshots` to skip writing 5-second price snapshots to the DB (trades are still recorded) — reduces write pressure during long sessions; add `--snapshot-interval SECS` to override the snapshot write interval in seconds (default: 5; use 1 for data-collection mode); add `--reset-db` to back up `live.db` to a timestamped file and delete it before launch so the bot starts from zero capital and trade history (prompts for confirmation; safe no-op if DB absent)
+- **Data collection** (first VPS deployment account — simulate mode, 1-second snapshots):
+  - Deploy and start the collector:
+    `bash scripts/start_collector.sh`           # deploy + launch
+    `bash scripts/start_collector.sh --status`  # check if running
+    `bash scripts/start_collector.sh --stop`    # stop
+  - Download weekly database:
+    `bash scripts/collect_db.sh --status`       # remote row counts
+    `bash scripts/collect_db.sh --rotate`       # download + archive + restart
+  - Automate weekly collection (cron):
+    `bash scripts/schedule_collect.sh --install`   # every Sunday 03:00 UTC
+    `bash scripts/schedule_collect.sh --status`    # show cron entry
+    `bash scripts/schedule_collect.sh --run-now`   # run immediately
 
 ## Strategy
 
@@ -171,6 +183,9 @@ python3 scripts/backtest.py --threshold 0.95       # custom threshold
 python3 scripts/backtest.py --detail               # print per-trade table
 python3 scripts/backtest.py --compare              # compare vs actual bot trades
 python3 scripts/backtest.py --sweep                # grid search (135 combinations)
+python3 scripts/backtest.py --sweep-all            # extended grid (405 combos, all DBs)
+python3 scripts/backtest.py --sweep-all --sort pnl # sort sweep by pnl|ratio|wr
+python3 scripts/backtest.py --sweep-all --top 10   # show top-10 unique configs (deduped)
 python3 scripts/backtest.py --db data/s1.db data/s2.db  # explicit files
 python3 scripts/backtest.py --db data/*.db         # shell glob (independent capital per file)
 python3 scripts/backtest.py --all                  # scan data/ + live.db if ≥ 100 snapshots

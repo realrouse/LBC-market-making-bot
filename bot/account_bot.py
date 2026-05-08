@@ -30,8 +30,6 @@ Message types consumed from feed.py:
    "spread": ..., "bid_vol": ..., "ask_vol": ..., "obi": ...}
   {"t": "ping",  "ts": ...}
 """
-# pylint: disable=duplicate-code  # market-expiry purge loop mirrors feed.py by design
-
 import argparse, asyncio, fcntl, logging, os, subprocess, sys, time
 import zmq, zmq.asyncio
 
@@ -51,14 +49,11 @@ def _parse_args() -> argparse.Namespace:
                    help="Enable DEBUG logging — very detailed, for diagnostics only")
     return p.parse_args()
 
-# ─── CONFIGURE INSTALL DIR BEFORE IMPORTING live_bot ─────────────────────────
-# live_bot reads TRADINEBOTTE_DIR at module level (INSTALL_DIR, DB_PATH, etc.)
-# so the env var must be set before the import statement.
 _FEED_ADDR = os.environ.get("TRADINEBOTTE_FEED_ADDR", "tcp://127.0.0.1:5557")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Import live_bot after path setup — this triggers all module-level config loads.
+# live_bot no longer has module-level side effects — safe to import anywhere.
 import live_bot as bot
 
 logger = logging.getLogger("account")
@@ -126,7 +121,8 @@ def _ensure_feed() -> None:
         os.chmod(_FEED_TMP_DIR, 0o1777)
     except PermissionError:
         pass  # another user created it first; trust it is already world-writable
-    lock_file = open(_FEED_LOCK_PATH, "w", encoding="utf-8")  # pylint: disable=consider-using-with
+    _fd = os.open(_FEED_LOCK_PATH, os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+    lock_file = os.fdopen(_fd, "w", encoding="utf-8")  # pylint: disable=consider-using-with
     try:
         fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -140,7 +136,9 @@ def _ensure_feed() -> None:
     try:
         feed_py  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "feed.py")
         log_path = f"{_FEED_TMP_DIR}/feed-{abs(hash(_FEED_ADDR)) % 100000}.log"
-        env      = {**os.environ, "TRADINEBOTTE_FEED_ADDR": _FEED_ADDR}
+        _env_keep = {"PATH", "HOME", "LANG", "VIRTUAL_ENV", "PYTHONPATH", "LC_ALL", "LC_CTYPE"}
+        env = {k: v for k, v in os.environ.items() if k in _env_keep}
+        env["TRADINEBOTTE_FEED_ADDR"] = _FEED_ADDR
         cmd      = [sys.executable, feed_py]
         if VERBOSE:
             cmd.append("--verbose")
@@ -249,41 +247,34 @@ async def _run(state: bot.BotState) -> None:
             elif t == "ping":
                 pass  # keepalive — no action needed
 
-            # Purge expired markets periodically.
-            expired = [
-                tid for tid, ts in list(state.tokens.items())
-                if ts.market_ended and ts.market_id not in state.open_trades
-            ]
-            for tid in expired:
-                ts_obj = state.tokens.pop(tid, None)
-                if ts_obj:
-                    state.market_tokens.pop(ts_obj.market_id, None)
-                    state.signalled.discard(ts_obj.market_id)
+            bot.purge_expired_markets(state)
     finally:
         sock.close(linger=0)
         ctx.term()
 
 
 async def main() -> None:
+    config = bot.make_config()
+
     logger.info("=" * 65)
-    logger.info("  ACCOUNT BOT — dir=%s", bot.INSTALL_DIR)
+    logger.info("  ACCOUNT BOT — dir=%s", config.install_dir)
     logger.info("  Feed : %s", _FEED_ADDR)
     if VERBOSE:
         logger.info("  Mode VERBOSE actif — logs DEBUG complets")
     logger.info("=" * 65)
 
     if VERBOSE:
-        logger.debug("[INIT] TRADINEBOTTE_DIR=%s", os.environ.get("TRADINEBOTTE_DIR", "(non défini)"))
-        logger.debug("[INIT] SIGNAL_THRESHOLD=%.2f", bot.SIGNAL_THRESHOLD)
+        logger.debug("[INIT] TRADINEBOTTE_DIR=%s", config.install_dir)
+        logger.debug("[INIT] SIGNAL_THRESHOLD=%.2f", config.signal_threshold)
         logger.debug("[INIT] STAKE=%.2f WIN=%.2f LOSS=%.2f",
-                     bot.STAKE, bot.WIN_THRESHOLD, bot.LOSS_THRESHOLD)
+                     config.stake, config.win_threshold, config.loss_threshold)
 
     _ensure_feed()
 
     if VERBOSE:
         logger.debug("[INIT] init_db...")
-    conn  = bot.init_db()
-    state = bot.BotState(conn)
+    conn  = bot.init_db(config)
+    state = bot.BotState(conn, config)
     bot.restore_state_from_db(state)
     if VERBOSE:
         logger.debug("[INIT] capital restauré=%.2f trades_ouverts=%d",
