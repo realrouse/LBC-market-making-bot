@@ -8,6 +8,17 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ## [Non publié]
 
+### Sécurité
+- **Purge de l'historique git** via `git filter-repo --replace-text` + `--message-callback` : le nom d'hôte du serveur et les trois mots de passe des comptes de déploiement présents dans d'anciens commits ont été supprimés de tous les blobs et messages de commit ; mots de passe renouvelés
+- **`bot/bot_utils.py` — SHA-1 → bcrypt pour htpasswd** (`_htpasswd_sha1` → `_htpasswd`) : le SHA-1 sans sel (`{SHA}`) remplacé par bcrypt (`$2y$`, natif Apache 2.4+) ; `bcrypt` ajouté à `requirements.txt` ; repli avec avertissement si la bibliothèque est absente ; suite `TestHtpasswd` mise à jour en conséquence
+- **`bot/bot_utils.py` — correction XSS dans la page de statut web** (`html.escape`) : le champ `question` des marchés, fourni par l'API Polymarket externe, était inséré brut dans les attributs et le contenu HTML ; désormais échappé avec `html.escape()` avant toute interpolation
+- **`bot/account_bot.py` — lock file protégé contre les symlinks** (`O_NOFOLLOW`) : `open()` remplacé par `os.open(O_CREAT|O_WRONLY|O_NOFOLLOW, 0o600)` + `os.fdopen()` pour empêcher un attaquant local de placer un symlink au chemin du lock et de faire tronquer un fichier arbitraire par le bot
+- **`bot/account_bot.py` — environnement minimal pour le sous-processus** `feed.py` : le processus enfant n'hérite plus de l'environnement complet du parent (incluant `POLY_PRIVATE_KEY`) ; seuls `PATH`, `HOME`, `LANG`, `VIRTUAL_ENV`, `PYTHONPATH`, `LC_ALL`, `LC_CTYPE` et `TRADINEBOTTE_FEED_ADDR` sont transmis
+- **Scripts shell — suppression de `eval echo`** (injection de commande) : `INSTALL_DIR="$(eval echo "$INSTALL_DIR")"` remplacé par `INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"` dans les 7 occurrences de `start_bot.sh`, `monitor.sh`, `start_account.sh`, `start_feed.sh`, `install_account_service.sh` (×2) et `install_feed_service.sh`
+- **Scripts shell — injection de chemin dans le Python inline corrigée** : `$CONFIG` était interpolé dans une chaîne `-c "..."` entre guillemets ; remplacé par du code entre apostrophes + `sys.argv[1]` dans `start_bot.sh` et `monitor.sh`
+- **Scripts de déploiement — suppression de `sshpass -p`** (mot de passe visible dans `ps aux`) : remplacé par `SSHPASS="$pwd" sshpass -e` dans les trois scripts de déploiement (`test_all_accounts.sh`, `test_multibot_deploy.sh`, `test_standalone_deploy.sh`)
+- **Scripts de déploiement — `StrictHostKeyChecking=no` → `accept-new`** : l'acceptation aveugle des clés SSH remplacée par `accept-new` (confiance au premier contact, rejet si la clé change) dans les 3 scripts de déploiement
+
 ### Correction
 - **`scripts/test_all_accounts.sh` — le parseur de résultat reconnaît désormais `OK (skipped=N)`** : le regex `^OK$` échouait quand unittest produit `OK (skipped=13)` ; changé en `^OK( |$)` pour que les déploiements avec des tests ignorés rapportent le succès correctement
 - **`live_bot.py` — restauration du `import aiohttp, websockets` manquant** : supprimé par erreur lors du refactor BotConfig ; détecté par pylint 4.0 (`E0602 undefined-variable`) ; avertissement `global-statement` dans `_setup_logging` supprimé par directive inline (singleton légitime au niveau processus) ; score 9,44 → **10,00/10**

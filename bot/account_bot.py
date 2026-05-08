@@ -121,7 +121,8 @@ def _ensure_feed() -> None:
         os.chmod(_FEED_TMP_DIR, 0o1777)
     except PermissionError:
         pass  # another user created it first; trust it is already world-writable
-    lock_file = open(_FEED_LOCK_PATH, "w", encoding="utf-8")  # pylint: disable=consider-using-with
+    _fd = os.open(_FEED_LOCK_PATH, os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+    lock_file = os.fdopen(_fd, "w", encoding="utf-8")  # pylint: disable=consider-using-with
     try:
         fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -135,7 +136,9 @@ def _ensure_feed() -> None:
     try:
         feed_py  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "feed.py")
         log_path = f"{_FEED_TMP_DIR}/feed-{abs(hash(_FEED_ADDR)) % 100000}.log"
-        env      = {**os.environ, "TRADINEBOTTE_FEED_ADDR": _FEED_ADDR}
+        _env_keep = {"PATH", "HOME", "LANG", "VIRTUAL_ENV", "PYTHONPATH", "LC_ALL", "LC_CTYPE"}
+        env = {k: v for k, v in os.environ.items() if k in _env_keep}
+        env["TRADINEBOTTE_FEED_ADDR"] = _FEED_ADDR
         cmd      = [sys.executable, feed_py]
         if VERBOSE:
             cmd.append("--verbose")

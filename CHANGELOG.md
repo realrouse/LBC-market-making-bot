@@ -8,6 +8,17 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Security
+- **Git history purged of infrastructure credentials** via `git filter-repo --replace-text` + `--message-callback`: server hostname and three deployment account passwords that appeared in early commits have been removed from all blobs and commit messages; passwords rotated
+- **`bot/bot_utils.py` — SHA-1 → bcrypt for htpasswd** (`_htpasswd_sha1` → `_htpasswd`): unsalted SHA-1 (`{SHA}`) replaced by bcrypt (`$2y$`, Apache 2.4+ native); `bcrypt` added to `requirements.txt`; soft fallback with warning when library absent; `TestHtpasswd` suite updated accordingly
+- **`bot/bot_utils.py` — XSS fix in web status page** (`html.escape`): market `question` field from external Polymarket API was inserted raw into HTML attributes and cell content; now escaped with `html.escape()` before any interpolation
+- **`bot/account_bot.py` — symlink-safe lock file** (`O_NOFOLLOW`): replaced `open()` with `os.open(O_CREAT|O_WRONLY|O_NOFOLLOW, 0o600)` + `os.fdopen()` to prevent a local attacker from pre-placing a symlink at the lock path and causing the bot to truncate an arbitrary file
+- **`bot/account_bot.py` — minimal subprocess env** for `feed.py`: child process no longer inherits the full parent environment (including `POLY_PRIVATE_KEY`); only `PATH`, `HOME`, `LANG`, `VIRTUAL_ENV`, `PYTHONPATH`, `LC_ALL`, `LC_CTYPE` and `TRADINEBOTTE_FEED_ADDR` are passed
+- **Shell scripts — `eval echo` removed** (command injection): `INSTALL_DIR="$(eval echo "$INSTALL_DIR")"` replaced with safe `INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"` in all 7 occurrences across `start_bot.sh`, `monitor.sh`, `start_account.sh`, `start_feed.sh`, `install_account_service.sh` (×2) and `install_feed_service.sh`
+- **Shell scripts — inline Python path injection fixed**: `$CONFIG` was interpolated into a double-quoted `-c "..."` string; replaced with single-quoted code + `sys.argv[1]` in `start_bot.sh` and `monitor.sh`
+- **Deploy scripts — `sshpass -p` removed** (password visible in `ps aux`): replaced with `SSHPASS="$pwd" sshpass -e` in all three deploy scripts (`test_all_accounts.sh`, `test_multibot_deploy.sh`, `test_standalone_deploy.sh`)
+- **Deploy scripts — `StrictHostKeyChecking=no` → `accept-new`**: blind host-key acceptance replaced with `accept-new` (trusts on first connect, rejects changed keys) in all 3 deploy scripts
+
 ### Fixed
 - **`scripts/test_all_accounts.sh` — result parser now matches `OK (skipped=N)`**: regex `^OK$` failed when unittest emits `OK (skipped=13)`; changed to `^OK( |$)` so deployments with skipped tests report success correctly
 - **`live_bot.py` — restore missing `import aiohttp, websockets`** dropped during the BotConfig refactor; pylint 4.0 detected them as `E0602 undefined-variable`; `global-statement` warning on `_setup_logging` suppressed with inline disable (legitimate process-level singleton); score 9.44 → **10.00/10**

@@ -896,22 +896,25 @@ class TestSignalledRestore(unittest.TestCase):
             self.assertIn(f"m{i}", fresh.signalled)
 
 
-# ─── _htpasswd_sha1 ──────────────────────────────────────────────────────────
+# ─── _htpasswd ───────────────────────────────────────────────────────────────
 
 class TestHtpasswd(unittest.TestCase):
 
-    def test_prefix(self):
-        self.assertTrue(bot_utils._htpasswd_sha1("anything").startswith("{SHA}"))
-
-    def test_known_value(self):
-        import base64, hashlib
-        expected = "{SHA}" + base64.b64encode(
-            hashlib.sha1(b"password").digest()
-        ).decode()
-        self.assertEqual(bot_utils._htpasswd_sha1("password"), expected)
+    def test_prefix_bcrypt(self):
+        if bot_utils._BCRYPT_AVAILABLE:
+            self.assertTrue(bot_utils._htpasswd("anything").startswith("$2"))
+        else:
+            self.assertTrue(bot_utils._htpasswd("anything").startswith("{SHA}"))
 
     def test_different_passwords_differ(self):
-        self.assertNotEqual(bot_utils._htpasswd_sha1("abc"), bot_utils._htpasswd_sha1("xyz"))
+        self.assertNotEqual(bot_utils._htpasswd("abc"), bot_utils._htpasswd("xyz"))
+
+    def test_bcrypt_verifies(self):
+        if not bot_utils._BCRYPT_AVAILABLE:
+            self.skipTest("bcrypt not installed")
+        import bcrypt
+        h = bot_utils._htpasswd("secret")
+        self.assertTrue(bcrypt.checkpw(b"secret", h.encode()))
 
 
 # ─── generate_status_html ─────────────────────────────────────────────────────

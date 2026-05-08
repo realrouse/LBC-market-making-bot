@@ -17,7 +17,7 @@
 # ═══════════════════════════════════════════════════════════════════
 
 INSTALL_DIR="${TRADINEBOTTE_DIR:-$HOME/tradinebotte}"
-INSTALL_DIR="$(eval echo "$INSTALL_DIR")"
+INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
 VENV="$INSTALL_DIR/venv"
 CONFIG="$INSTALL_DIR/config.json"
 BOT_LOG="$INSTALL_DIR/account.log"

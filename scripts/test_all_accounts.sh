@@ -83,16 +83,16 @@ section() {
 
 ssh_run() {
     local user="$1" pwd="$2"; shift 2
-    sshpass -p "$pwd" ssh -p "$PORT" -o StrictHostKeyChecking=no \
+    SSHPASS="$pwd" sshpass -e ssh -p "$PORT" -o StrictHostKeyChecking=accept-new \
         -o ConnectTimeout=10 "${user}@${HOST}" "$@"
 }
 
 rsync_to() {
     local user="$1" pwd="$2"
-    sshpass -p "$pwd" rsync -a \
+    SSHPASS="$pwd" sshpass -e rsync -a \
         --exclude='*.db' --exclude='__pycache__' \
         --exclude='.git' --exclude='venv' \
-        -e "ssh -p $PORT -o StrictHostKeyChecking=no" \
+        -e "ssh -p $PORT -o StrictHostKeyChecking=accept-new" \
         "$REPO_DIR/" "${user}@${HOST}:/home/${user}/tradinebotte/"
 }
 
@@ -104,13 +104,13 @@ run_account() {
     # and we must always reach the result-write at the end.
     set +e
 
-    _ssh() { sshpass -p "$pwd" ssh -p "$PORT" -o StrictHostKeyChecking=no \
+    _ssh() { SSHPASS="$pwd" sshpass -e ssh -p "$PORT" -o StrictHostKeyChecking=accept-new \
                  -o ConnectTimeout=15 "${user}@${HOST}" "$@"; }
     _rsync() {
-        sshpass -p "$pwd" rsync -a \
+        SSHPASS="$pwd" sshpass -e rsync -a \
             --exclude='*.db' --exclude='__pycache__' \
             --exclude='.git' --exclude='venv' \
-            -e "ssh -p $PORT -o StrictHostKeyChecking=no" \
+            -e "ssh -p $PORT -o StrictHostKeyChecking=accept-new" \
             "$REPO_DIR/" "${user}@${HOST}:/home/${user}/tradinebotte/"
     }
 

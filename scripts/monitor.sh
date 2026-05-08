@@ -10,7 +10,7 @@
 # ═══════════════════════════════════════════════════════════════════
 
 INSTALL_DIR="${TRADINEBOTTE_DIR:-$HOME/tradinebotte}"
-INSTALL_DIR="$(eval echo "$INSTALL_DIR")"
+INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
 CONFIG="$INSTALL_DIR/config.json"
 
 # ── Language ──────────────────────────────────────────────────────
@@ -18,13 +18,13 @@ CONFIG="$INSTALL_DIR/config.json"
 # Defaults to EN if config.json is absent.
 LANG="EN"
 if [ -f "$CONFIG" ]; then
-    LANG=$(python3 -c "
-import json
+    LANG=$(python3 -c '
+import json, sys
 try:
-    print(json.load(open('$CONFIG')).get('lang', 'EN'))
+    print(json.load(open(sys.argv[1])).get("lang", "EN"))
 except Exception:
-    print('EN')
-" 2>/dev/null || echo "EN")
+    print("EN")
+' "$CONFIG" 2>/dev/null || echo "EN")
 fi
 
 # _t "EN text" "FR text" — print the string for the current language (no trailing newline)
