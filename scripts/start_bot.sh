@@ -9,13 +9,21 @@
 #    2. Valeur par défaut : ~/tradinebotte (aucun accès root requis)
 #
 #  Options :
-#    --reset-db   sauvegarde live.db puis le supprime avant de lancer
-#                 (le bot repart à zéro : capital, trades, historique)
+#    --reset-db          sauvegarde live.db puis le supprime avant de lancer
+#                        (le bot repart à zéro : capital, trades, historique)
+#    --simulate          mode simulation — I/O vers ~/tradinebotte-sim
+#    --snapshot-interval N  intervalle snapshots en secondes (défaut : 5)
+#    Tout autre flag est transmis tel quel à live_bot.py.
 # ═══════════════════════════════════════════════════════════════════
 
 RESET_DB=0
+BOT_EXTRA_ARGS=()
 for _arg in "$@"; do
-    [ "$_arg" = "--reset-db" ] && RESET_DB=1
+    if [ "$_arg" = "--reset-db" ]; then
+        RESET_DB=1
+    else
+        BOT_EXTRA_ARGS+=("$_arg")
+    fi
 done
 
 INSTALL_DIR="${TRADINEBOTTE_DIR:-$HOME/tradinebotte}"
@@ -87,7 +95,7 @@ DISPLAY_LOG="${LOG/$HOME/\~}"
 DISPLAY_DIR="${INSTALL_DIR/$HOME/\~}"
 echo "$(_t "Starting bot from" "Lancement du bot depuis") $DISPLAY_DIR..."
 export TRADINEBOTTE_DIR="$INSTALL_DIR"
-nohup "$PYTHON" "$INSTALL_DIR/live_bot.py" >> "$LOG" 2>&1 &
+nohup "$PYTHON" "$INSTALL_DIR/live_bot.py" "${BOT_EXTRA_ARGS[@]}" >> "$LOG" 2>&1 &
 echo "PID: $!"
 sleep 3
 

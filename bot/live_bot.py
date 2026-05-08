@@ -239,11 +239,15 @@ def _parse_args() -> argparse.Namespace:
                    help="Skip log file (NullHandler); SQLite DB unaffected")
     p.add_argument("--no-snapshots",  action="store_true",
                    help="Skip snapshot writes for lower disk I/O")
+    p.add_argument("--snapshot-interval", type=int, default=None, metavar="SECS",
+                   help=f"Snapshot write interval in seconds (default: {SNAPSHOT_INTERVAL}). "
+                        "Use 1 for data-collection mode.")
     return p.parse_args()
 
 
 def make_config(simulate: bool = False, no_log: bool = False,
-                no_snapshots: bool = False) -> "BotConfig":
+                no_snapshots: bool = False,
+                snapshot_interval: Optional[int] = None) -> "BotConfig":
     """
     Build a BotConfig by reading env vars, config.json, and the strategy JSON.
 
@@ -315,6 +319,7 @@ def make_config(simulate: bool = False, no_log: bool = False,
         simulate=simulate,
         no_log=no_log,
         no_snapshots=no_snapshots,
+        snapshot_interval=snapshot_interval if snapshot_interval is not None else SNAPSHOT_INTERVAL,
         install_dir=install_dir,
         db_path=db_path,
         log_path=log_path,
@@ -1064,6 +1069,7 @@ async def main() -> None:
         simulate=args.simulate,
         no_log=args.no_log,
         no_snapshots=args.no_snapshots,
+        snapshot_interval=args.snapshot_interval,
     )
     _setup_logging(config)
 
