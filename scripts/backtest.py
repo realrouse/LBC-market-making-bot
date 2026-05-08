@@ -917,12 +917,34 @@ def main():
                     m_trades, m_capital = run_backtest(rows, matched_params)
                     matched_stats = summarize(m_trades, matched_params, m_capital)
 
+                # When the bot ran with a different stake/capital than the strategy
+                # defaults, re-run the user-params backtest with the same stake and
+                # capital_start so all three columns share the same economic base.
+                # Signal parameters (threshold, min_secs, obi) are kept as-is.
+                user_params_cmp = p
+                user_stats_cmp  = stats
+                if matched_params is not None and (
+                    abs(matched_params.stake         - p.stake)         > 1 or
+                    abs(matched_params.capital_start - p.capital_start) > 1
+                ):
+                    user_params_cmp = Params(
+                        signal_threshold   = p.signal_threshold,
+                        min_secs_remaining = p.min_secs_remaining,
+                        min_ask_vol        = p.min_ask_vol,
+                        obi_reject_thresh  = p.obi_reject_thresh,
+                        stake              = matched_params.stake,
+                        capital_start      = matched_params.capital_start,
+                        daily_stop_loss    = p.daily_stop_loss,
+                    )
+                    u_trades, u_capital = run_backtest(rows, user_params_cmp)
+                    user_stats_cmp = summarize(u_trades, user_params_cmp, u_capital)
+
                 label = f"BACKTEST — {os.path.basename(db_path)}" if multi else "BACKTEST"
                 print(_stat_block(label, p, stats, n_snapshots))
                 print_comparison(
                     db_name        = os.path.basename(db_path),
-                    user_params    = p,
-                    user_stats     = stats,
+                    user_params    = user_params_cmp,
+                    user_stats     = user_stats_cmp,
                     matched_params = matched_params,
                     matched_stats  = matched_stats,
                     actual         = actual,
