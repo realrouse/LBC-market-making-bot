@@ -17,9 +17,10 @@ interpréter les résultats pour prendre des décisions éclairées sur la strat
 5. [Sortie standard expliquée](#5-sortie-standard-expliquée)
 6. [Recherche en grille — `--sweep` et `--sweep-all`](#6-recherche-en-grille----sweep-et---sweep-all)
 7. [Comparaison trois colonnes — `--compare`](#7-comparaison-trois-colonnes----compare)
-8. [Workflow complet — `strategy_compare.sh`](#8-workflow-complet----strategy_comparesh)
-9. [Fichiers de stratégie JSON](#9-fichiers-de-stratégie-json)
-10. [Interpréter les résultats et prendre des décisions](#10-interpréter-les-résultats-et-prendre-des-décisions)
+8. [Le problème de modélisation STOP/GHOST](#8-le-problème-de-modélisation-stopghost)
+9. [Workflow complet — `strategy_compare.sh`](#9-workflow-complet----strategy_comparesh)
+10. [Fichiers de stratégie JSON](#10-fichiers-de-stratégie-json)
+11. [Interpréter les résultats et prendre des décisions](#11-interpréter-les-résultats-et-prendre-des-décisions)
 
 ---
 
@@ -421,7 +422,116 @@ Ces divergences expliquent pourquoi la colonne BACKTEST simple n'est pas directe
 
 ---
 
-## 8. Workflow complet — `strategy_compare.sh`
+## 8. Le problème de modélisation STOP/GHOST
+
+Cette section explique la différence systématique la plus importante entre les résultats
+de backtest et les résultats réels du bot, et comment en tenir compte lors de l'interprétation
+de la sortie `--compare`.
+
+### Ce que signifie STOP
+
+Un résultat **STOP** est enregistré quand le **stop-loss journalier se déclenche alors qu'un
+trade est ouvert**. Le bot live force la clôture de la position immédiatement au bid courant du
+marché — qui est typiquement entre 0,01 et 0,99, pas à un seuil propre WIN ou LOSS.
+
+```
+paper3.db — 24 trades STOP :
+  Bid de sortie moyen : 0,356  (le marché était à ~35 % de probabilité à la sortie)
+  PnL moyen          : −79 $   (sur une mise moyenne de 127 $)
+  Perte moyenne      : −62 % de la mise
+  Impact PnL total   : −1 895 $
+```
+
+Mécaniquement : si mise = 150 $ et ask d'entrée ≈ 0,953, le bot a acheté ≈ 157 tokens.
+Sortie à bid = 0,356 rapporte 157 × 0,356 ≈ 56 $. Perte nette = 56 $ − 150 $ = **−94 $**
+(proche de la moyenne −79 $, la variation reflétant les différents bids de sortie).
+
+Le stop-loss journalier ne garantit pas une perte fixe — il sort au bid du marché au
+moment du déclenchement. Un stop à bid=0,1 perd 90 % de la mise ; un stop à bid=0,5
+perd 50 %.
+
+### Ce que signifie GHOST
+
+Un résultat **GHOST** est enregistré quand un trade a été ouvert mais **aucune résolution
+n'a jamais été détectée** par le bot. Le marché a expiré (ou a été résolu on-chain) sans
+que le bot ne capte l'événement WIN ou LOSS — typiquement à cause d'une déconnexion
+WebSocket, d'un timeout API, ou d'un marché qui s'est résolu entre deux reconnexions.
+
+```
+paper3.db — 19 trades GHOST :
+  pnl_net          : 0,00 $ pour les 19 trades
+  resolution_bid   : 0,000 (aucun prix de sortie enregistré)
+  mise             : 150 $ chacun
+```
+
+`pnl_net = 0,0` ne signifie **pas** que la mise a été récupérée. Cela signifie que le bot
+a écrit zéro car il ne pouvait pas déterminer l'issue. L'impact économique réel dépend
+de ce qui s'est passé on-chain : si le marché a résolu YES la position était profitable ;
+si NO la mise entière a été perdue. Sans réconciliation oracle, l'issue est inconnue et
+traitée de façon conservatrice comme un PnL nul.
+
+### Pourquoi le backtest ne peut modéliser ni l'un ni l'autre
+
+| Issue | Ce que fait le backtest à la place | Pourquoi ça diffère |
+|-------|----------------------------------|---------------------|
+| **STOP** | Bloque les nouvelles entrées quand `daily_pnl < −DSL`. Les trades ouverts existants continuent jusqu'à atteindre bid ≥ 0,99 (WIN) ou bid ≤ 0,01 (LOSS). | Le backtest ne force jamais la sortie à un prix intermédiaire. Un trade qui aurait été STOPpé en live à bid=0,35 est finalement simulé en WIN ou LOSS — souvent WIN, car la plupart des marchés résolvent YES. Cela rend le backtest **systématiquement optimiste** pour les sessions avec des stops. |
+| **GHOST** | Pas de concept de résolution manquante. Si les snapshots se terminent avant la résolution, le trade est enregistré comme `OPEN`. | La table `snapshots` contient chaque message reçu par le bot. Un marché qui s'est résolu pendant une déconnexion n'a laissé aucun snapshot — donc le backtest n'entre jamais ce trade, ou l'entre et le laisse OPEN. Les mises déployées dans les trades GHOST sont invisibles pour le backtest. |
+
+### Quantifier l'écart (exemple paper3.db)
+
+```
+PnL% backtest aligné   : +168,2 %  (mise=150 $, capital=1 000 $)
+PnL% bot réel          :  +31,4 %
+Écart                  : −136,8 pp
+
+Contributeurs connus :
+  STOP  : 24 trades × moy. −79 $  = −1 895 $  (backtest les comptait en WIN/LOSS, surtout WIN)
+  GHOST : 19 trades × inconnu     =      0 $  (mise déployée, issue inconnue)
+  Pertes supplémentaires : 78 réelles vs 28 backtest aligné = 50 LOSS de plus × −137 $ moy. = −6 850 $
+```
+
+Les 50 pertes supplémentaires (au-delà de ce que prédit le backtest aligné) expliquent
+la majorité de l'écart. Elles proviennent de conditions de marché réelles non capturées
+dans les snapshots — des prix qui ont franchi le seuil LOSS pendant une période où le bot
+était déconnecté et donc n'a jamais snapshotté. Les pertes STOP ajoutent −1 895 $ que
+le backtest traite comme des victoires.
+
+### Comment lire l'écart dans la sortie `--compare`
+
+Quand le tableau de comparaison affiche :
+
+```
+  Stops (daily SL)   : —     —     24
+  Ghosts (no exit)   : —     —     19
+  PnL%               : +267 %  +168 %  +31 %
+```
+
+Les deux colonnes de backtest sont optimistes par construction pour cette session.
+L'interprétation correcte est :
+
+1. Les chiffres **+267 % / +168 %** représentent le plafond — ce que la stratégie
+   *atteindrait* si tous les trades se résolvaient proprement (pas de stops forcés, pas
+   de sorties manquantes).
+2. Le **+31,4 %** bot réel est le plancher — la performance réelle incluant tous les frictions.
+3. L'écart résiduel après soustraction de l'impact STOP/GHOST s'explique par des pertes
+   réelles supplémentaires, le slippage d'exécution, et les lacunes de couverture des snapshots.
+
+### Ce que cela implique pour les décisions de stratégie
+
+- Ne **pas** utiliser directement le PnL% du backtest aligné comme prédiction de la
+  performance live sur des sessions avec beaucoup de trades STOP ou GHOST.
+- Un ratio `(PnL% bot réel) / (PnL% backtest aligné)` bien inférieur à 1,0 est attendu et
+  **normal** quand les comptages STOP+GHOST sont significatifs par rapport au total des trades.
+- Le sweep / grid search reste valide pour classer les configurations les unes par rapport
+  aux autres — l'écart STOP/GHOST affecte toutes les configurations également (il dépend
+  des conditions de la session, pas des paramètres de stratégie).
+- Pour réduire l'écart : abaisser le stop-loss journalier par rapport à la mise pour que
+  moins d'événements STOP se produisent, ou accepter que la performance live sera
+  structurellement inférieure au backtest de cette marge.
+
+---
+
+## 9. Workflow complet — `strategy_compare.sh`
 
 Le script shell `scripts/strategy_compare.sh` automatise le workflow d'optimisation complet :
 
@@ -452,7 +562,7 @@ La sortie est sauvegardée dans `reports/strategy_compare_AAAAMMJJ_HHMMSS.txt` e
 
 ---
 
-## 9. Fichiers de stratégie JSON
+## 10. Fichiers de stratégie JSON
 
 Les paramètres de stratégie sont stockés dans `strategies/` :
 
@@ -482,7 +592,7 @@ bash scripts/start_bot.sh   # redémarre et recharge la stratégie
 
 ---
 
-## 10. Interpréter les résultats et prendre des décisions
+## 11. Interpréter les résultats et prendre des décisions
 
 ### Mon résultat de backtest est-il bon ?
 

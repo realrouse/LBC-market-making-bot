@@ -17,9 +17,10 @@ how to interpret the results to make informed strategy decisions.
 5. [Standard output explained](#5-standard-output-explained)
 6. [Grid search — `--sweep` and `--sweep-all`](#6-grid-search----sweep-and---sweep-all)
 7. [Three-way comparison — `--compare`](#7-three-way-comparison----compare)
-8. [Full workflow — `strategy_compare.sh`](#8-full-workflow----strategy_comparesh)
-9. [Strategy JSON files](#9-strategy-json-files)
-10. [Interpreting results and making decisions](#10-interpreting-results-and-making-decisions)
+8. [The STOP/GHOST modelling gap](#8-the-stopghost-modelling-gap)
+9. [Full workflow — `strategy_compare.sh`](#9-full-workflow----strategy_comparesh)
+10. [Strategy JSON files](#10-strategy-json-files)
+11. [Interpreting results and making decisions](#11-interpreting-results-and-making-decisions)
 
 ---
 
@@ -421,7 +422,113 @@ These divergences explain why the plain BACKTEST column is not directly comparab
 
 ---
 
-## 8. Full workflow — `strategy_compare.sh`
+## 8. The STOP/GHOST modelling gap
+
+This section explains the most important systematic difference between backtest results
+and live bot results, and how to account for it when interpreting `--compare` output.
+
+### What STOP means
+
+A **STOP** outcome is recorded when the **daily stop-loss fires while a trade is open**.
+The live bot force-closes the position immediately at the current market bid — which is
+typically somewhere between 0.01 and 0.99, not at a clean WIN or LOSS threshold.
+
+```
+paper3.db — 24 STOP trades:
+  Average exit bid : 0.356  (i.e. the market was at ~35% probability at exit)
+  Average PnL      : −$79   (on average stake $127)
+  Average loss     : −62% of stake
+  Total PnL impact : −$1,895
+```
+
+Mechanically: if stake = $150 and entry ask ≈ $0.953, the bot bought ≈ 157 tokens.
+Exiting at bid = 0.356 returns 157 × 0.356 ≈ $56. Net loss = $56 − $150 = **−$94**
+(close to the −$79 average, which reflects variation in exit bid).
+
+The daily stop-loss does not guarantee a fixed loss — it exits at whatever bid the
+market is at when the trigger fires. A stop at bid=0.1 loses 90% of stake; a stop at
+bid=0.5 loses 50%.
+
+### What GHOST means
+
+A **GHOST** outcome is recorded when a trade was opened but **no resolution was ever
+detected** by the bot. The market expired (or was resolved on-chain) without the bot
+capturing the WIN or LOSS event — typically due to a WebSocket disconnection, an API
+timeout, or a market that resolved between reconnections.
+
+```
+paper3.db — 19 GHOST trades:
+  pnl_net         : $0.00 for all 19 trades
+  resolution_bid  : 0.000 (no exit price recorded)
+  stake           : $150 each
+```
+
+`pnl_net = 0.0` does **not** mean the stake was recovered. It means the bot wrote
+zero because it could not determine the outcome. The actual economic impact depends
+on what happened on-chain: if the market resolved YES the position was profitable;
+if it resolved NO the full stake was lost. Without oracle reconciliation, the outcome
+is unknown and conservatively treated as a zero PnL placeholder.
+
+### Why the backtest cannot model either outcome
+
+| Outcome | What backtest does instead | Why it differs |
+|---------|--------------------------|----------------|
+| **STOP** | Blocks new entries once `daily_pnl < −DSL`. Existing open trades continue until they reach bid ≥ 0.99 (WIN) or bid ≤ 0.01 (LOSS). | The backtest never force-exits at an intermediate price. A trade that would have been STOPped in live at bid=0.35 is eventually simulated as a WIN or LOSS — usually WIN, since most markets resolve YES. This makes the backtest **systematically optimistic** for sessions where stops fire. |
+| **GHOST** | No concept of a missing resolution. If snapshots end before resolution, the trade is recorded as `OPEN`. | The `snapshots` table contains every message the bot received. A market that resolved during a disconnection left no snapshot — so the backtest never entered that trade, or entered it and left it as OPEN. The stakes deployed in GHOST trades are invisible to the backtest. |
+
+### Quantifying the gap (paper3.db example)
+
+```
+Aligned backtest PnL%  : +168.2%  (stake=$150, capital=$1000)
+Bot réel PnL%          :  +31.4%
+Gap                    : −136.8 pp
+
+Known contributors:
+  STOP  : 24 trades × avg −$79  = −$1,895  (backtest counted these as WIN/LOSS, mostly WIN)
+  GHOST : 19 trades × unknown   =     $0   (stake deployed, outcome unknown)
+  Extra losses: 78 real vs 28 aligned backtest = 50 additional LOSSes × −$137 avg = −$6,850
+```
+
+The extra losses (50 more than the aligned backtest predicts) account for the majority
+of the gap. These come from real market conditions not captured in snapshots — prices
+that triggered the LOSS threshold during a period the bot was disconnected and therefore
+never snapshotted. The STOP losses add a further −$1,895 that the backtest treats as wins.
+
+### How to read the gap in `--compare` output
+
+When the comparison table shows:
+
+```
+  Stops (daily SL)   : —     —     24
+  Ghosts (no exit)   : —     —     19
+  PnL%               : +267%  +168%  +31%
+```
+
+The two backtest columns are optimistic by construction for this session. The correct
+interpretation is:
+
+1. The **+267% / +168%** figures represent the ceiling — what the strategy *would* achieve
+   if all trades resolved cleanly (no forced stops, no missing exits).
+2. The **+31.4%** bot réel figure is the floor — actual performance including all friction.
+3. The remaining gap after subtracting STOP/GHOST impact is explained by extra real losses,
+   execution slippage, and snapshot coverage gaps.
+
+### What this means for strategy decisions
+
+- Do **not** use the aligned backtest PnL% directly as a prediction of live performance
+  on sessions with many STOP or GHOST trades.
+- A ratio of `(bot réel PnL%) / (aligned backtest PnL%)` far below 1.0 is expected and
+  **normal** when STOP+GHOST counts are significant relative to total trades.
+- The sweep / grid search is still valid for ranking configurations against each other —
+  the STOP/GHOST gap affects all configurations equally (it depends on session conditions,
+  not strategy parameters).
+- To reduce the gap: lower the daily stop-loss relative to stake so fewer STOP events
+  occur, or accept that live performance will structurally trail backtest by this margin.
+
+---
+
+## 9. Full workflow — `strategy_compare.sh`
+
 
 The shell script `scripts/strategy_compare.sh` automates the full optimisation workflow:
 
@@ -452,7 +559,7 @@ Output is saved to `reports/strategy_compare_YYYYMMDD_HHMMSS.txt` and printed to
 
 ---
 
-## 9. Strategy JSON files
+## 10. Strategy JSON files
 
 Strategy parameters are stored in `strategies/`:
 
@@ -482,7 +589,7 @@ bash scripts/start_bot.sh   # restarts and reloads strategy
 
 ---
 
-## 10. Interpreting results and making decisions
+## 11. Interpreting results and making decisions
 
 ### Is my backtest result good?
 
