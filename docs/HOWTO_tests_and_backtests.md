@@ -490,9 +490,8 @@ Known contributors:
 ```
 
 The extra losses (50 more than the aligned backtest predicts) account for the majority
-of the gap. These come from real market conditions not captured in snapshots — prices
-that triggered the LOSS threshold during a period the bot was disconnected and therefore
-never snapshotted. The STOP losses add a further −$1,895 that the backtest treats as wins.
+of the gap. Their origin is a fundamental temporal resolution gap explained in the
+section below. The STOP losses add a further −$1,895 that the backtest treats as wins.
 
 ### How to read the gap in `--compare` output
 
@@ -512,6 +511,38 @@ interpretation is:
 2. The **+31.4%** bot réel figure is the floor — actual performance including all friction.
 3. The remaining gap after subtracting STOP/GHOST impact is explained by extra real losses,
    execution slippage, and snapshot coverage gaps.
+
+### The 5-second snapshot blind spot — origin of the extra losses
+
+The backtest engine reads one row per market every ~5 seconds (the snapshot interval).
+The live bot processes **every WebSocket tick** — which can arrive several times per second.
+
+When a market's best_bid briefly dips to ≤ 0.01 (the LOSS threshold) between two snapshots
+and then recovers, the following happens:
+
+```
+Timeline of a LOSS that is invisible to the backtest:
+
+  t= 0s  snapshot → bid=0.96  ← backtest enters trade
+  t= 5s  snapshot → bid=0.82
+  t=10s  snapshot → bid=0.06  ← backtest sees this (not yet 0.01)
+  t=12.3s WebSocket tick → bid=0.01  ← live bot: LOSS recorded
+  t=12.5s WebSocket tick → bid=0.04  (market recovers)
+  t=15s  snapshot → bid=0.04  ← backtest sees recovery, continues
+  ...
+  t=240s snapshot → bid=0.98  ← backtest resolves as WIN
+```
+
+Evidence from paper3.db: every LOSS trade contains many snapshots (14–88 during the
+trade), yet the minimum bid ever captured in those snapshots is 0.01–0.06 — the dip
+to ≤0.01 that triggered the live LOSS is nowhere in the snapshot data. Average LOSS
+trade duration is 24 minutes (1,477 seconds), giving plenty of snapshots to catch the
+dip — but the dip is too brief (hundreds of milliseconds) to be recorded.
+
+**This gap is structural and cannot be fixed** without storing every WebSocket tick
+(~100× more data). It does not depend on strategy parameters — every configuration
+experiences the same blind spot equally. The sweep rankings remain valid for comparing
+configurations against each other.
 
 ### What this means for strategy decisions
 

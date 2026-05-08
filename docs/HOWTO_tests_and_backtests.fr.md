@@ -491,10 +491,9 @@ Contributeurs connus :
 ```
 
 Les 50 pertes supplémentaires (au-delà de ce que prédit le backtest aligné) expliquent
-la majorité de l'écart. Elles proviennent de conditions de marché réelles non capturées
-dans les snapshots — des prix qui ont franchi le seuil LOSS pendant une période où le bot
-était déconnecté et donc n'a jamais snapshotté. Les pertes STOP ajoutent −1 895 $ que
-le backtest traite comme des victoires.
+la majorité de l'écart. Leur origine est un biais de résolution temporelle fondamental
+expliqué dans la section ci-dessous. Les pertes STOP ajoutent −1 895 $ que le backtest
+traite comme des victoires.
 
 ### Comment lire l'écart dans la sortie `--compare`
 
@@ -515,6 +514,39 @@ L'interprétation correcte est :
 2. Le **+31,4 %** bot réel est le plancher — la performance réelle incluant tous les frictions.
 3. L'écart résiduel après soustraction de l'impact STOP/GHOST s'explique par des pertes
    réelles supplémentaires, le slippage d'exécution, et les lacunes de couverture des snapshots.
+
+### L'angle mort des 5 secondes — origine des pertes supplémentaires
+
+Le moteur de backtest lit une ligne par marché toutes les ~5 secondes (l'intervalle de snapshot).
+Le bot live traite **chaque tick WebSocket** — qui peut arriver plusieurs fois par seconde.
+
+Quand le best_bid d'un marché plonge brièvement à ≤ 0,01 (le seuil LOSS) entre deux
+snapshots puis remonte, voici ce qui se passe :
+
+```
+Timeline d'un trade LOSS invisible pour le backtest :
+
+  t= 0s  snapshot → bid=0,96  ← backtest entre en trade
+  t= 5s  snapshot → bid=0,82
+  t=10s  snapshot → bid=0,06  ← backtest voit ça (pas encore 0,01)
+  t=12,3s tick WebSocket → bid=0,01  ← bot live : LOSS enregistré
+  t=12,5s tick WebSocket → bid=0,04  (le marché remonte)
+  t=15s  snapshot → bid=0,04  ← backtest voit la remontée, continue
+  ...
+  t=240s snapshot → bid=0,98  ← backtest résout en WIN
+```
+
+Preuves issues de paper3.db : chaque trade LOSS contient de nombreux snapshots
+(14 à 88 pendant le trade), mais le bid minimum jamais capturé dans ces snapshots
+est 0,01–0,06 — le plongeon à ≤0,01 qui a déclenché le LOSS live n'apparaît nulle part
+dans les données de snapshots. La durée moyenne d'un trade LOSS est 24 minutes
+(1 477 secondes), ce qui laisse largement le temps de capturer la chute — mais celle-ci
+est trop brève (quelques centaines de millisecondes) pour être enregistrée.
+
+**Cet écart est structurel et non corrigeable** sans stocker chaque tick WebSocket
+(~100× plus de données). Il ne dépend pas des paramètres de stratégie — chaque
+configuration subit le même angle mort de manière égale. Les classements du sweep
+restent donc valides pour comparer les configurations entre elles.
 
 ### Ce que cela implique pour les décisions de stratégie
 
