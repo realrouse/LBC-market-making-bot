@@ -48,11 +48,18 @@ Read the generated report file. Focus on:
 
 ### Step 3 — Interpret results
 
-Answer these questions:
+For the **sweep table** (Section 1), check:
 - Does the current active strategy (`strategies/polymarket_BTC5M_v2.json`) match the top-ranked config?
 - What is the PnL/MaxDD ratio of the current config vs the best found?
-- Are there configurations with meaningfully better ratio (>0.3 improvement) AND more trades?
-- Does any DB show large divergence between aligned backtest and actual bot results?
+- Are there configurations with meaningfully better ratio (>0.3 improvement) AND trades within ±30%?
+- PnL% values: sweep uses `capital_start=$100` and `stake=$10`, so PnL% = PnL per $100 invested.
+
+For the **per-DB comparison** (Section 2), check each DB for:
+- **Stake divergence**: `⚠ stake: backtest=$10, actual=$150 (×15)` — bot ran with higher stake; backtest PnL must be scaled accordingly.
+- **Capital start divergence**: if aligned `Capital start` >> `$100`, the bot started mid-session with accumulated capital; PnL% columns differ in base.
+- **DSL shown as `—`**: detection failed (stake > DSL — single trade loss exceeds daily limit); aligned backtest fell back to user DSL. The PnL comparison on this DB is less reliable.
+- **PnL% gap between aligned backtest and bot réel**: normal causes are STOP/GHOST outcomes not modeled in backtest, and execution slippage. A gap > 2× warrants investigation.
+- **Negative bot réel PnL%**: if bot real PnL is negative while backtest is positive, check for: data period issues, fee underestimate, or threshold set too low.
 
 ### Step 4 — Produce a recommendation
 
@@ -64,11 +71,17 @@ STRATEGY OPTIMISATION REPORT — <date>
 
 ACTIVE STRATEGY (v2):
   threshold=0.95  min_secs=45  obi=-0.75  dsl=30
-  Ratio: <current ratio>  WR: <WR>%  PnL: <PnL>
+  Ratio: <ratio>  WR: <WR>%  PnL: <PnL> (<PnL%>)
 
 BEST FOUND CONFIG:
   threshold=X  min_secs=Y  obi=Z  dsl=W
-  Ratio: <ratio>  WR: <WR>%  PnL: <PnL>
+  Ratio: <ratio>  WR: <WR>%  PnL: <PnL> (<PnL%>)
+
+PER-DB SUMMARY:
+  <DB name>: backtest <PnL%> | aligned <PnL%> | bot réel <PnL%> [flag if divergent]
+
+INCONSISTENCIES FOUND:
+  - <list any stake/capital/DSL divergences, negative bot réel, large gaps>
 
 VERDICT: [UPDATE / KEEP / MONITOR]
   <1-3 sentence explanation>
@@ -80,7 +93,7 @@ NEXT STEP:
 Verdicts:
 - **UPDATE**: best config ratio > current + 0.3 AND trades within ±30% — create a new strategy file
 - **KEEP**: current config is within 0.3 ratio of best — no change needed
-- **MONITOR**: current config is suboptimal but based on limited data — more data needed
+- **MONITOR**: current config is suboptimal but insufficient data (< 500 trades total) or live bot underperforming backtest by >3× PnL%
 
 ### Step 5 — Apply (only when verdict is UPDATE)
 
@@ -110,13 +123,25 @@ If verdict is UPDATE, create a new strategy version:
 ## Interpreting the sweep table
 
 ```
-threshold | min_secs | min_ask |    obi |    dsl | trades |  wins |    WR% |       PnL |   MaxDD |  PnL/DD
+threshold | min_secs | min_ask |    obi |    dsl | trades |  wins |    WR% |       PnL |    PnL% |   MaxDD |  PnL/DD
 ```
 
+- **PnL%**: return on `capital_start=$100` with `stake=$10`; sweep always uses these defaults, so PnL% is directly comparable across configs.
 - **PnL/DD** (last column): Calmar-style ratio. Higher = better risk-adjusted return. Aim for ≥3.5.
 - **MaxDD**: worst single-session drawdown across all 5 DBs. Keep below $80.
 - **WR%**: win rate. 97–99% is normal. <97% with high threshold = something is wrong.
 - A ratio of **∞** means zero drawdown (too few trades or very favourable data period — treat as suspicious).
+
+## Interpreting the comparison table (--compare)
+
+Each DB shows three columns: BACKTEST (user params) | BACKTEST (aligned to actual) | BOT RÉEL.
+
+Key rows to examine:
+- **Stake**: if aligned stake ≠ user stake, PnL$ and PnL% are not directly comparable — scale mentally.
+- **Capital start**: base for PnL% calculation; `$100` = default backtest, `$1000` = bot started with accumulated capital.
+- **Daily stop-loss `—`**: detection unreliable (stake > DSL); aligned backtest fell back to user DSL.
+- **PnL%**: the most comparable metric across columns with different stake/capital.
+- **STOP/GHOST rows**: outcomes not modeled in backtest — account for the gap between aligned PnL% and bot réel PnL%.
 
 ## File paths
 

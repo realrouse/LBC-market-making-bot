@@ -282,6 +282,7 @@ def summarize(trades: List[SimTrade], params: Params, capital_final: float) -> d
         "total_pnl":     total_pnl,
         "max_drawdown":  max_dd,
         "capital_final": capital_final,
+        "pnl_pct":       (total_pnl / params.capital_start * 100) if params.capital_start > 0 else 0.0,
     }
 
 
@@ -334,7 +335,8 @@ def detect_actual_params(conn: sqlite3.Connection) -> Optional[dict]:
         secs_p5  = _percentile(conn, "signal_secs_remaining", "trades",
                                "resolved=1 AND signal_secs_remaining > 0", 0.05)
         cap_row  = conn.execute(
-            "SELECT MIN(capital_before) FROM trades WHERE resolved=1 AND capital_before IS NOT NULL"
+            "SELECT capital_before FROM trades WHERE resolved=1 AND capital_before IS NOT NULL "
+            "ORDER BY signal_ts_ms ASC LIMIT 1"
         ).fetchone()
         capital_start = cap_row[0] if cap_row and cap_row[0] else None
         # Estimate daily_stop_loss from the worst observed day: the bot must have
@@ -353,6 +355,11 @@ def detect_actual_params(conn: sqlite3.Connection) -> Optional[dict]:
             raw_dsl = abs(worst_day) * 1.20
             daily_stop_loss = math.ceil(raw_dsl / 50) * 50
         else:
+            daily_stop_loss = None
+        # If estimated DSL exceeds 5× stake, it can't be trusted: when
+        # stake > DSL a single loss already triggers the daily stop, so the
+        # worst-day heuristic always overestimates.
+        if daily_stop_loss and daily_stop_loss > 5 * stake_row[0]:
             daily_stop_loss = None
     except sqlite3.OperationalError:
         bid_p5, secs_p5, capital_start, daily_stop_loss = None, None, None, None
@@ -428,12 +435,13 @@ def _stat_block(label: str, params: Params, stats: dict, n_snapshots: int) -> st
     ]
     if stats["open"]:
         lines.append(f"  Open     : {stats['open']}  (unresolved at end of data)")
+    pnl_pct = stats.get("pnl_pct", 0.0)
     lines += [
+        f"  Stake    : ${params.stake:.2f}  (capital start: ${params.capital_start:.2f})",
         f"  Win rate : {stats['win_rate']:.1f}%",
-        f"  Total PnL: ${stats['total_pnl']:+.2f}",
+        f"  Total PnL: ${stats['total_pnl']:+.2f}  ({pnl_pct:+.1f}%)",
         f"  Max DD   : ${stats['max_drawdown']:.2f}",
-        f"  Capital  : ${stats['capital_final']:.2f}"
-        f"  (start: ${params.capital_start:.2f})",
+        f"  Capital  : ${stats['capital_final']:.2f}",
         "=" * 62,
     ]
     return "\n".join(lines)
@@ -483,6 +491,9 @@ def print_aggregate(results: List[dict]) -> None:
         print(f"  Open     : {total_open}  (unresolved at end of data)")
     print(f"  Win rate : {win_rate:.1f}%")
     print(f"  Total PnL: ${total_pnl:+.2f}")
+    total_capital = sum(r.get("capital_start", 100.0) for r in results)
+    if total_capital > 0:
+        print(f"  PnL%     : {total_pnl / total_capital * 100:+.1f}%  (sur capital total ${total_capital:.2f})")
     print(f"  Worst DD : ${worst_dd:.2f}  (worst single session)")
     print("=" * 62)
 
@@ -532,6 +543,11 @@ def print_comparison(
     stake_m = f"${matched_params.stake:.0f}" if show_matched else "—"
     stake_a = f"${detected['stake']:.0f} (modal)" if detected else "—"
     print(_row("Stake", stake_b, stake_m, stake_a))
+
+    cap_b = f"${user_params.capital_start:.0f}"
+    cap_m = f"${matched_params.capital_start:.0f}" if show_matched else "—"
+    cap_a = f"${detected['capital_start']:.0f}" if detected and detected.get("capital_start") else "—"
+    print(_row("Capital start", cap_b, cap_m, cap_a))
 
     dsl_b = f"${user_params.daily_stop_loss:.0f}"
     dsl_m = f"${matched_params.daily_stop_loss:.0f}" if show_matched else "—"
@@ -586,6 +602,18 @@ def print_comparison(
                _fmt_pnl(user_stats["total_pnl"]),
                _fmt_pnl(matched_stats["total_pnl"] if matched_stats else None),
                _fmt_pnl(actual["total_pnl"] if actual else None)))
+
+    def _fmt_pnl_pct(pnl: Optional[float], capital: Optional[float]) -> str:
+        if pnl is None or not capital:
+            return "—"
+        return f"{pnl / capital * 100:+.1f}%"
+
+    cap_actual = detected["capital_start"] if detected and detected.get("capital_start") else None
+    print(_row("PnL%",
+               _fmt_pnl_pct(user_stats["total_pnl"], user_params.capital_start),
+               _fmt_pnl_pct(matched_stats["total_pnl"] if matched_stats else None,
+                             matched_params.capital_start if matched_params else None),
+               _fmt_pnl_pct(actual["total_pnl"] if actual else None, cap_actual)))
 
     print(_row("Max DD",
                _fmt_dd(user_stats["max_drawdown"]),
@@ -649,7 +677,7 @@ def print_sweep_table(results: list, sort_by: str = "ratio", show_dsl: bool = Fa
     header = (
         f"{'threshold':>9} | {'min_secs':>8} | {'min_ask':>7} | {'obi':>6}"
         + (f" | {'dsl':>6}" if show_dsl else "")
-        + f" | {'trades':>6} | {'wins':>5} | {'WR%':>6} | {'PnL':>9} | {'MaxDD':>7} | {'PnL/DD':>7}"
+        + f" | {'trades':>6} | {'wins':>5} | {'WR%':>6} | {'PnL':>9} | {'PnL%':>7} | {'MaxDD':>7} | {'PnL/DD':>7}"
     )
     sep = "-" * len(header)
 
@@ -681,12 +709,15 @@ def print_sweep_table(results: list, sort_by: str = "ratio", show_dsl: bool = Fa
         ratio = stats.get("ratio") or _ratio(stats["total_pnl"], stats["max_drawdown"])
         ratio_str = f"{ratio:>7.2f}" if ratio != float("inf") else "    ∞"
         dsl_part = f" {params.daily_stop_loss:>5.0f} |" if show_dsl else ""
+        pnl_pct = stats.get("pnl_pct", stats["total_pnl"] / 100.0)  # params.capital_start always 100 in sweep
+        pnl_pct_str = f"{pnl_pct:>+6.1f}%"
         print(
             f"  {params.signal_threshold:>7.2f} | {params.min_secs_remaining:>8.0f} |"
             f" {params.min_ask_vol:>7.0f} | {params.obi_reject_thresh:>6.2f} |"
             f"{dsl_part}"
             f" {stats['total']:>6} | {stats['wins']:>5} |"
             f" {stats['win_rate']:>5.1f}% | ${stats['total_pnl']:>+8.2f} |"
+            f" {pnl_pct_str} |"
             f" ${stats['max_drawdown']:>6.2f} | {ratio_str}"
         )
 
@@ -699,12 +730,14 @@ def print_recommendations(results: list, n: int = 5) -> None:
     def _row(rank: int, params: Params, stats: dict) -> str:
         ratio = _r((params, stats))
         ratio_s = f"{ratio:.2f}" if ratio != float("inf") else "∞"
+        pnl_pct = stats.get("pnl_pct", stats["total_pnl"] / 100.0)
         return (
             f"  {rank}. thr={params.signal_threshold}  secs={params.min_secs_remaining:.0f}  "
             f"ask={params.min_ask_vol:.0f}  obi={params.obi_reject_thresh}  "
             f"dsl={params.daily_stop_loss:.0f}"
             f"  → trades={stats['total']}  WR={stats['win_rate']:.1f}%"
-            f"  PnL=${stats['total_pnl']:+.2f}  DD=${stats['max_drawdown']:.2f}"
+            f"  PnL=${stats['total_pnl']:+.2f} ({pnl_pct:+.1f}%)"
+            f"  DD=${stats['max_drawdown']:.2f}"
             f"  ratio={ratio_s}"
         )
 
@@ -876,7 +909,10 @@ def main():
                         obi_reject_thresh  = p.obi_reject_thresh,
                         stake              = detected["stake"],
                         capital_start      = detected["capital_start"]   or detected["stake"] * 10,
-                        daily_stop_loss    = detected["daily_stop_loss"] or detected["stake"] * 5,
+                        # When DSL cannot be reliably detected (stake > DSL),
+                        # fall back to the user's own DSL so aligned vs user columns
+                        # remain comparable on that dimension.
+                        daily_stop_loss    = detected["daily_stop_loss"] or p.daily_stop_loss,
                     )
                     m_trades, m_capital = run_backtest(rows, matched_params)
                     matched_stats = summarize(m_trades, matched_params, m_capital)
@@ -900,9 +936,10 @@ def main():
                 print_detail(trades)
 
             file_results.append({
-                "label":       os.path.basename(db_path),
-                "stats":       stats,
-                "n_snapshots": n_snapshots,
+                "label":         os.path.basename(db_path),
+                "stats":         stats,
+                "n_snapshots":   n_snapshots,
+                "capital_start": p.capital_start,
             })
 
         conn.close()
