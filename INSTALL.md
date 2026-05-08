@@ -344,6 +344,7 @@ is online (`After=network-online.target`).
 - `--no-log` — suppress the log file entirely for minimum disk I/O; SQLite DB (trades + snapshots) is unaffected; combine with `--simulate` to keep stdout output
 - `--no-snapshots` — skip writing 5-second price snapshots to the DB; trades are still recorded; reduces write pressure during long sessions; use when snapshot data is not needed for post-analysis
 - `--reset-db` — back up `live.db` to `live.db.bak.YYYYMMDD_HHMMSS` then delete it before launch; bot starts from zero capital and trade history; prompts for `yes` confirmation; safe no-op if DB is absent
+- `--snapshot-interval SECS` — override the snapshot write interval in seconds (default: 5); use `1` for data-collection mode where 1-second resolution is needed for strategy research
 - `--simulate` — isolate all file I/O to `~/tradinebotte-sim` by default, no real orders placed. If `TRADINEBOTTE_DIR` is already set in the environment, that path is used instead — allowing multiple bots to run in parallel without conflict:
   ```bash
   TRADINEBOTTE_DIR=~/account-a python3 live_bot.py --simulate
@@ -720,6 +721,55 @@ Confirm real on-chain orders (not simulated):
 
 ```bash
 grep "order=" ~/tradinebotte/live.log | grep -v "order=sim" | tail -20
+```
+
+
+## Data collection
+
+The first VPS deployment account runs the bot in simulate mode with 1-second snapshot intervals to build a high-resolution dataset for strategy research and backtesting.
+
+### Collector scripts
+
+**`scripts/start_collector.sh`** — deploy and manage the data-collection process:
+
+| Flag | Description |
+|---|---|
+| *(no flag)* | Deploy source files to the collector account and start `live_bot.py --simulate --snapshot-interval 1` |
+| `--status` | Check whether the collector process is running and print the remote snapshot row count |
+| `--stop` | Stop the running collector process |
+
+```bash
+bash scripts/start_collector.sh           # deploy + launch
+bash scripts/start_collector.sh --status  # check if running
+bash scripts/start_collector.sh --stop    # stop
+```
+
+**`scripts/collect_db.sh`** — download and archive the weekly snapshot database:
+
+| Flag | Description |
+|---|---|
+| `--status` | Show remote row counts for `snapshots` and `trades` tables without downloading |
+| `--rotate` | Download `live.db` from the collector, archive it to `data/` with a datestamp, then restart the collector with a fresh database |
+
+```bash
+bash scripts/collect_db.sh --status    # remote row counts
+bash scripts/collect_db.sh --rotate    # download + archive + restart
+```
+
+The downloaded file is archived to `data/collect_YYYYMMDD.db`. Collector log: `~/tradinebotte/collect.log`.
+
+**`scripts/schedule_collect.sh`** — automate the weekly rotation with cron:
+
+| Flag | Description |
+|---|---|
+| `--install` | Install a cron entry that runs `collect_db.sh --rotate` every Sunday at 03:00 UTC |
+| `--status` | Print the current cron entry for the collect job |
+| `--run-now` | Run the rotation immediately (same as `collect_db.sh --rotate`) |
+
+```bash
+bash scripts/schedule_collect.sh --install    # every Sunday 03:00 UTC
+bash scripts/schedule_collect.sh --status     # show cron entry
+bash scripts/schedule_collect.sh --run-now    # run immediately
 ```
 
 

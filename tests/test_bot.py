@@ -1432,6 +1432,69 @@ class TestSchemaVersioning(unittest.TestCase):
         conn.close()
 
 
+class TestSnapshotInterval(unittest.IsolatedAsyncioTestCase):
+    """
+    BotConfig.snapshot_interval controls how often handle_book_update writes a
+    snapshot row.  The default is SNAPSHOT_INTERVAL (5s); it can be overridden
+    at construction time.  handle_book_update must respect the configured value.
+    """
+
+    def setUp(self):
+        self.state = make_state()
+
+    def tearDown(self):
+        self.state.conn.close()
+
+    def _snap_count(self):
+        return self.state.conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
+
+    def test_default_is_five(self):
+        cfg = bot.BotConfig()
+        self.assertEqual(cfg.snapshot_interval, bot.SNAPSHOT_INTERVAL)
+        self.assertEqual(cfg.snapshot_interval, 5)
+
+    def test_custom_value_stored(self):
+        cfg = bot.BotConfig(snapshot_interval=1)
+        self.assertEqual(cfg.snapshot_interval, 1)
+
+    def test_large_value_stored(self):
+        cfg = bot.BotConfig(snapshot_interval=60)
+        self.assertEqual(cfg.snapshot_interval, 60)
+
+    async def _update(self, ts):
+        """Run one handle_book_update cycle for ts (session=None skips orders)."""
+        self.state.session = None
+        parsed = {
+            "token_id": ts.token_id, "best_bid": ts.best_bid, "best_ask": ts.best_ask,
+            "spread": 0.005, "bid_vol": 100.0, "ask_vol": ts.ask_vol, "obi": ts.obi,
+        }
+        await bot.handle_book_update(self.state, parsed)
+
+    async def test_snapshot_written_after_interval_elapsed(self):
+        ts = make_token(best_bid=0.50, best_ask=0.55)
+        self.state.tokens[ts.token_id] = ts
+        self.state.config = bot.BotConfig(snapshot_interval=1)
+        ts.last_snapshot_ts = time.time() - 2  # 2s ago > 1s interval
+        await self._update(ts)
+        self.assertEqual(self._snap_count(), 1)
+
+    async def test_snapshot_not_written_before_interval(self):
+        ts = make_token(best_bid=0.50, best_ask=0.55)
+        self.state.tokens[ts.token_id] = ts
+        self.state.config = bot.BotConfig(snapshot_interval=60)
+        ts.last_snapshot_ts = time.time() - 1  # 1s ago < 60s interval
+        await self._update(ts)
+        self.assertEqual(self._snap_count(), 0)
+
+    async def test_one_second_interval_allows_rapid_snapshots(self):
+        ts = make_token(best_bid=0.50, best_ask=0.55)
+        self.state.tokens[ts.token_id] = ts
+        self.state.config = bot.BotConfig(snapshot_interval=1)
+        ts.last_snapshot_ts = 0.0  # never snapshotted → always elapsed
+        await self._update(ts)
+        self.assertEqual(self._snap_count(), 1)
+
+
 class TestStrategyLoading(unittest.TestCase):
     """Verify the v2 strategy JSON exists, loads correctly, and has the sweep-optimised params."""
 
