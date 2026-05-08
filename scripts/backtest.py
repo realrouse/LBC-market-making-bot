@@ -19,9 +19,11 @@ Usage:
     python3 scripts/backtest.py --all                        # all data/*.db + live.db
     python3 scripts/backtest.py --all --threshold 0.95 --detail
     python3 scripts/backtest.py --sweep                      # grid search
+    python3 scripts/backtest.py --db data/paper3.db --compare
+        → three-way table: backtest(user) | backtest(aligned to actual) | actual bot
 """
 
-import argparse, os, sqlite3, sys
+import argparse, math, os, sqlite3, sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import product
@@ -283,6 +285,133 @@ def summarize(trades: List[SimTrade], params: Params, capital_final: float) -> d
     }
 
 
+# ─── Actual-params detection ──────────────────────────────────────────────────
+
+def _percentile(conn: sqlite3.Connection, col: str, table: str,
+                where: str, pct: float) -> Optional[float]:
+    """
+    Return the value at the given percentile (0–1) for a numeric column.
+    Uses an ORDER BY + OFFSET approach compatible with SQLite.
+    """
+    n_row = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE {where}").fetchone()
+    if not n_row or not n_row[0]:
+        return None
+    offset = max(0, int(pct * n_row[0]))
+    row = conn.execute(
+        f"SELECT {col} FROM {table} WHERE {where} ORDER BY {col} LIMIT 1 OFFSET ?",
+        (offset,),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def detect_actual_params(conn: sqlite3.Connection) -> Optional[dict]:
+    """
+    Infer the bot's actual runtime config from the trades table.
+
+    Returns a dict with:
+      stake         — most common stake value (modal)
+      threshold     — 5th-percentile of signal_best_bid, rounded down to 0.01
+                      (robust against outliers from old bot versions)
+      min_secs      — 5th-percentile of signal_secs_remaining > 0, rounded down to 5s
+      capital_start — minimum capital_before across all resolved trades
+      stops         — count of STOP-outcome trades (daily stop-loss hits)
+      ghosts        — count of GHOST-outcome trades (markets expired without result)
+    Returns None when the trades table is empty or required columns are missing.
+    """
+    try:
+        stake_row = conn.execute(
+            "SELECT stake, COUNT(*) FROM trades WHERE resolved=1 "
+            "GROUP BY stake ORDER BY COUNT(*) DESC LIMIT 1"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    if not stake_row:
+        return None
+
+    try:
+        bid_p5   = _percentile(conn, "signal_best_bid", "trades",
+                               "resolved=1 AND signal_best_bid IS NOT NULL", 0.05)
+        secs_p5  = _percentile(conn, "signal_secs_remaining", "trades",
+                               "resolved=1 AND signal_secs_remaining > 0", 0.05)
+        cap_row  = conn.execute(
+            "SELECT MIN(capital_before) FROM trades WHERE resolved=1 AND capital_before IS NOT NULL"
+        ).fetchone()
+        capital_start = cap_row[0] if cap_row and cap_row[0] else None
+        # Estimate daily_stop_loss from the worst observed day: the bot must have
+        # run all day through that loss, so the actual limit was at least that large.
+        # We add 20 % headroom and round up to the nearest $50.
+        worst_row = conn.execute("""
+            SELECT MIN(day_pnl) FROM (
+                SELECT SUM(pnl_net) AS day_pnl
+                FROM trades
+                WHERE resolved=1 AND pnl_net IS NOT NULL AND signal_ts_ms IS NOT NULL
+                GROUP BY strftime('%Y-%m-%d', signal_ts_ms/1000, 'unixepoch')
+            )
+        """).fetchone()
+        worst_day = worst_row[0] if worst_row and worst_row[0] else None
+        if worst_day and worst_day < 0:
+            raw_dsl = abs(worst_day) * 1.20
+            daily_stop_loss = math.ceil(raw_dsl / 50) * 50
+        else:
+            daily_stop_loss = None
+    except sqlite3.OperationalError:
+        bid_p5, secs_p5, capital_start, daily_stop_loss = None, None, None, None
+
+    stops_row = conn.execute(
+        "SELECT "
+        "  SUM(CASE WHEN outcome='STOP'  THEN 1 ELSE 0 END), "
+        "  SUM(CASE WHEN outcome='GHOST' THEN 1 ELSE 0 END) "
+        "FROM trades WHERE resolved=1"
+    ).fetchone()
+
+    # Round threshold down to nearest 0.01, min_secs down to nearest 5s.
+    threshold = math.floor((bid_p5 or 0.95) * 100) / 100 if bid_p5 else None
+    min_secs  = max(30.0, math.floor((secs_p5 or 30.0) / 5) * 5) if secs_p5 else None
+
+    return {
+        "stake":           stake_row[0],
+        "threshold":       threshold,
+        "min_secs":        min_secs,
+        "capital_start":   capital_start,
+        "daily_stop_loss": daily_stop_loss,
+        "raw_min_bid":     bid_p5,
+        "raw_min_secs":    secs_p5,
+        "stops":           stops_row[0] or 0,
+        "ghosts":          stops_row[1] or 0,
+    }
+
+
+def _actual_stats(conn: sqlite3.Connection) -> Optional[dict]:
+    """Query aggregate statistics from the actual trades table."""
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*), "
+            "  SUM(CASE WHEN outcome='WIN'  THEN 1 ELSE 0 END), "
+            "  SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END), "
+            "  SUM(CASE WHEN outcome='STOP' THEN 1 ELSE 0 END), "
+            "  SUM(CASE WHEN outcome='GHOST' THEN 1 ELSE 0 END), "
+            "  COALESCE(SUM(pnl_net), 0) "
+            "FROM trades WHERE resolved=1"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    if not row or not row[0]:
+        return None
+    total, wins, losses, stops, ghosts, pnl = (
+        row[0] or 0, row[1] or 0, row[2] or 0,
+        row[3] or 0, row[4] or 0, row[5] or 0.0,
+    )
+    return {
+        "total":    total,
+        "wins":     wins,
+        "losses":   losses,
+        "stops":    stops,
+        "ghosts":   ghosts,
+        "win_rate": (wins / total * 100) if total else 0.0,
+        "total_pnl": pnl,
+    }
+
+
 # ─── Output helpers ───────────────────────────────────────────────────────────
 
 def _stat_block(label: str, params: Params, stats: dict, n_snapshots: int) -> str:
@@ -358,26 +487,145 @@ def print_aggregate(results: List[dict]) -> None:
     print("=" * 62)
 
 
-def print_actual(conn: sqlite3.Connection, params: Params, n_snapshots: int) -> None:
-    """Print actual bot performance from the trades table for comparison."""
-    row = conn.execute(
-        "SELECT COUNT(*), "
-        "  SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END), "
-        "  SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END), "
-        "  COALESCE(SUM(pnl_net),0) "
-        "FROM trades WHERE resolved=1"
-    ).fetchone()
-    total, wins, losses, pnl = row[0] or 0, row[1] or 0, row[2] or 0, row[3] or 0.0
-    wr = (wins / total * 100) if total else 0.0
-    print("=" * 62)
-    print("  ACTUAL BOT RESULTS (for comparison)")
-    print("=" * 62)
-    print(f"  Trades   : {total}")
-    print(f"  Wins     : {wins}")
-    print(f"  Losses   : {losses}")
-    print(f"  Win rate : {wr:.1f}%")
-    print(f"  Total PnL: ${pnl:+.2f}")
-    print("=" * 62)
+def print_comparison(
+    db_name:        str,
+    user_params:    Params,
+    user_stats:     dict,
+    matched_params: Optional[Params],
+    matched_stats:  Optional[dict],
+    actual:         Optional[dict],
+    detected:       Optional[dict],
+) -> None:
+    """
+    Three-column comparison table:
+      BACKTEST (user params) | BACKTEST (aligned to actual) | ACTUAL BOT RESULTS
+
+    The matched column is omitted when no trades table is found or when the
+    detected params are identical to the user params (no mismatch to show).
+    """
+    W = 16   # column width
+
+    def _row(label: str, a: str, b: str, c: str) -> str:
+        return f"  {label:<20} {a:>{W}} {b:>{W}} {c:>{W}}"
+
+    show_matched = matched_params is not None and matched_stats is not None
+
+    print()
+    print("=" * (22 + W * 3 + 2))
+    print(f"  COMPARAISON — {db_name}")
+    print("=" * (22 + W * 3 + 2))
+    print(_row("", "BACKTEST", "BACKTEST", "BOT"))
+    print(_row("", "(paramètres)", "(aligné)", "RÉEL"))
+    print("  " + "-" * (20 + W * 3 + 2))
+    # Config rows
+    thr_b = f"{user_params.signal_threshold}"
+    thr_m = f"{matched_params.signal_threshold}" if show_matched else "—"
+    thr_a = f"≈{detected['raw_min_bid']:.4f}" if detected and detected.get("raw_min_bid") else "—"
+    print(_row("Threshold", thr_b, thr_m, thr_a))
+
+    secs_b = f"{user_params.min_secs_remaining:.0f}s"
+    secs_m = f"{matched_params.min_secs_remaining:.0f}s" if show_matched else "—"
+    secs_a = f"≈{detected['raw_min_secs']:.0f}s" if detected and detected.get("raw_min_secs") else "—"
+    print(_row("Min secs", secs_b, secs_m, secs_a))
+
+    stake_b = f"${user_params.stake:.0f}"
+    stake_m = f"${matched_params.stake:.0f}" if show_matched else "—"
+    stake_a = f"${detected['stake']:.0f} (modal)" if detected else "—"
+    print(_row("Stake", stake_b, stake_m, stake_a))
+
+    dsl_b = f"${user_params.daily_stop_loss:.0f}"
+    dsl_m = f"${matched_params.daily_stop_loss:.0f}" if show_matched else "—"
+    dsl_a = f"≈${detected['daily_stop_loss']:.0f}" if detected and detected.get("daily_stop_loss") else "—"
+    print(_row("Daily stop-loss", dsl_b, dsl_m, dsl_a))
+
+    print("  " + "-" * (20 + W * 3 + 2))
+
+    # Results rows
+    def _fmt_int(v: Optional[int], fallback: str = "—") -> str:
+        return f"{v:,}" if v is not None else fallback
+
+    def _fmt_pct(v: Optional[float]) -> str:
+        return f"{v:.1f}%" if v is not None else "—"
+
+    def _fmt_pnl(v: Optional[float]) -> str:
+        return f"${v:+.2f}" if v is not None else "—"
+
+    def _fmt_dd(v: Optional[float]) -> str:
+        return f"${v:.2f}" if v is not None else "—"
+
+    a_total = actual["total"] if actual else None
+    m_total = matched_stats["total"] if matched_stats else None
+    print(_row("Trades", _fmt_int(user_stats["total"]), _fmt_int(m_total), _fmt_int(a_total)))
+
+    a_wins = actual["wins"] if actual else None
+    m_wins = matched_stats["wins"] if matched_stats else None
+    print(_row("Wins", _fmt_int(user_stats["wins"]), _fmt_int(m_wins), _fmt_int(a_wins)))
+
+    a_losses = actual["losses"] if actual else None
+    m_losses = matched_stats["losses"] if matched_stats else None
+    print(_row("Losses", _fmt_int(user_stats["losses"]), _fmt_int(m_losses), _fmt_int(a_losses)))
+
+    if actual and (actual.get("stops") or actual.get("ghosts")):
+        stops  = actual.get("stops",  0)
+        ghosts = actual.get("ghosts", 0)
+        if stops:
+            print(_row("Stops (daily SL)", "—", "—", _fmt_int(stops)))
+        if ghosts:
+            print(_row("Ghosts (no exit)", "—", "—", _fmt_int(ghosts)))
+
+    if user_stats.get("open"):
+        m_open = _fmt_int(matched_stats["open"]) if matched_stats else "—"
+        print(_row("Open (end of data)", _fmt_int(user_stats["open"]), m_open, "—"))
+
+    print(_row("Win rate",
+               _fmt_pct(user_stats["win_rate"]),
+               _fmt_pct(matched_stats["win_rate"] if matched_stats else None),
+               _fmt_pct(actual["win_rate"] if actual else None)))
+
+    print(_row("Total PnL",
+               _fmt_pnl(user_stats["total_pnl"]),
+               _fmt_pnl(matched_stats["total_pnl"] if matched_stats else None),
+               _fmt_pnl(actual["total_pnl"] if actual else None)))
+
+    print(_row("Max DD",
+               _fmt_dd(user_stats["max_drawdown"]),
+               _fmt_dd(matched_stats["max_drawdown"] if matched_stats else None),
+               "—"))
+
+    print("=" * (22 + W * 3 + 2))
+
+    # Config-mismatch warning
+    if detected:
+        mismatches = []
+        if abs(detected["stake"] - user_params.stake) > 1:
+            ratio = detected["stake"] / user_params.stake
+            mismatches.append(
+                f"stake: backtest=${user_params.stake:.0f}, "
+                f"actual=${detected['stake']:.0f} (×{ratio:.0f})"
+            )
+        if detected["threshold"] and abs(detected["threshold"] - user_params.signal_threshold) >= 0.01:
+            mismatches.append(
+                f"threshold: backtest={user_params.signal_threshold}, "
+                f"actual≈{detected['threshold']}"
+            )
+        if detected["min_secs"] and abs(detected["min_secs"] - user_params.min_secs_remaining) >= 10:
+            mismatches.append(
+                f"min_secs: backtest={user_params.min_secs_remaining:.0f}s, "
+                f"actual≈{detected['min_secs']:.0f}s"
+            )
+        if mismatches:
+            print()
+            print("  ⚠  Paramètres divergents :")
+            for m in mismatches:
+                print(f"     {m}")
+            parts = [f"--stake {detected['stake']:.0f}"]
+            if detected["threshold"]:
+                parts.append(f"--threshold {detected['threshold']}")
+            if detected["min_secs"]:
+                parts.append(f"--min-secs {detected['min_secs']:.0f}")
+            print(f"\n     Pour une comparaison exacte (colonne alignée) :")
+            print(f"     python3 scripts/backtest.py --db <fichier> --compare {' '.join(parts)}")
+            print()
 
 
 def print_sweep_table(results: list) -> None:
@@ -432,7 +680,7 @@ def main():
     parser.add_argument("--detail",     action="store_true",
                         help="print individual simulated trade table")
     parser.add_argument("--compare",    action="store_true",
-                        help="show actual bot results alongside backtest (single file only)")
+                        help="three-way comparison: backtest(user) | backtest(aligned) | actual bot")
     parser.add_argument("--sweep",      action="store_true",
                         help="grid search over multiple parameter combinations")
     args = parser.parse_args()
@@ -499,17 +747,45 @@ def main():
         else:
             trades, capital_final = run_backtest(rows, p)
             stats = summarize(trades, p, capital_final)
-            # Show filename in label when replaying multiple files.
-            label = f"BACKTEST — {os.path.basename(db_path)}" if multi else "BACKTEST"
-            print(_stat_block(label, p, stats, n_snapshots))
+
+            if args.compare:
+                # Detect actual bot params and run a matched backtest.
+                detected = detect_actual_params(conn)
+                actual   = _actual_stats(conn)
+
+                matched_params = None
+                matched_stats  = None
+                if detected and actual:
+                    matched_params = Params(
+                        signal_threshold   = detected["threshold"]       or p.signal_threshold,
+                        min_secs_remaining = detected["min_secs"]        or p.min_secs_remaining,
+                        min_ask_vol        = p.min_ask_vol,
+                        obi_reject_thresh  = p.obi_reject_thresh,
+                        stake              = detected["stake"],
+                        capital_start      = detected["capital_start"]   or detected["stake"] * 10,
+                        daily_stop_loss    = detected["daily_stop_loss"] or detected["stake"] * 5,
+                    )
+                    m_trades, m_capital = run_backtest(rows, matched_params)
+                    matched_stats = summarize(m_trades, matched_params, m_capital)
+
+                label = f"BACKTEST — {os.path.basename(db_path)}" if multi else "BACKTEST"
+                print(_stat_block(label, p, stats, n_snapshots))
+                print_comparison(
+                    db_name        = os.path.basename(db_path),
+                    user_params    = p,
+                    user_stats     = stats,
+                    matched_params = matched_params,
+                    matched_stats  = matched_stats,
+                    actual         = actual,
+                    detected       = detected,
+                )
+            else:
+                # Standard single-block output.
+                label = f"BACKTEST — {os.path.basename(db_path)}" if multi else "BACKTEST"
+                print(_stat_block(label, p, stats, n_snapshots))
 
             if args.detail:
                 print_detail(trades)
-
-            # --compare only makes sense for a single file (needs a trades table).
-            if args.compare and not multi:
-                print()
-                print_actual(conn, p, n_snapshots)
 
             file_results.append({
                 "label":       os.path.basename(db_path),
