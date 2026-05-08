@@ -80,7 +80,8 @@ how to interpret the results to make informed strategy decisions.
 | Term | Definition |
 |------|-----------|
 | **Backtest** | Replay of the `snapshots` table through the strategy logic. The engine reads rows chronologically, applies entry/exit conditions, and accumulates simulated PnL. No real orders are placed. |
-| **Aligned backtest** | A backtest run with the parameters the bot *actually* used (detected from the `trades` table), rather than the user-specified defaults. Shown as the middle column in `--compare`. Closer to reality than the plain backtest. |
+| **Aligned backtest** | A **simulation** (replay of `snapshots` data, no real orders) that uses the parameters the bot *actually had at runtime*, inferred from the `trades` table. It is still purely simulated — but its parameters (threshold, stake, min_secs, capital_start, DSL) are corrected to match the bot's real configuration, making it the most accurate simulation of what *should* have happened. Shown as the middle column in `--compare`. |
+| **Bot réel** | The **actual trades executed** by the live bot on Polymarket, as recorded in the `trades` table during a real session. These are not simulated — they represent what *really* happened: real money, real order fills at market prices, real execution latency. Includes outcomes not modelled in backtest (STOP, GHOST), and is affected by WebSocket interruptions and API delays. Shown as the right column in `--compare`. |
 | **Capital reset** | When multiple DB files are processed, each file starts with a fresh `capital_start`. This isolates sessions so a bad day in one file does not affect another. |
 | **Sweep / grid search** | Running the backtest for every combination of parameter values in a predefined grid and ranking the results. Used to find optimal strategy parameters. |
 | **Deduplication (--top)** | The sweep table can contain near-identical rows where only `min_ask` or `dsl` differs but the result is identical. `--top N` collapses the table to the N best *unique* configurations (deduped on `threshold / min_secs / obi`). |
@@ -356,9 +357,9 @@ The final line gives the exact CLI command to reproduce the best overall config.
 
 | Column | What it is |
 |--------|-----------|
-| **BACKTEST (paramètres)** | Backtest with the parameters you specified (or strategy JSON defaults). |
-| **BACKTEST (aligné)** | Backtest with the parameters the live bot *actually used*, inferred from the `trades` table. |
-| **BOT RÉEL** | Actual results recorded in the `trades` table during the live run. |
+| **BACKTEST (paramètres)** | A **simulation**: replay of `snapshots` with the parameters you specified (or strategy JSON defaults). No real trades. |
+| **BACKTEST (aligné)** | A **simulation**: replay of the same `snapshots`, but with the parameters the bot *actually had at runtime* (inferred from the `trades` table). Still no real trades, but parameters are corrected — this is the fairest simulation-side prediction of what should have happened. |
+| **BOT RÉEL** | **Real trades**: what the live bot actually executed on Polymarket, as stored in the `trades` table. Real money, real order fills, real latency. Not a simulation. May include STOP and GHOST outcomes that the simulations cannot model. |
 
 ### How actual parameters are detected
 

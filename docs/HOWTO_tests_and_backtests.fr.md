@@ -80,7 +80,8 @@ interpréter les résultats pour prendre des décisions éclairées sur la strat
 | Terme | Définition |
 |-------|-----------|
 | **Backtest** | Rejeu de la table `snapshots` à travers la logique de stratégie. Le moteur lit les lignes chronologiquement, applique les conditions d'entrée/sortie et accumule le PnL simulé. Aucun ordre réel n'est passé. |
-| **Backtest aligné** | Un backtest exécuté avec les paramètres que le bot a *réellement* utilisés (détectés depuis la table `trades`), plutôt qu'avec les valeurs par défaut de l'utilisateur. Affiché comme colonne centrale dans `--compare`. Plus proche de la réalité que le backtest simple. |
+| **Backtest aligné** | Une **simulation** (rejeu des données `snapshots`, aucun ordre réel) qui utilise les paramètres que le bot avait *réellement* à l'exécution, inférés depuis la table `trades`. C'est toujours purement simulé — mais ses paramètres (threshold, stake, min_secs, capital_start, DSL) sont corrigés pour correspondre à la configuration réelle du bot, ce qui en fait la simulation la plus précise de ce qui *aurait dû* se passer. Affiché comme colonne centrale dans `--compare`. |
+| **Bot réel** | Les **trades réellement exécutés** par le bot live sur Polymarket, tels qu'enregistrés dans la table `trades` lors d'une session live. Ce n'est pas une simulation — ce sont les événements réels : argent réel, fills d'ordres aux prix du marché, latence d'exécution réelle. Inclut les issues non modélisées en backtest (STOP, GHOST), et est affecté par les déconnexions WebSocket et les délais API. Affiché comme colonne de droite dans `--compare`. |
 | **Remise à zéro du capital** | Quand plusieurs fichiers DB sont traités, chaque fichier repart avec un `capital_start` frais. Cela isole les sessions pour qu'un mauvais jour dans un fichier n'affecte pas un autre. |
 | **Sweep / recherche en grille** | Exécution du backtest pour chaque combinaison de valeurs de paramètres dans une grille prédéfinie, puis classement des résultats. Utilisé pour trouver les paramètres de stratégie optimaux. |
 | **Déduplication (--top)** | Le tableau du sweep peut contenir des lignes quasi-identiques où seuls `min_ask` ou `dsl` diffèrent mais le résultat est identique. `--top N` réduit le tableau aux N meilleures configurations *uniques* (dédupliquées sur `threshold / min_secs / obi`). |
@@ -356,9 +357,9 @@ La dernière ligne donne la commande CLI exacte pour reproduire la meilleure con
 
 | Colonne | Ce que c'est |
 |---------|-------------|
-| **BACKTEST (paramètres)** | Backtest avec les paramètres que vous avez spécifiés (ou les valeurs par défaut du JSON de stratégie). |
-| **BACKTEST (aligné)** | Backtest avec les paramètres que le bot live a *réellement* utilisés, inférés depuis la table `trades`. |
-| **BOT RÉEL** | Résultats réels enregistrés dans la table `trades` lors du run live. |
+| **BACKTEST (paramètres)** | Une **simulation** : rejeu des `snapshots` avec les paramètres que vous avez spécifiés (ou les valeurs par défaut du JSON de stratégie). Aucun trade réel. |
+| **BACKTEST (aligné)** | Une **simulation** : rejeu des mêmes `snapshots`, mais avec les paramètres que le bot avait *réellement* à l'exécution (inférés depuis la table `trades`). Toujours pas de trades réels, mais les paramètres sont corrigés — c'est la prédiction côté simulation la plus fidèle de ce qui aurait dû se passer. |
+| **BOT RÉEL** | **Trades réels** : ce que le bot live a réellement exécuté sur Polymarket, stocké dans la table `trades`. Argent réel, fills aux prix du marché, latence réelle. Pas une simulation. Peut contenir des issues STOP et GHOST que les simulations ne peuvent pas modéliser. |
 
 ### Comment les paramètres réels sont détectés
 
