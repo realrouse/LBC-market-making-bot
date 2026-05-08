@@ -429,9 +429,36 @@ CREATE TABLE IF NOT EXISTS snapshots (
     direction TEXT, secs_remaining REAL,
     best_bid REAL, best_ask REAL, spread REAL,
     ask_vol REAL, obi REAL, has_open_trade INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_trades_market ON trades(market_id);
 CREATE INDEX IF NOT EXISTS idx_trades_resolved ON trades(resolved);
 """
+
+# Each key is a schema version number; value is the DDL to apply.
+# Version 1 is the baseline: all tables already exist from SCHEMA above.
+# Add future entries here: MIGRATIONS[2] = "ALTER TABLE trades ADD COLUMN ..."
+MIGRATIONS: dict[int, str] = {
+    1: "",
+}
+
+
+def _apply_migrations(conn: sqlite3.Connection) -> None:
+    """Apply any pending schema migrations and record the version reached."""
+    row = conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
+    current = row[0] if row else 0
+    for version in sorted(MIGRATIONS):
+        if version <= current:
+            continue
+        ddl = MIGRATIONS[version]
+        if ddl:
+            conn.executescript(ddl)
+        if row is None:
+            conn.execute("INSERT INTO schema_version(version) VALUES (?)", (version,))
+            row = True
+        else:
+            conn.execute("UPDATE schema_version SET version=?", (version,))
+        logger.info("DB schema migration v%d appliquee", version)
+
 
 def init_db(config: "BotConfig") -> sqlite3.Connection:
     """Open (or create) the SQLite database and apply schema migrations."""
@@ -439,6 +466,7 @@ def init_db(config: "BotConfig") -> sqlite3.Connection:
     # the connection is only ever accessed from the event loop.
     conn = sqlite3.connect(config.db_path, check_same_thread=False)
     conn.executescript(SCHEMA)
+    _apply_migrations(conn)
     if config.db_mmap_mb > 0:
         # Memory-map the DB file so SQLite accesses it via RAM pages managed
         # by the kernel rather than read() syscalls.
@@ -530,6 +558,9 @@ class BotState:
         # midnight by check_signal. Eliminates the SQL SELECT on the hot path.
         self.daily_pnl: float = 0.0
         self._daily_pnl_day: int = -1   # UTC day number (days since epoch)
+        # Circuit-breaker: suspend new entries after 3 consecutive CLOB failures.
+        self.api_fail_streak: int = 0
+        self.api_cooldown_until: float = 0.0
 
     @property
     def win_rate(self) -> float:
@@ -655,6 +686,7 @@ async def check_signal(state: BotState, ts: TokenState, _t_ws: Optional[float] =
             return
     if state.capital - len(state.open_trades) * cfg.stake < cfg.stake: return
     if state.daily_pnl < -cfg.daily_stop_loss: return
+    if time.time() < state.api_cooldown_until: return
 
     state.signalled.add(ts.market_id)
     await enter_live_trade(state, ts, _t_ws=_t_ws)
@@ -690,6 +722,17 @@ async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[floa
             private_key=cfg.private_key, install_dir=cfg.install_dir,
         )
     order_rtt_ms = (time.monotonic() - t_pre_order) * 1000
+    if state.session and cfg.private_key:
+        if oid is None:
+            state.api_fail_streak += 1
+            if state.api_fail_streak >= 3:
+                state.api_cooldown_until = time.time() + 300
+                logger.warning(
+                    "CIRCUIT-BREAKER: %d échecs CLOB consécutifs — entrées suspendues 5 min",
+                    state.api_fail_streak,
+                )
+        else:
+            state.api_fail_streak = 0
     cur = state.conn.execute(
         "INSERT INTO trades ("
         "market_id, token_id, direction, question, "

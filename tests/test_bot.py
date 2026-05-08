@@ -26,9 +26,10 @@ import bot_utils
 # ── Test helpers ──────────────────────────────────────────────────────────────
 
 def make_db():
-    """In-memory SQLite database with the production schema applied."""
+    """In-memory SQLite database with the production schema and migrations applied."""
     conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.executescript(bot.SCHEMA)
+    bot._apply_migrations(conn)
     conn.commit()
     return conn
 
@@ -1307,6 +1308,128 @@ class TestSaveSnapshot(unittest.TestCase):
             "SELECT token_id FROM snapshots ORDER BY id"
         ).fetchall()
         self.assertEqual([r[0] for r in rows], ["tokA", "tokB"])
+
+
+# ── circuit-breaker ───────────────────────────────────────────────────────────
+
+class TestCircuitBreaker(unittest.IsolatedAsyncioTestCase):
+
+    def setUp(self):
+        self.state = make_state()
+
+    def tearDown(self):
+        self.state.conn.close()
+
+    def test_initial_state(self):
+        self.assertEqual(self.state.api_fail_streak, 0)
+        self.assertAlmostEqual(self.state.api_cooldown_until, 0.0)
+
+    async def test_cooldown_blocks_signal(self):
+        self.state.api_cooldown_until = time.time() + 300
+        await bot.check_signal(self.state, make_token())
+        self.assertNotIn("mkt1", self.state.signalled)
+
+    async def test_expired_cooldown_allows_signal(self):
+        self.state.api_cooldown_until = time.time() - 1
+        await bot.check_signal(self.state, make_token())
+        self.assertIn("mkt1", self.state.signalled)
+
+    async def test_streak_increments_on_api_failure(self):
+        self.state.config = bot.BotConfig(private_key="0xdeadbeef")
+        self.state.session = unittest.mock.AsyncMock()
+        with patch("live_bot.api.post_order", new=unittest.mock.AsyncMock(return_value=None)):
+            await bot.enter_live_trade(self.state, make_token())
+        self.assertEqual(self.state.api_fail_streak, 1)
+
+    async def test_cooldown_set_after_3_failures(self):
+        self.state.config = bot.BotConfig(private_key="0xdeadbeef")
+        self.state.session = unittest.mock.AsyncMock()
+        self.state.api_fail_streak = 2
+        with patch("live_bot.api.post_order", new=unittest.mock.AsyncMock(return_value=None)):
+            await bot.enter_live_trade(self.state, make_token(market_id="mkt9", token_id="tok9"))
+        self.assertGreater(self.state.api_cooldown_until, time.time())
+
+    async def test_streak_resets_on_success(self):
+        self.state.config = bot.BotConfig(private_key="0xdeadbeef")
+        self.state.session = unittest.mock.AsyncMock()
+        self.state.api_fail_streak = 2
+        with patch("live_bot.api.post_order", new=unittest.mock.AsyncMock(return_value="ord_ok")):
+            await bot.enter_live_trade(self.state, make_token())
+        self.assertEqual(self.state.api_fail_streak, 0)
+
+    async def test_no_streak_in_simulation_mode(self):
+        # state.session is None → no CLOB call → streak must not change
+        self.state.config = bot.BotConfig(private_key="0xdeadbeef")
+        await bot.enter_live_trade(self.state, make_token())
+        self.assertEqual(self.state.api_fail_streak, 0)
+
+
+# ── schema versioning ─────────────────────────────────────────────────────────
+
+class TestSchemaVersioning(unittest.TestCase):
+
+    def _fresh_conn(self):
+        conn = sqlite3.connect(":memory:", check_same_thread=False)
+        conn.executescript(bot.SCHEMA)
+        return conn
+
+    def test_schema_version_table_exists(self):
+        conn = self._fresh_conn()
+        bot._apply_migrations(conn)
+        conn.commit()
+        tables = [r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()]
+        self.assertIn("schema_version", tables)
+        conn.close()
+
+    def test_version_set_to_max_migration_key(self):
+        conn = self._fresh_conn()
+        bot._apply_migrations(conn)
+        conn.commit()
+        ver = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+        self.assertEqual(ver, max(bot.MIGRATIONS))
+        conn.close()
+
+    def test_idempotent_second_call(self):
+        conn = self._fresh_conn()
+        bot._apply_migrations(conn)
+        conn.commit()
+        bot._apply_migrations(conn)  # must not raise or duplicate the row
+        conn.commit()
+        count = conn.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0]
+        self.assertEqual(count, 1)
+        conn.close()
+
+    def test_future_migration_applied(self):
+        original = dict(bot.MIGRATIONS)
+        try:
+            bot.MIGRATIONS[99] = (
+                "CREATE TABLE IF NOT EXISTS _test_mig (x INTEGER);"
+            )
+            conn = self._fresh_conn()
+            bot._apply_migrations(conn)
+            conn.commit()
+            tables = [r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()]
+            self.assertIn("_test_mig", tables)
+            ver = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+            self.assertEqual(ver, 99)
+            conn.close()
+        finally:
+            bot.MIGRATIONS.clear()
+            bot.MIGRATIONS.update(original)
+
+    def test_partial_upgrade_from_version_0(self):
+        # Simulate an old DB at version 0 (schema_version is empty).
+        conn = self._fresh_conn()
+        conn.commit()  # schema_version table exists but has no rows
+        bot._apply_migrations(conn)
+        conn.commit()
+        ver = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+        self.assertEqual(ver, max(bot.MIGRATIONS))
+        conn.close()
 
 
 if __name__ == "__main__":

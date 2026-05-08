@@ -19,6 +19,11 @@ Toutes les modifications notables de ce projet sont documentées ici.
 - **Scripts de déploiement — suppression de `sshpass -p`** (mot de passe visible dans `ps aux`) : remplacé par `SSHPASS="$pwd" sshpass -e` dans les trois scripts de déploiement (`test_all_accounts.sh`, `test_multibot_deploy.sh`, `test_standalone_deploy.sh`)
 - **Scripts de déploiement — `StrictHostKeyChecking=no` → `accept-new`** : l'acceptation aveugle des clés SSH remplacée par `accept-new` (confiance au premier contact, rejet si la clé change) dans les 3 scripts de déploiement
 
+### Ajout
+- **Circuit-breaker sur les échecs API CLOB** (`BotState.api_fail_streak` / `api_cooldown_until`) : après 3 échecs consécutifs de `post_order` avec une clé privée configurée, les nouvelles entrées sont suspendues 5 minutes ; le compteur se remet à 0 au premier ordre réussi ; `check_signal` vérifie le cooldown avant le `signalled.add()` ; 6 nouveaux tests dans `TestCircuitBreaker`
+- **Versionnage du schéma DB** (dictionnaire `MIGRATIONS` + `_apply_migrations`) : table `schema_version` ajoutée au SCHEMA ; `_apply_migrations(conn)` applique les migrations en attente dans l'ordre des versions et enregistre la version la plus haute appliquée ; `init_db` l'appelle après `executescript(SCHEMA)` ; `make_db()` dans les tests mis à jour en conséquence ; 5 nouveaux tests dans `TestSchemaVersioning`
+- **`.pylintrc` — `[TYPECHECK] ignored-modules = websockets`** : supprime le faux positif `E0401 import-error` préexistant qui apparaît quand pylint s'exécute sous Python système (paquet venv uniquement) ; restaure 10,00/10
+
 ### Correction
 - **pylint 10,00/10 rétabli** après le commit sécurité : helper `_today_ms_utc()` extrait dans `bot_utils.py` (élimine R0801 duplicate-code entre `generate_status_html` et `restore_state_from_db`) ; imports `from` stdlib déplacés avant les tiers-partis dans `live_bot.py` (C0411) ; `max-module-lines=1200` ajouté au `.pylintrc` (live_bot a dépassé 1000 lignes après BotConfig + cache PnL journalier)
 - **`scripts/test_all_accounts.sh` — le parseur de résultat reconnaît désormais `OK (skipped=N)`** : le regex `^OK$` échouait quand unittest produit `OK (skipped=13)` ; changé en `^OK( |$)` pour que les déploiements avec des tests ignorés rapportent le succès correctement

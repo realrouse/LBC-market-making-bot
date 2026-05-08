@@ -73,3 +73,8 @@ disable=
     R0911,
     R0912,
     R0915,
+
+[TYPECHECK]
+# websockets is installed in the project venv but not in the system Python
+# that runs pylint; suppress the false-positive import-error it would raise.
+ignored-modules = websockets

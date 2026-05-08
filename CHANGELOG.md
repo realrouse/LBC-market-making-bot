@@ -19,6 +19,11 @@ All notable changes to this project are documented here.
 - **Deploy scripts — `sshpass -p` removed** (password visible in `ps aux`): replaced with `SSHPASS="$pwd" sshpass -e` in all three deploy scripts (`test_all_accounts.sh`, `test_multibot_deploy.sh`, `test_standalone_deploy.sh`)
 - **Deploy scripts — `StrictHostKeyChecking=no` → `accept-new`**: blind host-key acceptance replaced with `accept-new` (trusts on first connect, rejects changed keys) in all 3 deploy scripts
 
+### Added
+- **Circuit-breaker on CLOB API failures** (`BotState.api_fail_streak` / `api_cooldown_until`): after 3 consecutive `post_order` failures while a private key is configured, new entries are suspended for 5 minutes; the streak resets to 0 on the first successful order; `check_signal` checks the cooldown before the `signalled.add()` call; 6 new tests in `TestCircuitBreaker`
+- **DB schema versioning** (`MIGRATIONS` dict + `_apply_migrations`): `schema_version` table added to SCHEMA; `_apply_migrations(conn)` applies any pending migrations in version order and records the highest applied version; `init_db` calls it after `executescript(SCHEMA)`; `make_db()` in tests updated accordingly; 5 new tests in `TestSchemaVersioning`
+- **`.pylintrc` — `[TYPECHECK] ignored-modules = websockets`**: suppresses the pre-existing `E0401 import-error` false positive that occurs when pylint runs under system Python (venv-only package); restores 10.00/10
+
 ### Fixed
 - **pylint 10.00/10 restored** after security commit: `_today_ms_utc()` helper extracted to `bot_utils.py` (eliminates R0801 duplicate-code between `generate_status_html` and `restore_state_from_db`); stdlib `from`-imports moved before third-party in `live_bot.py` (C0411); `max-module-lines=1200` added to `.pylintrc` (live_bot grew past 1000 after BotConfig + daily PnL cache additions)
 - **`scripts/test_all_accounts.sh` — result parser now matches `OK (skipped=N)`**: regex `^OK$` failed when unittest emits `OK (skipped=13)`; changed to `^OK( |$)` so deployments with skipped tests report success correctly
