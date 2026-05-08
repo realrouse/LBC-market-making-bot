@@ -628,20 +628,97 @@ def print_comparison(
             print()
 
 
-def print_sweep_table(results: list) -> None:
-    """Print a comparison table of all parameter combinations."""
-    header = (f"{'threshold':>9} | {'min_secs':>8} | {'min_ask':>7} | {'obi':>6} | "
-              f"{'trades':>6} | {'wins':>5} | {'WR%':>6} | {'PnL':>8} | {'MaxDD':>7}")
+def _ratio(pnl: float, dd: float) -> float:
+    """PnL / MaxDD risk-adjusted ratio (Calmar-style). Inf when DD=0 and PnL>0."""
+    if dd <= 0:
+        return float("inf") if pnl > 0 else 0.0
+    return pnl / dd
+
+
+def print_sweep_table(results: list, sort_by: str = "wr", show_dsl: bool = False) -> None:
+    """
+    Print a comparison table of all parameter combinations.
+
+    sort_by: 'wr'    → sort by win rate (default)
+             'pnl'   → sort by total PnL
+             'ratio' → sort by PnL/MaxDD (risk-adjusted, recommended for strategy selection)
+    show_dsl: include the daily_stop_loss column (set True when the sweep varies it)
+    """
+    dsl_col = " | {'dsl':>6}" if show_dsl else ""
+    header = (
+        f"{'threshold':>9} | {'min_secs':>8} | {'min_ask':>7} | {'obi':>6}"
+        + (f" | {'dsl':>6}" if show_dsl else "")
+        + f" | {'trades':>6} | {'wins':>5} | {'WR%':>6} | {'PnL':>9} | {'MaxDD':>7} | {'PnL/DD':>7}"
+    )
     sep = "-" * len(header)
+
+    sort_keys = {
+        "wr":    lambda x: -x[1]["win_rate"],
+        "pnl":   lambda x: -x[1]["total_pnl"],
+        "ratio": lambda x: -(x[1].get("ratio") or _ratio(x[1]["total_pnl"], x[1]["max_drawdown"])),
+    }
+    key_fn = sort_keys.get(sort_by, sort_keys["wr"])
+
     print(f"\n{header}\n{sep}")
-    for params, stats in sorted(results, key=lambda x: -x[1]["win_rate"]):
+    for params, stats in sorted(results, key=key_fn):
+        ratio = stats.get("ratio") or _ratio(stats["total_pnl"], stats["max_drawdown"])
+        ratio_str = f"{ratio:>7.2f}" if ratio != float("inf") else "    ∞"
+        dsl_part = f" {params.daily_stop_loss:>5.0f} |" if show_dsl else ""
         print(
             f"  {params.signal_threshold:>7.2f} | {params.min_secs_remaining:>8.0f} |"
             f" {params.min_ask_vol:>7.0f} | {params.obi_reject_thresh:>6.2f} |"
+            f"{dsl_part}"
             f" {stats['total']:>6} | {stats['wins']:>5} |"
-            f" {stats['win_rate']:>5.1f}% | ${stats['total_pnl']:>+7.2f} |"
-            f" ${stats['max_drawdown']:>6.2f}"
+            f" {stats['win_rate']:>5.1f}% | ${stats['total_pnl']:>+8.2f} |"
+            f" ${stats['max_drawdown']:>6.2f} | {ratio_str}"
         )
+
+
+def print_recommendations(results: list, n: int = 5) -> None:
+    """Print top-N configs by three criteria: PnL/DD ratio, total PnL, win rate."""
+    def _r(x):
+        return x[1].get("ratio") or _ratio(x[1]["total_pnl"], x[1]["max_drawdown"])
+
+    def _row(rank: int, params: Params, stats: dict) -> str:
+        ratio = _r((params, stats))
+        ratio_s = f"{ratio:.2f}" if ratio != float("inf") else "∞"
+        return (
+            f"  {rank}. thr={params.signal_threshold}  secs={params.min_secs_remaining:.0f}  "
+            f"ask={params.min_ask_vol:.0f}  obi={params.obi_reject_thresh}  "
+            f"dsl={params.daily_stop_loss:.0f}"
+            f"  → trades={stats['total']}  WR={stats['win_rate']:.1f}%"
+            f"  PnL=${stats['total_pnl']:+.2f}  DD=${stats['max_drawdown']:.2f}"
+            f"  ratio={ratio_s}"
+        )
+
+    filtered = [(p, s) for p, s in results if s["total"] >= 50]  # ignore thin configs
+
+    print("\n" + "=" * 80)
+    print("  RECOMMANDATIONS — top configs par critère (configs avec ≥50 trades)")
+    print("=" * 80)
+
+    print("\n  ── Par ratio PnL/MaxDD (risque ajusté — recommandé) ──")
+    for i, (p, s) in enumerate(sorted(filtered, key=lambda x: -_r(x))[:n], 1):
+        print(_row(i, p, s))
+
+    print("\n  ── Par PnL total ──")
+    for i, (p, s) in enumerate(sorted(filtered, key=lambda x: -x[1]["total_pnl"])[:n], 1):
+        print(_row(i, p, s))
+
+    print("\n  ── Par win rate ──")
+    for i, (p, s) in enumerate(sorted(filtered, key=lambda x: -x[1]["win_rate"])[:n], 1):
+        print(_row(i, p, s))
+
+    # Single best recommendation
+    if filtered:
+        best_p, best_s = sorted(filtered, key=lambda x: -_r(x))[0]
+        print("\n  ★  MEILLEURE CONFIG GLOBALE (ratio PnL/DD) :")
+        print(f"     python3 scripts/backtest.py --threshold {best_p.signal_threshold}"
+              f" --min-secs {best_p.min_secs_remaining:.0f}"
+              f" --min-ask {best_p.min_ask_vol:.0f}"
+              f" --obi {best_p.obi_reject_thresh}"
+              f" --stake {best_p.stake:.0f}")
+    print("=" * 80)
 
 
 # ─── DB loading ───────────────────────────────────────────────────────────────
@@ -682,10 +759,15 @@ def main():
     parser.add_argument("--compare",    action="store_true",
                         help="three-way comparison: backtest(user) | backtest(aligned) | actual bot")
     parser.add_argument("--sweep",      action="store_true",
-                        help="grid search over multiple parameter combinations")
+                        help="grid search over multiple parameter combinations (per file)")
+    parser.add_argument("--sweep-all",  action="store_true",
+                        help="grid search aggregated across all DB files (more robust than per-file)")
+    parser.add_argument("--sort",       default="ratio",
+                        choices=["wr", "pnl", "ratio"],
+                        help="sweep sort order: wr=win rate, pnl=total PnL, ratio=PnL/MaxDD")
     args = parser.parse_args()
 
-    db_paths = _collect_dbs(args.db, args.all)
+    db_paths = _collect_dbs(args.db, args.all or args.sweep_all)
     if not db_paths:
         print("No database files found. Use --db PATH, --all, or run the bot first.")
         sys.exit(1)
@@ -703,6 +785,9 @@ def main():
 
     file_results: List[dict] = []  # accumulate for aggregate summary
 
+    # ── Collect rows for all DBs (needed by --sweep-all) ─────────────────────
+    all_db_rows: List[Tuple[str, list]] = []  # (db_name, rows) pairs
+
     for db_path in db_paths:
         if not os.path.exists(db_path):
             print(f"WARNING: not found, skipping: {db_path}")
@@ -712,44 +797,53 @@ def main():
         elif db_path == _live_db:   tag = "(live)"
         elif db_path == _paper3_db: tag = "(paper3)"
         else:                       tag = ""
-        print(f"DB: {db_path} {tag}".rstrip())
 
         conn        = sqlite3.connect(db_path)
         n_snapshots = conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
 
         if n_snapshots == 0:
-            print("  No snapshots — skipping.")
             conn.close()
             continue
 
         rows = load_rows(conn)
+        all_db_rows.append((os.path.basename(db_path), rows))
+
+        if args.sweep_all:
+            conn.close()
+            continue   # rows collected; per-file output skipped for sweep-all
+
+        print(f"DB: {db_path} {tag}".rstrip())
 
         if args.sweep:
-            # Grid search — run per file; no cross-file aggregate for sweep.
+            # Per-file grid search — original behaviour extended with daily_sl.
             thresholds = [0.94, 0.95, 0.96, 0.97, 0.98]
             min_secs   = [30,   45,   60]
             min_asks   = [5,    10,   20]
             obi_vals   = [-0.75, -0.50, -0.25]
-            combos     = len(thresholds) * len(min_secs) * len(min_asks) * len(obi_vals)
+            dsl_vals   = [30, 100, 500]
+            combos     = (len(thresholds) * len(min_secs) * len(min_asks)
+                          * len(obi_vals) * len(dsl_vals))
             print(f"Grid search: {len(thresholds)}×{len(min_secs)}×{len(min_asks)}"
-                  f"×{len(obi_vals)} = {combos} combinations")
+                  f"×{len(obi_vals)}×{len(dsl_vals)} = {combos} combinations")
             print(f"Snapshots  : {n_snapshots:,}")
 
             sweep_results = []
-            for thr, secs, ask, obi in product(thresholds, min_secs, min_asks, obi_vals):
+            for thr, secs, ask, obi, dsl in product(
+                    thresholds, min_secs, min_asks, obi_vals, dsl_vals):
                 sp = Params(signal_threshold=thr, min_secs_remaining=secs,
-                            min_ask_vol=ask, obi_reject_thresh=obi, stake=args.stake)
+                            min_ask_vol=ask, obi_reject_thresh=obi,
+                            daily_stop_loss=dsl, stake=args.stake)
                 trades, capital_final = run_backtest(rows, sp)
                 stats = summarize(trades, sp, capital_final)
                 sweep_results.append((sp, stats))
-            print_sweep_table(sweep_results)
+            print_sweep_table(sweep_results, sort_by=args.sort, show_dsl=True)
+            print_recommendations(sweep_results)
 
         else:
             trades, capital_final = run_backtest(rows, p)
             stats = summarize(trades, p, capital_final)
 
             if args.compare:
-                # Detect actual bot params and run a matched backtest.
                 detected = detect_actual_params(conn)
                 actual   = _actual_stats(conn)
 
@@ -780,7 +874,6 @@ def main():
                     detected       = detected,
                 )
             else:
-                # Standard single-block output.
                 label = f"BACKTEST — {os.path.basename(db_path)}" if multi else "BACKTEST"
                 print(_stat_block(label, p, stats, n_snapshots))
 
@@ -794,6 +887,58 @@ def main():
             })
 
         conn.close()
+
+    # ── --sweep-all: aggregate grid search across all DB files ────────────────
+    if args.sweep_all and all_db_rows:
+        total_snaps = sum(len(r) for _, r in all_db_rows)
+        thresholds  = [0.94, 0.95, 0.96, 0.97, 0.98]
+        min_secs    = [30,   45,   60]
+        min_asks    = [5,    10,   20]
+        obi_vals    = [-0.75, -0.50, -0.25]
+        dsl_vals    = [30, 100, 500]
+        combos      = (len(thresholds) * len(min_secs) * len(min_asks)
+                       * len(obi_vals) * len(dsl_vals))
+        db_names    = ", ".join(n for n, _ in all_db_rows)
+        print(f"SWEEP-ALL — {len(all_db_rows)} DB(s): {db_names}")
+        print(f"Grid search: {len(thresholds)}×{len(min_secs)}×{len(min_asks)}"
+              f"×{len(obi_vals)}×{len(dsl_vals)} = {combos} combinations")
+        print(f"Snapshots  : {total_snaps:,} (agrégés — capital reset par fichier)")
+
+        sweep_results = []
+        for thr, secs, ask, obi, dsl in product(
+                thresholds, min_secs, min_asks, obi_vals, dsl_vals):
+            sp = Params(signal_threshold=thr, min_secs_remaining=secs,
+                        min_ask_vol=ask, obi_reject_thresh=obi,
+                        daily_stop_loss=dsl, stake=args.stake)
+            agg_wins = agg_losses = agg_open = 0
+            agg_pnl  = 0.0
+            worst_dd = 0.0
+            for _, rows in all_db_rows:
+                trades, cap = run_backtest(rows, sp)
+                s = summarize(trades, sp, cap)
+                agg_wins    += s["wins"]
+                agg_losses  += s["losses"]
+                agg_open    += s["open"]
+                agg_pnl     += s["total_pnl"]
+                worst_dd     = max(worst_dd, s["max_drawdown"])
+            resolved = agg_wins + agg_losses
+            wr = (agg_wins / resolved * 100) if resolved else 0.0
+            agg_stats = {
+                "total":        resolved + agg_open,
+                "wins":         agg_wins,
+                "losses":       agg_losses,
+                "open":         agg_open,
+                "win_rate":     wr,
+                "total_pnl":    agg_pnl,
+                "max_drawdown": worst_dd,
+                "ratio":        _ratio(agg_pnl, worst_dd),
+                "capital_final": 0.0,
+            }
+            sweep_results.append((sp, agg_stats))
+
+        print_sweep_table(sweep_results, sort_by=args.sort, show_dsl=True)
+        print_recommendations(sweep_results)
+        return
 
     # Print cross-file aggregate when more than one file was replayed.
     if multi and len(file_results) > 1 and not args.sweep:
