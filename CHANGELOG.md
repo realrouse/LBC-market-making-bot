@@ -20,6 +20,7 @@ All notable changes to this project are documented here.
 - **Deploy scripts — `StrictHostKeyChecking=no` → `accept-new`**: blind host-key acceptance replaced with `accept-new` (trusts on first connect, rejects changed keys) in all 3 deploy scripts
 
 ### Added
+- **`strategies/polymarket_BTC5M_v2.json` — new default strategy** (sweep-all optimised 2026-05-08): `signal_threshold=0.95` (was 0.96), `min_secs_remaining=45`, `obi_reject_thresh=-0.75`, `daily_stop_loss=30`; PnL/MaxDD ratio 4.42 vs 3.61 for v1 across 5 databases / 912k snapshots; `live_bot.py` default strategy pointer updated to `polymarket_BTC5M_v2.json`; v1 kept for reference
 - **`scripts/backtest.py --sweep-all`** — aggregate grid search across all databases: runs each of the 405 parameter combinations (5 thresholds × 3 min_secs × 3 min_ask × 3 OBI × 3 daily_stop_loss) independently per DB and aggregates results (sum PnL, worst MaxDD across sessions); prints the full ranked sweep table plus `print_recommendations()` — top-5 configs by PnL/MaxDD ratio, by total PnL, and by win rate, with the exact CLI command for the best overall config
 - **`scripts/backtest.py --sort wr|pnl|ratio`** — sweep table is now sortable; default sort is `ratio` (PnL/MaxDD Calmar-style); `--sort pnl` ranks by total PnL; `--sort wr` ranks by win rate
 - **`scripts/backtest.py --sweep` extended grid** — `daily_stop_loss` added as a sweep dimension (`[30, 100, 500]`); grid is now 5×3×3×3×3 = 405 combinations (was 5×3×3 = 45); `ratio` column (PnL/MaxDD) and `dsl` column added to the sweep table
