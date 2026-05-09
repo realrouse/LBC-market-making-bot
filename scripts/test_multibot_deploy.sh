@@ -89,6 +89,13 @@ if [[ "$N_BOTS" -ne ${#PASSWORDS[@]} ]]; then
     exit 1
 fi
 
+# Per-account indicators config paths (relative to REMOTE_INSTALL_DIR). "" = skip.
+INDICATORS_CONFIGS=("${TEST_INDICATORS_CONFIGS[@]:-}")
+# Pad with empty strings if the conf omitted the array or it's shorter than USERS.
+while [[ ${#INDICATORS_CONFIGS[@]} -lt $N_BOTS ]]; do
+    INDICATORS_CONFIGS+=("")
+done
+
 # ─── Helpers SSH ───────────────────────────────────────────────────────────────
 run() {
     local idx="$1"; shift
@@ -149,10 +156,14 @@ for idx in "${!USERS[@]}"; do
     run $idx "
         pkill -f '[a]ccount_bot.py' 2>/dev/null || true
         pkill -f '[f]eed.py'        2>/dev/null || true
+        pkill -f '[i]ndicators.py'  2>/dev/null || true
         sleep 3
         pkill -9 -f '[a]ccount_bot.py' 2>/dev/null || true
         pkill -9 -f '[f]eed.py'        2>/dev/null || true
+        pkill -9 -f '[i]ndicators.py'  2>/dev/null || true
         fuser -k 5557/tcp 2>/dev/null || true
+        fuser -k 5559/tcp 2>/dev/null || true
+        fuser -k 5560/tcp 2>/dev/null || true
         rm -rf $REMOTE_INSTALL_DIR $REMOTE_BOT_DIR || true
         rm -rf /tmp/tradinebotte-feed || true
         exit 0
@@ -196,6 +207,26 @@ for idx in "${!USERS[@]}"; do
     run $idx "mkdir -p $REMOTE_BOT_DIR" && ok "$user : $REMOTE_BOT_DIR prêt"
 done
 
+# ─── Phase 3b : Lancement des services d'indicateurs ──────────────────────────
+section "PHASE 3b — SERVICES D'INDICATEURS"
+IND_STARTED=0
+for idx in "${!USERS[@]}"; do
+    cfg="${INDICATORS_CONFIGS[$idx]:-}"
+    [[ -z "$cfg" ]] && continue
+    user="${USERS[$idx]}"
+    info "Lancement indicators.py pour $user — config=$cfg"
+    run $idx "
+        cd $REMOTE_INSTALL_DIR
+        nohup $REMOTE_INSTALL_DIR/venv/bin/python3 -u bot/indicators.py \
+            --config $REMOTE_INSTALL_DIR/$cfg \
+            > $REMOTE_BOT_DIR/indicators.log 2>&1 < /dev/null &
+        echo \"IND_PID=\$!\"
+    " && ok "$user : indicators.py lancé" || warn "$user : lancement indicators échoué"
+    IND_STARTED=$((IND_STARTED + 1))
+done
+[[ $IND_STARTED -gt 0 ]] && { sleep 5; ok "$IND_STARTED service(s) indicators lancé(s)"; } \
+    || info "Aucun service indicators configuré"
+
 # ─── Phase 4 : Lancement simultané ─────────────────────────────────────────────
 section "PHASE 4 — LANCEMENT SIMULTANÉ DES $N_BOTS BOTS"
 info "Envoi des $N_BOTS commandes de lancement en parallèle (test race condition)..."
@@ -227,6 +258,16 @@ info "Processus account_bot : $BOT_COUNT (attendu : $N_BOTS)"
 
 [[ "$FEED_COUNT" -eq 1 ]]       && ok "Feed unique actif" || err "Nombre incorrect de feeds : $FEED_COUNT (attendu 1)"
 [[ "$BOT_COUNT"  -eq "$N_BOTS" ]] && ok "$N_BOTS bots actifs" || err "Nombre incorrect de bots : $BOT_COUNT (attendu $N_BOTS)"
+
+# Vérification des services indicators
+for idx in "${!USERS[@]}"; do
+    cfg="${INDICATORS_CONFIGS[$idx]:-}"
+    [[ -z "$cfg" ]] && continue
+    user="${USERS[$idx]}"
+    IND_COUNT=$(run $idx "ps aux | grep '[i]ndicators.py' | wc -l" || echo 0)
+    [[ "$IND_COUNT" -ge 1 ]] && ok "$user : indicators.py actif ($cfg)" \
+        || err "$user : indicators.py non trouvé pour config $cfg"
+done
 
 for idx in "${!USERS[@]}"; do
     user="${USERS[$idx]}"
@@ -336,10 +377,14 @@ for idx in "${!USERS[@]}"; do
     run $idx "
         pkill -f '[a]ccount_bot.py' 2>/dev/null || true
         pkill -f '[f]eed.py'        2>/dev/null || true
+        pkill -f '[i]ndicators.py'  2>/dev/null || true
         sleep 2
         pkill -9 -f '[a]ccount_bot.py' 2>/dev/null || true
         pkill -9 -f '[f]eed.py'        2>/dev/null || true
+        pkill -9 -f '[i]ndicators.py'  2>/dev/null || true
         fuser -k 5557/tcp 2>/dev/null || true
+        fuser -k 5559/tcp 2>/dev/null || true
+        fuser -k 5560/tcp 2>/dev/null || true
         rm -rf /tmp/tradinebotte-feed || true
         exit 0
     " && info "$user : processus arrêtés" || true

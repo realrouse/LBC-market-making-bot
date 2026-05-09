@@ -496,6 +496,27 @@ Les messages ne sont publiés qu'une fois `--min-ticks` (défaut : 25) mises à 
 
 **Variables d'environnement :** `TRADINEBOTTE_FEED_ADDR` et `TRADINEBOTTE_INDICATORS_ADDR` surchargent les valeurs par défaut de `--feed` et `--out`.
 
+### Configs séparées par compte
+
+Deux fichiers de config prêts à l'emploi sont fournis pour les déploiements multi-bots :
+
+| Fichier | Compte | Port | Timeframe |
+|---|---|---|---|
+| `strategies/indicators_4h.json` | account-a | `:5559` | 4h |
+| `strategies/indicators_1d.json` | account-b | `:5560` | `1d` |
+
+Démarrer avec `start_indicators.sh` :
+
+```bash
+# account-a
+TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_4h.json \
+  bash scripts/start_indicators.sh
+
+# account-b
+TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_1d.json \
+  bash scripts/start_indicators.sh
+```
+
 
 ## Backtest grid trading
 

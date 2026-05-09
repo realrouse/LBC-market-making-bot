@@ -490,6 +490,27 @@ Messages are only published once `--min-ticks` (default: 25) price updates have 
 
 **Environment variables:** `TRADINEBOTTE_FEED_ADDR` and `TRADINEBOTTE_INDICATORS_ADDR` override the defaults for `--feed` and `--out`.
 
+### Per-account split configs
+
+Two ready-to-use configs are provided for multi-bot deployments:
+
+| File | Account | Port | Timeframe |
+|---|---|---|---|
+| `strategies/indicators_4h.json` | account-a | `:5559` | 4h |
+| `strategies/indicators_1d.json` | account-b | `:5560` | `1d` |
+
+Start each with `start_indicators.sh`:
+
+```bash
+# account-a
+TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_4h.json \
+  bash scripts/start_indicators.sh
+
+# account-b
+TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_1d.json \
+  bash scripts/start_indicators.sh
+```
+
 
 ## Grid Trading Backtest
 

@@ -510,5 +510,71 @@ class TestMultiBotIndicatorSharing(unittest.TestCase):
         self.assertEqual(by_id["btc_1d"].timeframe, "1d")
 
 
+class TestSplitConfigs(unittest.TestCase):
+    """
+    Verify that indicators_4h.json and indicators_1d.json are valid stand-alone
+    per-account configs with distinct ports and the expected single stream each.
+    """
+
+    def _path(self, filename: str) -> str:
+        return os.path.join(os.path.dirname(__file__), "..", "strategies", filename)
+
+    def _load(self, filename: str):
+        path = self._path(filename)
+        if not os.path.exists(path):
+            self.skipTest(f"strategies/{filename} not found")
+        return load_config(path)
+
+    # ── indicators_4h.json ────────────────────────────────────────────────────
+
+    def test_4h_config_loads(self) -> None:
+        feed, out, min_ticks, streams = self._load("indicators_4h.json")
+        self.assertEqual(out, "tcp://127.0.0.1:5559")
+        self.assertEqual(len(streams), 1)
+        self.assertEqual(streams[0].id, "btc_4h")
+        self.assertEqual(streams[0].timeframe, "4h")
+        self.assertEqual(streams[0].asset, "BTCUSDT")
+        self.assertEqual(streams[0].source, "binance_ws")
+
+    def test_4h_has_rsi_and_volatility(self) -> None:
+        _, _, _, streams = self._load("indicators_4h.json")
+        types = {s.type for s in streams[0].indicators}
+        self.assertIn("rsi", types)
+        self.assertIn("volatility", types)
+
+    # ── indicators_1d.json ────────────────────────────────────────────────────
+
+    def test_1d_config_loads(self) -> None:
+        feed, out, min_ticks, streams = self._load("indicators_1d.json")
+        self.assertEqual(out, "tcp://127.0.0.1:5560")
+        self.assertEqual(len(streams), 1)
+        self.assertEqual(streams[0].id, "btc_1d")
+        self.assertEqual(streams[0].timeframe, "1d")
+        self.assertEqual(streams[0].asset, "BTCUSDT")
+        self.assertEqual(streams[0].source, "binance_ws")
+
+    def test_1d_has_rsi_and_volatility(self) -> None:
+        _, _, _, streams = self._load("indicators_1d.json")
+        types = {s.type for s in streams[0].indicators}
+        self.assertIn("rsi", types)
+        self.assertIn("volatility", types)
+
+    # ── cross-config isolation ────────────────────────────────────────────────
+
+    def test_ports_are_distinct(self) -> None:
+        """4h and 1d configs must bind on different ports — no conflict possible."""
+        _, out_4h, _, _ = self._load("indicators_4h.json")
+        _, out_1d, _, _ = self._load("indicators_1d.json")
+        self.assertNotEqual(out_4h, out_1d)
+
+    def test_stream_ids_are_distinct(self) -> None:
+        _, _, _, streams_4h = self._load("indicators_4h.json")
+        _, _, _, streams_1d = self._load("indicators_1d.json")
+        ids_4h = {s.id for s in streams_4h}
+        ids_1d = {s.id for s in streams_1d}
+        self.assertFalse(ids_4h & ids_1d,
+                         f"stream_id collision: {ids_4h & ids_1d}")
+
+
 if __name__ == "__main__":
     unittest.main()
