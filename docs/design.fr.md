@@ -374,6 +374,76 @@ sont re-publiés au prochain refresh de 30 secondes.
 
 ---
 
+## 11. ZeroMQ vs MQTT — analyse des compromis pour ce projet
+
+ZeroMQ et MQTT implémentent tous deux du publish/subscribe, mais font des
+choix architecturaux opposés. Cette section explique pourquoi ZeroMQ a été
+retenu et quels sont les compromis concrets dans le contexte de tradinebotte.
+
+### Différence clé : avec ou sans broker
+
+MQTT est **basé sur un broker** : chaque message transite par un serveur
+central (Mosquitto, EMQX, …). Publishers et subscribers ne communiquent jamais
+directement — le broker sert d'intermédiaire, stocke les messages retenus et
+applique les niveaux de QoS.
+
+ZeroMQ est **sans broker** : le publisher bind un port TCP ; les subscribers
+s'y connectent directement. Aucun processus intermédiaire n'existe.
+
+```
+Topologie MQTT              Topologie ZeroMQ (la nôtre)
+──────────────────          ──────────────────────────────
+feed.py                     feed.py
+  │  publish                PUB bind :5557
+  ▼                           │
+[broker Mosquitto]            ├──▶ account_bot A (SUB connect)
+  │  subscribe               ├──▶ account_bot B (SUB connect)
+  ├──▶ account_bot A         └──▶ indicators.py (SUB connect)
+  ├──▶ account_bot B
+  └──▶ indicators.py
+```
+
+### Avantages de ZeroMQ dans notre cas
+
+| Critère | Détail |
+|---|---|
+| **Aucun processus broker** | Aucun daemon supplémentaire à déployer, configurer, surveiller ou redémarrer. 3 points de défaillance en moins par VPS. |
+| **Latence** | TCP loopback sans saut broker : ~10–50 µs contre ~1 ms via un broker MQTT local. Critique pour les messages `book` qui pilotent l'évaluation du signal au seuil 0,96. |
+| **Pas de données périmées** | ZeroMQ PUB/SUB ne retient aucun message. Un SUB qui se connecte tardivement manque les anciens messages — exactement ce que l'on veut : un `account_bot` redémarré après un crash ne doit pas recevoir des centaines de prix en file d'attente. |
+| **Simplicité** | `pip install pyzmq` suffit ; aucun paquet broker, aucun fichier de config, aucune règle ACL. Une ligne pour bind, une pour connect. |
+| **High-water mark (HWM)** | Si un subscriber est lent, ZeroMQ abandonne silencieusement les messages à la HWM. Pour un flux de données de marché, abandonner est le bon comportement : un prix périmé est pire qu'aucun prix. |
+| **Déploiement localhost** | Tous les processus tournent sur le même VPS. `tcp://127.0.0.1:*` ne nécessite ni auth, ni TLS, ni ACL réseau. Le modèle de sécurité MQTT (users, TLS, ACL) n'apporte rien ici. |
+
+### Inconvénients de ZeroMQ dans notre cas
+
+| Critère | Détail |
+|---|---|
+| **Pas de persistance** | Un subscriber non connecté au moment de l'envoi ne recevra jamais le message. Ce n'est généralement pas un problème (`book` est continu ; `market` est re-publié toutes les 30 s) mais un `account_bot` fraîchement redémarré peut manquer le premier cycle d'annonces de marchés. |
+| **Pas de filtrage par topic côté broker** | ZeroMQ PUB envoie chaque message à tous les SUB connectés. Le filtrage se fait côté application (`if msg["stream_id"] != "btc_4h": continue`). Avec MQTT, le filtrage par topic au niveau du broker économise du CPU sur les flux haute fréquence quand il y a beaucoup de subscribers. Ce n'est pas un problème aujourd'hui (N ≤ 3 subscribers). |
+| **Pas de monitoring intégré** | Les brokers MQTT exposent un arbre de topics `$SYS` avec comptes de connexions, débit, profondeur de file. ZeroMQ n'a pas d'équivalent — le diagnostic nécessite une instrumentation applicative ou des outils externes. |
+| **Perte de messages à la reconnexion** | Après un redémarrage du feed, les SUB se reconnectent automatiquement mais perdent les messages publiés pendant le gap. Le refresh `market` toutes les 30 s atténue ce problème ; les gaps sur `book` sont acceptables. |
+
+### Pourquoi MQTT serait moins adapté ici
+
+| Fonctionnalité MQTT | Notre situation |
+|---|---|
+| **Messages retenus** | On ne veut précisément *pas* qu'un `account_bot` fraîchement connecté reçoive le dernier prix en cache : il pourrait avoir plusieurs minutes d'ancienneté et corrompre la phase de warmup `min_ticks`. |
+| **QoS 1 / QoS 2** | Ajoute des aller-retours d'acquittement et des garanties at-least-once / exactly-once. Pour les prix en streaming, une livraison dupliquée est néfaste (les ticks comptés deux fois faussent l'historique des indicateurs). |
+| **HA broker / clustering** | Notre architecture tourne sur un VPS unique. La HA broker MQTT ajoute de la complexité sans aucun bénéfice. |
+| **Orienté WAN / IoT** | MQTT a été conçu pour des appareils contraints sur des réseaux peu fiables. Nos pipes sont du TCP loopback — il n'y a ni perte de paquets, ni limite de bande passante, ni problème de keep-alive à résoudre. |
+
+### Verdict
+
+ZeroMQ est le bon choix pour ce projet : il supprime le broker du chemin
+critique, élimine une classe entière de défaillances de déploiement, et fournit
+la sémantique sans-persistance, basse-latence que requiert un flux de carnets
+d'ordres haute fréquence. Le seul scénario où MQTT deviendrait intéressant
+serait une distribution des subscribers sur plusieurs hôtes (VPS distincts) et
+un filtrage par topic au niveau du broker pour gérer la bande passante — un
+scénario hors périmètre actuellement.
+
+---
+
 ## 10. Fichiers liés
 
 | Fichier | Rôle |
