@@ -450,6 +450,77 @@ Quand plusieurs fichiers sont traités, chaque fichier tourne avec le capital r�
 | `--top N` | 0 (tous) | Afficher uniquement les top-N configs uniques (dédupliqué sur seuil/min_secs/obi) |
 
 
+## Backtest grid trading
+
+Rejouer des données OHLCV BTC/USDT historiques contre une stratégie grid configurable. Modèle de remplissage : touche de prix sur l'intervalle `[low, high]` de la bougie. Nécessite des bases SQLite de bougies 1 minute dans `data/` — à télécharger avec `scripts/download_btc_history.py`.
+
+```bash
+# Grid statique (défaut) — toutes les BDs dans data/
+python3 scripts/backtest_grid.py --all
+
+# Trailing bear-adapté — recentrage vers le bas à chaque exit_low
+python3 scripts/backtest_grid.py --all --trail bear
+
+# Trailing bull-adapté — recentrage vers le haut à chaque exit_high
+python3 scripts/backtest_grid.py --all --trail bull
+
+# Comparaison côte à côte : statique vs trailing
+python3 scripts/backtest_grid.py --all --trail bear --compare
+python3 scripts/backtest_grid.py --all --trail bull --compare
+
+# Balayage de paramètres (combos range × levels)
+python3 scripts/backtest_grid.py --all --sweep
+python3 scripts/backtest_grid.py --all --sweep --sort pnl
+
+# Fichier BD explicite
+python3 scripts/backtest_grid.py data/BTCUSDT_1m90d_range_20260208-20260509.db
+```
+
+**Flags de paramètres :**
+
+| Flag | Défaut | Description |
+|---|---|---|
+| `--all` | — | Utiliser tous les fichiers `BTCUSDT_1m*.db` trouvés dans `data/` |
+| `--range FLOAT` | 15.0 | Grid ±% du prix de départ/recentrage (`grid_lower = prix × (1 − range/100)`) |
+| `--levels INT` | 30 | Nombre de niveaux équidistants ; capital = `levels × size` |
+| `--size FLOAT` | 50.0 | USDT par ordre |
+| `--fee FLOAT` | 0.1 | Taux de frais % par côté |
+| `--trail MODE` | `off` | Mode trailing : `off` (statique), `bear` (recentrage bas), `bull` (recentrage haut), `both` (les deux — dangereux en marché tendanciel) |
+| `--max-recenters INT` | 10 | Nombre maximum de recentrages avant traitement comme stop-loss |
+| `--compare` | — | Exécuter le mode statique en parallèle et afficher la comparaison par BD |
+| `--sweep` | — | Balayer `range_pct × levels` (5×3 = 15 combos) |
+| `--sort METRIC` | `calmar` | Trier les résultats du sweep par `calmar` (PnL%/MaxDD) ou `pnl` |
+
+### Télécharger les données OHLCV historiques
+
+```bash
+# 90 derniers jours (défaut)
+python3 scripts/download_btc_history.py
+
+# Plage historique — bear market 2022 (crash LUNA)
+python3 scripts/download_btc_history.py --start 2022-05-01 --end 2022-08-01
+
+# Plage historique — bull run 2024
+python3 scripts/download_btc_history.py --start 2024-10-15 --end 2025-01-15
+
+# Chemin de sortie personnalisé
+python3 scripts/download_btc_history.py --out data/ma_plage.db
+```
+
+**Flags :**
+
+| Flag | Défaut | Description |
+|---|---|---|
+| `--symbol STR` | `BTCUSDT` | Paire de trading |
+| `--interval STR` | `1m` | Intervalle des bougies (`1m`, `5m`, `15m`, `1h`, …) |
+| `--days INT` | 90 | Nombre de jours à télécharger (utilisé si `--start` est absent) |
+| `--start DATE` | — | Date de début `YYYY-MM-DD` ; remplace `--days` |
+| `--end DATE` | aujourd'hui | Date de fin `YYYY-MM-DD` |
+| `--out FILE` | auto | Chemin SQLite de sortie (défaut : `data/BTCUSDT_1m<N>d_range_<dates>.db`) |
+
+Les bases de données téléchargées sont exclues du git (`.gitignore`). Le téléchargement reprend depuis la dernière bougie stockée lors d'une relance. Voir [`docs/AdaptedGridTrading.fr.md`](docs/AdaptedGridTrading.fr.md) pour les résultats de backtest, la sélection de stratégie et les tableaux de balayage de paramètres.
+
+
 ## Filtre heure / jour
 
 Le bot peut restreindre les entrées en trade à des plages horaires UTC selon le type de jour. Le filtre est configuré dans le fichier de stratégie JSON (`strategies/polymarket_BTC5M.json`) et est **désactivé par défaut** — le comportement existant est préservé jusqu'à activation explicite.

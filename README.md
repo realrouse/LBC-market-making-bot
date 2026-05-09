@@ -17,6 +17,7 @@ Automated trading bot for [Polymarket](https://polymarket.com) prediction market
 - **Optional HTML status page** — bot writes a self-refreshing page (configurable path, optional HTTP Basic Auth) — [see preview](docs/status_example.html)
 - **Multi-bot WebSocket sharing** — `bot/feed.py` holds a single WebSocket connection and broadcasts every book update over ZeroMQ PUB; one or more `bot/account_bot.py` processes subscribe and trade with fully isolated SQLite databases, logs, and configs; each bot evaluates signals with **its own** strategy parameters (different thresholds, stakes, or hour filters); works across Linux users (`/home/user1`, `/home/user2`); **feed auto-starts** — the first account_bot to launch starts feed.py automatically via a race-safe file lock, no manual feed management needed — see [docs/multi.md](docs/multi.md) for the full decision guide and architecture reference
 - **Pluggable exchange API** — all Polymarket-specific code lives in `bot/api_polymarket.py`; swapping exchanges requires only a new adapter file and a single import change in `live_bot.py`; Binance spot (`bot/api_binance.py`) and MEXC spot (`bot/api_mexc.py`) connectors are included, implementing the identical interface with HMAC-SHA256 signing, OBI computation, and dry-run mode
+- **Grid trading** — BTC/USDT spot grid strategy for Binance/MEXC: places buy orders across N evenly-spaced levels, collects profit on each BUY→SELL cycle; three modes: `static` (stop when price exits range), `trail=bear` (re-center downward — profitable exit on bounce; −3.3% → +2.0% on 2022 LUNA crash), `trail=bull` (re-center upward — captures full bull run; +0.1% → +3.7% on 2024 bull run); backtested on three 90-day BTC regimes (lateral 2026, bear 2022, bull 2024); see [`docs/AdaptedGridTrading.md`](docs/AdaptedGridTrading.md)
 - **API latency benchmark** — `scripts/benchmark_api.py` measures REST round-trip time and WebSocket time-to-first-message across all three exchanges; reports min/mean/p50/p90/p99/max/σ; `--rounds N` and `--no-ws` options
 - **Bilingual interface** — `scripts/setup.py`, `install.sh`, `start_bot.sh`, and `monitor.sh` prompt `[E] English / [F] Français` at startup; the choice is persisted as `"lang"` in `config.json` and inherited automatically by subsequent scripts
 - **JSON strategy files** — signal and capital parameters live in `strategies/polymarket_BTC5M.json`; switch strategies by pointing `"strategy"` in `config.json` to any file
@@ -191,6 +192,27 @@ python3 scripts/backtest.py --db data/*.db         # shell glob (independent cap
 python3 scripts/backtest.py --all                  # scan data/ + live.db if ≥ 100 snapshots
 TRADINEBOTTE_DIR=~/mybot python3 scripts/backtest.py # custom database path
 ```
+
+## Grid Trading Backtest
+
+Replay historical BTC/USDT OHLCV data against a configurable grid strategy. Fill model: price-touch on candle `[low, high]`. Requires 1-minute SQLite databases in `data/` — download with `scripts/download_btc_history.py`.
+
+```bash
+python3 scripts/backtest_grid.py --all                           # static grid, all DBs in data/
+python3 scripts/backtest_grid.py --all --trail bear              # bear-adapted trailing
+python3 scripts/backtest_grid.py --all --trail bull --compare    # bull trailing vs static
+python3 scripts/backtest_grid.py --all --sweep --sort pnl        # parameter sweep
+```
+
+Download historical OHLCV data from Binance:
+
+```bash
+python3 scripts/download_btc_history.py                                          # last 90 days
+python3 scripts/download_btc_history.py --start 2022-05-01 --end 2022-08-01     # bear market
+python3 scripts/download_btc_history.py --start 2024-10-15 --end 2025-01-15     # bull run
+```
+
+See [`docs/AdaptedGridTrading.md`](docs/AdaptedGridTrading.md) for full strategy documentation, backtest results, and strategy selection guide.
 
 ## Notes
 

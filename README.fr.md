@@ -17,6 +17,7 @@ Bot de trading automatisé pour les marchés de prédiction [Polymarket](https:/
 - **Page de statut HTML optionnelle** — le bot écrit une page auto-rafraîchissante (chemin configurable, authentification HTTP Basic Auth optionnelle) — [aperçu visuel](docs/status_example.html)
 - **Partage WebSocket multi-bot** — `bot/feed.py` maintient une seule connexion WebSocket et diffuse chaque mise à jour via ZeroMQ PUB ; un ou plusieurs processus `bot/account_bot.py` souscrivent et tradent avec des bases SQLite, logs et configs totalement isolés ; chaque bot évalue les signaux avec **ses propres** paramètres de stratégie (seuils, mises ou filtres horaires différents) ; fonctionne entre utilisateurs Linux différents (`/home/user1`, `/home/user2`) ; **feed auto-démarré** — le premier account_bot à se lancer démarre feed.py automatiquement via un verrou fichier sans race condition, aucune gestion manuelle du feed requise — voir [docs/multi.fr.md](docs/multi.fr.md) pour le guide de décision et la référence d'architecture complète
 - **API exchange modulaire** — tout le code spécifique Polymarket est dans `bot/api_polymarket.py` ; changer d'exchange ne nécessite qu'un nouveau fichier adaptateur et une seule ligne d'import dans `live_bot.py` ; les connecteurs Binance spot (`bot/api_binance.py`) et MEXC spot (`bot/api_mexc.py`) sont inclus, implémentant l'interface identique avec signature HMAC-SHA256, calcul de l'OBI et mode simulation
+- **Grid trading** — stratégie grid spot BTC/USDT pour Binance/MEXC : place des ordres d'achat sur N niveaux équidistants, collecte le profit sur chaque cycle BUY→SELL ; trois modes : `static` (arrêt quand le prix sort de la plage), `trail=bear` (recentrage vers le bas — sortie rentable sur rebond ; −3,3 % → +2,0 % sur le crash LUNA 2022), `trail=bull` (recentrage vers le haut — capture la hausse complète ; +0,1 % → +3,7 % sur la bull run 2024) ; backtesté sur trois régimes BTC de 90 jours (latéral 2026, bear 2022, bull 2024) ; voir [`docs/AdaptedGridTrading.fr.md`](docs/AdaptedGridTrading.fr.md)
 - **Benchmark de latence API** — `scripts/benchmark_api.py` mesure le temps aller-retour REST et le temps jusqu'au premier message WebSocket sur les trois exchanges ; rapporte min/mean/p50/p90/p99/max/σ ; options `--rounds N` et `--no-ws`
 - **Interface bilingue** — `scripts/setup.py`, `install.sh`, `start_bot.sh` et `monitor.sh` proposent `[E] English / [F] Français` au démarrage ; le choix est persisté sous la clé `"lang"` dans `config.json` et hérité automatiquement par les scripts suivants
 - **Fichiers de stratégie JSON** — les paramètres de signal et de capital sont dans `strategies/polymarket_BTC5M.json` ; changer de stratégie se fait en pointant `"strategy"` dans `config.json` vers n'importe quel fichier
@@ -191,6 +192,27 @@ python3 scripts/backtest.py --db data/*.db         # glob shell (capital indépe
 python3 scripts/backtest.py --all                  # scanne data/ + live.db si ≥ 100 snapshots
 TRADINEBOTTE_DIR=~/mybot python3 scripts/backtest.py # chemin de base de données personnalisé
 ```
+
+## Backtest grid trading
+
+Rejouer des données OHLCV BTC/USDT historiques contre une stratégie grid configurable. Modèle de remplissage : touche de prix sur l'intervalle `[low, high]` de la bougie. Nécessite des bases SQLite de bougies 1 minute dans `data/` — à télécharger avec `scripts/download_btc_history.py`.
+
+```bash
+python3 scripts/backtest_grid.py --all                           # grid statique, toutes les BDs
+python3 scripts/backtest_grid.py --all --trail bear              # trailing bear-adapté
+python3 scripts/backtest_grid.py --all --trail bull --compare    # trailing bull vs statique
+python3 scripts/backtest_grid.py --all --sweep --sort pnl        # balayage de paramètres
+```
+
+Télécharger les données OHLCV historiques depuis Binance :
+
+```bash
+python3 scripts/download_btc_history.py                                          # 90 derniers jours
+python3 scripts/download_btc_history.py --start 2022-05-01 --end 2022-08-01     # bear market
+python3 scripts/download_btc_history.py --start 2024-10-15 --end 2025-01-15     # bull run 2024
+```
+
+Voir [`docs/AdaptedGridTrading.fr.md`](docs/AdaptedGridTrading.fr.md) pour la documentation complète des stratégies, les résultats de backtest et le guide de sélection.
 
 ## Notes
 
