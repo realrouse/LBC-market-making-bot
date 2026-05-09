@@ -3,7 +3,13 @@ MEXC spot API adapter — implements the same public interface as
 api_polymarket.py: get_markets, post_order, parse_book_update, compute_fee,
 and market metadata helpers.
 
-MEXC v3 REST is Binance-compatible but uses different WebSocket framing.
+Grid trading extensions (not in api_polymarket):
+    get_order_status(session, symbol, order_id) → status string or None
+    cancel_order(session, symbol, order_id)     → bool
+    get_open_orders(session, symbol)            → list[dict]
+
+MEXC v3 REST is Binance-compatible but uses different WebSocket framing
+and the header key is X-MEXC-APIKEY instead of X-MBX-APIKEY.
 
 Credentials: MEXC_API_KEY and MEXC_API_SECRET env vars,
 or pass api_key / api_secret kwargs to post_order.
@@ -262,3 +268,128 @@ async def post_order(session, symbol, price, size_usdc, *,
     except Exception as e:
         logger.error("MEXC post_order erreur : %s", e)
         return None
+
+
+# ─── ORDER MANAGEMENT (grid trading) ─────────────────────────────────────────
+
+async def get_order_status(session, symbol, order_id, *,
+                           api_key=None, api_secret=None):
+    """
+    Query the status of a single order.
+
+    Returns "NEW" | "FILLED" | "CANCELED" | "PARTIALLY_FILLED",
+    or None on error or in simulation mode (no credentials).
+
+    MEXC v3 endpoint: GET /api/v3/order (Binance-compatible).
+    """
+    _key    = api_key    or os.environ.get("MEXC_API_KEY", "")
+    _secret = api_secret or os.environ.get("MEXC_API_SECRET", "")
+    if not _key or not _secret:
+        return None
+    if str(order_id).startswith("sim_"):
+        return None
+    try:
+        params = {
+            "symbol":    str(symbol).split(":", maxsplit=1)[0],
+            "orderId":   int(order_id),
+            "timestamp": int(time.time() * 1000),
+        }
+        params["signature"] = _sign(params, _secret)
+        async with session.get(
+            f"{BASE_URL}/api/v3/order",
+            params=params,
+            headers={"X-MEXC-APIKEY": _key},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            data = await resp.json(content_type=None)
+            if resp.status != 200:
+                logger.warning("MEXC get_order_status erreur %d : %s", resp.status, data)
+                return None
+            return str(data.get("status", "")) or None
+    except Exception as e:
+        logger.error("MEXC get_order_status erreur : %s", e)
+        return None
+
+
+async def cancel_order(session, symbol, order_id, *,
+                       api_key=None, api_secret=None):
+    """
+    Cancel an open order.
+
+    Returns True on success (status == "CANCELED"), False on error.
+    Simulated orders (sim_ prefix) and missing credentials return True immediately.
+
+    MEXC v3 endpoint: DELETE /api/v3/order (Binance-compatible).
+    """
+    if str(order_id).startswith("sim_"):
+        return True
+    _key    = api_key    or os.environ.get("MEXC_API_KEY", "")
+    _secret = api_secret or os.environ.get("MEXC_API_SECRET", "")
+    if not _key or not _secret:
+        return True
+    try:
+        params = {
+            "symbol":    str(symbol).split(":", maxsplit=1)[0],
+            "orderId":   int(order_id),
+            "timestamp": int(time.time() * 1000),
+        }
+        params["signature"] = _sign(params, _secret)
+        async with session.delete(
+            f"{BASE_URL}/api/v3/order",
+            params=params,
+            headers={"X-MEXC-APIKEY": _key},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            data = await resp.json(content_type=None)
+            if resp.status != 200:
+                logger.warning("MEXC cancel_order erreur %d : %s", resp.status, data)
+                return False
+            return str(data.get("status", "")) == "CANCELED"
+    except Exception as e:
+        logger.error("MEXC cancel_order erreur : %s", e)
+        return False
+
+
+async def get_open_orders(session, symbol, *, api_key=None, api_secret=None):
+    """
+    Return all open orders for `symbol` as a normalised list.
+
+    Each element: {"order_id": str, "side": str, "price": float,
+                   "qty": float, "status": str}
+
+    Returns [] on error or in simulation mode.
+    MEXC v3 endpoint: GET /api/v3/openOrders (Binance-compatible).
+    """
+    _key    = api_key    or os.environ.get("MEXC_API_KEY", "")
+    _secret = api_secret or os.environ.get("MEXC_API_SECRET", "")
+    if not _key or not _secret:
+        return []
+    try:
+        params = {
+            "symbol":    str(symbol).split(":", maxsplit=1)[0],
+            "timestamp": int(time.time() * 1000),
+        }
+        params["signature"] = _sign(params, _secret)
+        async with session.get(
+            f"{BASE_URL}/api/v3/openOrders",
+            params=params,
+            headers={"X-MEXC-APIKEY": _key},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            data = await resp.json(content_type=None)
+            if resp.status != 200:
+                logger.warning("MEXC get_open_orders erreur %d : %s", resp.status, data)
+                return []
+            return [
+                {
+                    "order_id": str(o.get("orderId", "")),
+                    "side":     str(o.get("side", "")),
+                    "price":    float(o.get("price", 0)),
+                    "qty":      float(o.get("origQty", 0)),
+                    "status":   str(o.get("status", "")),
+                }
+                for o in data
+            ]
+    except Exception as e:
+        logger.error("MEXC get_open_orders erreur : %s", e)
+        return []
