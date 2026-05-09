@@ -450,6 +450,53 @@ Quand plusieurs fichiers sont traités, chaque fichier tourne avec le capital r�
 | `--top N` | 0 (tous) | Afficher uniquement les top-N configs uniques (dédupliqué sur seuil/min_secs/obi) |
 
 
+## Service d'indicateurs techniques
+
+`bot/indicators.py` est un étage pipeline ZeroMQ qui se place entre feed.py et n'importe quel consommateur. Il souscrit au socket PUB du feed, accumule un historique de prix par token, et republie des messages d'indicateurs enrichis sur un second socket PUB.
+
+```
+feed.py  PUB :5557  ──SUB──▶  indicators.py  ──PUB :5559──▶  consommateurs
+```
+
+```bash
+# Démarrage avec les paramètres par défaut (SUB :5557 → PUB :5559)
+python3 bot/indicators.py
+
+# Périodes personnalisées
+python3 bot/indicators.py --rsi 7 --sma 10 --ema 5 --vol 10
+
+# Adresses ZMQ personnalisées
+python3 bot/indicators.py --feed tcp://127.0.0.1:5558 --out tcp://127.0.0.1:5560
+
+# Verbeux (affiche chaque publication d'indicateur)
+python3 bot/indicators.py --verbose
+```
+
+**Format des messages publiés :**
+
+```json
+{"t": "indicators", "token_id": "...", "ts": 1746800000000,
+ "rsi_14": 72.3, "sma_20": 0.9612, "ema_9": 0.9634, "vol_20": 0.0021}
+```
+
+Les messages ne sont publiés qu'une fois `--min-ticks` (défaut : 25) mises à jour de prix reçues **et** toutes les périodes des indicateurs satisfaites.
+
+**Flags :**
+
+| Flag | Défaut | Description |
+|---|---|---|
+| `--feed ADDR` | `tcp://127.0.0.1:5557` | Adresse ZMQ à laquelle souscrire (PUB de feed.py) |
+| `--out ADDR` | `tcp://127.0.0.1:5559` | Adresse ZMQ sur laquelle binder et publier |
+| `--rsi N` | 14 | Période RSI |
+| `--sma N` | 20 | Période SMA |
+| `--ema N` | 9 | Période EMA |
+| `--vol N` | 20 | Fenêtre de volatilité (écart-type des log-rendements) |
+| `--min-ticks N` | 25 | Nombre minimal de ticks de prix avant toute publication |
+| `--verbose` | — | Afficher chaque publication en niveau DEBUG |
+
+**Variables d'environnement :** `TRADINEBOTTE_FEED_ADDR` et `TRADINEBOTTE_INDICATORS_ADDR` surchargent les valeurs par défaut de `--feed` et `--out`.
+
+
 ## Backtest grid trading
 
 Rejouer des données OHLCV BTC/USDT historiques contre une stratégie grid configurable. Modèle de remplissage : touche de prix sur l'intervalle `[low, high]` de la bougie. Nécessite des bases SQLite de bougies 1 minute dans `data/` — à télécharger avec `scripts/download_btc_history.py`.

@@ -444,6 +444,53 @@ When more than one file is processed, each file runs with capital reset to `capi
 | `--top N` | 0 (all) | Show only top-N unique configs in sweep table (deduped on threshold/min_secs/obi) |
 
 
+## Technical Indicator Service
+
+`bot/indicators.py` is a ZeroMQ pipeline stage that sits between feed.py and any consumer. It subscribes to the feed PUB socket, accumulates a price history per token, and republishes enriched indicator messages on a second PUB socket.
+
+```
+feed.py  PUB :5557  ──SUB──▶  indicators.py  ──PUB :5559──▶  consumers
+```
+
+```bash
+# Start with default settings (SUB :5557 → PUB :5559)
+python3 bot/indicators.py
+
+# Custom periods
+python3 bot/indicators.py --rsi 7 --sma 10 --ema 5 --vol 10
+
+# Custom ZMQ addresses
+python3 bot/indicators.py --feed tcp://127.0.0.1:5558 --out tcp://127.0.0.1:5560
+
+# Verbose (prints each indicator publish to stdout)
+python3 bot/indicators.py --verbose
+```
+
+**Output message format:**
+
+```json
+{"t": "indicators", "token_id": "...", "ts": 1746800000000,
+ "rsi_14": 72.3, "sma_20": 0.9612, "ema_9": 0.9634, "vol_20": 0.0021}
+```
+
+Messages are only published once `--min-ticks` (default: 25) price updates have been received **and** all indicator periods are satisfied.
+
+**Flags:**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--feed ADDR` | `tcp://127.0.0.1:5557` | ZMQ address to subscribe to (feed.py PUB) |
+| `--out ADDR` | `tcp://127.0.0.1:5559` | ZMQ address to bind and publish on |
+| `--rsi N` | 14 | RSI period |
+| `--sma N` | 20 | SMA period |
+| `--ema N` | 9 | EMA period |
+| `--vol N` | 20 | Volatility window (std-dev of log-returns) |
+| `--min-ticks N` | 25 | Minimum price ticks before any publish |
+| `--verbose` | — | Print each publish at DEBUG level |
+
+**Environment variables:** `TRADINEBOTTE_FEED_ADDR` and `TRADINEBOTTE_INDICATORS_ADDR` override the defaults for `--feed` and `--out`.
+
+
 ## Grid Trading Backtest
 
 Replay historical BTC/USDT OHLCV data against a configurable grid strategy. Fill model: price-touch on the candle `[low, high]` range. Requires 1-minute SQLite databases in `data/` — download with `scripts/download_btc_history.py`.
