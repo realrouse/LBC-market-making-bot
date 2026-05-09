@@ -337,6 +337,95 @@ Consumers: any process subscribing to the indicators PUB port.
 
 ---
 
+### `indicators` — Binance futures open interest (`source="binance_oi"`)
+
+Polled from `https://fapi.binance.com/futures/data/openInterestHist` every
+5 min (default). Provides absolute OI and the signed change since the previous
+poll.
+
+```json
+{
+  "t":             "indicators",
+  "stream_id":     "btc_oi",
+  "oi_btc":        45690.57,
+  "oi_usd":        4569056780.0,
+  "oi_change_btc": 12.44,
+  "oi_change_usd": 1244440.0,
+  "ts":            1745664125000
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `oi_btc` | float | Open interest in BTC contracts |
+| `oi_usd` | float | Open interest in USD |
+| `oi_change_btc` | float | OI delta since previous poll (+ = new longs/shorts opened) |
+| `oi_change_usd` | float | OI delta in USD since previous poll |
+| `ts` | int | Publish timestamp (Unix ms) |
+
+Rising OI with rising price = trend continuation; falling OI = position
+unwinding / reversal risk.
+
+---
+
+### `indicators` — Binance long/short ratio (`source="binance_ls_ratio"`)
+
+Polled from `https://fapi.binance.com/futures/data/topLongShortAccountRatio`
+every 5 min (default). Reflects positioning of top-trader accounts (not
+position size).
+
+```json
+{
+  "t":                "indicators",
+  "stream_id":        "btc_ls_ratio",
+  "long_short_ratio": 1.2345,
+  "long_pct":         0.5523,
+  "short_pct":        0.4477,
+  "ts":               1745664125000
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `long_short_ratio` | float | `long_pct / short_pct` |
+| `long_pct` | float | Fraction of top-trader accounts that are net long (0–1) |
+| `short_pct` | float | Fraction of top-trader accounts that are net short (0–1) |
+| `ts` | int | Publish timestamp (Unix ms) |
+
+Contrarian signal: ratio > 1.5 or < 0.7 often precedes a reversal.
+
+---
+
+### `indicators` — Binance forced liquidations (`source="binance_liquidations"`)
+
+Aggregates `https://fapi.binance.com/fapi/v1/forceOrders` over the last poll
+interval (5 min by default). `SELL` orders = long positions liquidated; `BUY`
+orders = short positions liquidated.
+
+```json
+{
+  "t":             "indicators",
+  "stream_id":     "btc_liquidations",
+  "liq_long_usd":  1250000.0,
+  "liq_short_usd": 80000.0,
+  "liq_net_usd":   -1170000.0,
+  "liq_count":     45,
+  "ts":            1745664125000
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `liq_long_usd` | float | Total USD value of long positions liquidated in the interval |
+| `liq_short_usd` | float | Total USD value of short positions liquidated in the interval |
+| `liq_net_usd` | float | `liq_short_usd − liq_long_usd` (negative = more longs blown out) |
+| `liq_count` | int | Number of forced orders in the interval |
+| `ts` | int | Publish timestamp (Unix ms) |
+
+Consumers: any process subscribing to the indicators PUB port.
+
+---
+
 ## 5. Feed auto-start mechanism
 
 When running in multi-bot mode, manual feed management is not required. The

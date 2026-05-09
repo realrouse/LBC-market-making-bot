@@ -65,9 +65,12 @@ _IND_ADDR  = os.environ.get("TRADINEBOTTE_INDICATORS_ADDR",      "tcp://127.0.0.
 _REG_ADDR  = os.environ.get("TRADINEBOTTE_INDICATORS_REG_ADDR",  "tcp://127.0.0.1:5561")
 _BINANCE_REST_URL    = "https://api.binance.com/api/v3/klines"
 _BINANCE_WS_BASE     = "wss://stream.binance.com:9443/ws"
-_BINANCE_FUTURES_URL = "https://fapi.binance.com/fapi/v1/premiumIndex"
-_DERIBIT_DVOL_URL    = "https://www.deribit.com/api/v2/public/get_index_price"
-_FEAR_GREED_URL      = "https://api.alternative.me/fng/"
+_BINANCE_FUTURES_URL      = "https://fapi.binance.com/fapi/v1/premiumIndex"
+_BINANCE_OI_HIST_URL      = "https://fapi.binance.com/futures/data/openInterestHist"
+_BINANCE_LS_RATIO_URL     = "https://fapi.binance.com/futures/data/topLongShortAccountRatio"
+_BINANCE_FORCE_ORDERS_URL = "https://fapi.binance.com/fapi/v1/forceOrders"
+_DERIBIT_DVOL_URL         = "https://www.deribit.com/api/v2/public/get_index_price"
+_FEAR_GREED_URL           = "https://api.alternative.me/fng/"
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT,
@@ -182,12 +185,19 @@ class PriceSeries:
 _VALID_INDICATOR_TYPES      = frozenset({"rsi", "sma", "ema", "volatility"})
 _VALID_SOURCES              = frozenset({
     "feed", "binance_ws", "binance_funding", "deribit_iv", "fear_greed",
+    "binance_oi", "binance_ls_ratio", "binance_liquidations",
 })
-_SOURCES_WITHOUT_INDICATORS = frozenset({"binance_funding", "deribit_iv", "fear_greed"})
+_SOURCES_WITHOUT_INDICATORS = frozenset({
+    "binance_funding", "deribit_iv", "fear_greed",
+    "binance_oi", "binance_ls_ratio", "binance_liquidations",
+})
 _DEFAULT_POLL_INTERVALS: dict[str, int] = {
-    "binance_funding": 900,    # 15 min
-    "deribit_iv":      300,    # 5 min
-    "fear_greed":     3600,    # 1 hour
+    "binance_funding":     900,    # 15 min
+    "deribit_iv":          300,    # 5 min
+    "fear_greed":         3600,    # 1 hour
+    "binance_oi":          300,    # 5 min
+    "binance_ls_ratio":    300,    # 5 min
+    "binance_liquidations": 300,   # 5 min
 }
 
 
@@ -518,6 +528,103 @@ async def _fear_greed_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> None:
         await asyncio.sleep(interval)
 
 
+async def _binance_oi_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> None:
+    """Poll Binance futures open interest + 5-min change at the configured interval."""
+    interval = spec.poll_interval_s or _DEFAULT_POLL_INTERVALS["binance_oi"]
+    asset    = spec.asset or "BTCUSDT"
+    prev_oi_btc: float | None = None
+    prev_oi_usd: float | None = None
+    while True:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    _BINANCE_OI_HIST_URL,
+                    params={"symbol": asset.upper(), "period": "5m", "limit": 2},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    data = await resp.json(content_type=None)
+            latest   = data[-1]
+            oi_btc   = float(latest["sumOpenInterest"])
+            oi_usd   = float(latest["sumOpenInterestValue"])
+            chg_btc  = oi_btc - prev_oi_btc if prev_oi_btc is not None else 0.0
+            chg_usd  = oi_usd - prev_oi_usd if prev_oi_usd is not None else 0.0
+            prev_oi_btc, prev_oi_usd = oi_btc, oi_usd
+            _publish(pub, {
+                "t":             "indicators",
+                "stream_id":     spec.id,
+                "oi_btc":        oi_btc,
+                "oi_usd":        oi_usd,
+                "oi_change_btc": chg_btc,
+                "oi_change_usd": chg_usd,
+                "ts":            int(time.time() * 1000),
+            })
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("[%s] open interest fetch failed (%s)", spec.id, exc)
+        await asyncio.sleep(interval)
+
+
+async def _binance_ls_ratio_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> None:
+    """Poll Binance top-trader long/short account ratio at the configured interval."""
+    interval = spec.poll_interval_s or _DEFAULT_POLL_INTERVALS["binance_ls_ratio"]
+    asset    = spec.asset or "BTCUSDT"
+    while True:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    _BINANCE_LS_RATIO_URL,
+                    params={"symbol": asset.upper(), "period": "5m", "limit": 1},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    data = await resp.json(content_type=None)
+            entry = data[0]
+            _publish(pub, {
+                "t":                "indicators",
+                "stream_id":        spec.id,
+                "long_short_ratio": float(entry["longShortRatio"]),
+                "long_pct":         float(entry["longAccount"]),
+                "short_pct":        float(entry["shortAccount"]),
+                "ts":               int(time.time() * 1000),
+            })
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("[%s] long/short ratio fetch failed (%s)", spec.id, exc)
+        await asyncio.sleep(interval)
+
+
+async def _binance_liquidations_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> None:
+    """Aggregate Binance forced liquidation orders over the last poll interval."""
+    interval = spec.poll_interval_s or _DEFAULT_POLL_INTERVALS["binance_liquidations"]
+    asset    = spec.asset or "BTCUSDT"
+    while True:
+        try:
+            start_ms = int((time.time() - interval) * 1000)
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    _BINANCE_FORCE_ORDERS_URL,
+                    params={"symbol": asset.upper(), "startTime": start_ms, "limit": 1000},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    orders = await resp.json(content_type=None)
+            liq_long = liq_short = 0.0
+            for o in orders:
+                notional = float(o.get("executedQty", 0)) * float(o.get("averagePrice", 0))
+                if o.get("side") == "SELL":   # long position liquidated
+                    liq_long += notional
+                else:                          # short position liquidated
+                    liq_short += notional
+            _publish(pub, {
+                "t":             "indicators",
+                "stream_id":     spec.id,
+                "liq_long_usd":  liq_long,
+                "liq_short_usd": liq_short,
+                "liq_net_usd":   liq_short - liq_long,
+                "liq_count":     len(orders),
+                "ts":            int(time.time() * 1000),
+            })
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("[%s] liquidations fetch failed (%s)", spec.id, exc)
+        await asyncio.sleep(interval)
+
+
 # ─── DYNAMIC REGISTRATION ────────────────────────────────────────────────────
 
 async def _start_stream(
@@ -542,6 +649,12 @@ async def _start_stream(
         coro = _deribit_iv_task(spec, pub)
     elif spec.source == "fear_greed":
         coro = _fear_greed_task(spec, pub)
+    elif spec.source == "binance_oi":
+        coro = _binance_oi_task(spec, pub)
+    elif spec.source == "binance_ls_ratio":
+        coro = _binance_ls_ratio_task(spec, pub)
+    elif spec.source == "binance_liquidations":
+        coro = _binance_liquidations_task(spec, pub)
     else:
         logger.error("[reg] cannot start stream %r: source %r is not dispatchable",
                      spec.id, spec.source)

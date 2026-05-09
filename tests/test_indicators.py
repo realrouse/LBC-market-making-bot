@@ -7,7 +7,7 @@ from indicators import (
     compute_sma, compute_ema, compute_rsi, compute_volatility, PriceSeries,
     IndicatorSpec, StreamSpec, IndicatorsConfig, load_config,
     derive_stream_id, parse_subscribe_request, _handle_subscribe,
-    _SOURCES_WITHOUT_INDICATORS, _DEFAULT_POLL_INTERVALS,
+    _SOURCES_WITHOUT_INDICATORS, _DEFAULT_POLL_INTERVALS, _VALID_SOURCES,
 )
 
 
@@ -871,6 +871,110 @@ class TestNewSources(unittest.TestCase):
         cfg_d  = self._load_config("indicators_deribit_iv_bitcoin.json")
         cfg_fg = self._load_config("indicators_fear_greed.json")
         ports = {cfg_f.out_addr, cfg_d.out_addr, cfg_fg.out_addr}
+        self.assertEqual(len(ports), 3, f"PUB port collision: {ports}")
+
+
+class TestBinanceMarketStructure(unittest.TestCase):
+    """Tests for binance_oi, binance_ls_ratio, and binance_liquidations sources."""
+
+    # ── module-level constants ────────────────────────────────────────────────
+
+    def test_three_new_sources_in_valid_sources(self):
+        for src in ("binance_oi", "binance_ls_ratio", "binance_liquidations"):
+            self.assertIn(src, _VALID_SOURCES)
+
+    def test_three_new_sources_without_indicators(self):
+        for src in ("binance_oi", "binance_ls_ratio", "binance_liquidations"):
+            self.assertIn(src, _SOURCES_WITHOUT_INDICATORS)
+
+    def test_default_poll_intervals_are_300s(self):
+        for src in ("binance_oi", "binance_ls_ratio", "binance_liquidations"):
+            self.assertEqual(_DEFAULT_POLL_INTERVALS[src], 300)
+
+    # ── StreamSpec.from_dict ──────────────────────────────────────────────────
+
+    def test_binance_oi_spec_loads(self):
+        spec = StreamSpec.from_dict({
+            "id": "btc_oi", "asset": "BTCUSDT",
+            "source": "binance_oi", "timeframe": "n/a",
+            "indicators": [], "poll_interval_s": 300,
+        })
+        self.assertEqual(spec.source, "binance_oi")
+        self.assertEqual(spec.poll_interval_s, 300)
+
+    def test_binance_ls_ratio_spec_loads(self):
+        spec = StreamSpec.from_dict({
+            "id": "btc_ls_ratio", "asset": "BTCUSDT",
+            "source": "binance_ls_ratio", "timeframe": "n/a",
+            "indicators": [],
+        })
+        self.assertEqual(spec.source, "binance_ls_ratio")
+
+    def test_binance_liquidations_spec_loads(self):
+        spec = StreamSpec.from_dict({
+            "id": "btc_liquidations", "asset": "BTCUSDT",
+            "source": "binance_liquidations", "timeframe": "n/a",
+            "indicators": [],
+        })
+        self.assertEqual(spec.source, "binance_liquidations")
+
+    # ── parse_subscribe_request ───────────────────────────────────────────────
+
+    def test_binance_oi_subscribe(self):
+        stream_id, spec = parse_subscribe_request({
+            "source": "binance_oi", "asset": "BTCUSDT",
+        })
+        self.assertEqual(stream_id, "binance_oi")
+        self.assertEqual(spec.source, "binance_oi")
+
+    def test_binance_ls_ratio_subscribe_no_asset(self):
+        stream_id, spec = parse_subscribe_request({"source": "binance_ls_ratio"})
+        self.assertEqual(stream_id, "binance_ls_ratio")
+
+    def test_binance_liquidations_subscribe_poll_interval(self):
+        _, spec = parse_subscribe_request({
+            "source": "binance_liquidations", "poll_interval_s": 600,
+        })
+        self.assertEqual(spec.poll_interval_s, 600)
+
+    # ── JSON config files ─────────────────────────────────────────────────────
+
+    def _load(self, filename: str) -> IndicatorsConfig:
+        path = os.path.join(os.path.dirname(__file__), "..", "strategies", filename)
+        if not os.path.exists(path):
+            self.skipTest(f"strategies/{filename} not found")
+        return load_config(path)
+
+    def test_oi_config_loads(self):
+        cfg = self._load("indicators_oi_bitcoin.json")
+        self.assertEqual(len(cfg.streams), 1)
+        s = cfg.streams[0]
+        self.assertEqual(s.id,     "btc_oi")
+        self.assertEqual(s.source, "binance_oi")
+        self.assertEqual(s.asset,  "BTCUSDT")
+        self.assertEqual(s.poll_interval_s, 300)
+
+    def test_ls_ratio_config_loads(self):
+        cfg = self._load("indicators_ls_ratio_bitcoin.json")
+        self.assertEqual(len(cfg.streams), 1)
+        s = cfg.streams[0]
+        self.assertEqual(s.id,     "btc_ls_ratio")
+        self.assertEqual(s.source, "binance_ls_ratio")
+        self.assertEqual(s.poll_interval_s, 300)
+
+    def test_liquidations_config_loads(self):
+        cfg = self._load("indicators_liquidations_bitcoin.json")
+        self.assertEqual(len(cfg.streams), 1)
+        s = cfg.streams[0]
+        self.assertEqual(s.id,     "btc_liquidations")
+        self.assertEqual(s.source, "binance_liquidations")
+        self.assertEqual(s.poll_interval_s, 300)
+
+    def test_all_three_configs_have_distinct_pub_ports(self):
+        cfg_oi  = self._load("indicators_oi_bitcoin.json")
+        cfg_ls  = self._load("indicators_ls_ratio_bitcoin.json")
+        cfg_liq = self._load("indicators_liquidations_bitcoin.json")
+        ports = {cfg_oi.out_addr, cfg_ls.out_addr, cfg_liq.out_addr}
         self.assertEqual(len(ports), 3, f"PUB port collision: {ports}")
 
 

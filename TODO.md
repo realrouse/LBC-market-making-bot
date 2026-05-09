@@ -11,6 +11,22 @@
 - **Sizing dynamique** — Kelly fractionnel sur la taille de mise plutôt que $10 fixe ; adapte le risque à la confiance du signal
 - **Stop-loss hebdomadaire** — complément au stop-loss journalier pour limiter les séries de pertes sur plusieurs jours
 
+### Indicateurs techniques — indicators.py
+
+Les sources suivantes sont calculables depuis les klines Binance déjà intégrées,
+sans nouvelle dépendance réseau. Elles nécessitent des nouvelles entrées dans
+`_VALID_INDICATOR_TYPES` et leur implémentation dans `PriceSeries.compute_indicators`.
+
+- **MACD** (12/26/9) — croisement des EMA 12 et 26 ; signal = EMA 9 du MACD.
+  Champs publiés : `macd`, `macd_signal`, `macd_hist`.
+- **Bollinger Bands** (20, ±2σ) — `bb_upper`, `bb_lower`, `bb_width`.
+  La largeur (`bb_width = (upper - lower) / middle`) mesure le régime de volatilité.
+- **VWAP** — Volume Weighted Average Price intraday. Nécessite le volume des klines
+  (champ `v` dans les données Binance kline WebSocket). Champ publié : `vwap`.
+- **Stochastic RSI** — RSI du RSI, plus réactif sur les petits délais.
+  `stoch_rsi_k = (rsi - min_rsi) / (max_rsi - min_rsi)`, lissé sur 3 périodes.
+  Champs : `stoch_rsi_k`, `stoch_rsi_d`.
+
 ### Backtest / analyse
 - **Sharpe / Sortino ratio** — métriques manquantes dans le rapport actuel ; importantes pour comparer des stratégies
 - **Walk-forward optimization** — entraîne sur N semaines, valide sur la suivante, glisse la fenêtre ; réduit le risque d'overfitting du `--sweep`
