@@ -2,48 +2,55 @@
 """
 indicators.py — Technical indicator service
 
-Subscribes to a ZeroMQ PUB feed (feed.py on port 5557) and computes
-rolling technical indicators (RSI, SMA, EMA, volatility) on the best_bid
-price series of each token. Publishes enriched indicator messages on a
-new PUB socket (default: port 5559).
+SUB to feed.py (ZeroMQ) and/or Binance WebSocket kline streams → compute
+RSI / SMA / EMA / volatility → PUB enriched messages on a second socket.
 
-Input messages consumed (from feed.py):
-  {"t": "book", "token_id": "...", "best_bid": ..., ...}
+Two data sources are supported, configured via a JSON file:
 
-Output messages published:
-  {"t": "indicators", "token_id": "...", "ts": ...,
-   "rsi_14": ..., "sma_20": ..., "ema_9": ..., "vol_20": ...}
-  (only published once min_ticks history is accumulated and all
-   indicator periods are satisfied)
+  source="feed"        — subscribes to feed.py PUB (best_bid tick-by-tick,
+                         one PriceSeries per Polymarket token)
+  source="binance_ws"  — opens a Binance kline WebSocket for one asset/
+                         timeframe; seeds from REST on startup; pushes the
+                         close price of each completed candle
+
+Output messages:
+  source="feed":
+    {"t":"indicators", "token_id":"...", "stream_id":"...", "ts":...,
+     "rsi_14":..., ...}
+  source="binance_ws":
+    {"t":"indicators", "asset":"BTCUSDT", "timeframe":"4h", "stream_id":"...",
+     "ts":..., "rsi_14":..., "vol_20":...}
 
 Usage:
-  python3 bot/indicators.py
-  python3 bot/indicators.py --verbose
+  python3 bot/indicators.py --config strategies/indicators.json
+  python3 bot/indicators.py          # legacy: CLI flags, ZMQ feed source
   python3 bot/indicators.py --rsi 14 --sma 20 --ema 9 --vol 20
-  TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 python3 bot/indicators.py
-  TRADINEBOTTE_INDICATORS_ADDR=tcp://127.0.0.1:5560 python3 bot/indicators.py
+  TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 python3 bot/indicators.py \\
+      --config strategies/indicators.json
 """
 
-import argparse, asyncio, logging, math, os, sys, time
+import argparse, asyncio, json, logging, math, os, sys, time
 from collections import deque
+from dataclasses import dataclass
 from typing import Any
 
-import zmq, zmq.asyncio
+import aiohttp, websockets, zmq, zmq.asyncio
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────
 _FEED_ADDR = os.environ.get("TRADINEBOTTE_FEED_ADDR",       "tcp://127.0.0.1:5557")
 _IND_ADDR  = os.environ.get("TRADINEBOTTE_INDICATORS_ADDR", "tcp://127.0.0.1:5559")
+_BINANCE_REST_URL = "https://api.binance.com/api/v3/klines"
+_BINANCE_WS_BASE  = "wss://stream.binance.com:9443/ws"
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT,
                     handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger("indicators")
 
-# Set by _parse_args()
 VERBOSE = False
 
 
-# ─── INDICATOR MATH (pure stdlib, no numpy) ──────────────────────────────────
+# ─── INDICATOR MATH (pure stdlib) ────────────────────────────────────────────
 
 def compute_sma(prices: list[float], n: int) -> float | None:
     """Simple moving average of the last n prices."""
@@ -97,7 +104,7 @@ def compute_volatility(prices: list[float], n: int = 20) -> float | None:
 # ─── PRICE SERIES ────────────────────────────────────────────────────────────
 
 class PriceSeries:
-    """Ring-buffer price history + indicator computation for one token."""
+    """Ring-buffer price history + indicator computation for one token/asset."""
 
     def __init__(self, maxlen: int = 200) -> None:
         self._prices: deque[float] = deque(maxlen=maxlen)
@@ -110,6 +117,7 @@ class PriceSeries:
 
     def indicators(self, rsi_n: int, sma_n: int, ema_n: int,
                    vol_n: int) -> dict[str, float | None]:
+        """Legacy fixed-quad interface (used by existing tests)."""
         p = list(self._prices)
         return {
             f"rsi_{rsi_n}": compute_rsi(p, rsi_n),
@@ -118,61 +126,283 @@ class PriceSeries:
             f"vol_{vol_n}": compute_volatility(p, vol_n),
         }
 
+    def compute_indicators(self,
+                           specs: "list[IndicatorSpec]") -> dict[str, float | None]:
+        """Config-driven interface: compute each indicator in specs.
 
-# ─── MAIN ASYNC LOOP ─────────────────────────────────────────────────────────
+        Key format: ``<abbrev>_<period>`` — e.g. ``rsi_14``, ``sma_20``,
+        ``ema_9``, ``vol_20`` — consistent with the legacy ``indicators()``
+        method (volatility is abbreviated to "vol").
+        """
+        _abbrev = {"rsi": "rsi", "sma": "sma", "ema": "ema", "volatility": "vol"}
+        p = list(self._prices)
+        result: dict[str, float | None] = {}
+        for spec in specs:
+            key = f"{_abbrev[spec.type]}_{spec.period}"
+            if spec.type == "rsi":
+                result[key] = compute_rsi(p, spec.period)
+            elif spec.type == "sma":
+                result[key] = compute_sma(p, spec.period)
+            elif spec.type == "ema":
+                result[key] = compute_ema(p, spec.period)
+            elif spec.type == "volatility":
+                result[key] = compute_volatility(p, spec.period)
+        return result
 
-async def run(feed_addr: str, ind_addr: str,
-              rsi_n: int, sma_n: int, ema_n: int, vol_n: int,
-              min_ticks: int) -> None:
-    ctx = zmq.asyncio.Context()
 
+# ─── CONFIG TYPES ────────────────────────────────────────────────────────────
+
+_VALID_INDICATOR_TYPES = frozenset({"rsi", "sma", "ema", "volatility"})
+_VALID_SOURCES         = frozenset({"feed", "binance_ws"})
+
+
+@dataclass
+class IndicatorSpec:
+    """One indicator to compute (type + period)."""
+    type:   str   # "rsi" | "sma" | "ema" | "volatility"
+    period: int
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "IndicatorSpec":
+        ind_type = str(d.get("type", "")).lower()
+        if ind_type not in _VALID_INDICATOR_TYPES:
+            raise ValueError(
+                f"Unknown indicator type {d.get('type')!r}. "
+                f"Valid: {sorted(_VALID_INDICATOR_TYPES)}"
+            )
+        period = int(d.get("period", 0))
+        if period < 2:
+            raise ValueError(f"Indicator period must be >= 2, got {period}")
+        return cls(type=ind_type, period=period)
+
+
+@dataclass
+class StreamSpec:
+    """One data stream: asset + source + timeframe + list of indicators."""
+    id:           str
+    asset:        str
+    source:       str            # "feed" | "binance_ws"
+    timeframe:    str            # "tick" | "1m" | "5m" | "1h" | "4h" | "1d" …
+    indicators:   list[IndicatorSpec]
+    seed_periods: int = 50       # REST candles to fetch at startup (binance_ws only)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "StreamSpec":
+        source = str(d.get("source", "feed")).lower()
+        if source not in _VALID_SOURCES:
+            raise ValueError(
+                f"Stream {d.get('id')!r}: unknown source {d.get('source')!r}. "
+                f"Valid: {sorted(_VALID_SOURCES)}"
+            )
+        indicators = [IndicatorSpec.from_dict(i) for i in d.get("indicators", [])]
+        if not indicators:
+            raise ValueError(
+                f"Stream {d.get('id')!r}: at least one indicator required"
+            )
+        return cls(
+            id=str(d.get("id", "")),
+            asset=str(d.get("asset", "")),
+            source=source,
+            timeframe=str(d.get("timeframe", "tick")),
+            indicators=indicators,
+            seed_periods=int(d.get("seed_periods", 50)),
+        )
+
+
+def load_config(path: str) -> "tuple[str, str, int, list[StreamSpec]]":
+    """Load indicators.json. Returns (feed_addr, out_addr, min_ticks, streams)."""
+    with open(path, encoding="utf-8") as fh:
+        cfg = json.load(fh)
+    feed_addr = cfg.get("zmq_feed_addr", _FEED_ADDR)
+    out_addr  = cfg.get("zmq_out_addr",  _IND_ADDR)
+    min_ticks = int(cfg.get("min_ticks", 25))
+    raw_streams = [s for s in cfg.get("streams", []) if "id" in s]
+    streams = [StreamSpec.from_dict(s) for s in raw_streams]
+    if not streams:
+        raise ValueError(f"Config {path!r}: at least one stream required")
+    return feed_addr, out_addr, min_ticks, streams
+
+
+# ─── DATA SOURCES ────────────────────────────────────────────────────────────
+
+async def _seed_series(symbol: str, timeframe: str,
+                       n: int, series: PriceSeries) -> None:
+    """Seed PriceSeries with the last n closed candle closes from Binance REST."""
+    params = {"symbol": symbol.upper(), "interval": timeframe, "limit": n + 1}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                _BINANCE_REST_URL, params=params,
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as resp:
+                data = await resp.json(content_type=None)
+        for candle in data[:-1]:          # skip last (still open)
+            series.push(float(candle[4])) # index 4 = close price
+        logger.info("[seed] %s/%s: %d closed candles loaded",
+                    symbol, timeframe, len(data) - 1)
+    except Exception as exc:              # pylint: disable=broad-except
+        logger.warning("[seed] %s/%s: REST seed failed (%s) — continuing without history",
+                       symbol, timeframe, exc)
+
+
+def _publish(pub: zmq.asyncio.Socket, out: dict[str, Any]) -> None:
+    pub.send_json(out, zmq.NOBLOCK)
+    if VERBOSE:
+        keys = [k for k in out if k not in ("t", "token_id", "asset",
+                                             "timeframe", "stream_id", "ts")]
+        logger.debug("[PUB %s] %s  %s",
+                     out.get("stream_id", "?"),
+                     out.get("asset") or out.get("token_id", "?"),
+                     "  ".join(f"{k}={out[k]:.4f}" for k in keys))
+
+
+async def _binance_kline_task(spec: StreamSpec, pub: zmq.asyncio.Socket,
+                              min_ticks: int) -> None:
+    """Stream live klines from Binance WebSocket for spec.asset/spec.timeframe."""
+    series = PriceSeries()
+    await _seed_series(spec.asset, spec.timeframe, spec.seed_periods, series)
+
+    ws_url  = f"{_BINANCE_WS_BASE}/{spec.asset.lower()}@kline_{spec.timeframe}"
+    backoff = 5
+
+    while True:
+        try:
+            async with websockets.connect(
+                ws_url, ping_interval=20, ping_timeout=10
+            ) as ws:
+                logger.info("[%s] connected → %s", spec.id, ws_url)
+                backoff = 5
+                async for raw in ws:
+                    msg  = json.loads(raw)
+                    kline = msg.get("k", {})
+                    if not kline.get("x"):    # only on closed candles
+                        continue
+                    series.push(float(kline["c"]))
+                    if len(series) < min_ticks:
+                        continue
+                    ind = series.compute_indicators(spec.indicators)
+                    if any(v is None for v in ind.values()):
+                        continue
+                    _publish(pub, {
+                        "t":          "indicators",
+                        "asset":      spec.asset,
+                        "timeframe":  spec.timeframe,
+                        "stream_id":  spec.id,
+                        "ts":         int(time.time() * 1000),
+                        **ind,
+                    })
+        except Exception as exc:           # pylint: disable=broad-except
+            logger.warning("[%s] WS error (%s) — reconnect in %ds",
+                           spec.id, exc, backoff)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60)
+
+
+async def _zmq_feed_task(feed_addr: str, pub: zmq.asyncio.Socket,
+                         feed_streams: list[StreamSpec],
+                         min_ticks: int) -> None:
+    """Subscribe to the ZeroMQ feed and compute indicators on best_bid per token."""
+    ctx = zmq.asyncio.Context.instance()
     sub = ctx.socket(zmq.SUB)
     sub.setsockopt(zmq.SUBSCRIBE, b"")
     sub.connect(feed_addr)
-    logger.info("SUB connecté → %s", feed_addr)
+    logger.info("[feed] SUB connecté → %s", feed_addr)
 
-    pub = ctx.socket(zmq.PUB)
-    pub.bind(ind_addr)
-    logger.info("PUB bind → %s", ind_addr)
+    # For simplicity, apply ALL feed-source stream indicator specs to every token.
+    # (Polymarket tokens are dynamic — we can't filter by asset name.)
+    all_specs: list[IndicatorSpec] = []
+    for s in feed_streams:
+        all_specs.extend(s.indicators)
+    stream_id = feed_streams[0].id if len(feed_streams) == 1 else "feed"
 
     series: dict[str, PriceSeries] = {}
-
     try:
         while True:
             msg: dict[str, Any] = await sub.recv_json()
             if msg.get("t") != "book":
                 continue
-
             token_id = msg.get("token_id", "")
-            bid = msg.get("best_bid")
+            bid      = msg.get("best_bid")
             if not token_id or bid is None:
                 continue
-
             s = series.setdefault(token_id, PriceSeries())
             s.push(float(bid))
-
             if len(s) < min_ticks:
                 continue
-
-            ind = s.indicators(rsi_n, sma_n, ema_n, vol_n)
+            ind = s.compute_indicators(all_specs)
             if any(v is None for v in ind.values()):
                 continue
-
-            out: dict[str, Any] = {
-                "t":        "indicators",
-                "token_id": token_id,
-                "ts":       int(time.time() * 1000),
+            _publish(pub, {
+                "t":         "indicators",
+                "token_id":  token_id,
+                "stream_id": stream_id,
+                "ts":        int(time.time() * 1000),
                 **ind,
-            }
-            pub.send_json(out, zmq.NOBLOCK)
-
-            if VERBOSE:
-                logger.debug("[PUB indicators] token=%.12s rsi=%.1f sma=%.4f",
-                             token_id,
-                             ind.get(f"rsi_{rsi_n}", 0.0) or 0.0,
-                             ind.get(f"sma_{sma_n}", 0.0) or 0.0)
+            })
     finally:
         sub.close()
+
+
+# ─── MAIN RUN ────────────────────────────────────────────────────────────────
+
+async def run(feed_addr: str, ind_addr: str,
+              rsi_n: int, sma_n: int, ema_n: int, vol_n: int,
+              min_ticks: int,
+              config_path: str | None = None) -> None:
+    """
+    Orchestrate indicator streams.
+
+    If config_path is given: load the JSON and spawn one asyncio task per stream.
+    Otherwise: legacy mode — one ZMQ feed stream with CLI-specified periods.
+    """
+    ctx = zmq.asyncio.Context()
+    pub = ctx.socket(zmq.PUB)
+
+    if config_path:
+        cfg_feed, cfg_out, cfg_min, streams = load_config(config_path)
+        # env var overrides take precedence over config file addresses
+        actual_feed = feed_addr if feed_addr != _FEED_ADDR else cfg_feed
+        actual_out  = ind_addr  if ind_addr  != _IND_ADDR  else cfg_out
+        actual_min  = cfg_min
+    else:
+        # Legacy mode: build a synthetic single-stream from CLI flags
+        streams = [StreamSpec(
+            id="legacy",
+            asset="*",
+            source="feed",
+            timeframe="tick",
+            indicators=[
+                IndicatorSpec(type="rsi",        period=rsi_n),
+                IndicatorSpec(type="sma",        period=sma_n),
+                IndicatorSpec(type="ema",        period=ema_n),
+                IndicatorSpec(type="volatility", period=vol_n),
+            ],
+        )]
+        actual_feed = feed_addr
+        actual_out  = ind_addr
+        actual_min  = min_ticks
+
+    pub.bind(actual_out)
+    logger.info("PUB bind → %s", actual_out)
+
+    feed_streams    = [s for s in streams if s.source == "feed"]
+    binance_streams = [s for s in streams if s.source == "binance_ws"]
+
+    tasks: list[asyncio.Task] = []  # type: ignore[type-arg]
+    try:
+        if feed_streams:
+            tasks.append(asyncio.create_task(
+                _zmq_feed_task(actual_feed, pub, feed_streams, actual_min)
+            ))
+        for bstream in binance_streams:
+            tasks.append(asyncio.create_task(
+                _binance_kline_task(bstream, pub, actual_min)
+            ))
+        if not tasks:
+            logger.error("No streams to run — check your config")
+            return
+        await asyncio.gather(*tasks)
+    finally:
         pub.close()
         ctx.term()
 
@@ -181,20 +411,23 @@ async def run(feed_addr: str, ind_addr: str,
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="tradinebotte technical indicator service")
+    p.add_argument("--config", metavar="FILE",
+                   help="JSON config file (e.g. strategies/indicators.json); "
+                        "when set, --rsi/--sma/--ema/--vol/--feed/--out are ignored")
     p.add_argument("--feed", default=_FEED_ADDR, metavar="ADDR",
                    help=f"ZMQ address to subscribe to (default: {_FEED_ADDR})")
     p.add_argument("--out", default=_IND_ADDR, metavar="ADDR",
                    help=f"ZMQ address to publish on (default: {_IND_ADDR})")
     p.add_argument("--rsi",       type=int, default=14, metavar="N",
-                   help="RSI period (default: 14)")
+                   help="RSI period — legacy mode only (default: 14)")
     p.add_argument("--sma",       type=int, default=20, metavar="N",
-                   help="SMA period (default: 20)")
+                   help="SMA period — legacy mode only (default: 20)")
     p.add_argument("--ema",       type=int, default=9,  metavar="N",
-                   help="EMA period (default: 9)")
+                   help="EMA period — legacy mode only (default: 9)")
     p.add_argument("--vol",       type=int, default=20, metavar="N",
-                   help="Volatility window (default: 20)")
+                   help="Volatility window — legacy mode only (default: 20)")
     p.add_argument("--min-ticks", type=int, default=25, metavar="N",
-                   help="Min price ticks before publishing (default: 25)")
+                   help="Min price ticks before publishing — legacy mode only (default: 25)")
     p.add_argument("--verbose", action="store_true",
                    help="Enable DEBUG logging")
     return p.parse_args()
@@ -215,6 +448,7 @@ def main() -> None:
         ema_n=args.ema,
         vol_n=args.vol,
         min_ticks=args.min_ticks,
+        config_path=args.config,
     ))
 
 
