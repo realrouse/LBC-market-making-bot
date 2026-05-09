@@ -8,6 +8,10 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ## [Non publié]
 
+---
+
+## [0.4.2] - 2026-05-09
+
 ### Modifié
 - **Politique linguistique appliquée dans les quatre modules du bot** (`bot/live_bot.py`, `bot/feed.py`, `bot/indicators.py`, `bot/account_bot.py`) : tous les messages de log, commentaires et docstrings en français ont été traduits en anglais ; `CLAUDE.md` a été mis à jour avec une section obligatoire "Language policy" codifiant que le code source (`.py`, `.sh`, `.json`), les commentaires, les messages de log et les docstrings doivent être exclusivement en anglais ; les fichiers de documentation (`*.fr.md`) restent le seul endroit où le français a sa place ; cette règle a été appliquée rétroactivement sur les quatre modules
 
