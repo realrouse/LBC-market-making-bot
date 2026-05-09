@@ -61,7 +61,7 @@ def _htpasswd(password: str) -> str:
     if _BCRYPT_AVAILABLE:
         return _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
     logger.warning(
-        "bcrypt non installé — htpasswd utilise SHA-1 (faible). Exécutez: pip install bcrypt"
+        "bcrypt not installed — htpasswd falls back to SHA-1 (weak). Run: pip install bcrypt"
     )
     return "{SHA}" + base64.b64encode(hashlib.sha1(password.encode()).digest()).decode()
 
@@ -98,7 +98,7 @@ def _status_html_trade_rows(conn: sqlite3.Connection) -> str:
         "FROM trades WHERE resolved=1 ORDER BY resolution_ts_ms DESC LIMIT 10"
     ).fetchall()
     if not rows:
-        return '<tr><td colspan="8" style="color:#8b949e">Aucun trade résolu</td></tr>'
+        return '<tr><td colspan="8" style="color:#8b949e">No resolved trades</td></tr>'
     parts = []
     for tid, direction, outcome, entry, pnl, cap, ts_ms, question in rows:
         ts_str = datetime.fromtimestamp(ts_ms / 1000).strftime("%H:%M:%S") if ts_ms else "—"
@@ -136,7 +136,7 @@ def generate_status_html(state: Any) -> str:
     open_cls = "neutral" if open_count      >  0  else ""
 
     return (
-        '<!DOCTYPE html>\n<html lang="fr">\n<head>\n'
+        '<!DOCTYPE html>\n<html lang="en">\n<head>\n'
         '<meta charset="UTF-8">\n'
         '<meta http-equiv="refresh" content="60">\n'
         '<title>Tradinebot Status</title>\n'
@@ -158,7 +158,7 @@ def generate_status_html(state: Any) -> str:
         'margin-right:6px;animation:pulse 2s infinite}\n'
         '@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}\n'
         '</style>\n</head>\n<body>\n'
-        f'<h1><span class="dot"></span>Tradinebot — Statut en direct</h1>\n'
+        f'<h1><span class="dot"></span>Tradinebot — Live Status</h1>\n'
         '<div class="cards">\n'
         f'  <div class="card"><div class="label">Capital</div>'
         f'<div class="value">${state.capital:.2f}</div></div>\n'
@@ -168,19 +168,19 @@ def generate_status_html(state: Any) -> str:
         f'<div class="value {wr_cls}">{state.win_rate:.1f}%</div></div>\n'
         f'  <div class="card"><div class="label">Trades</div>'
         f'<div class="value">{state.total_trades}</div></div>\n'
-        f'  <div class="card"><div class="label">Aujourd\'hui</div>'
+        f'  <div class="card"><div class="label">Today</div>'
         f'<div class="value {day_cls}">${daily_pnl:+.2f} ({daily_count}T)</div></div>\n'
-        f'  <div class="card"><div class="label">En cours</div>'
+        f'  <div class="card"><div class="label">Open</div>'
         f'<div class="value {open_cls}">{open_count}</div></div>\n'
         '</div>\n'
-        '<h2>10 derniers trades résolus</h2>\n'
+        '<h2>10 latest resolved trades</h2>\n'
         '<table>\n'
-        '<thead><tr><th>#</th><th>Heure</th><th>Direction</th><th>Résultat</th>'
-        '<th>Prix entrée</th><th>PnL</th><th>Capital</th><th>Marché</th></tr></thead>\n'
+        '<thead><tr><th>#</th><th>Time</th><th>Direction</th><th>Result</th>'
+        '<th>Entry</th><th>PnL</th><th>Capital</th><th>Market</th></tr></thead>\n'
         f'<tbody>{trade_rows}</tbody>\n'
         '</table>\n'
-        f'<div class="footer">Dernière mise à jour : {now_str} — '
-        'Actualisation auto toutes les 60&nbsp;s</div>\n'
+        f'<div class="footer">Last updated: {now_str} — '
+        'Auto-refresh every 60&nbsp;s</div>\n'
         '</body>\n</html>\n'
     )
 
