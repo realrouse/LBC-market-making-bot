@@ -2,7 +2,7 @@
 # strategy_compare.sh — full strategy parameter comparison workflow.
 #
 # Runs a grid search over all strategy parameter combinations across all
-# available databases, then a per-DB backtest vs bot-réel comparison, and
+# available databases, then a per-DB backtest vs live-bot comparison, and
 # saves the combined report to reports/strategy_compare_YYYYMMDD_HHMMSS.txt
 #
 # Usage:
@@ -98,9 +98,9 @@ _run $BACKTEST ${DB_FLAG:---all} --sweep-all --sort "$SORT" --top "$TOP"
 echo ""
 if [[ $NO_SAVE -eq 0 ]]; then echo "" >> "$OUT_FILE"; fi
 
-# ── Section 2: Per-DB comparison (backtest vs bot réel) ───────────────────────
-echo "=== SECTION 2 — PER-DB COMPARISON (backtest vs bot réel) ==="
-if [[ $NO_SAVE -eq 0 ]]; then echo "=== SECTION 2 — PER-DB COMPARISON (backtest vs bot réel) ===" >> "$OUT_FILE"; fi
+# ── Section 2: Per-DB comparison (backtest vs live bot) ───────────────────────
+echo "=== SECTION 2 — PER-DB COMPARISON (backtest vs live bot) ==="
+if [[ $NO_SAVE -eq 0 ]]; then echo "=== SECTION 2 — PER-DB COMPARISON (backtest vs live bot) ===" >> "$OUT_FILE"; fi
 
 # shellcheck disable=SC2086
 _run $BACKTEST ${DB_FLAG:---all} --compare
