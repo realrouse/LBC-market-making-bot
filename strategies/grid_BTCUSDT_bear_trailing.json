@@ -1,0 +1,32 @@
+{
+    "_name": "Grid BTC/USDT — bear-adapted trailing (backtested)",
+    "_description": "Trailing grid: re-centers downward when price falls below grid_lower (trail_mode=bear). Does NOT re-center upward — if price rallies above grid_upper the grid stops with realized profit. Backtested on three regimes at ±15%/30 levels: +5.0%/90d lateral 2026, +2.0% bear 2022 LUNA crash (+5.3 points vs static -3.3%), +0.1% bull run (identical to static). Suited for bear or uncertain market with expected further downside. Recalibrate grid_lower/grid_upper to ±15% of current BTC price. Capital = grid_levels × grid_order_size_usdt.",
+    "_backtest": {
+        "trail_mode":       "bear (re-center downward only)",
+        "range_pct":        "±15%",
+        "lateral_2026":     "+5.0% / 90d (+20% ann) — 96% time in grid — identical to static",
+        "bear_2022":        "+2.0% — 2 re-centers ($31,981 → $27,437) — exits at bounce (32% of period)",
+        "bullrun_2024":     "+0.1% — 0 re-centers — identical to static (stopped at exit_high)",
+        "key_insight":      "tight ±15% grid exits profitably when bear market bounces (price crosses re-centered grid_upper)",
+        "avoid":            "trail=both in bear markets — accumulates BTC on every bounce, -23.9% loss",
+        "calibrated_at":    "2026-05-09  BTC=$80,705"
+    },
+    "_run_backtest": "python3 scripts/backtest_grid.py --all --trail bear --range 15 --levels 30 --compare",
+
+    "strategy_type": "grid",
+    "connector":     "binance",
+
+    "grid_symbol":          "BTCUSDT",
+    "grid_lower":           68599.0,
+    "grid_upper":           92811.0,
+    "grid_levels":          30,
+    "grid_order_size_usdt": 50.0,
+
+    "capital_start": 1500.0,
+    "stake":           50.0,
+    "daily_stop_loss": 150.0,
+
+    "hour_filter": {
+        "enabled": false
+    }
+}
