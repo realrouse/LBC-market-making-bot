@@ -88,6 +88,7 @@ se connecter.
                 │               SYSTÈMES EXTERNES                     │
                 │  Polymarket WebSocket (wss://ws-*.clob...)           │
                 │  API REST Gamma (https://gamma-api.poly...)          │
+                │  Binance kline WebSocket + API REST                  │
                 └─────────────────────┬────────────────────────────────┘
                                       │ connexion WS unique
                                       ▼
@@ -98,17 +99,32 @@ se connecter.
                                       │ diffuse : market / book / ping
                         ┌─────────────┼─────────────────┐
                         ▼             ▼                  ▼
-             ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐
-             │ account_bot  │  │ account_bot  │  │  indicators.py   │
-             │ SUB :5557    │  │ SUB :5557    │  │  SUB :5557       │
-             │ ~/compte-a   │  │ ~/compte-b   │  │  PUB bind :5559  │
-             └──────────────┘  └──────────────┘  └────────┬─────────┘
-                                                           │ indicators
-                                                           ▼
-                                                  ┌─────────────────┐
-                                                  │  tout consumer  │
-                                                  │  SUB :5559      │
-                                                  └─────────────────┘
+             ┌──────────────┐  ┌──────────────┐  ┌────────────────────────┐
+             │ account_bot  │  │ account_bot  │  │    indicators.py       │
+             │ SUB :5557    │  │ SUB :5557    │  │    SUB :5557           │
+             │ REQ :5561 ───┼──┼──────────────┼─▶│    REP bind :5561     │
+             │ ~/compte-a   │  │ REQ :5561 ───┼─▶│    PUB bind :5559     │
+             └──────────────┘  └──────────────┘  └───────────┬────────────┘
+                                                              │ indicators
+                                                              ▼
+                                                   ┌─────────────────────┐
+                                                   │   tout consumer     │
+                                                   │   SUB :5559         │
+                                                   └─────────────────────┘
+```
+
+**Flux d'enregistrement dynamique** — au démarrage, chaque `account_bot`
+envoie un REQ à `:5561` décrivant les flux dont il a besoin. `indicators.py`
+démarre la tâche asyncio correspondante si elle ne tourne pas déjà et répond
+`{"status":"ok","stream_id":"..."}`. Toute la sortie est diffusée sur le
+PUB `:5559` ; les consommateurs filtrent par `stream_id`.
+
+```
+démarrage account_bot :
+  REQ → {"cmd":"subscribe","asset":"BTCUSDT","timeframe":"4h",
+         "source":"binance_ws","indicators":[{"type":"rsi","period":14}]}
+  REP ← {"status":"ok","stream_id":"btc_4h"}
+  SUB → :5559  (filtre : stream_id == "btc_4h")
 ```
 
 ### Patrons de socket utilisés
@@ -117,6 +133,8 @@ se connecter.
 |---|---|---|
 | `zmq.PUB` bind | 1 → N diffusion | `feed.py`, `indicators.py` |
 | `zmq.SUB` connect | N → 1 réception | `account_bot.py`, `indicators.py` |
+| `zmq.REP` bind | serveur requête/réponse | `indicators.py` |
+| `zmq.REQ` connect | client requête/réponse | `account_bot.py` (au démarrage) |
 
 Tous les messages sont des objets JSON mono-frame. ZeroMQ garantit la
 livraison atomique de chaque frame — jamais de message partiel.
@@ -126,7 +144,8 @@ livraison atomique de chaque frame — jamais de message partiel.
 | Variable | Défaut | Bindé par | Connecté par |
 |---|---|---|---|
 | `TRADINEBOTTE_FEED_ADDR` | `tcp://127.0.0.1:5557` | `feed.py` | `account_bot.py`, `indicators.py` |
-| `TRADINEBOTTE_INDICATORS_ADDR` | `tcp://127.0.0.1:5559` | `indicators.py` | tout consumer |
+| `TRADINEBOTTE_INDICATORS_ADDR` | `tcp://127.0.0.1:5559` | `indicators.py` PUB | tout consumer |
+| `TRADINEBOTTE_INDICATORS_REG_ADDR` | `tcp://127.0.0.1:5561` | `indicators.py` REP | `account_bot.py` (REQ au démarrage) |
 
 Les deux peuvent être surchargées via variables d'environnement pour faire
 tourner plusieurs stacks feed+compte indépendants sur la même machine (ex.
@@ -327,7 +346,11 @@ Les indicateurs retournent `None` tant que le buffer n'a pas assez d'historique.
 Aucun message n'est publié tant qu'un seul indicateur n'est pas calculable :
 les consommateurs ne reçoivent jamais de données partielles.
 
-**Partage multi-bots** — `indicators.py` exécute une tâche asyncio par flux configuré (une pour `btc_4h`, une pour `btc_1d`). Tous les messages de sortie sont publiés sur le même socket PUB. Chaque `account_bot` abonné reçoit *tous* les messages et filtre côté client selon `stream_id`. Aucun processus ni port supplémentaire.
+**Partage multi-bots** — `indicators.py` exécute une tâche asyncio par flux. Toute la sortie est diffusée sur un seul socket PUB ; les consommateurs filtrent par `stream_id`.
+
+**Enregistrement dynamique** — les flux peuvent être ajoutés à l'exécution sans redémarrer `indicators.py`. Chaque bot envoie un REQ au socket REP (`:5561`) avec ses besoins ; le serveur démarre la tâche si elle est nouvelle et répond avec le `stream_id` à écouter. Les flux déclarés dans la config JSON sont pré-chargés au démarrage ; les flux demandés par les bots s'ajoutent par-dessus.
+
+**Limitation** — l'enregistrement dynamique n'est supporté que pour `source="binance_ws"`. Les flux feed-source (ticks Polymarket) doivent être déclarés statiquement dans le fichier de config JSON.
 
 **Démarrage du pipeline :**
 

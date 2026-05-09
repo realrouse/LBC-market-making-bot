@@ -5,6 +5,9 @@ indicators.py — Technical indicator service
 SUB to feed.py (ZeroMQ) and/or Binance WebSocket kline streams → compute
 RSI / SMA / EMA / volatility → PUB enriched messages on a second socket.
 
+A REP socket accepts dynamic stream-registration requests from any bot at
+runtime so new indicator streams can be added without restarting the service.
+
 Two data sources are supported, configured via a JSON file:
 
   source="feed"        — subscribes to feed.py PUB (best_bid tick-by-tick,
@@ -13,13 +16,19 @@ Two data sources are supported, configured via a JSON file:
                          timeframe; seeds from REST on startup; pushes the
                          close price of each completed candle
 
-Output messages:
+Output messages (PUB socket):
   source="feed":
     {"t":"indicators", "token_id":"...", "stream_id":"...", "ts":...,
      "rsi_14":..., ...}
   source="binance_ws":
     {"t":"indicators", "asset":"BTCUSDT", "timeframe":"4h", "stream_id":"...",
      "ts":..., "rsi_14":..., "vol_20":...}
+
+Dynamic registration (REP socket):
+  Request:  {"cmd":"subscribe", "asset":"BTCUSDT", "timeframe":"4h",
+             "source":"binance_ws", "indicators":[{"type":"rsi","period":14}]}
+  Response: {"status":"ok", "stream_id":"btc_4h"}
+         or {"status":"error", "message":"..."}
 
 Usage:
   python3 bot/indicators.py --config strategies/indicators.json
@@ -32,13 +41,14 @@ Usage:
 import argparse, asyncio, json, logging, math, os, sys, time
 from collections import deque
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NamedTuple
 
 import aiohttp, websockets, zmq, zmq.asyncio
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────
-_FEED_ADDR = os.environ.get("TRADINEBOTTE_FEED_ADDR",       "tcp://127.0.0.1:5557")
-_IND_ADDR  = os.environ.get("TRADINEBOTTE_INDICATORS_ADDR", "tcp://127.0.0.1:5559")
+_FEED_ADDR = os.environ.get("TRADINEBOTTE_FEED_ADDR",            "tcp://127.0.0.1:5557")
+_IND_ADDR  = os.environ.get("TRADINEBOTTE_INDICATORS_ADDR",      "tcp://127.0.0.1:5559")
+_REG_ADDR  = os.environ.get("TRADINEBOTTE_INDICATORS_REG_ADDR",  "tcp://127.0.0.1:5561")
 _BINANCE_REST_URL = "https://api.binance.com/api/v3/klines"
 _BINANCE_WS_BASE  = "wss://stream.binance.com:9443/ws"
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
@@ -209,18 +219,73 @@ class StreamSpec:
         )
 
 
-def load_config(path: str) -> "tuple[str, str, int, list[StreamSpec]]":
-    """Load indicators.json. Returns (feed_addr, out_addr, min_ticks, streams)."""
+class IndicatorsConfig(NamedTuple):
+    """Parsed result of load_config()."""
+    feed_addr: str
+    out_addr:  str
+    reg_addr:  str
+    min_ticks: int
+    streams:   list[StreamSpec]
+
+
+def load_config(path: str) -> IndicatorsConfig:
+    """Load indicators.json. Returns IndicatorsConfig(feed, out, reg, min_ticks, streams)."""
     with open(path, encoding="utf-8") as fh:
         cfg = json.load(fh)
     feed_addr = cfg.get("zmq_feed_addr", _FEED_ADDR)
     out_addr  = cfg.get("zmq_out_addr",  _IND_ADDR)
+    reg_addr  = cfg.get("zmq_reg_addr",  _REG_ADDR)
     min_ticks = int(cfg.get("min_ticks", 25))
     raw_streams = [s for s in cfg.get("streams", []) if "id" in s]
     streams = [StreamSpec.from_dict(s) for s in raw_streams]
     if not streams:
         raise ValueError(f"Config {path!r}: at least one stream required")
-    return feed_addr, out_addr, min_ticks, streams
+    return IndicatorsConfig(feed_addr, out_addr, reg_addr, min_ticks, streams)
+
+
+# ─── DYNAMIC REGISTRATION HELPERS ────────────────────────────────────────────
+
+def derive_stream_id(asset: str, timeframe: str) -> str:
+    """Build a short stream identifier from asset + timeframe.
+
+    "BTCUSDT" + "4h"  → "btc_4h"
+    "ETHUSDT" + "1d"  → "eth_1d"
+    "BTCEUR"  + "1h"  → "btceur_1h"
+    """
+    base = asset.lower()
+    for suffix in ("usdt", "usdc", "busd"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    return f"{base}_{timeframe}"
+
+
+def parse_subscribe_request(req: dict[str, Any]) -> tuple[str, StreamSpec]:
+    """Validate and parse a subscribe request dict into (stream_id, StreamSpec).
+
+    Raises ValueError with a descriptive message on any validation error.
+    """
+    asset = str(req.get("asset", "")).strip().upper()
+    if not asset:
+        raise ValueError("'asset' is required (e.g. 'BTCUSDT')")
+    timeframe = str(req.get("timeframe", "")).strip()
+    if not timeframe:
+        raise ValueError("'timeframe' is required (e.g. '4h', '1d')")
+
+    stream_id = str(req.get("stream_id") or derive_stream_id(asset, timeframe))
+
+    spec_dict: dict[str, Any] = {
+        "id":         stream_id,
+        "asset":      asset,
+        "source":     req.get("source", "binance_ws"),
+        "timeframe":  timeframe,
+        "indicators": req.get("indicators", []),
+    }
+    if "seed_periods" in req:
+        spec_dict["seed_periods"] = int(req["seed_periods"])
+
+    spec = StreamSpec.from_dict(spec_dict)
+    return stream_id, spec
 
 
 # ─── DATA SOURCES ────────────────────────────────────────────────────────────
@@ -308,8 +373,6 @@ async def _zmq_feed_task(feed_addr: str, pub: zmq.asyncio.Socket,
     sub.connect(feed_addr)
     logger.info("[feed] SUB connecté → %s", feed_addr)
 
-    # For simplicity, apply ALL feed-source stream indicator specs to every token.
-    # (Polymarket tokens are dynamic — we can't filter by asset name.)
     all_specs: list[IndicatorSpec] = []
     for s in feed_streams:
         all_specs.extend(s.indicators)
@@ -343,27 +406,112 @@ async def _zmq_feed_task(feed_addr: str, pub: zmq.asyncio.Socket,
         sub.close()
 
 
+# ─── DYNAMIC REGISTRATION ────────────────────────────────────────────────────
+
+async def _start_binance_stream(
+    spec: StreamSpec,
+    pub: zmq.asyncio.Socket,
+    min_ticks: int,
+    active: dict[str, tuple[StreamSpec, "asyncio.Task[None]"]],
+) -> None:
+    """Start a Binance kline task for spec if one is not already running."""
+    if spec.id in active:
+        logger.info("[reg] stream %r already active — skipping", spec.id)
+        return
+    task: asyncio.Task[None] = asyncio.create_task(
+        _binance_kline_task(spec, pub, min_ticks),
+        name=f"binance_{spec.id}",
+    )
+    active[spec.id] = (spec, task)
+    logger.info("[reg] started stream %r (%s/%s)", spec.id, spec.asset, spec.timeframe)
+
+
+async def _handle_subscribe(
+    req: dict[str, Any],
+    pub: zmq.asyncio.Socket,
+    min_ticks: int,
+    active: dict[str, tuple[StreamSpec, "asyncio.Task[None]"]],
+) -> dict[str, Any]:
+    """Process one subscribe request and return the response dict."""
+    try:
+        stream_id, spec = parse_subscribe_request(req)
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
+
+    if spec.source == "binance_ws":
+        await _start_binance_stream(spec, pub, min_ticks, active)
+    else:
+        # feed-source streams must be declared statically in the JSON config
+        if spec.id not in active:
+            return {
+                "status":  "error",
+                "message": (
+                    "Dynamic registration is only supported for source='binance_ws'. "
+                    "Declare feed-source streams in the JSON config file."
+                ),
+            }
+
+    return {"status": "ok", "stream_id": stream_id}
+
+
+async def _registration_task(
+    reg_addr: str,
+    pub: zmq.asyncio.Socket,
+    min_ticks: int,
+    active: dict[str, tuple[StreamSpec, "asyncio.Task[None]"]],
+) -> None:
+    """REP loop: accept subscribe requests from bots and start new streams on demand."""
+    ctx = zmq.asyncio.Context.instance()
+    rep = ctx.socket(zmq.REP)
+    rep.bind(reg_addr)
+    logger.info("[reg] REP bind → %s", reg_addr)
+    try:
+        while True:
+            req: dict[str, Any] = await rep.recv_json()
+            cmd = req.get("cmd", "")
+            if cmd == "subscribe":
+                resp = await _handle_subscribe(req, pub, min_ticks, active)
+            else:
+                resp = {
+                    "status":  "error",
+                    "message": f"Unknown command {cmd!r}. Use 'subscribe'.",
+                }
+            await rep.send_json(resp)
+    except asyncio.CancelledError:
+        raise
+    finally:
+        rep.close()
+
+
 # ─── MAIN RUN ────────────────────────────────────────────────────────────────
 
-async def run(feed_addr: str, ind_addr: str,
+async def run(feed_addr: str, ind_addr: str, reg_addr: str,
               rsi_n: int, sma_n: int, ema_n: int, vol_n: int,
               min_ticks: int,
               config_path: str | None = None) -> None:
     """
     Orchestrate indicator streams.
 
-    If config_path is given: load the JSON and spawn one asyncio task per stream.
+    If config_path is given: load the JSON and spawn one asyncio task per
+    binance_ws stream; one shared task for all feed-source streams; and one
+    REP task that accepts dynamic subscribe requests from bots.
+
     Otherwise: legacy mode — one ZMQ feed stream with CLI-specified periods.
     """
     ctx = zmq.asyncio.Context()
     pub = ctx.socket(zmq.PUB)
 
+    # active: stream_id → (StreamSpec, Task) — shared with _registration_task
+    active: dict[str, tuple[StreamSpec, asyncio.Task[None]]] = {}
+
     if config_path:
-        cfg_feed, cfg_out, cfg_min, streams = load_config(config_path)
+        cfg = load_config(config_path)
         # env var overrides take precedence over config file addresses
-        actual_feed = feed_addr if feed_addr != _FEED_ADDR else cfg_feed
-        actual_out  = ind_addr  if ind_addr  != _IND_ADDR  else cfg_out
-        actual_min  = cfg_min
+        actual_feed = feed_addr if feed_addr != _FEED_ADDR else cfg.feed_addr
+        actual_out  = ind_addr  if ind_addr  != _IND_ADDR  else cfg.out_addr
+        actual_reg  = reg_addr  if reg_addr  != _REG_ADDR  else cfg.reg_addr
+        actual_min  = cfg.min_ticks
+        streams     = cfg.streams
     else:
         # Legacy mode: build a synthetic single-stream from CLI flags
         streams = [StreamSpec(
@@ -380,27 +528,40 @@ async def run(feed_addr: str, ind_addr: str,
         )]
         actual_feed = feed_addr
         actual_out  = ind_addr
+        actual_reg  = reg_addr
         actual_min  = min_ticks
 
     pub.bind(actual_out)
     logger.info("PUB bind → %s", actual_out)
 
-    feed_streams    = [s for s in streams if s.source == "feed"]
-    binance_streams = [s for s in streams if s.source == "binance_ws"]
+    tasks: list[asyncio.Task[None]] = []
 
-    tasks: list[asyncio.Task] = []  # type: ignore[type-arg]
+    # Start static binance_ws streams
+    for spec in [s for s in streams if s.source == "binance_ws"]:
+        await _start_binance_stream(spec, pub, actual_min, active)
+    tasks.extend(task for _, task in active.values())
+
+    # Start static feed streams (one shared SUB task)
+    feed_streams = [s for s in streams if s.source == "feed"]
+    if feed_streams:
+        tasks.append(asyncio.create_task(
+            _zmq_feed_task(actual_feed, pub, feed_streams, actual_min),
+            name="zmq_feed",
+        ))
+
+    if not tasks and not feed_streams:
+        logger.error("No streams to run — check your config")
+        pub.close()
+        ctx.term()
+        return
+
+    # Dynamic registration listener (always started)
+    tasks.append(asyncio.create_task(
+        _registration_task(actual_reg, pub, actual_min, active),
+        name="registration",
+    ))
+
     try:
-        if feed_streams:
-            tasks.append(asyncio.create_task(
-                _zmq_feed_task(actual_feed, pub, feed_streams, actual_min)
-            ))
-        for bstream in binance_streams:
-            tasks.append(asyncio.create_task(
-                _binance_kline_task(bstream, pub, actual_min)
-            ))
-        if not tasks:
-            logger.error("No streams to run — check your config")
-            return
         await asyncio.gather(*tasks)
     finally:
         pub.close()
@@ -417,7 +578,10 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--feed", default=_FEED_ADDR, metavar="ADDR",
                    help=f"ZMQ address to subscribe to (default: {_FEED_ADDR})")
     p.add_argument("--out", default=_IND_ADDR, metavar="ADDR",
-                   help=f"ZMQ address to publish on (default: {_IND_ADDR})")
+                   help=f"ZMQ PUB address (default: {_IND_ADDR})")
+    p.add_argument("--reg-addr", default=_REG_ADDR, metavar="ADDR",
+                   help=f"ZMQ REP address for dynamic stream registration "
+                        f"(default: {_REG_ADDR})")
     p.add_argument("--rsi",       type=int, default=14, metavar="N",
                    help="RSI period — legacy mode only (default: 14)")
     p.add_argument("--sma",       type=int, default=20, metavar="N",
@@ -443,6 +607,7 @@ def main() -> None:
     asyncio.run(run(
         feed_addr=args.feed,
         ind_addr=args.out,
+        reg_addr=args.reg_addr,
         rsi_n=args.rsi,
         sma_n=args.sma,
         ema_n=args.ema,

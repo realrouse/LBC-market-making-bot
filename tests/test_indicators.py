@@ -5,7 +5,8 @@ import sys, os, math, unittest, json, tempfile, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bot"))
 from indicators import (
     compute_sma, compute_ema, compute_rsi, compute_volatility, PriceSeries,
-    IndicatorSpec, StreamSpec, load_config,
+    IndicatorSpec, StreamSpec, IndicatorsConfig, load_config,
+    derive_stream_id, parse_subscribe_request, _handle_subscribe,
 )
 
 
@@ -291,21 +292,36 @@ class TestLoadConfig(unittest.TestCase):
 
     def test_loads_addresses(self):
         path = self._write_config(self._base_cfg())
-        feed, out, _, _ = load_config(path)
-        self.assertEqual(feed, "tcp://127.0.0.1:5557")
-        self.assertEqual(out,  "tcp://127.0.0.1:5559")
+        cfg = load_config(path)
+        self.assertEqual(cfg.feed_addr, "tcp://127.0.0.1:5557")
+        self.assertEqual(cfg.out_addr,  "tcp://127.0.0.1:5559")
+
+    def test_loads_reg_addr_default(self):
+        path = self._write_config(self._base_cfg())
+        cfg = load_config(path)
+        self.assertEqual(cfg.reg_addr, "tcp://127.0.0.1:5561")
+
+    def test_loads_reg_addr_override(self):
+        path = self._write_config(self._base_cfg(zmq_reg_addr="tcp://127.0.0.1:5599"))
+        cfg = load_config(path)
+        self.assertEqual(cfg.reg_addr, "tcp://127.0.0.1:5599")
 
     def test_loads_min_ticks(self):
         path = self._write_config(self._base_cfg(min_ticks=30))
-        _, _, min_ticks, _ = load_config(path)
-        self.assertEqual(min_ticks, 30)
+        cfg = load_config(path)
+        self.assertEqual(cfg.min_ticks, 30)
 
     def test_loads_streams(self):
         path = self._write_config(self._base_cfg())
-        _, _, _, streams = load_config(path)
-        self.assertEqual(len(streams), 1)
-        self.assertEqual(streams[0].id, "btc_4h")
-        self.assertEqual(streams[0].asset, "BTCUSDT")
+        cfg = load_config(path)
+        self.assertEqual(len(cfg.streams), 1)
+        self.assertEqual(cfg.streams[0].id, "btc_4h")
+        self.assertEqual(cfg.streams[0].asset, "BTCUSDT")
+
+    def test_returns_indicators_config_namedtuple(self):
+        path = self._write_config(self._base_cfg())
+        cfg = load_config(path)
+        self.assertIsInstance(cfg, IndicatorsConfig)
 
     def test_default_config_file(self):
         config_path = os.path.join(
@@ -313,10 +329,9 @@ class TestLoadConfig(unittest.TestCase):
         )
         if not os.path.exists(config_path):
             self.skipTest("strategies/indicators.json not found")
-        _, _, _, streams = load_config(config_path)
-        self.assertGreater(len(streams), 0)
-        # Default: RSI and volatility on BTC
-        btc = streams[0]
+        cfg = load_config(config_path)
+        self.assertGreater(len(cfg.streams), 0)
+        btc = cfg.streams[0]
         self.assertEqual(btc.asset, "BTCUSDT")
         types = {s.type for s in btc.indicators}
         self.assertIn("rsi", types)
@@ -328,11 +343,11 @@ class TestLoadConfig(unittest.TestCase):
             load_config(path)
 
     def test_comment_streams_skipped(self):
-        cfg = self._base_cfg()
-        cfg["streams"].insert(0, {"_comment": "ignored"})
-        path = self._write_config(cfg)
-        _, _, _, streams = load_config(path)
-        self.assertEqual(len(streams), 1)
+        cfg_dict = self._base_cfg()
+        cfg_dict["streams"].insert(0, {"_comment": "ignored"})
+        path = self._write_config(cfg_dict)
+        cfg = load_config(path)
+        self.assertEqual(len(cfg.streams), 1)
 
 
 class TestPriceSeriesComputeIndicators(unittest.TestCase):
@@ -491,11 +506,11 @@ class TestMultiBotIndicatorSharing(unittest.TestCase):
         )
         if not os.path.exists(config_path):
             self.skipTest("strategies/indicators.json not found")
-        _, _, _, streams = load_config(config_path)
-        ids = {s.id for s in streams}
+        cfg = load_config(config_path)
+        ids = {s.id for s in cfg.streams}
         self.assertIn("btc_4h", ids)
         self.assertIn("btc_1d", ids)
-        self.assertEqual(len(streams), 2)
+        self.assertEqual(len(cfg.streams), 2)
 
     def test_stream_timeframes_distinct(self) -> None:
         """btc_4h and btc_1d carry different timeframe values."""
@@ -504,8 +519,8 @@ class TestMultiBotIndicatorSharing(unittest.TestCase):
         )
         if not os.path.exists(config_path):
             self.skipTest("strategies/indicators.json not found")
-        _, _, _, streams = load_config(config_path)
-        by_id = {s.id: s for s in streams}
+        cfg = load_config(config_path)
+        by_id = {s.id: s for s in cfg.streams}
         self.assertEqual(by_id["btc_4h"].timeframe, "4h")
         self.assertEqual(by_id["btc_1d"].timeframe, "1d")
 
@@ -519,7 +534,7 @@ class TestSplitConfigs(unittest.TestCase):
     def _path(self, filename: str) -> str:
         return os.path.join(os.path.dirname(__file__), "..", "strategies", filename)
 
-    def _load(self, filename: str):
+    def _load(self, filename: str) -> IndicatorsConfig:
         path = self._path(filename)
         if not os.path.exists(path):
             self.skipTest(f"strategies/{filename} not found")
@@ -528,52 +543,220 @@ class TestSplitConfigs(unittest.TestCase):
     # ── indicators_4h.json ────────────────────────────────────────────────────
 
     def test_4h_config_loads(self) -> None:
-        feed, out, min_ticks, streams = self._load("indicators_4h.json")
-        self.assertEqual(out, "tcp://127.0.0.1:5559")
-        self.assertEqual(len(streams), 1)
-        self.assertEqual(streams[0].id, "btc_4h")
-        self.assertEqual(streams[0].timeframe, "4h")
-        self.assertEqual(streams[0].asset, "BTCUSDT")
-        self.assertEqual(streams[0].source, "binance_ws")
+        cfg = self._load("indicators_4h.json")
+        self.assertEqual(cfg.out_addr, "tcp://127.0.0.1:5559")
+        self.assertEqual(cfg.reg_addr, "tcp://127.0.0.1:5561")
+        self.assertEqual(len(cfg.streams), 1)
+        self.assertEqual(cfg.streams[0].id, "btc_4h")
+        self.assertEqual(cfg.streams[0].timeframe, "4h")
+        self.assertEqual(cfg.streams[0].asset, "BTCUSDT")
+        self.assertEqual(cfg.streams[0].source, "binance_ws")
 
     def test_4h_has_rsi_and_volatility(self) -> None:
-        _, _, _, streams = self._load("indicators_4h.json")
-        types = {s.type for s in streams[0].indicators}
+        cfg = self._load("indicators_4h.json")
+        types = {s.type for s in cfg.streams[0].indicators}
         self.assertIn("rsi", types)
         self.assertIn("volatility", types)
 
     # ── indicators_1d.json ────────────────────────────────────────────────────
 
     def test_1d_config_loads(self) -> None:
-        feed, out, min_ticks, streams = self._load("indicators_1d.json")
-        self.assertEqual(out, "tcp://127.0.0.1:5560")
-        self.assertEqual(len(streams), 1)
-        self.assertEqual(streams[0].id, "btc_1d")
-        self.assertEqual(streams[0].timeframe, "1d")
-        self.assertEqual(streams[0].asset, "BTCUSDT")
-        self.assertEqual(streams[0].source, "binance_ws")
+        cfg = self._load("indicators_1d.json")
+        self.assertEqual(cfg.out_addr, "tcp://127.0.0.1:5560")
+        self.assertEqual(cfg.reg_addr, "tcp://127.0.0.1:5562")
+        self.assertEqual(len(cfg.streams), 1)
+        self.assertEqual(cfg.streams[0].id, "btc_1d")
+        self.assertEqual(cfg.streams[0].timeframe, "1d")
+        self.assertEqual(cfg.streams[0].asset, "BTCUSDT")
+        self.assertEqual(cfg.streams[0].source, "binance_ws")
 
     def test_1d_has_rsi_and_volatility(self) -> None:
-        _, _, _, streams = self._load("indicators_1d.json")
-        types = {s.type for s in streams[0].indicators}
+        cfg = self._load("indicators_1d.json")
+        types = {s.type for s in cfg.streams[0].indicators}
         self.assertIn("rsi", types)
         self.assertIn("volatility", types)
 
     # ── cross-config isolation ────────────────────────────────────────────────
 
-    def test_ports_are_distinct(self) -> None:
-        """4h and 1d configs must bind on different ports — no conflict possible."""
-        _, out_4h, _, _ = self._load("indicators_4h.json")
-        _, out_1d, _, _ = self._load("indicators_1d.json")
-        self.assertNotEqual(out_4h, out_1d)
+    def test_pub_ports_are_distinct(self) -> None:
+        """4h and 1d configs must bind on different PUB ports."""
+        cfg_4h = self._load("indicators_4h.json")
+        cfg_1d = self._load("indicators_1d.json")
+        self.assertNotEqual(cfg_4h.out_addr, cfg_1d.out_addr)
+
+    def test_reg_ports_are_distinct(self) -> None:
+        """4h and 1d configs must bind on different REP registration ports."""
+        cfg_4h = self._load("indicators_4h.json")
+        cfg_1d = self._load("indicators_1d.json")
+        self.assertNotEqual(cfg_4h.reg_addr, cfg_1d.reg_addr)
 
     def test_stream_ids_are_distinct(self) -> None:
-        _, _, _, streams_4h = self._load("indicators_4h.json")
-        _, _, _, streams_1d = self._load("indicators_1d.json")
-        ids_4h = {s.id for s in streams_4h}
-        ids_1d = {s.id for s in streams_1d}
+        cfg_4h = self._load("indicators_4h.json")
+        cfg_1d = self._load("indicators_1d.json")
+        ids_4h = {s.id for s in cfg_4h.streams}
+        ids_1d = {s.id for s in cfg_1d.streams}
         self.assertFalse(ids_4h & ids_1d,
                          f"stream_id collision: {ids_4h & ids_1d}")
+
+
+class TestDeriveStreamId(unittest.TestCase):
+
+    def test_strips_usdt(self):
+        self.assertEqual(derive_stream_id("BTCUSDT", "4h"), "btc_4h")
+
+    def test_strips_usdc(self):
+        self.assertEqual(derive_stream_id("ETHUSDC", "1d"), "eth_1d")
+
+    def test_strips_busd(self):
+        self.assertEqual(derive_stream_id("BNBBUSD", "1h"), "bnb_1h")
+
+    def test_no_known_suffix(self):
+        self.assertEqual(derive_stream_id("BTCEUR", "1h"), "btceur_1h")
+
+    def test_lowercase_input(self):
+        self.assertEqual(derive_stream_id("btcusdt", "4h"), "btc_4h")
+
+
+class TestParseSubscribeRequest(unittest.TestCase):
+
+    def _req(self, **overrides):
+        base = {
+            "asset":      "BTCUSDT",
+            "timeframe":  "4h",
+            "source":     "binance_ws",
+            "indicators": [{"type": "rsi", "period": 14}],
+        }
+        base.update(overrides)
+        return base
+
+    def test_minimal_request(self):
+        stream_id, spec = parse_subscribe_request(self._req())
+        self.assertEqual(stream_id, "btc_4h")
+        self.assertEqual(spec.asset, "BTCUSDT")
+        self.assertEqual(spec.timeframe, "4h")
+        self.assertEqual(spec.source, "binance_ws")
+        self.assertEqual(spec.indicators[0].type, "rsi")
+
+    def test_explicit_stream_id(self):
+        stream_id, spec = parse_subscribe_request(
+            self._req(stream_id="my_custom_stream")
+        )
+        self.assertEqual(stream_id, "my_custom_stream")
+        self.assertEqual(spec.id, "my_custom_stream")
+
+    def test_stream_id_derived_when_absent(self):
+        stream_id, _ = parse_subscribe_request(self._req(asset="ETHUSDT", timeframe="1d"))
+        self.assertEqual(stream_id, "eth_1d")
+
+    def test_seed_periods_forwarded(self):
+        _, spec = parse_subscribe_request(self._req(seed_periods=100))
+        self.assertEqual(spec.seed_periods, 100)
+
+    def test_missing_asset_raises(self):
+        with self.assertRaises(ValueError):
+            parse_subscribe_request(self._req(asset=""))
+
+    def test_missing_timeframe_raises(self):
+        with self.assertRaises(ValueError):
+            parse_subscribe_request(self._req(timeframe=""))
+
+    def test_invalid_indicator_type_raises(self):
+        with self.assertRaises(ValueError):
+            parse_subscribe_request(self._req(indicators=[{"type": "macd", "period": 14}]))
+
+    def test_invalid_source_raises(self):
+        with self.assertRaises(ValueError):
+            parse_subscribe_request(self._req(source="kraken_ws"))
+
+    def test_empty_indicators_raises(self):
+        with self.assertRaises(ValueError):
+            parse_subscribe_request(self._req(indicators=[]))
+
+    def test_asset_uppercased(self):
+        _, spec = parse_subscribe_request(self._req(asset="btcusdt"))
+        self.assertEqual(spec.asset, "BTCUSDT")
+
+
+class TestHandleSubscribe(unittest.IsolatedAsyncioTestCase):
+    """Integration tests for _handle_subscribe using real async ZMQ sockets."""
+
+    async def test_subscribe_returns_ok(self):
+        import zmq
+        import zmq.asyncio as azmq
+        from unittest.mock import AsyncMock, patch
+
+        ctx = azmq.Context()
+        pub = ctx.socket(zmq.PUB)
+        pub.bind_to_random_port("tcp://127.0.0.1")
+        active = {}
+
+        with patch("indicators._start_binance_stream", new=AsyncMock()):
+            resp = await _handle_subscribe(
+                {"asset": "BTCUSDT", "timeframe": "4h", "source": "binance_ws",
+                 "indicators": [{"type": "rsi", "period": 14}]},
+                pub, 25, active,
+            )
+
+        self.assertEqual(resp["status"], "ok")
+        self.assertEqual(resp["stream_id"], "btc_4h")
+        pub.close(); ctx.term()
+
+    async def test_invalid_request_returns_error(self):
+        import zmq
+        import zmq.asyncio as azmq
+
+        ctx = azmq.Context()
+        pub = ctx.socket(zmq.PUB)
+        pub.bind_to_random_port("tcp://127.0.0.1")
+
+        resp = await _handle_subscribe(
+            {"asset": "", "timeframe": "4h",
+             "indicators": [{"type": "rsi", "period": 14}]},
+            pub, 25, {},
+        )
+
+        self.assertEqual(resp["status"], "error")
+        self.assertIn("asset", resp["message"])
+        pub.close(); ctx.term()
+
+    async def test_duplicate_subscribe_returns_ok(self):
+        import zmq
+        import zmq.asyncio as azmq
+        from unittest.mock import AsyncMock, patch
+
+        ctx = azmq.Context()
+        pub = ctx.socket(zmq.PUB)
+        pub.bind_to_random_port("tcp://127.0.0.1")
+
+        req = {"asset": "BTCUSDT", "timeframe": "4h", "source": "binance_ws",
+               "indicators": [{"type": "rsi", "period": 14}]}
+        active = {}
+
+        with patch("indicators._start_binance_stream", new=AsyncMock()):
+            resp1 = await _handle_subscribe(req, pub, 25, active)
+            resp2 = await _handle_subscribe(req, pub, 25, active)
+
+        self.assertEqual(resp1["status"], "ok")
+        self.assertEqual(resp2["status"], "ok")
+        self.assertEqual(resp1["stream_id"], resp2["stream_id"])
+        pub.close(); ctx.term()
+
+    async def test_feed_source_not_in_active_returns_error(self):
+        import zmq
+        import zmq.asyncio as azmq
+
+        ctx = azmq.Context()
+        pub = ctx.socket(zmq.PUB)
+        pub.bind_to_random_port("tcp://127.0.0.1")
+
+        resp = await _handle_subscribe(
+            {"asset": "BTCUSDT", "timeframe": "tick", "source": "feed",
+             "indicators": [{"type": "rsi", "period": 14}]},
+            pub, 25, {},   # empty active — feed stream not registered
+        )
+
+        self.assertEqual(resp["status"], "error")
+        pub.close(); ctx.term()
 
 
 if __name__ == "__main__":

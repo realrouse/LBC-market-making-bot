@@ -4,6 +4,7 @@
 
     "zmq_feed_addr": "tcp://127.0.0.1:5557",
     "zmq_out_addr":  "tcp://127.0.0.1:5559",
+    "zmq_reg_addr":  "tcp://127.0.0.1:5561",
     "min_ticks": 25,
 
     "streams": [
