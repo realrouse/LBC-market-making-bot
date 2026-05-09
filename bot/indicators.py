@@ -60,9 +60,20 @@ from typing import Any, NamedTuple
 import aiohttp, websockets, zmq, zmq.asyncio
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────
-_FEED_ADDR = os.environ.get("TRADINEBOTTE_FEED_ADDR",            "tcp://127.0.0.1:5557")
-_IND_ADDR  = os.environ.get("TRADINEBOTTE_INDICATORS_ADDR",      "tcp://127.0.0.1:5559")
-_REG_ADDR  = os.environ.get("TRADINEBOTTE_INDICATORS_REG_ADDR",  "tcp://127.0.0.1:5561")
+# TRADINEBOTTE_PORT_BASE shifts the entire default port layout uniformly.
+# Default layout (base=5557): feed=5557, indicators PUB=5559, indicators REP=5561.
+# Example — run a second independent stack on base 6557:
+#   TRADINEBOTTE_PORT_BASE=6557 python3 bot/indicators.py --config ...
+# Per-service env vars still override PORT_BASE when set explicitly.
+_PORT_BASE  = int(os.environ.get("TRADINEBOTTE_PORT_BASE", "5557"))
+_PORT_SHIFT = _PORT_BASE - 5557  # 0 when using defaults
+
+_FEED_ADDR = os.environ.get("TRADINEBOTTE_FEED_ADDR",
+                             f"tcp://127.0.0.1:{_PORT_BASE}")
+_IND_ADDR  = os.environ.get("TRADINEBOTTE_INDICATORS_ADDR",
+                             f"tcp://127.0.0.1:{_PORT_BASE + 2}")
+_REG_ADDR  = os.environ.get("TRADINEBOTTE_INDICATORS_REG_ADDR",
+                             f"tcp://127.0.0.1:{_PORT_BASE + 4}")
 _BINANCE_REST_URL    = "https://api.binance.com/api/v3/klines"
 _BINANCE_WS_BASE     = "wss://stream.binance.com:9443/ws"
 _BINANCE_FUTURES_URL      = "https://fapi.binance.com/fapi/v1/premiumIndex"
@@ -72,6 +83,14 @@ _BINANCE_FORCE_ORDERS_URL = "https://fapi.binance.com/fapi/v1/forceOrders"
 _DERIBIT_DVOL_URL         = "https://www.deribit.com/api/v2/public/get_index_price"
 _FEAR_GREED_URL           = "https://api.alternative.me/fng/"
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
+
+
+def _shift_addr(addr: str) -> str:
+    """Apply _PORT_SHIFT to a tcp://host:port address. No-op when shift is 0."""
+    if _PORT_SHIFT == 0 or not addr.startswith("tcp://"):
+        return addr
+    host, port_str = addr.rsplit(":", 1)
+    return f"{host}:{int(port_str) + _PORT_SHIFT}"
 
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT,
                     handlers=[logging.StreamHandler(sys.stdout)])
@@ -266,12 +285,22 @@ class IndicatorsConfig(NamedTuple):
 
 
 def load_config(path: str) -> IndicatorsConfig:
-    """Load indicators.json. Returns IndicatorsConfig(feed, out, reg, min_ticks, streams)."""
+    """Load indicators.json. Returns IndicatorsConfig(feed, out, reg, min_ticks, streams).
+
+    When TRADINEBOTTE_PORT_BASE is set, addresses declared in the JSON file are
+    shifted by the same offset as the built-in defaults, so a single env var
+    moves the entire port layout. Explicit per-service env vars (TRADINEBOTTE_
+    FEED_ADDR, TRADINEBOTTE_INDICATORS_ADDR, TRADINEBOTTE_INDICATORS_REG_ADDR)
+    override everything without shifting.
+    """
     with open(path, encoding="utf-8") as fh:
         cfg = json.load(fh)
-    feed_addr = cfg.get("zmq_feed_addr", _FEED_ADDR)
-    out_addr  = cfg.get("zmq_out_addr",  _IND_ADDR)
-    reg_addr  = cfg.get("zmq_reg_addr",  _REG_ADDR)
+    raw_feed = cfg.get("zmq_feed_addr")
+    raw_out  = cfg.get("zmq_out_addr")
+    raw_reg  = cfg.get("zmq_reg_addr")
+    feed_addr = _shift_addr(raw_feed) if raw_feed else _FEED_ADDR
+    out_addr  = _shift_addr(raw_out)  if raw_out  else _IND_ADDR
+    reg_addr  = _shift_addr(raw_reg)  if raw_reg  else _REG_ADDR
     min_ticks = int(cfg.get("min_ticks", 25))
     raw_streams = [s for s in cfg.get("streams", []) if "id" in s]
     streams = [StreamSpec.from_dict(s) for s in raw_streams]

@@ -445,7 +445,37 @@ dynamiquement — les déclarer dans le fichier de config JSON.
 
 ---
 
-## 7. Indicateurs planifiés (TODO)
+## 7. Configuration des ports
+
+Toutes les adresses de port sont calculées depuis `TRADINEBOTTE_PORT_BASE`
+(défaut : 5557). Cette variable décale l'ensemble de la plage de ports par
+défaut de façon uniforme, permettant de faire tourner deux piles indépendantes
+sur la même machine sans modifier aucun fichier JSON.
+
+| Variable | Défaut | Description |
+|---|---|---|
+| `TRADINEBOTTE_PORT_BASE` | `5557` | Port de base. Tous les ports par défaut se décalent de `PORT_BASE − 5557`. |
+| `TRADINEBOTTE_FEED_ADDR` | `tcp://127.0.0.1:{PORT_BASE}` | Adresse PUB du feed. Remplace `PORT_BASE` pour le feed uniquement. |
+| `TRADINEBOTTE_INDICATORS_ADDR` | `tcp://127.0.0.1:{PORT_BASE+2}` | Adresse PUB du service indicators. |
+| `TRADINEBOTTE_INDICATORS_REG_ADDR` | `tcp://127.0.0.1:{PORT_BASE+4}` | Adresse REP pour l'enregistrement dynamique. |
+
+Quand `PORT_BASE` est défini, les adresses déclarées dans les fichiers JSON
+(`zmq_out_addr`, `zmq_reg_addr`, `zmq_feed_addr`) sont décalées du même offset.
+Les variables par service restent prioritaires sans décalage.
+
+```bash
+# Pile par défaut — ports 5557 / 5559 / 5561 …
+bash scripts/start_indicators.sh
+
+# Deuxième pile indépendante — tous les ports décalés de +1000
+TRADINEBOTTE_PORT_BASE=6557 \
+TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_4h_bitcoin.json \
+  bash scripts/start_indicators.sh
+```
+
+---
+
+## 8. Indicateurs planifiés (TODO)
 
 Ces indicateurs seront ajoutés comme nouvelles valeurs de `type` dans
 `_VALID_INDICATOR_TYPES` et implémentés dans `PriceSeries.compute_indicators`.
@@ -461,7 +491,7 @@ REST ou WebSocket requise.
 
 ---
 
-## 8. Fichiers associés
+## 9. Fichiers associés
 
 | Fichier | Rôle |
 |---|---|

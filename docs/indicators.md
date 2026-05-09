@@ -441,7 +441,36 @@ declare them in the JSON config file.
 
 ---
 
-## 7. Planned indicators (TODO)
+## 7. Port configuration
+
+All port addresses are computed from `TRADINEBOTTE_PORT_BASE` (default: 5557).
+Setting this variable shifts the entire default port layout uniformly, enabling
+two independent stacks on the same machine without editing any JSON config.
+
+| Variable | Default | Description |
+|---|---|---|
+| `TRADINEBOTTE_PORT_BASE` | `5557` | Base port. All default addresses shift by `PORT_BASE − 5557`. |
+| `TRADINEBOTTE_FEED_ADDR` | `tcp://127.0.0.1:{PORT_BASE}` | Feed PUB address. Overrides `PORT_BASE` for the feed only. |
+| `TRADINEBOTTE_INDICATORS_ADDR` | `tcp://127.0.0.1:{PORT_BASE+2}` | Indicators PUB address. |
+| `TRADINEBOTTE_INDICATORS_REG_ADDR` | `tcp://127.0.0.1:{PORT_BASE+4}` | Indicators REP address for dynamic registration. |
+
+When `PORT_BASE` is set, addresses declared in JSON config files (`zmq_out_addr`,
+`zmq_reg_addr`, `zmq_feed_addr`) are shifted by the same offset. Per-service env
+vars override everything without shifting.
+
+```bash
+# Default stack — ports 5557 / 5559 / 5561 …
+bash scripts/start_indicators.sh
+
+# Second independent stack — all ports shifted by +1000
+TRADINEBOTTE_PORT_BASE=6557 \
+TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_4h_bitcoin.json \
+  bash scripts/start_indicators.sh
+```
+
+---
+
+## 8. Planned indicators (TODO)
 
 These will be added as new `type` values in `_VALID_INDICATOR_TYPES` and
 implemented in `PriceSeries.compute_indicators`. They reuse existing Binance
@@ -456,7 +485,7 @@ kline data — no new REST or WebSocket source needed.
 
 ---
 
-## 8. Related files
+## 9. Related files
 
 | File | Role |
 |---|---|

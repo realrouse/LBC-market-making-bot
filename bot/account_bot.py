@@ -49,7 +49,8 @@ def _parse_args() -> argparse.Namespace:
                    help="Enable DEBUG logging — very detailed, for diagnostics only")
     return p.parse_args()
 
-_FEED_ADDR = os.environ.get("TRADINEBOTTE_FEED_ADDR", "tcp://127.0.0.1:5557")
+_PORT_BASE = int(os.environ.get("TRADINEBOTTE_PORT_BASE", "5557"))
+_FEED_ADDR = os.environ.get("TRADINEBOTTE_FEED_ADDR", f"tcp://127.0.0.1:{_PORT_BASE}")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 

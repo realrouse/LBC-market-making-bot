@@ -547,9 +547,26 @@ any missed `market` messages are re-published on the next 30-second refresh.
 
 | Variable | Default | Scope | Description |
 |---|---|---|---|
-| `TRADINEBOTTE_FEED_ADDR` | `tcp://127.0.0.1:5557` | feed.py, account_bot.py, indicators.py | ZMQ address feed.py binds and consumers connect to |
-| `TRADINEBOTTE_INDICATORS_ADDR` | `tcp://127.0.0.1:5559` | indicators.py | ZMQ address indicators.py binds and consumers connect to |
+| `TRADINEBOTTE_PORT_BASE` | `5557` | feed.py, account_bot.py, indicators.py | Base port of the entire stack. All default port numbers shift by `PORT_BASE − 5557`. Override per-service vars still take precedence. |
+| `TRADINEBOTTE_FEED_ADDR` | `tcp://127.0.0.1:$PORT_BASE` | feed.py, account_bot.py, indicators.py | Exact ZMQ address for the feed PUB socket. Overrides `PORT_BASE` for the feed only. |
+| `TRADINEBOTTE_INDICATORS_ADDR` | `tcp://127.0.0.1:$(PORT_BASE+2)` | indicators.py | Exact ZMQ PUB address for the indicators service. |
+| `TRADINEBOTTE_INDICATORS_REG_ADDR` | `tcp://127.0.0.1:$(PORT_BASE+4)` | indicators.py | Exact ZMQ REP address for dynamic stream registration. |
 | `TRADINEBOTTE_DIR` | `~/tradinebotte` | account_bot.py, live_bot.py | Per-account data directory (DB, log, config, strategies) |
+
+### Running two independent stacks on the same machine
+
+```bash
+# Stack A — default ports (5557, 5559, 5561 …)
+TRADINEBOTTE_DIR=~/account-a python3 bot/account_bot.py &
+
+# Stack B — all ports shifted by +1000
+TRADINEBOTTE_PORT_BASE=6557 TRADINEBOTTE_DIR=~/account-b python3 bot/account_bot.py &
+TRADINEBOTTE_PORT_BASE=6557 TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_4h_bitcoin.json \
+  bash scripts/start_indicators.sh &
+```
+
+`TRADINEBOTTE_PORT_BASE` shifts addresses declared in JSON config files by the
+same offset, so a single env var moves the entire port layout of one stack.
 
 ---
 

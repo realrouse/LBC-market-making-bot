@@ -8,6 +8,7 @@ from indicators import (
     IndicatorSpec, StreamSpec, IndicatorsConfig, load_config,
     derive_stream_id, parse_subscribe_request, _handle_subscribe,
     _SOURCES_WITHOUT_INDICATORS, _DEFAULT_POLL_INTERVALS, _VALID_SOURCES,
+    _shift_addr, _PORT_SHIFT,
 )
 
 
@@ -872,6 +873,83 @@ class TestNewSources(unittest.TestCase):
         cfg_fg = self._load_config("indicators_fear_greed.json")
         ports = {cfg_f.out_addr, cfg_d.out_addr, cfg_fg.out_addr}
         self.assertEqual(len(ports), 3, f"PUB port collision: {ports}")
+
+
+class TestPortBase(unittest.TestCase):
+    """Tests for _shift_addr() and port-base configuration."""
+
+    def test_shift_addr_zero_is_noop(self):
+        addr = "tcp://127.0.0.1:5559"
+        # When _PORT_SHIFT is 0 (default PORT_BASE=5557), _shift_addr is a no-op.
+        if _PORT_SHIFT == 0:
+            self.assertEqual(_shift_addr(addr), addr)
+
+    def test_shift_addr_positive(self):
+        # Simulate PORT_BASE=6557 → shift=+1000
+        from indicators import _shift_addr as sa
+        import indicators as ind_mod
+        orig = ind_mod._PORT_SHIFT  # pylint: disable=protected-access
+        ind_mod._PORT_SHIFT = 1000
+        try:
+            self.assertEqual(sa("tcp://127.0.0.1:5559"), "tcp://127.0.0.1:6559")
+            self.assertEqual(sa("tcp://127.0.0.1:5561"), "tcp://127.0.0.1:6561")
+        finally:
+            ind_mod._PORT_SHIFT = orig
+
+    def test_shift_addr_non_tcp_unchanged(self):
+        import indicators as ind_mod
+        orig = ind_mod._PORT_SHIFT
+        ind_mod._PORT_SHIFT = 1000
+        try:
+            self.assertEqual(_shift_addr("ipc:///tmp/feed.ipc"), "ipc:///tmp/feed.ipc")
+        finally:
+            ind_mod._PORT_SHIFT = orig
+
+    def test_shift_addr_preserves_host(self):
+        import indicators as ind_mod
+        orig = ind_mod._PORT_SHIFT
+        ind_mod._PORT_SHIFT = 500
+        try:
+            result = _shift_addr("tcp://0.0.0.0:5559")
+            self.assertTrue(result.startswith("tcp://0.0.0.0:"))
+            self.assertEqual(result, "tcp://0.0.0.0:6059")
+        finally:
+            ind_mod._PORT_SHIFT = orig
+
+    def test_load_config_shifts_json_addresses(self):
+        """When PORT_SHIFT is non-zero, JSON-declared addresses are shifted."""
+        import indicators as ind_mod
+        orig_shift = ind_mod._PORT_SHIFT
+        orig_ind   = ind_mod._IND_ADDR
+        orig_reg   = ind_mod._REG_ADDR
+        orig_feed  = ind_mod._FEED_ADDR
+        ind_mod._PORT_SHIFT = 1000
+        ind_mod._IND_ADDR   = "tcp://127.0.0.1:6559"
+        ind_mod._REG_ADDR   = "tcp://127.0.0.1:6561"
+        ind_mod._FEED_ADDR  = "tcp://127.0.0.1:6557"
+        try:
+            cfg_dict = {
+                "zmq_feed_addr": "tcp://127.0.0.1:5557",
+                "zmq_out_addr":  "tcp://127.0.0.1:5559",
+                "zmq_reg_addr":  "tcp://127.0.0.1:5561",
+                "min_ticks": 25,
+                "streams": [{
+                    "id": "btc_4h", "asset": "BTCUSDT",
+                    "source": "binance_ws", "timeframe": "4h",
+                    "indicators": [{"type": "rsi", "period": 14}],
+                }],
+            }
+            tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+            json.dump(cfg_dict, tmp); tmp.close()
+            cfg = load_config(tmp.name)
+            self.assertEqual(cfg.feed_addr, "tcp://127.0.0.1:6557")
+            self.assertEqual(cfg.out_addr,  "tcp://127.0.0.1:6559")
+            self.assertEqual(cfg.reg_addr,  "tcp://127.0.0.1:6561")
+        finally:
+            ind_mod._PORT_SHIFT = orig_shift
+            ind_mod._IND_ADDR   = orig_ind
+            ind_mod._REG_ADDR   = orig_reg
+            ind_mod._FEED_ADDR  = orig_feed
 
 
 class TestBinanceMarketStructure(unittest.TestCase):

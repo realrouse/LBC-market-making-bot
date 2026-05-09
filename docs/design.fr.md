@@ -553,9 +553,27 @@ sont re-publiés au prochain refresh de 30 secondes.
 
 | Variable | Défaut | Portée | Description |
 |---|---|---|---|
-| `TRADINEBOTTE_FEED_ADDR` | `tcp://127.0.0.1:5557` | feed.py, account_bot.py, indicators.py | Adresse ZMQ bindée par feed.py et utilisée par les consommateurs |
-| `TRADINEBOTTE_INDICATORS_ADDR` | `tcp://127.0.0.1:5559` | indicators.py | Adresse ZMQ bindée par indicators.py et utilisée par les consommateurs |
+| `TRADINEBOTTE_PORT_BASE` | `5557` | feed.py, account_bot.py, indicators.py | Port de base de toute la pile. Tous les ports par défaut se décalent de `PORT_BASE − 5557`. Les variables par service restent prioritaires. |
+| `TRADINEBOTTE_FEED_ADDR` | `tcp://127.0.0.1:$PORT_BASE` | feed.py, account_bot.py, indicators.py | Adresse ZMQ exacte du socket PUB feed. Remplace `PORT_BASE` pour le feed uniquement. |
+| `TRADINEBOTTE_INDICATORS_ADDR` | `tcp://127.0.0.1:$(PORT_BASE+2)` | indicators.py | Adresse ZMQ PUB exacte du service indicators. |
+| `TRADINEBOTTE_INDICATORS_REG_ADDR` | `tcp://127.0.0.1:$(PORT_BASE+4)` | indicators.py | Adresse ZMQ REP exacte pour l'enregistrement dynamique de flux. |
 | `TRADINEBOTTE_DIR` | `~/tradinebotte` | account_bot.py, live_bot.py | Répertoire de données par compte (BD, log, config, stratégies) |
+
+### Faire tourner deux piles indépendantes sur la même machine
+
+```bash
+# Pile A — ports par défaut (5557, 5559, 5561 …)
+TRADINEBOTTE_DIR=~/compte-a python3 bot/account_bot.py &
+
+# Pile B — tous les ports décalés de +1000
+TRADINEBOTTE_PORT_BASE=6557 TRADINEBOTTE_DIR=~/compte-b python3 bot/account_bot.py &
+TRADINEBOTTE_PORT_BASE=6557 TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_4h_bitcoin.json \
+  bash scripts/start_indicators.sh &
+```
+
+`TRADINEBOTTE_PORT_BASE` décale également les adresses déclarées dans les
+fichiers JSON de config du même offset — une seule variable déplace l'ensemble
+de la plage de ports d'une pile.
 
 ---
 

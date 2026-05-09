@@ -32,7 +32,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import api_polymarket as api
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────
-FEED_ADDR       = os.environ.get("TRADINEBOTTE_FEED_ADDR", "tcp://127.0.0.1:5557")
+_PORT_BASE      = int(os.environ.get("TRADINEBOTTE_PORT_BASE", "5557"))
+FEED_ADDR       = os.environ.get("TRADINEBOTTE_FEED_ADDR", f"tcp://127.0.0.1:{_PORT_BASE}")
 MARKET_REFRESH  = 30   # seconds between Gamma API polls
 PING_INTERVAL   = 10   # seconds between keepalive pings to subscribers
 LOG_FORMAT      = "%(asctime)s [%(levelname)s] %(message)s"
