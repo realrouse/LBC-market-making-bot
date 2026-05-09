@@ -35,4 +35,4 @@ class Strategy(Protocol):
         Must handle both entry (signal detection) and exit (resolution / fill
         detection) in one call, since the book stream is the only push source.
         """
-        ...
+        ...  # pylint: disable=unnecessary-ellipsis

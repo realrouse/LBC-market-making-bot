@@ -497,5 +497,5 @@ REST ou WebSocket requise.
 |---|---|
 | `bot/indicators.py` | Implémentation : toutes les sources, `PriceSeries`, chargeur de config, tâches ZMQ |
 | `strategies/indicators_*.json` | Fichiers de config par flux |
-| `tests/test_indicators.py` | Tests unitaires et d'intégration (112 tests) |
+| `tests/test_indicators.py` | Tests unitaires et d'intégration (117 tests) |
 | `docs/design.fr.md` | Topologie ZeroMQ, catalogue de messages, analyse ZeroMQ vs MQTT |

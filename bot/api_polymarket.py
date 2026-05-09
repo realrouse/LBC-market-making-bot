@@ -218,10 +218,10 @@ async def get_markets(session):
             m for m in batch
             if any(kw in m.get("question", "").lower() for kw in BTC_5M_KEYWORDS)
         ]
-        logger.info("Marches BTC 5-min : %d", len(results))
+        logger.info("BTC 5-min markets: %d", len(results))
         return results
     except Exception as e:
-        logger.warning("Fetch erreur : %s", e)
+        logger.warning("Fetch error: %s", e)
         return []
 
 
@@ -239,7 +239,7 @@ async def post_order(session, token_id, price, size_usdc, *, private_key, instal
     mode (no private key), or None on error.
     """
     if not private_key:
-        logger.warning("POLY_PRIVATE_KEY non definie — ordre simule")
+        logger.warning("POLY_PRIVATE_KEY not set — order simulated")
         return f"sim_{uuid.uuid4().hex[:12]}"
     try:
         import sys as _sys, sysconfig as _sc

@@ -68,6 +68,14 @@ import aiohttp, websockets, zmq, zmq.asyncio
 _PORT_BASE  = int(os.environ.get("TRADINEBOTTE_PORT_BASE", "5557"))
 _PORT_SHIFT = _PORT_BASE - 5557  # 0 when using defaults
 
+def _warn_if_external_bind(addr: str, name: str) -> None:
+    """Log a security warning if a ZMQ bind address is not loopback."""
+    if addr.startswith("tcp://") and "127.0.0.1" not in addr and "localhost" not in addr:
+        logging.getLogger("indicators").warning(
+            "SECURITY: %s (%s) is bound to a non-loopback address — "
+            "ensure ZMQ CURVE auth is active before exposing to the network.", name, addr
+        )
+
 _FEED_ADDR = os.environ.get("TRADINEBOTTE_FEED_ADDR",
                              f"tcp://127.0.0.1:{_PORT_BASE}")
 _IND_ADDR  = os.environ.get("TRADINEBOTTE_INDICATORS_ADDR",
@@ -159,6 +167,7 @@ class PriceSeries:
         self._prices: deque[float] = deque(maxlen=maxlen)
 
     def push(self, price: float) -> None:
+        """Append one price sample to the ring buffer."""
         self._prices.append(price)
 
     def __len__(self) -> int:
@@ -228,6 +237,7 @@ class IndicatorSpec:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "IndicatorSpec":
+        """Construct from a config dict; raises ValueError on invalid type or period."""
         ind_type = str(d.get("type", "")).lower()
         if ind_type not in _VALID_INDICATOR_TYPES:
             raise ValueError(
@@ -253,6 +263,7 @@ class StreamSpec:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "StreamSpec":
+        """Construct from a config dict; raises ValueError on unknown source or missing indicators."""
         source = str(d.get("source", "feed")).lower()
         if source not in _VALID_SOURCES:
             raise ValueError(
@@ -387,6 +398,7 @@ async def _seed_series(symbol: str, timeframe: str,
 
 
 def _publish(pub: zmq.asyncio.Socket, out: dict[str, Any]) -> None:
+    """Send one enriched indicator message on the PUB socket (non-blocking)."""
     pub.send_json(out, zmq.NOBLOCK)
     if VERBOSE:
         keys = [k for k in out if k not in ("t", "token_id", "asset",
@@ -448,7 +460,7 @@ async def _zmq_feed_task(feed_addr: str, pub: zmq.asyncio.Socket,
     sub = ctx.socket(zmq.SUB)
     sub.setsockopt(zmq.SUBSCRIBE, b"")
     sub.connect(feed_addr)
-    logger.info("[feed] SUB connecté → %s", feed_addr)
+    logger.info("[feed] SUB connected → %s", feed_addr)
 
     all_specs: list[IndicatorSpec] = []
     for s in feed_streams:
@@ -487,74 +499,74 @@ async def _binance_funding_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> No
     """Poll Binance perpetual funding rate at the configured interval."""
     interval = spec.poll_interval_s or _DEFAULT_POLL_INTERVALS["binance_funding"]
     asset    = spec.asset or "BTCUSDT"
-    while True:
-        try:
-            async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
                 async with session.get(
                     _BINANCE_FUTURES_URL,
                     params={"symbol": asset.upper()},
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as resp:
                     data = await resp.json(content_type=None)
-            _publish(pub, {
-                "t":               "indicators",
-                "stream_id":       spec.id,
-                "funding_rate":    float(data["lastFundingRate"]),
-                "next_funding_ms": int(data["nextFundingTime"]),
-                "ts":              int(time.time() * 1000),
-            })
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.warning("[%s] funding rate fetch failed (%s)", spec.id, exc)
-        await asyncio.sleep(interval)
+                _publish(pub, {
+                    "t":               "indicators",
+                    "stream_id":       spec.id,
+                    "funding_rate":    float(data["lastFundingRate"]),
+                    "next_funding_ms": int(data["nextFundingTime"]),
+                    "ts":              int(time.time() * 1000),
+                })
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("[%s] funding rate fetch failed (%s)", spec.id, exc)
+            await asyncio.sleep(interval)
 
 
 async def _deribit_iv_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> None:
     """Poll Deribit DVOL implied volatility index at the configured interval."""
     interval   = spec.poll_interval_s or _DEFAULT_POLL_INTERVALS["deribit_iv"]
     index_name = spec.asset.lower() if spec.asset else "dvol_btc"
-    while True:
-        try:
-            async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
                 async with session.get(
                     _DERIBIT_DVOL_URL,
                     params={"index_name": index_name},
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as resp:
                     data = await resp.json(content_type=None)
-            _publish(pub, {
-                "t":         "indicators",
-                "stream_id": spec.id,
-                "dvol":      float(data["result"]["index_price"]),
-                "ts":        int(time.time() * 1000),
-            })
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.warning("[%s] Deribit IV fetch failed (%s)", spec.id, exc)
-        await asyncio.sleep(interval)
+                _publish(pub, {
+                    "t":         "indicators",
+                    "stream_id": spec.id,
+                    "dvol":      float(data["result"]["index_price"]),
+                    "ts":        int(time.time() * 1000),
+                })
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("[%s] Deribit IV fetch failed (%s)", spec.id, exc)
+            await asyncio.sleep(interval)
 
 
 async def _fear_greed_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> None:
     """Poll Alternative.me Fear & Greed Index at the configured interval."""
     interval = spec.poll_interval_s or _DEFAULT_POLL_INTERVALS["fear_greed"]
-    while True:
-        try:
-            async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
                 async with session.get(
                     _FEAR_GREED_URL,
                     params={"limit": 1},
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as resp:
                     data = await resp.json(content_type=None)
-            entry = data["data"][0]
-            _publish(pub, {
-                "t":                "indicators",
-                "stream_id":        spec.id,
-                "fear_greed":       int(entry["value"]),
-                "fear_greed_label": str(entry["value_classification"]),
-                "ts":               int(time.time() * 1000),
-            })
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.warning("[%s] Fear & Greed fetch failed (%s)", spec.id, exc)
-        await asyncio.sleep(interval)
+                entry = data["data"][0]
+                _publish(pub, {
+                    "t":                "indicators",
+                    "stream_id":        spec.id,
+                    "fear_greed":       int(entry["value"]),
+                    "fear_greed_label": str(entry["value_classification"]),
+                    "ts":               int(time.time() * 1000),
+                })
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("[%s] Fear & Greed fetch failed (%s)", spec.id, exc)
+            await asyncio.sleep(interval)
 
 
 async def _binance_oi_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> None:
@@ -563,95 +575,95 @@ async def _binance_oi_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> None:
     asset    = spec.asset or "BTCUSDT"
     prev_oi_btc: float | None = None
     prev_oi_usd: float | None = None
-    while True:
-        try:
-            async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
                 async with session.get(
                     _BINANCE_OI_HIST_URL,
                     params={"symbol": asset.upper(), "period": "5m", "limit": 2},
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as resp:
                     data = await resp.json(content_type=None)
-            latest   = data[-1]
-            oi_btc   = float(latest["sumOpenInterest"])
-            oi_usd   = float(latest["sumOpenInterestValue"])
-            chg_btc  = oi_btc - prev_oi_btc if prev_oi_btc is not None else 0.0
-            chg_usd  = oi_usd - prev_oi_usd if prev_oi_usd is not None else 0.0
-            prev_oi_btc, prev_oi_usd = oi_btc, oi_usd
-            _publish(pub, {
-                "t":             "indicators",
-                "stream_id":     spec.id,
-                "oi_btc":        oi_btc,
-                "oi_usd":        oi_usd,
-                "oi_change_btc": chg_btc,
-                "oi_change_usd": chg_usd,
-                "ts":            int(time.time() * 1000),
-            })
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.warning("[%s] open interest fetch failed (%s)", spec.id, exc)
-        await asyncio.sleep(interval)
+                latest   = data[-1]
+                oi_btc   = float(latest["sumOpenInterest"])
+                oi_usd   = float(latest["sumOpenInterestValue"])
+                chg_btc  = oi_btc - prev_oi_btc if prev_oi_btc is not None else 0.0
+                chg_usd  = oi_usd - prev_oi_usd if prev_oi_usd is not None else 0.0
+                prev_oi_btc, prev_oi_usd = oi_btc, oi_usd
+                _publish(pub, {
+                    "t":             "indicators",
+                    "stream_id":     spec.id,
+                    "oi_btc":        oi_btc,
+                    "oi_usd":        oi_usd,
+                    "oi_change_btc": chg_btc,
+                    "oi_change_usd": chg_usd,
+                    "ts":            int(time.time() * 1000),
+                })
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("[%s] open interest fetch failed (%s)", spec.id, exc)
+            await asyncio.sleep(interval)
 
 
 async def _binance_ls_ratio_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> None:
     """Poll Binance top-trader long/short account ratio at the configured interval."""
     interval = spec.poll_interval_s or _DEFAULT_POLL_INTERVALS["binance_ls_ratio"]
     asset    = spec.asset or "BTCUSDT"
-    while True:
-        try:
-            async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
                 async with session.get(
                     _BINANCE_LS_RATIO_URL,
                     params={"symbol": asset.upper(), "period": "5m", "limit": 1},
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as resp:
                     data = await resp.json(content_type=None)
-            entry = data[0]
-            _publish(pub, {
-                "t":                "indicators",
-                "stream_id":        spec.id,
-                "long_short_ratio": float(entry["longShortRatio"]),
-                "long_pct":         float(entry["longAccount"]),
-                "short_pct":        float(entry["shortAccount"]),
-                "ts":               int(time.time() * 1000),
-            })
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.warning("[%s] long/short ratio fetch failed (%s)", spec.id, exc)
-        await asyncio.sleep(interval)
+                entry = data[0]
+                _publish(pub, {
+                    "t":                "indicators",
+                    "stream_id":        spec.id,
+                    "long_short_ratio": float(entry["longShortRatio"]),
+                    "long_pct":         float(entry["longAccount"]),
+                    "short_pct":        float(entry["shortAccount"]),
+                    "ts":               int(time.time() * 1000),
+                })
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("[%s] long/short ratio fetch failed (%s)", spec.id, exc)
+            await asyncio.sleep(interval)
 
 
 async def _binance_liquidations_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> None:
     """Aggregate Binance forced liquidation orders over the last poll interval."""
     interval = spec.poll_interval_s or _DEFAULT_POLL_INTERVALS["binance_liquidations"]
     asset    = spec.asset or "BTCUSDT"
-    while True:
-        try:
-            start_ms = int((time.time() - interval) * 1000)
-            async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
+                start_ms = int((time.time() - interval) * 1000)
                 async with session.get(
                     _BINANCE_FORCE_ORDERS_URL,
                     params={"symbol": asset.upper(), "startTime": start_ms, "limit": 1000},
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as resp:
                     orders = await resp.json(content_type=None)
-            liq_long = liq_short = 0.0
-            for o in orders:
-                notional = float(o.get("executedQty", 0)) * float(o.get("averagePrice", 0))
-                if o.get("side") == "SELL":   # long position liquidated
-                    liq_long += notional
-                else:                          # short position liquidated
-                    liq_short += notional
-            _publish(pub, {
-                "t":             "indicators",
-                "stream_id":     spec.id,
-                "liq_long_usd":  liq_long,
-                "liq_short_usd": liq_short,
-                "liq_net_usd":   liq_short - liq_long,
-                "liq_count":     len(orders),
-                "ts":            int(time.time() * 1000),
-            })
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.warning("[%s] liquidations fetch failed (%s)", spec.id, exc)
-        await asyncio.sleep(interval)
+                liq_long = liq_short = 0.0
+                for o in orders:
+                    notional = float(o.get("executedQty", 0)) * float(o.get("averagePrice", 0))
+                    if o.get("side") == "SELL":   # long position liquidated
+                        liq_long += notional
+                    else:                          # short position liquidated
+                        liq_short += notional
+                _publish(pub, {
+                    "t":             "indicators",
+                    "stream_id":     spec.id,
+                    "liq_long_usd":  liq_long,
+                    "liq_short_usd": liq_short,
+                    "liq_net_usd":   liq_short - liq_long,
+                    "liq_count":     len(orders),
+                    "ts":            int(time.time() * 1000),
+                })
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("[%s] liquidations fetch failed (%s)", spec.id, exc)
+            await asyncio.sleep(interval)
 
 
 # ─── DYNAMIC REGISTRATION ────────────────────────────────────────────────────
@@ -804,6 +816,8 @@ async def run(feed_addr: str, ind_addr: str, reg_addr: str,
         actual_reg  = reg_addr
         actual_min  = min_ticks
 
+    _warn_if_external_bind(actual_out, "INDICATORS_ADDR")
+    _warn_if_external_bind(actual_reg, "INDICATORS_REG_ADDR")
     pub.bind(actual_out)
     logger.info("PUB bind → %s", actual_out)
 

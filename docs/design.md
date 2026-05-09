@@ -507,7 +507,7 @@ never receive partial data.
 
 **Dynamic registration** — streams can be added at runtime without restarting `indicators.py`. Any bot sends a REQ to the REP socket (`:5561`) with its indicator needs; the server starts the task if new and replies with the `stream_id` to subscribe to. Streams declared in the JSON config are pre-loaded at startup; bot-requested streams are added on top.
 
-**Limitation** — dynamic registration is supported for `source="binance_ws"`, `"binance_funding"`, `"deribit_iv"`, and `"fear_greed"`. Feed-source streams (Polymarket ticks) must be declared statically in the JSON config.
+**Limitation** — dynamic registration is supported for all non-feed sources: `"binance_ws"`, `"binance_funding"`, `"deribit_iv"`, `"fear_greed"`, `"binance_oi"`, `"binance_ls_ratio"`, and `"binance_liquidations"`. Feed-source streams (Polymarket ticks) must be declared statically in the JSON config.
 
 **Starting the pipeline:**
 
@@ -570,7 +570,7 @@ same offset, so a single env var moves the entire port layout of one stack.
 
 ---
 
-## 11. ZeroMQ vs MQTT — trade-off analysis for this project
+## 10. ZeroMQ vs MQTT — trade-off analysis for this project
 
 Both ZeroMQ and MQTT implement publish/subscribe messaging, but they make
 opposite architectural choices. This section explains why ZeroMQ was chosen
@@ -640,7 +640,7 @@ a scenario that is currently out of scope.
 
 ---
 
-## 10. Related files
+## 11. Related files
 
 | File | Role |
 |---|---|

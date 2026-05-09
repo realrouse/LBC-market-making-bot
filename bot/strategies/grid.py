@@ -79,6 +79,7 @@ class GridLevel:
 
     @property
     def is_active(self) -> bool:
+        """True when a BUY or SELL order is outstanding (not idle)."""
         return self.status != "idle"
 
 
@@ -157,6 +158,7 @@ class GridStrategy:
 
     @property
     def levels(self) -> list[GridLevel]:
+        """Convenience accessor for the active grid's level list."""
         return self.grid.levels
 
     def level_at_price(self, price: float, tolerance: float = 0.5) -> Optional[GridLevel]:

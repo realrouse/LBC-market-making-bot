@@ -80,7 +80,7 @@ _FEED_READY_S   = 30      # max seconds to wait for feed to become ready
 def _probe_feed_sync(addr: str, timeout_ms: int) -> bool:
     """Return True if at least one message arrives from feed within timeout_ms."""
     if VERBOSE:
-        logger.debug("[PROBE] sonde %s (timeout %dms)...", addr, timeout_ms)
+        logger.debug("[PROBE] probing %s (timeout %dms)...", addr, timeout_ms)
     ctx = zmq.Context()
     sock = ctx.socket(zmq.SUB)
     sock.setsockopt(zmq.RCVTIMEO, timeout_ms)
@@ -89,7 +89,7 @@ def _probe_feed_sync(addr: str, timeout_ms: int) -> bool:
     try:
         msg = sock.recv()
         if VERBOSE:
-            logger.debug("[PROBE] reponse recue (%d octets) — feed actif", len(msg))
+            logger.debug("[PROBE] response received (%d bytes) — feed active", len(msg))
         return True
     except zmq.Again:
         if VERBOSE:
@@ -114,7 +114,7 @@ def _ensure_feed() -> None:
       4. Losers get BlockingIOError, wait for shared (LOCK_SH) → proceed
     """
     if _probe_feed_sync(_FEED_ADDR, _FEED_PROBE_MS):
-        logger.info("Feed actif sur %s", _FEED_ADDR)
+        logger.info("Feed active on %s", _FEED_ADDR)
         return
 
     os.makedirs(_FEED_TMP_DIR, exist_ok=True)
@@ -128,7 +128,7 @@ def _ensure_feed() -> None:
         fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         # Another account_bot won the race and is starting the feed — wait.
-        logger.info("Feed en cours de démarrage par un autre processus — attente...")
+        logger.info("Feed being started by another process — waiting...")
         fcntl.flock(lock_file, fcntl.LOCK_SH)
         lock_file.close()
         return
@@ -145,21 +145,21 @@ def _ensure_feed() -> None:
             cmd.append("--verbose")
 
         if VERBOSE:
-            logger.debug("[ENSURE_FEED] démarrage feed.py : %s", " ".join(cmd))
-            logger.debug("[ENSURE_FEED] log feed : %s", log_path)
+            logger.debug("[ENSURE_FEED] starting feed.py: %s", " ".join(cmd))
+            logger.debug("[ENSURE_FEED] feed log: %s", log_path)
         with open(log_path, "ab") as log_f:
             proc = subprocess.Popen(cmd, env=env, stdout=log_f, stderr=log_f)  # pylint: disable=consider-using-with
-        logger.info("Feed démarré (PID %d) — log: %s", proc.pid, log_path)
+        logger.info("Feed started (PID %d) — log: %s", proc.pid, log_path)
 
         # Wait until feed publishes its first message.
         for i in range(_FEED_READY_S):
             time.sleep(1)
             if VERBOSE:
-                logger.debug("[ENSURE_FEED] attente feed prêt... %ds/%ds", i + 1, _FEED_READY_S)
+                logger.debug("[ENSURE_FEED] waiting for feed ready... %ds/%ds", i + 1, _FEED_READY_S)
             if _probe_feed_sync(_FEED_ADDR, timeout_ms=2_000):
-                logger.info("Feed prêt (%ds)", i + 1)
+                logger.info("Feed ready (%ds)", i + 1)
                 return
-        logger.warning("Feed démarré mais aucun message reçu après %ds", _FEED_READY_S)
+        logger.warning("Feed started but no message received after %ds", _FEED_READY_S)
     finally:
         fcntl.flock(lock_file, fcntl.LOCK_UN)
         lock_file.close()
@@ -177,11 +177,11 @@ def _register_from_market_msg(state: bot.BotState, msg: dict) -> None:
     em  = int(msg.get("end_ms", 0))
     if not mid or not up or not dn:
         if VERBOSE:
-            logger.debug("[MARKET] msg incomplet ignoré : %s", msg)
+            logger.debug("[MARKET] incomplete msg ignored: %s", msg)
         return
     if em and time.time() * 1000 > em:
         if VERBOSE:
-            logger.debug("[MARKET] marché expiré ignoré : %s", mid)
+            logger.debug("[MARKET] expired market ignored: %s", mid)
         return
     is_new = mid not in state.market_tokens
     for tid, direction in ((up, "UP"), (dn, "DOWN")):
@@ -189,7 +189,7 @@ def _register_from_market_msg(state: bot.BotState, msg: dict) -> None:
             state.tokens[tid] = bot.TokenState(tid, mid, direction, q, sm, em)
     state.market_tokens[mid] = {"UP": up, "DOWN": dn}
     if VERBOSE and is_new:
-        logger.debug("[MARKET] enregistré : %s %s", mid[:16], q[:50])
+        logger.debug("[MARKET] registered: %s %s", mid[:16], q[:50])
 
 
 async def _run(state: bot.BotState) -> None:
@@ -198,7 +198,7 @@ async def _run(state: bot.BotState) -> None:
     sock = ctx.socket(zmq.SUB)
     sock.connect(_FEED_ADDR)
     sock.setsockopt(zmq.SUBSCRIBE, b"")
-    logger.info("Connecte au feed : %s", _FEED_ADDR)
+    logger.info("Connected to feed: %s", _FEED_ADDR)
 
     last_msg_ts = time.time()
     msgs_total  = 0
@@ -211,10 +211,10 @@ async def _run(state: bot.BotState) -> None:
                 msgs_total += 1
             except asyncio.TimeoutError:
                 idle = time.time() - last_msg_ts
-                logger.warning("Aucun message du feed depuis %.0fs — feed actif ?", idle)
+                logger.warning("No message from feed for %.0fs — is feed alive?", idle)
                 continue
             except Exception as e:
-                logger.error("Erreur reception feed : %s", e)
+                logger.error("Feed receive error: %s", e)
                 await asyncio.sleep(5)
                 continue
 
@@ -237,11 +237,11 @@ async def _run(state: bot.BotState) -> None:
                 token_id = raw.get("token_id", "")
                 if token_id not in state.tokens:
                     if VERBOSE:
-                        logger.debug("[BOOK] token inconnu ignoré : %.20s", token_id)
+                        logger.debug("[BOOK] unknown token ignored: %.20s", token_id)
                     continue
                 parsed = {k: v for k, v in raw.items() if k != "t"}
                 if VERBOSE:
-                    logger.debug("[BOOK] traitement signal — bid=%.4f seuil=%.2f",
+                    logger.debug("[BOOK] checking signal — bid=%.4f thresh=%.2f",
                                  raw.get("best_bid", 0), bot.SIGNAL_THRESHOLD)
                 await bot.handle_book_update(state, parsed)
 
@@ -261,7 +261,7 @@ async def main() -> None:
     logger.info("  ACCOUNT BOT — dir=%s", config.install_dir)
     logger.info("  Feed : %s", _FEED_ADDR)
     if VERBOSE:
-        logger.info("  Mode VERBOSE actif — logs DEBUG complets")
+        logger.info("  VERBOSE mode active — full DEBUG logs")
     logger.info("=" * 65)
 
     if VERBOSE:
@@ -278,7 +278,7 @@ async def main() -> None:
     state = bot.BotState(conn, config)
     bot.restore_state_from_db(state)
     if VERBOSE:
-        logger.debug("[INIT] capital restauré=%.2f trades_ouverts=%d",
+        logger.debug("[INIT] capital=%.2f open_trades=%d",
                      state.capital, len(state.open_trades))
 
     import aiohttp

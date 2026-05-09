@@ -47,7 +47,7 @@ def print_dashboard(state: Any) -> None:
     logger.info("  LIVE BOT  %s", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     logger.info("  Capital=$%.2f  PnL=$%+.2f  Trades=%d  WR=%.1f%%",
                 state.capital, state.total_pnl, state.total_trades, state.win_rate)
-    logger.info("  Tokens=%d  Marches=%d  Ouverts=%d",
+    logger.info("  Tokens=%d  Markets=%d  Open=%d",
                 len(state.tokens), len(state.market_tokens), len(state.open_trades))
     logger.info("=" * 65)
     write_web_status(state)

@@ -512,7 +512,7 @@ les consommateurs ne reçoivent jamais de données partielles.
 
 **Enregistrement dynamique** — les flux peuvent être ajoutés à l'exécution sans redémarrer `indicators.py`. Chaque bot envoie un REQ au socket REP (`:5561`) avec ses besoins ; le serveur démarre la tâche si elle est nouvelle et répond avec le `stream_id` à écouter. Les flux déclarés dans la config JSON sont pré-chargés au démarrage ; les flux demandés par les bots s'ajoutent par-dessus.
 
-**Limitation** — l'enregistrement dynamique est supporté pour `source="binance_ws"`, `"binance_funding"`, `"deribit_iv"` et `"fear_greed"`. Les flux feed-source (ticks Polymarket) doivent être déclarés statiquement dans le fichier de config JSON.
+**Limitation** — l'enregistrement dynamique est supporté pour toutes les sources non-feed : `"binance_ws"`, `"binance_funding"`, `"deribit_iv"`, `"fear_greed"`, `"binance_oi"`, `"binance_ls_ratio"` et `"binance_liquidations"`. Les flux feed-source (ticks Polymarket) doivent être déclarés statiquement dans le fichier de config JSON.
 
 **Démarrage du pipeline :**
 
@@ -577,7 +577,7 @@ de la plage de ports d'une pile.
 
 ---
 
-## 11. ZeroMQ vs MQTT — analyse des compromis pour ce projet
+## 10. ZeroMQ vs MQTT — analyse des compromis pour ce projet
 
 ZeroMQ et MQTT implémentent tous deux du publish/subscribe, mais font des
 choix architecturaux opposés. Cette section explique pourquoi ZeroMQ a été
@@ -647,7 +647,7 @@ scénario hors périmètre actuellement.
 
 ---
 
-## 10. Fichiers liés
+## 11. Fichiers liés
 
 | Fichier | Rôle |
 |---|---|

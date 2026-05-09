@@ -491,5 +491,5 @@ kline data — no new REST or WebSocket source needed.
 |---|---|
 | `bot/indicators.py` | Implementation: all sources, `PriceSeries`, config loader, ZMQ tasks |
 | `strategies/indicators_*.json` | Per-stream config files |
-| `tests/test_indicators.py` | Unit and integration tests (112 tests) |
+| `tests/test_indicators.py` | Unit and integration tests (117 tests) |
 | `docs/design.md` | ZeroMQ topology, message catalog, ZeroMQ vs MQTT analysis |

@@ -7,7 +7,7 @@ Run with:
     .venv/bin/python3 -m unittest discover tests/ -v
 """
 
-import os, sys, time, sqlite3, unittest
+import logging, os, sys, time, sqlite3, unittest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch
 
@@ -2490,6 +2490,214 @@ class TestGridPersistence(unittest.TestCase):
         mock_post.assert_not_called()
         restored_lvl = s2.grid.levels[0]
         self.assertEqual(restored_lvl.status, "buy_placed")
+
+
+# ── _SessionFilter ────────────────────────────────────────────────────────────
+
+class TestSessionFilter(unittest.TestCase):
+    """_SessionFilter injects the session ID into every log record."""
+
+    def test_filter_returns_true(self):
+        sf = bot._SessionFilter()
+        record = logging.LogRecord("live", logging.INFO, "", 0, "msg", (), None)
+        self.assertTrue(sf.filter(record))
+
+    def test_filter_attaches_session_attribute(self):
+        sf = bot._SessionFilter()
+        record = logging.LogRecord("live", logging.INFO, "", 0, "msg", (), None)
+        sf.filter(record)
+        self.assertTrue(hasattr(record, "session"))
+
+    def test_session_matches_module_constant(self):
+        sf = bot._SessionFilter()
+        record = logging.LogRecord("live", logging.INFO, "", 0, "msg", (), None)
+        sf.filter(record)
+        self.assertEqual(record.session, bot._SESSION_ID)
+
+    def test_session_id_is_eight_hex_chars(self):
+        self.assertEqual(len(bot._SESSION_ID), 8)
+        self.assertTrue(all(c in "0123456789ABCDEF" for c in bot._SESSION_ID))
+
+
+# ── RejectionStats ────────────────────────────────────────────────────────────
+
+class TestRejectionStats(unittest.TestCase):
+    """RejectionStats starts at zero and each field increments independently."""
+
+    def test_all_fields_start_at_zero(self):
+        r = bot.RejectionStats()
+        for field in ("signalled", "market_ended", "trading_hour", "best_bid",
+                      "entry_max", "best_ask", "ask_vol", "secs_remaining",
+                      "obi", "vol_filter", "capital", "daily_stop", "api_cooldown"):
+            self.assertEqual(getattr(r, field), 0, field)
+
+    def test_fields_are_independent(self):
+        r = bot.RejectionStats()
+        r.signalled += 1
+        self.assertEqual(r.signalled, 1)
+        self.assertEqual(r.best_bid, 0)
+
+    def test_botstate_initialises_rejection_stats(self):
+        state = make_state()
+        self.addCleanup(state.conn.close)
+        self.assertIsInstance(state.rejection_stats, bot.RejectionStats)
+
+    def test_botstate_has_last_stats_log_timestamp(self):
+        state = make_state()
+        self.addCleanup(state.conn.close)
+        self.assertIsInstance(state._last_stats_log, float)
+        self.assertGreater(state._last_stats_log, 0)
+
+
+class TestRejectionCounters(unittest.IsolatedAsyncioTestCase):
+    """check_signal() increments the right counter for each rejection reason."""
+
+    def setUp(self):
+        self.state = make_state()
+        # Freeze the periodic-log timer so it never fires during these tests.
+        self.state._last_stats_log = time.time() + 10_000
+
+    def tearDown(self):
+        self.state.conn.close()
+
+    async def test_counter_signalled(self):
+        self.state.signalled.add("mkt1")
+        await bot.check_signal(self.state, make_token())
+        self.assertEqual(self.state.rejection_stats.signalled, 1)
+
+    async def test_counter_market_ended(self):
+        ts = make_token()
+        ts.market_end_ms = (time.time() - 10) * 1000
+        await bot.check_signal(self.state, ts)
+        self.assertEqual(self.state.rejection_stats.market_ended, 1)
+
+    async def test_counter_trading_hour(self):
+        with patch.object(bot, "is_trading_hour", return_value=False):
+            await bot.check_signal(self.state, make_token())
+        self.assertEqual(self.state.rejection_stats.trading_hour, 1)
+
+    async def test_counter_best_bid(self):
+        await bot.check_signal(self.state, make_token(best_bid=0.50))
+        self.assertEqual(self.state.rejection_stats.best_bid, 1)
+
+    async def test_counter_best_ask(self):
+        await bot.check_signal(self.state, make_token(best_ask=1.0))
+        self.assertEqual(self.state.rejection_stats.best_ask, 1)
+
+    async def test_counter_ask_vol(self):
+        await bot.check_signal(self.state, make_token(ask_vol=1.0))
+        self.assertEqual(self.state.rejection_stats.ask_vol, 1)
+
+    async def test_counter_secs_remaining(self):
+        await bot.check_signal(self.state, make_token(secs_remaining=5))
+        self.assertEqual(self.state.rejection_stats.secs_remaining, 1)
+
+    async def test_counter_obi(self):
+        await bot.check_signal(self.state, make_token(obi=-0.9))
+        self.assertEqual(self.state.rejection_stats.obi, 1)
+
+    async def test_counter_capital(self):
+        self.state.capital = 0.0
+        await bot.check_signal(self.state, make_token())
+        self.assertEqual(self.state.rejection_stats.capital, 1)
+
+    async def test_counter_daily_stop(self):
+        self.state.daily_pnl = -99.0
+        self.state._daily_pnl_day = int(time.time() // 86400)
+        await bot.check_signal(self.state, make_token())
+        self.assertEqual(self.state.rejection_stats.daily_stop, 1)
+
+    async def test_counter_api_cooldown(self):
+        self.state.api_cooldown_until = time.time() + 300
+        await bot.check_signal(self.state, make_token())
+        self.assertEqual(self.state.rejection_stats.api_cooldown, 1)
+
+    async def test_no_counters_incremented_on_fire(self):
+        await bot.check_signal(self.state, make_token())
+        r = self.state.rejection_stats
+        total = sum(getattr(r, f) for f in vars(r))
+        self.assertEqual(total, 0)
+
+    async def test_periodic_log_resets_counters(self):
+        # Back-date the timer so the periodic log fires on the next call.
+        self.state._last_stats_log = time.time() - 61
+        self.state.signalled.add("mkt1")
+        await bot.check_signal(self.state, make_token())
+        # After the reset the counter for this call should still be 1,
+        # but the object has been replaced with a fresh RejectionStats.
+        self.assertIsInstance(self.state.rejection_stats, bot.RejectionStats)
+        # The timer should have been reset to now.
+        self.assertAlmostEqual(self.state._last_stats_log, time.time(), delta=2)
+
+
+# ── LATENCY ts_ms ─────────────────────────────────────────────────────────────
+
+class TestLatencyLog(unittest.IsolatedAsyncioTestCase):
+    """ts_ms must appear in the [LATENCY] log line."""
+
+    async def test_latency_log_includes_ts_ms(self):
+        state = make_state()
+        self.addCleanup(state.conn.close)
+        ts = make_token()
+
+        logged: list[str] = []
+        original_info = bot.logger.info
+
+        def capture_info(msg, *args, **kwargs):
+            logged.append(msg % args if args else msg)
+            original_info(msg, *args, **kwargs)
+
+        with patch.object(bot, "logger") as mock_logger:
+            mock_logger.info.side_effect = capture_info
+            mock_logger.warning = bot.logger.warning
+            t_ws = time.monotonic()
+            await bot.enter_live_trade(state, ts, _t_ws=t_ws)
+
+        latency_lines = [m for m in logged if "[LATENCY]" in m]
+        self.assertTrue(latency_lines, "No [LATENCY] line was logged")
+        self.assertIn("ts_ms=", latency_lines[0])
+
+
+# ── _PlainFmt / _ColorFmt ─────────────────────────────────────────────────────
+
+class TestLogFormatters(unittest.TestCase):
+    """Format helpers produce abbreviated level names and correct ANSI codes."""
+
+    def _make_record(self, level=logging.INFO, msg="hello"):
+        return logging.LogRecord("live", level, "", 0, msg, (), None)
+
+    def test_plain_fmt_abbreviates_info(self):
+        fmt = bot._PlainFmt(bot._LOG_FMT, datefmt=bot._LOG_DATE)
+        # Inject session so the format string resolves.
+        r = self._make_record()
+        r.session = "TESTSESS"  # type: ignore[attr-defined]
+        out = fmt.format(r)
+        self.assertIn("INFO ", out)
+        self.assertNotIn("INFO\n", out)
+
+    def test_plain_fmt_abbreviates_warning(self):
+        fmt = bot._PlainFmt(bot._LOG_FMT, datefmt=bot._LOG_DATE)
+        r = self._make_record(logging.WARNING)
+        r.session = "TESTSESS"  # type: ignore[attr-defined]
+        out = fmt.format(r)
+        self.assertIn("WARN ", out)
+
+    def test_color_fmt_adds_ansi_on_warning(self):
+        fmt = bot._ColorFmt(bot._LOG_FMT, datefmt=bot._LOG_DATE)
+        r = self._make_record(logging.WARNING)
+        r.session = "TESTSESS"  # type: ignore[attr-defined]
+        out = fmt.format(r)
+        self.assertIn("\033[", out)
+
+    def test_color_fmt_no_ansi_on_info(self):
+        fmt = bot._ColorFmt(bot._LOG_FMT, datefmt=bot._LOG_DATE)
+        r = self._make_record(logging.INFO)
+        r.session = "TESTSESS"  # type: ignore[attr-defined]
+        out = fmt.format(r)
+        self.assertNotIn("\033[", out)
+
+    def test_log_fmt_contains_session_placeholder(self):
+        self.assertIn("%(session)s", bot._LOG_FMT)
 
 
 if __name__ == "__main__":

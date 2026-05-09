@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **Ne jamais inclure dans un fichier public (CHANGELOG, README, INSTALL, etc.) :**
 - Noms de serveurs ou domaines (ex. `monserveur.example.com`, noms d'hôtes internes)
 - Adresses IP
-- Noms d'utilisateurs de déploiement (ex. `claude1`, `claude2`, `claude3`)
+- Noms d'utilisateurs de déploiement (ex. `user1`, `user2`, `user3`)
 - Mots de passe ou tokens
 
 **Formulations génériques à utiliser à la place :**
@@ -36,6 +36,21 @@ Ce projet maintient dix fichiers de documentation en deux langues :
 | `UPDATE.md` | `UPDATE.fr.md` |
 
 **Les dix fichiers doivent être mis à jour dans le même commit.** Ne jamais modifier l'un sans mettre à jour son équivalent dans l'autre langue. Un hook Claude Code (`.claude/settings.json`) rappelle cette règle après chaque `git commit`.
+
+## Language policy — mandatory rule
+
+The project is **bilingual at the documentation level** and **English-only at the code level**:
+
+| Artifact | Language |
+|---|---|
+| `README.md`, `CHANGELOG.md`, `INSTALL.md`, `QUICKSTART.md`, `UPDATE.md` | English |
+| `README.fr.md`, `CHANGELOG.fr.md`, `INSTALL.fr.md`, `QUICKSTART.fr.md`, `UPDATE.fr.md` | French |
+| Source code (`.py`, `.sh`, `.json`) | **English only** |
+| Code comments | **English only** |
+| Log messages (`logger.info`, `logger.warning`, …) | **English only** |
+| Docstrings | **English only** |
+
+**Never write French in code, comments, logs, or docstrings.** Documentation files are the only place where French belongs. This rule was enforced retroactively across all four bot modules (`live_bot.py`, `feed.py`, `indicators.py`, `account_bot.py`) in the log-system refactor session.
 
 ## Commands
 

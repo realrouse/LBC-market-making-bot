@@ -39,4 +39,5 @@ def load(name: str, config: Any) -> Optional[Any]:
 
 
 def available() -> list[str]:
+    """Return all registered strategy names, including the built-in threshold."""
     return ["threshold"] + sorted(_REGISTRY)

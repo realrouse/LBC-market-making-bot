@@ -46,19 +46,23 @@ def compute_fee(price, quantity):
 # without modification. For spot markets, "UP token" = BUY side, "DOWN" = SELL.
 
 def get_market_id(market):
+    """Return the trading symbol as the market identifier."""
     return market.get("symbol", "")
 
 
 def get_market_question(market):
+    """Return a human-readable market description (falls back to symbol)."""
     return market.get("question", market.get("symbol", ""))
 
 
 def get_market_end_ts_ms(market):
-    return 0.0  # spot markets have no expiry
+    """Return 0 — spot markets have no scheduled expiry."""
+    return 0.0
 
 
 def get_market_start_ts_ms(market):
-    return 0.0  # not applicable to spot
+    """Return 0 — start time is not applicable to spot markets."""
+    return 0.0
 
 
 def get_up_token_id(market):
