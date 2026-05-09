@@ -260,7 +260,80 @@ The key suffix encodes the configured period (e.g. `rsi_14`, `sma_20`).
 Fields are absent if the period is not reached yet; the message is not
 published at all until every indicator has a valid value.
 
-Consumers: any process subscribing to port 5559.
+**Binance kline stream** — `source="binance_ws"`, fields include `asset`,
+`timeframe`, and `stream_id`; no `token_id`.
+
+---
+
+### `indicators` — Binance perpetual funding rate (`source="binance_funding"`)
+
+Polled from `https://fapi.binance.com/fapi/v1/premiumIndex` every 15 min
+(default). No indicator math; raw rate is published as-is.
+
+```json
+{
+  "t":               "indicators",
+  "stream_id":       "btc_funding",
+  "funding_rate":    0.0001,
+  "next_funding_ms": 1746000000000,
+  "ts":              1745664125000
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `stream_id` | string | As declared in the config (e.g. `"btc_funding"`) |
+| `funding_rate` | float | Current Binance perpetual funding rate (typically ±0.01 %) |
+| `next_funding_ms` | int | Next funding settlement timestamp (Unix ms) |
+| `ts` | int | Publish timestamp (Unix ms) |
+
+---
+
+### `indicators` — Deribit DVOL implied volatility (`source="deribit_iv"`)
+
+Polled from `https://www.deribit.com/api/v2/public/get_index_price` every
+5 min (default). Provides the BTC annualised implied volatility index.
+
+```json
+{
+  "t":         "indicators",
+  "stream_id": "btc_dvol",
+  "dvol":      62.5,
+  "ts":        1745664125000
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `stream_id` | string | As declared in the config (e.g. `"btc_dvol"`) |
+| `dvol` | float | Deribit DVOL annualised implied volatility (e.g. 62.5 ≈ 62.5 %) |
+| `ts` | int | Publish timestamp (Unix ms) |
+
+---
+
+### `indicators` — Fear & Greed Index (`source="fear_greed"`)
+
+Polled from `https://api.alternative.me/fng/` every 1 hour (default).
+The index ranges from 0 (Extreme Fear) to 100 (Extreme Greed).
+
+```json
+{
+  "t":                "indicators",
+  "stream_id":        "fear_greed",
+  "fear_greed":       72,
+  "fear_greed_label": "Greed",
+  "ts":               1745664125000
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `stream_id` | string | Always `"fear_greed"` (asset-agnostic) |
+| `fear_greed` | int | Index value 0–100 |
+| `fear_greed_label` | string | Text label: `"Extreme Fear"`, `"Fear"`, `"Neutral"`, `"Greed"`, `"Extreme Greed"` |
+| `ts` | int | Publish timestamp (Unix ms) |
+
+Consumers: any process subscribing to the indicators PUB port.
 
 ---
 
@@ -345,7 +418,7 @@ never receive partial data.
 
 **Dynamic registration** — streams can be added at runtime without restarting `indicators.py`. Any bot sends a REQ to the REP socket (`:5561`) with its indicator needs; the server starts the task if new and replies with the `stream_id` to subscribe to. Streams declared in the JSON config are pre-loaded at startup; bot-requested streams are added on top.
 
-**Limitation** — dynamic registration is only supported for `source="binance_ws"`. Feed-source streams (Polymarket ticks) must be declared statically in the JSON config.
+**Limitation** — dynamic registration is supported for `source="binance_ws"`, `"binance_funding"`, `"deribit_iv"`, and `"fear_greed"`. Feed-source streams (Polymarket ticks) must be declared statically in the JSON config.
 
 **Starting the pipeline:**
 
@@ -424,12 +497,12 @@ feed.py                   feed.py
 
 | Criterion | Detail |
 |---|---|
-| **No broker process** | No extra daemon to deploy, configure, monitor, or restart. 3 fewer failure points per VPS. |
+| **No broker process** | No extra daemon to deploy, configure, monitor, or restart. 3 fewer failure points per server. |
 | **Latency** | Loopback TCP, no broker hop: ~10–50 µs vs ~1 ms through a local MQTT broker. Critical for `book` messages that drive signal evaluation at 0.96 threshold. |
 | **No stale data** | ZeroMQ PUB/SUB has no message retention. A late-connecting SUB misses old messages — exactly what we want: an `account_bot` restarting after a crash should not receive hundreds of stale book prices queued during the downtime. |
 | **Simplicity** | `pip install pyzmq` only; no broker package, no config files, no ACL rules. One line to bind, one to connect. |
 | **High-water mark (HWM)** | If a slow subscriber falls behind, ZeroMQ silently drops at HWM. For streaming market data, dropping is correct behaviour: a stale book price is worse than no price. |
-| **Localhost deployment** | All processes run on the same VPS. ZeroMQ's `tcp://127.0.0.1:*` requires no auth, TLS, or network ACLs. MQTT's security model (usernames, TLS, ACLs) adds zero value here. |
+| **Localhost deployment** | All processes run on the same dedicated server. ZeroMQ's `tcp://127.0.0.1:*` requires no auth, TLS, or network ACLs. MQTT's security model (usernames, TLS, ACLs) adds zero value here. |
 
 ### Disadvantages of ZeroMQ in our case
 
@@ -446,7 +519,7 @@ feed.py                   feed.py
 |---|---|
 | **Retained messages** | We explicitly do *not* want a freshly connected account_bot to receive the last cached bid price: it may be minutes old and would corrupt the `min_ticks` warmup phase. |
 | **QoS 1 / QoS 2** | Adds acknowledgment round-trips and at-least-once / exactly-once delivery guarantees. For streaming prices, duplicate delivery is harmful (double-counted ticks inflate indicator history). |
-| **Broker HA / clustering** | Our design runs on a single VPS. MQTT's broker HA adds complexity with no benefit. |
+| **Broker HA / clustering** | Our design runs on a single dedicated server. MQTT's broker HA adds complexity with no benefit. |
 | **WAN / IoT focus** | MQTT was designed for constrained devices over unreliable networks. Our pipes are localhost TCP — there is no packet loss, bandwidth limit, or keep-alive problem to solve. |
 
 ### Verdict
@@ -455,7 +528,7 @@ ZeroMQ is the right choice for this project: it removes the broker from the
 critical path, eliminates a class of deployment failures, and delivers the
 no-persistence, low-latency semantics that high-frequency order-book streaming
 requires. The only scenario where MQTT would become attractive is if
-subscribers were distributed across multiple hosts (different VPS instances)
+subscribers were distributed across multiple hosts (different dedicated server instances)
 and topic-based filtering at the broker level were needed to manage bandwidth —
 a scenario that is currently out of scope.
 

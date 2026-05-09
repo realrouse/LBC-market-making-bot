@@ -264,7 +264,81 @@ d'indicateurs sont satisfaites.
 Le suffixe numérique encode la période configurée (ex. `rsi_14`, `sma_20`).
 Aucun message n'est publié tant qu'au moins un indicateur n'est pas calculable.
 
-Consommateurs : tout processus souscrivant au port 5559.
+**Stream Binance kline** — `source="binance_ws"`, les champs incluent `asset`,
+`timeframe` et `stream_id` ; pas de `token_id`.
+
+---
+
+### `indicators` — taux de financement perpétuel Binance (`source="binance_funding"`)
+
+Interrogé depuis `https://fapi.binance.com/fapi/v1/premiumIndex` toutes les
+15 min (par défaut). Aucun calcul d'indicateur ; le taux brut est publié tel
+quel.
+
+```json
+{
+  "t":               "indicators",
+  "stream_id":       "btc_funding",
+  "funding_rate":    0.0001,
+  "next_funding_ms": 1746000000000,
+  "ts":              1745664125000
+}
+```
+
+| Champ | Type | Description |
+|---|---|---|
+| `stream_id` | string | Tel que déclaré dans la config (ex. `"btc_funding"`) |
+| `funding_rate` | float | Taux de financement perpétuel Binance actuel (typiquement ±0,01 %) |
+| `next_funding_ms` | int | Horodatage du prochain règlement de financement (Unix ms) |
+| `ts` | int | Horodatage de publication (Unix ms) |
+
+---
+
+### `indicators` — volatilité implicite Deribit DVOL (`source="deribit_iv"`)
+
+Interrogé depuis `https://www.deribit.com/api/v2/public/get_index_price` toutes
+les 5 min (par défaut). Fournit l'indice de volatilité implicite annualisé BTC.
+
+```json
+{
+  "t":         "indicators",
+  "stream_id": "btc_dvol",
+  "dvol":      62.5,
+  "ts":        1745664125000
+}
+```
+
+| Champ | Type | Description |
+|---|---|---|
+| `stream_id` | string | Tel que déclaré dans la config (ex. `"btc_dvol"`) |
+| `dvol` | float | Volatilité implicite annualisée Deribit DVOL (ex. 62,5 ≈ 62,5 %) |
+| `ts` | int | Horodatage de publication (Unix ms) |
+
+---
+
+### `indicators` — Indice Fear & Greed (`source="fear_greed"`)
+
+Interrogé depuis `https://api.alternative.me/fng/` toutes les 1 heure (par
+défaut). L'indice va de 0 (Peur Extrême) à 100 (Avidité Extrême).
+
+```json
+{
+  "t":                "indicators",
+  "stream_id":        "fear_greed",
+  "fear_greed":       72,
+  "fear_greed_label": "Greed",
+  "ts":               1745664125000
+}
+```
+
+| Champ | Type | Description |
+|---|---|---|
+| `stream_id` | string | Toujours `"fear_greed"` (indépendant de l'actif) |
+| `fear_greed` | int | Valeur de l'indice 0–100 |
+| `fear_greed_label` | string | Libellé textuel : `"Extreme Fear"`, `"Fear"`, `"Neutral"`, `"Greed"`, `"Extreme Greed"` |
+| `ts` | int | Horodatage de publication (Unix ms) |
+
+Consommateurs : tout processus souscrivant au port PUB des indicateurs.
 
 ---
 
@@ -350,7 +424,7 @@ les consommateurs ne reçoivent jamais de données partielles.
 
 **Enregistrement dynamique** — les flux peuvent être ajoutés à l'exécution sans redémarrer `indicators.py`. Chaque bot envoie un REQ au socket REP (`:5561`) avec ses besoins ; le serveur démarre la tâche si elle est nouvelle et répond avec le `stream_id` à écouter. Les flux déclarés dans la config JSON sont pré-chargés au démarrage ; les flux demandés par les bots s'ajoutent par-dessus.
 
-**Limitation** — l'enregistrement dynamique n'est supporté que pour `source="binance_ws"`. Les flux feed-source (ticks Polymarket) doivent être déclarés statiquement dans le fichier de config JSON.
+**Limitation** — l'enregistrement dynamique est supporté pour `source="binance_ws"`, `"binance_funding"`, `"deribit_iv"` et `"fear_greed"`. Les flux feed-source (ticks Polymarket) doivent être déclarés statiquement dans le fichier de config JSON.
 
 **Démarrage du pipeline :**
 
@@ -430,12 +504,12 @@ feed.py                     feed.py
 
 | Critère | Détail |
 |---|---|
-| **Aucun processus broker** | Aucun daemon supplémentaire à déployer, configurer, surveiller ou redémarrer. 3 points de défaillance en moins par VPS. |
+| **Aucun processus broker** | Aucun daemon supplémentaire à déployer, configurer, surveiller ou redémarrer. 3 points de défaillance en moins par serveur dédié. |
 | **Latence** | TCP loopback sans saut broker : ~10–50 µs contre ~1 ms via un broker MQTT local. Critique pour les messages `book` qui pilotent l'évaluation du signal au seuil 0,96. |
 | **Pas de données périmées** | ZeroMQ PUB/SUB ne retient aucun message. Un SUB qui se connecte tardivement manque les anciens messages — exactement ce que l'on veut : un `account_bot` redémarré après un crash ne doit pas recevoir des centaines de prix en file d'attente. |
 | **Simplicité** | `pip install pyzmq` suffit ; aucun paquet broker, aucun fichier de config, aucune règle ACL. Une ligne pour bind, une pour connect. |
 | **High-water mark (HWM)** | Si un subscriber est lent, ZeroMQ abandonne silencieusement les messages à la HWM. Pour un flux de données de marché, abandonner est le bon comportement : un prix périmé est pire qu'aucun prix. |
-| **Déploiement localhost** | Tous les processus tournent sur le même VPS. `tcp://127.0.0.1:*` ne nécessite ni auth, ni TLS, ni ACL réseau. Le modèle de sécurité MQTT (users, TLS, ACL) n'apporte rien ici. |
+| **Déploiement localhost** | Tous les processus tournent sur le même serveur dédié. `tcp://127.0.0.1:*` ne nécessite ni auth, ni TLS, ni ACL réseau. Le modèle de sécurité MQTT (users, TLS, ACL) n'apporte rien ici. |
 
 ### Inconvénients de ZeroMQ dans notre cas
 
@@ -452,7 +526,7 @@ feed.py                     feed.py
 |---|---|
 | **Messages retenus** | On ne veut précisément *pas* qu'un `account_bot` fraîchement connecté reçoive le dernier prix en cache : il pourrait avoir plusieurs minutes d'ancienneté et corrompre la phase de warmup `min_ticks`. |
 | **QoS 1 / QoS 2** | Ajoute des aller-retours d'acquittement et des garanties at-least-once / exactly-once. Pour les prix en streaming, une livraison dupliquée est néfaste (les ticks comptés deux fois faussent l'historique des indicateurs). |
-| **HA broker / clustering** | Notre architecture tourne sur un VPS unique. La HA broker MQTT ajoute de la complexité sans aucun bénéfice. |
+| **HA broker / clustering** | Notre architecture tourne sur un serveur dédié unique. La HA broker MQTT ajoute de la complexité sans aucun bénéfice. |
 | **Orienté WAN / IoT** | MQTT a été conçu pour des appareils contraints sur des réseaux peu fiables. Nos pipes sont du TCP loopback — il n'y a ni perte de paquets, ni limite de bande passante, ni problème de keep-alive à résoudre. |
 
 ### Verdict
@@ -461,7 +535,7 @@ ZeroMQ est le bon choix pour ce projet : il supprime le broker du chemin
 critique, élimine une classe entière de défaillances de déploiement, et fournit
 la sémantique sans-persistance, basse-latence que requiert un flux de carnets
 d'ordres haute fréquence. Le seul scénario où MQTT deviendrait intéressant
-serait une distribution des subscribers sur plusieurs hôtes (VPS distincts) et
+serait une distribution des subscribers sur plusieurs hôtes (serveurs dédiés distincts) et
 un filtrage par topic au niveau du broker pour gérer la bande passante — un
 scénario hors périmètre actuellement.
 

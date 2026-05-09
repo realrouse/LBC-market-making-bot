@@ -1,0 +1,17 @@
+{
+  "_comment": "indicators_fear_greed.json — Alternative.me Crypto Fear & Greed Index",
+  "zmq_feed_addr": "tcp://127.0.0.1:5557",
+  "zmq_out_addr":  "tcp://127.0.0.1:5567",
+  "zmq_reg_addr":  "tcp://127.0.0.1:5568",
+  "min_ticks": 1,
+  "streams": [
+    {
+      "id":              "fear_greed",
+      "asset":           "",
+      "source":          "fear_greed",
+      "timeframe":       "n/a",
+      "indicators":      [],
+      "poll_interval_s": 3600
+    }
+  ]
+}

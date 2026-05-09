@@ -8,13 +8,19 @@ RSI / SMA / EMA / volatility → PUB enriched messages on a second socket.
 A REP socket accepts dynamic stream-registration requests from any bot at
 runtime so new indicator streams can be added without restarting the service.
 
-Two data sources are supported, configured via a JSON file:
+Five data sources are supported, configured via a JSON file:
 
-  source="feed"        — subscribes to feed.py PUB (best_bid tick-by-tick,
-                         one PriceSeries per Polymarket token)
-  source="binance_ws"  — opens a Binance kline WebSocket for one asset/
-                         timeframe; seeds from REST on startup; pushes the
-                         close price of each completed candle
+  source="feed"            — subscribes to feed.py PUB (best_bid tick-by-tick,
+                             one PriceSeries per Polymarket token)
+  source="binance_ws"      — opens a Binance kline WebSocket for one asset/
+                             timeframe; seeds from REST on startup; pushes the
+                             close price of each completed candle
+  source="binance_funding" — polls Binance perp funding rate (REST, every 15 min
+                             by default); no indicator math required
+  source="deribit_iv"      — polls Deribit DVOL implied volatility index (REST,
+                             every 5 min by default); no indicator math required
+  source="fear_greed"      — polls Alternative.me Fear & Greed Index (REST,
+                             every 1 h by default); no indicator math required
 
 Output messages (PUB socket):
   source="feed":
@@ -23,6 +29,14 @@ Output messages (PUB socket):
   source="binance_ws":
     {"t":"indicators", "asset":"BTCUSDT", "timeframe":"4h", "stream_id":"...",
      "ts":..., "rsi_14":..., "vol_20":...}
+  source="binance_funding":
+    {"t":"indicators", "stream_id":"btc_funding",
+     "funding_rate":0.0001, "next_funding_ms":1746000000000, "ts":...}
+  source="deribit_iv":
+    {"t":"indicators", "stream_id":"btc_dvol", "dvol":62.5, "ts":...}
+  source="fear_greed":
+    {"t":"indicators", "stream_id":"fear_greed",
+     "fear_greed":72, "fear_greed_label":"Greed", "ts":...}
 
 Dynamic registration (REP socket):
   Request:  {"cmd":"subscribe", "asset":"BTCUSDT", "timeframe":"4h",
@@ -49,8 +63,11 @@ import aiohttp, websockets, zmq, zmq.asyncio
 _FEED_ADDR = os.environ.get("TRADINEBOTTE_FEED_ADDR",            "tcp://127.0.0.1:5557")
 _IND_ADDR  = os.environ.get("TRADINEBOTTE_INDICATORS_ADDR",      "tcp://127.0.0.1:5559")
 _REG_ADDR  = os.environ.get("TRADINEBOTTE_INDICATORS_REG_ADDR",  "tcp://127.0.0.1:5561")
-_BINANCE_REST_URL = "https://api.binance.com/api/v3/klines"
-_BINANCE_WS_BASE  = "wss://stream.binance.com:9443/ws"
+_BINANCE_REST_URL    = "https://api.binance.com/api/v3/klines"
+_BINANCE_WS_BASE     = "wss://stream.binance.com:9443/ws"
+_BINANCE_FUTURES_URL = "https://fapi.binance.com/fapi/v1/premiumIndex"
+_DERIBIT_DVOL_URL    = "https://www.deribit.com/api/v2/public/get_index_price"
+_FEAR_GREED_URL      = "https://api.alternative.me/fng/"
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT,
@@ -162,8 +179,16 @@ class PriceSeries:
 
 # ─── CONFIG TYPES ────────────────────────────────────────────────────────────
 
-_VALID_INDICATOR_TYPES = frozenset({"rsi", "sma", "ema", "volatility"})
-_VALID_SOURCES         = frozenset({"feed", "binance_ws"})
+_VALID_INDICATOR_TYPES      = frozenset({"rsi", "sma", "ema", "volatility"})
+_VALID_SOURCES              = frozenset({
+    "feed", "binance_ws", "binance_funding", "deribit_iv", "fear_greed",
+})
+_SOURCES_WITHOUT_INDICATORS = frozenset({"binance_funding", "deribit_iv", "fear_greed"})
+_DEFAULT_POLL_INTERVALS: dict[str, int] = {
+    "binance_funding": 900,    # 15 min
+    "deribit_iv":      300,    # 5 min
+    "fear_greed":     3600,    # 1 hour
+}
 
 
 @dataclass
@@ -189,12 +214,13 @@ class IndicatorSpec:
 @dataclass
 class StreamSpec:
     """One data stream: asset + source + timeframe + list of indicators."""
-    id:           str
-    asset:        str
-    source:       str            # "feed" | "binance_ws"
-    timeframe:    str            # "tick" | "1m" | "5m" | "1h" | "4h" | "1d" …
-    indicators:   list[IndicatorSpec]
-    seed_periods: int = 50       # REST candles to fetch at startup (binance_ws only)
+    id:              str
+    asset:           str
+    source:          str            # "feed" | "binance_ws" | "binance_funding" | ...
+    timeframe:       str            # "tick" | "1m" | "5m" | "1h" | "4h" | "1d" | "n/a"
+    indicators:      list[IndicatorSpec]
+    seed_periods:    int = 50       # REST candles to fetch at startup (binance_ws only)
+    poll_interval_s: int = 0        # poll interval override; 0 = use source default
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "StreamSpec":
@@ -205,7 +231,7 @@ class StreamSpec:
                 f"Valid: {sorted(_VALID_SOURCES)}"
             )
         indicators = [IndicatorSpec.from_dict(i) for i in d.get("indicators", [])]
-        if not indicators:
+        if not indicators and source not in _SOURCES_WITHOUT_INDICATORS:
             raise ValueError(
                 f"Stream {d.get('id')!r}: at least one indicator required"
             )
@@ -216,6 +242,7 @@ class StreamSpec:
             timeframe=str(d.get("timeframe", "tick")),
             indicators=indicators,
             seed_periods=int(d.get("seed_periods", 50)),
+            poll_interval_s=int(d.get("poll_interval_s", 0)),
         )
 
 
@@ -264,25 +291,35 @@ def parse_subscribe_request(req: dict[str, Any]) -> tuple[str, StreamSpec]:
     """Validate and parse a subscribe request dict into (stream_id, StreamSpec).
 
     Raises ValueError with a descriptive message on any validation error.
+    Poll-based sources (binance_funding, deribit_iv, fear_greed) do not require
+    asset or timeframe — stream_id is derived from the source name when absent.
     """
-    asset = str(req.get("asset", "")).strip().upper()
-    if not asset:
-        raise ValueError("'asset' is required (e.g. 'BTCUSDT')")
-    timeframe = str(req.get("timeframe", "")).strip()
-    if not timeframe:
-        raise ValueError("'timeframe' is required (e.g. '4h', '1d')")
+    source = str(req.get("source", "binance_ws")).lower()
 
-    stream_id = str(req.get("stream_id") or derive_stream_id(asset, timeframe))
+    if source in _SOURCES_WITHOUT_INDICATORS:
+        asset     = str(req.get("asset", "")).strip().upper()
+        timeframe = str(req.get("timeframe", "n/a")).strip() or "n/a"
+        stream_id = str(req.get("stream_id") or source)
+    else:
+        asset = str(req.get("asset", "")).strip().upper()
+        if not asset:
+            raise ValueError("'asset' is required (e.g. 'BTCUSDT')")
+        timeframe = str(req.get("timeframe", "")).strip()
+        if not timeframe:
+            raise ValueError("'timeframe' is required (e.g. '4h', '1d')")
+        stream_id = str(req.get("stream_id") or derive_stream_id(asset, timeframe))
 
     spec_dict: dict[str, Any] = {
         "id":         stream_id,
         "asset":      asset,
-        "source":     req.get("source", "binance_ws"),
+        "source":     source,
         "timeframe":  timeframe,
         "indicators": req.get("indicators", []),
     }
     if "seed_periods" in req:
         spec_dict["seed_periods"] = int(req["seed_periods"])
+    if "poll_interval_s" in req:
+        spec_dict["poll_interval_s"] = int(req["poll_interval_s"])
 
     spec = StreamSpec.from_dict(spec_dict)
     return stream_id, spec
@@ -318,7 +355,8 @@ def _publish(pub: zmq.asyncio.Socket, out: dict[str, Any]) -> None:
         logger.debug("[PUB %s] %s  %s",
                      out.get("stream_id", "?"),
                      out.get("asset") or out.get("token_id", "?"),
-                     "  ".join(f"{k}={out[k]:.4f}" for k in keys))
+                     "  ".join(f"{k}={out[k]:.4f}" if isinstance(out[k], float)
+                                else f"{k}={out[k]}" for k in keys))
 
 
 async def _binance_kline_task(spec: StreamSpec, pub: zmq.asyncio.Socket,
@@ -406,24 +444,117 @@ async def _zmq_feed_task(feed_addr: str, pub: zmq.asyncio.Socket,
         sub.close()
 
 
+async def _binance_funding_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> None:
+    """Poll Binance perpetual funding rate at the configured interval."""
+    interval = spec.poll_interval_s or _DEFAULT_POLL_INTERVALS["binance_funding"]
+    asset    = spec.asset or "BTCUSDT"
+    while True:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    _BINANCE_FUTURES_URL,
+                    params={"symbol": asset.upper()},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    data = await resp.json(content_type=None)
+            _publish(pub, {
+                "t":               "indicators",
+                "stream_id":       spec.id,
+                "funding_rate":    float(data["lastFundingRate"]),
+                "next_funding_ms": int(data["nextFundingTime"]),
+                "ts":              int(time.time() * 1000),
+            })
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("[%s] funding rate fetch failed (%s)", spec.id, exc)
+        await asyncio.sleep(interval)
+
+
+async def _deribit_iv_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> None:
+    """Poll Deribit DVOL implied volatility index at the configured interval."""
+    interval   = spec.poll_interval_s or _DEFAULT_POLL_INTERVALS["deribit_iv"]
+    index_name = spec.asset.lower() if spec.asset else "dvol_btc"
+    while True:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    _DERIBIT_DVOL_URL,
+                    params={"index_name": index_name},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    data = await resp.json(content_type=None)
+            _publish(pub, {
+                "t":         "indicators",
+                "stream_id": spec.id,
+                "dvol":      float(data["result"]["index_price"]),
+                "ts":        int(time.time() * 1000),
+            })
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("[%s] Deribit IV fetch failed (%s)", spec.id, exc)
+        await asyncio.sleep(interval)
+
+
+async def _fear_greed_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> None:
+    """Poll Alternative.me Fear & Greed Index at the configured interval."""
+    interval = spec.poll_interval_s or _DEFAULT_POLL_INTERVALS["fear_greed"]
+    while True:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    _FEAR_GREED_URL,
+                    params={"limit": 1},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    data = await resp.json(content_type=None)
+            entry = data["data"][0]
+            _publish(pub, {
+                "t":                "indicators",
+                "stream_id":        spec.id,
+                "fear_greed":       int(entry["value"]),
+                "fear_greed_label": str(entry["value_classification"]),
+                "ts":               int(time.time() * 1000),
+            })
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("[%s] Fear & Greed fetch failed (%s)", spec.id, exc)
+        await asyncio.sleep(interval)
+
+
 # ─── DYNAMIC REGISTRATION ────────────────────────────────────────────────────
 
-async def _start_binance_stream(
+async def _start_stream(
     spec: StreamSpec,
     pub: zmq.asyncio.Socket,
     min_ticks: int,
     active: dict[str, tuple[StreamSpec, "asyncio.Task[None]"]],
 ) -> None:
-    """Start a Binance kline task for spec if one is not already running."""
+    """Start a task for spec if one is not already running.
+
+    Dispatches to the right coroutine based on spec.source.
+    feed-source streams are not dispatchable here (they share one SUB task).
+    """
     if spec.id in active:
         logger.info("[reg] stream %r already active — skipping", spec.id)
         return
+    if spec.source == "binance_ws":
+        coro = _binance_kline_task(spec, pub, min_ticks)
+    elif spec.source == "binance_funding":
+        coro = _binance_funding_task(spec, pub)
+    elif spec.source == "deribit_iv":
+        coro = _deribit_iv_task(spec, pub)
+    elif spec.source == "fear_greed":
+        coro = _fear_greed_task(spec, pub)
+    else:
+        logger.error("[reg] cannot start stream %r: source %r is not dispatchable",
+                     spec.id, spec.source)
+        return
     task: asyncio.Task[None] = asyncio.create_task(
-        _binance_kline_task(spec, pub, min_ticks),
-        name=f"binance_{spec.id}",
+        coro, name=f"{spec.source}_{spec.id}"
     )
     active[spec.id] = (spec, task)
-    logger.info("[reg] started stream %r (%s/%s)", spec.id, spec.asset, spec.timeframe)
+    logger.info("[reg] started stream %r (%s)", spec.id, spec.source)
+
+
+# Keep the old name as an alias so existing test mocks still resolve.
+_start_binance_stream = _start_stream
 
 
 async def _handle_subscribe(
@@ -438,15 +569,15 @@ async def _handle_subscribe(
     except ValueError as exc:
         return {"status": "error", "message": str(exc)}
 
-    if spec.source == "binance_ws":
-        await _start_binance_stream(spec, pub, min_ticks, active)
+    if spec.source != "feed":
+        await _start_stream(spec, pub, min_ticks, active)
     else:
         # feed-source streams must be declared statically in the JSON config
         if spec.id not in active:
             return {
                 "status":  "error",
                 "message": (
-                    "Dynamic registration is only supported for source='binance_ws'. "
+                    "Dynamic registration is only supported for non-feed sources. "
                     "Declare feed-source streams in the JSON config file."
                 ),
             }
@@ -493,7 +624,7 @@ async def run(feed_addr: str, ind_addr: str, reg_addr: str,
     Orchestrate indicator streams.
 
     If config_path is given: load the JSON and spawn one asyncio task per
-    binance_ws stream; one shared task for all feed-source streams; and one
+    non-feed stream; one shared task for all feed-source streams; and one
     REP task that accepts dynamic subscribe requests from bots.
 
     Otherwise: legacy mode — one ZMQ feed stream with CLI-specified periods.
@@ -536,9 +667,10 @@ async def run(feed_addr: str, ind_addr: str, reg_addr: str,
 
     tasks: list[asyncio.Task[None]] = []
 
-    # Start static binance_ws streams
-    for spec in [s for s in streams if s.source == "binance_ws"]:
-        await _start_binance_stream(spec, pub, actual_min, active)
+    # Start all static non-feed streams (binance_ws, binance_funding, deribit_iv, fear_greed)
+    for spec in streams:
+        if spec.source != "feed":
+            await _start_stream(spec, pub, actual_min, active)
     tasks.extend(task for _, task in active.values())
 
     # Start static feed streams (one shared SUB task)

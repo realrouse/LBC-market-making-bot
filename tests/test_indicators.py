@@ -7,6 +7,7 @@ from indicators import (
     compute_sma, compute_ema, compute_rsi, compute_volatility, PriceSeries,
     IndicatorSpec, StreamSpec, IndicatorsConfig, load_config,
     derive_stream_id, parse_subscribe_request, _handle_subscribe,
+    _SOURCES_WITHOUT_INDICATORS, _DEFAULT_POLL_INTERVALS,
 )
 
 
@@ -757,6 +758,120 @@ class TestHandleSubscribe(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(resp["status"], "error")
         pub.close(); ctx.term()
+
+
+class TestNewSources(unittest.TestCase):
+    """Tests for the three poll-based sources: binance_funding, deribit_iv, fear_greed."""
+
+    # ── module-level constants ────────────────────────────────────────────────
+
+    def test_sources_without_indicators_contains_all_three(self):
+        self.assertIn("binance_funding", _SOURCES_WITHOUT_INDICATORS)
+        self.assertIn("deribit_iv",      _SOURCES_WITHOUT_INDICATORS)
+        self.assertIn("fear_greed",      _SOURCES_WITHOUT_INDICATORS)
+
+    def test_default_poll_intervals(self):
+        self.assertEqual(_DEFAULT_POLL_INTERVALS["binance_funding"], 900)
+        self.assertEqual(_DEFAULT_POLL_INTERVALS["deribit_iv"],      300)
+        self.assertEqual(_DEFAULT_POLL_INTERVALS["fear_greed"],      3600)
+
+    # ── StreamSpec.from_dict ──────────────────────────────────────────────────
+
+    def test_poll_source_allows_empty_indicators(self):
+        for source in ("binance_funding", "deribit_iv", "fear_greed"):
+            spec = StreamSpec.from_dict({
+                "id": source, "asset": "", "source": source,
+                "timeframe": "n/a", "indicators": [],
+            })
+            self.assertEqual(spec.source, source)
+            self.assertEqual(spec.indicators, [])
+
+    def test_poll_source_poll_interval_default_zero(self):
+        spec = StreamSpec.from_dict({
+            "id": "btc_funding", "asset": "BTCUSDT",
+            "source": "binance_funding", "timeframe": "n/a", "indicators": [],
+        })
+        self.assertEqual(spec.poll_interval_s, 0)
+
+    def test_poll_source_poll_interval_override(self):
+        spec = StreamSpec.from_dict({
+            "id": "btc_funding", "asset": "BTCUSDT",
+            "source": "binance_funding", "timeframe": "n/a", "indicators": [],
+            "poll_interval_s": 1800,
+        })
+        self.assertEqual(spec.poll_interval_s, 1800)
+
+    def test_binance_ws_still_requires_indicators(self):
+        with self.assertRaises(ValueError):
+            StreamSpec.from_dict({
+                "id": "btc_4h", "asset": "BTCUSDT",
+                "source": "binance_ws", "timeframe": "4h", "indicators": [],
+            })
+
+    # ── parse_subscribe_request for poll sources ──────────────────────────────
+
+    def test_fear_greed_subscribe_no_asset_required(self):
+        stream_id, spec = parse_subscribe_request({
+            "source": "fear_greed",
+        })
+        self.assertEqual(stream_id, "fear_greed")
+        self.assertEqual(spec.source, "fear_greed")
+        self.assertEqual(spec.indicators, [])
+
+    def test_binance_funding_subscribe_with_asset(self):
+        stream_id, spec = parse_subscribe_request({
+            "source": "binance_funding",
+            "asset":  "BTCUSDT",
+        })
+        self.assertEqual(stream_id, "binance_funding")
+        self.assertEqual(spec.asset, "BTCUSDT")
+
+    def test_poll_subscribe_poll_interval_forwarded(self):
+        _, spec = parse_subscribe_request({
+            "source":          "deribit_iv",
+            "poll_interval_s": 600,
+        })
+        self.assertEqual(spec.poll_interval_s, 600)
+
+    # ── JSON config files ─────────────────────────────────────────────────────
+
+    def _load_config(self, filename: str) -> IndicatorsConfig:
+        path = os.path.join(os.path.dirname(__file__), "..", "strategies", filename)
+        if not os.path.exists(path):
+            self.skipTest(f"strategies/{filename} not found")
+        return load_config(path)
+
+    def test_funding_config_loads(self):
+        cfg = self._load_config("indicators_funding_bitcoin.json")
+        self.assertEqual(len(cfg.streams), 1)
+        s = cfg.streams[0]
+        self.assertEqual(s.id,     "btc_funding")
+        self.assertEqual(s.source, "binance_funding")
+        self.assertEqual(s.asset,  "BTCUSDT")
+        self.assertEqual(s.poll_interval_s, 900)
+
+    def test_deribit_iv_config_loads(self):
+        cfg = self._load_config("indicators_deribit_iv_bitcoin.json")
+        self.assertEqual(len(cfg.streams), 1)
+        s = cfg.streams[0]
+        self.assertEqual(s.id,     "btc_dvol")
+        self.assertEqual(s.source, "deribit_iv")
+        self.assertEqual(s.poll_interval_s, 300)
+
+    def test_fear_greed_config_loads(self):
+        cfg = self._load_config("indicators_fear_greed.json")
+        self.assertEqual(len(cfg.streams), 1)
+        s = cfg.streams[0]
+        self.assertEqual(s.id,     "fear_greed")
+        self.assertEqual(s.source, "fear_greed")
+        self.assertEqual(s.poll_interval_s, 3600)
+
+    def test_all_three_configs_have_distinct_pub_ports(self):
+        cfg_f  = self._load_config("indicators_funding_bitcoin.json")
+        cfg_d  = self._load_config("indicators_deribit_iv_bitcoin.json")
+        cfg_fg = self._load_config("indicators_fear_greed.json")
+        ports = {cfg_f.out_addr, cfg_d.out_addr, cfg_fg.out_addr}
+        self.assertEqual(len(ports), 3, f"PUB port collision: {ports}")
 
 
 if __name__ == "__main__":
