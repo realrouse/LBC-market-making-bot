@@ -10,6 +10,14 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.4.3] - 2026-05-09
+
+### Correction
+- **Balayage de la politique anglais-uniquement — scripts et fichiers bot** (`bot/feed.py`, `bot/bot_utils.py`, `bot/strategies/grid.py`, `bot/strategies/__init__.py`, `scripts/start_feed.sh`, `scripts/start_account.sh`, `scripts/start_indicators.sh`, `scripts/run_integration_tests.sh`, `scripts/benchmark_api.py`, `scripts/profile_hotpath.py`, `scripts/strategy_compare.sh`, `scripts/backtest_volfilter.py`, `scripts/test_multibot_deploy.sh`, `scripts/test_standalone_deploy.sh`) : toutes les chaînes françaises restantes dans le code source, les messages de log, les commentaires, les sorties d'erreur et les en-têtes de scripts ont été traduits en anglais ; les seules exceptions — seconds arguments des helpers shell bilingues `_t()` et valeurs `"FR":` dans `setup.py` — sont intentionnelles et ont été préservées ; cela complète l'application rétroactive de la politique linguistique introduite en 0.4.2
+- **Bracket trick `pgrep`/`pkill` étendu aux processus feed, account et indicators** (`scripts/start_feed.sh`, `scripts/start_account.sh`, `scripts/start_indicators.sh`) : les patterns `[f]eed.py`, `[a]ccount_bot.py`, `[i]ndicators.py` empêchent la session SSH exécutant le script de se correspondre via `pgrep -f`
+
+---
+
 ## [0.4.2] - 2026-05-09
 
 ### Modifié
