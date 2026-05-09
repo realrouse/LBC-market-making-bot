@@ -3,6 +3,24 @@
 ## Roadmap v0.3
 
 ### Opérationnel / infrastructure
+- **Diffusion réseau externe du serveur d'indicateurs** — aujourd'hui `feed.py` et
+  `indicators.py` bindent sur `127.0.0.1` (loopback uniquement). Permettre la
+  diffusion sur l'interface réseau externe (`0.0.0.0` ou une IP dédiée) pour qu'un
+  bot tournant sur une autre machine puisse s'y abonner.
+
+  Points d'attention avant d'activer :
+  - **Authentification ZMQ** — activer CURVE ou plain auth (ZAP) pour ne pas
+    exposer le flux de données brutes à n'importe quel hôte sur le réseau.
+  - **TLS** — ZMQ CURVE fournit le chiffrement point-à-point sans proxy ; sinon
+    encapsuler dans un tunnel SSH (`-L`) ou WireGuard.
+  - **Interface configurable** — remplacer le `127.0.0.1` hardcodé par une
+    variable `TRADINEBOTTE_BIND_ADDR` (défaut : `127.0.0.1` pour ne pas changer
+    le comportement actuel) dans `feed.py` et `indicators.py`.
+  - **Firewall** — documenter les règles iptables/nftables à ouvrir (ports
+    PUB et REP de chaque service) et celles à fermer par défaut.
+  - **`TRADINEBOTTE_PORT_BASE`** est déjà compatible multi-stack ; cette
+    évolution s'y greffe naturellement.
+
 - **Notifications Telegram** — alerte sur chaque trade, déclenchement du stop-loss journalier, reconnexion WebSocket
 - **Health-check HTTP** — mini serveur local (ex. port 9090) répondant avec les stats brutes ; monitorable depuis un reverse proxy ou un cron externe
   > 📋 *ameliorationarchitecture.txt item VII (P3, ~15 lignes)* — `aiohttp.web` sur `127.0.0.1:8765`, `GET /health` → `{"status":"ok","capital":…,"wins":…,"losses":…,"open_trades":…,"uptime_s":…}`
