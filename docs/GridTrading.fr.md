@@ -292,16 +292,13 @@ Avec 20 niveaux à 50 USDT = 1 000 USDT de capital engagé maximum.
 | `connectors.load("binance")` / `load("mexc")` | ✅ Implémenté |
 | `strategies.load("grid", config)` — factory | ✅ Implémenté |
 | Routage dans `handle_book_update()` | ✅ Implémenté |
-| `_initialise_grid()` — placement initial des ordres | 🔲 TODO |
-| `_poll_fills()` — détection des fills par REST | 🔲 TODO |
-| `_on_buy_filled()` / `_on_sell_filled()` — counter-orders | 🔲 TODO |
-| `_check_stop_loss()` — annulation si hors grille | 🔲 TODO |
-| Persistance des niveaux dans SQLite | 🔲 TODO |
+| `_initialise_grid()` — placement initial des ordres | ✅ Implémenté |
+| `_poll_fills()` — détection des fills par REST | ✅ Implémenté |
+| `_on_buy_filled()` / `_on_sell_filled()` — counter-orders | ✅ Implémenté |
+| `_check_stop_loss()` — annulation si hors grille | ✅ Implémenté |
+| `_save_state()` — persistance SQLite (`grid_state` + `grid_levels`) | ✅ Implémenté |
+| `restore_from_db()` — reprise au redémarrage + réconciliation exchange | ✅ Implémenté |
 | WebSocket order stream (fills en temps réel) | 🔲 TODO |
-
-Les TODOs sont tous localisés dans `GridStrategy.on_book_update()` dans
-`bot/strategies/grid.py`. L'infrastructure (config, connecteurs, routage,
-tests) est en place.
 
 ---
 

@@ -46,6 +46,7 @@ Configuration keys in strategy JSON
 from __future__ import annotations
 
 import logging
+import sqlite3
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -158,6 +159,167 @@ class GridStrategy:
             if abs(lvl.price - price) <= tolerance:
                 return lvl
         return None
+
+    # ── Persistence ────────────────────────────────────────────────────────────
+
+    def _save_state(self, conn: sqlite3.Connection) -> None:
+        """Upsert grid metadata and all level states to the DB."""
+        now = time.time()
+        conn.execute(
+            """
+            INSERT INTO grid_state
+                (symbol, grid_lower, grid_upper, grid_step, order_size_usdt,
+                 total_cycles, total_profit_usd, initialised, halted, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(symbol) DO UPDATE SET
+                total_cycles     = excluded.total_cycles,
+                total_profit_usd = excluded.total_profit_usd,
+                initialised      = excluded.initialised,
+                halted           = excluded.halted,
+                updated_at       = excluded.updated_at
+            """,
+            (
+                self.grid.symbol,
+                self.grid.grid_lower, self.grid.grid_upper,
+                self.grid.grid_step,  self.grid.order_size_usdt,
+                self.grid.total_cycles, self.grid.total_profit_usd,
+                int(self.grid.initialised), int(self.grid.halted), now,
+            ),
+        )
+        for lvl in self.grid.levels:
+            conn.execute(
+                """
+                INSERT INTO grid_levels
+                    (symbol, level_price, buy_order_id, sell_order_id,
+                     buy_price, sell_price, status, filled_at_ts, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(symbol, level_price) DO UPDATE SET
+                    buy_order_id  = excluded.buy_order_id,
+                    sell_order_id = excluded.sell_order_id,
+                    buy_price     = excluded.buy_price,
+                    sell_price    = excluded.sell_price,
+                    status        = excluded.status,
+                    filled_at_ts  = excluded.filled_at_ts,
+                    updated_at    = excluded.updated_at
+                """,
+                (
+                    self.grid.symbol, lvl.price,
+                    lvl.buy_order_id, lvl.sell_order_id,
+                    lvl.buy_price,    lvl.sell_price,
+                    lvl.status,       lvl.filled_at_ts, now,
+                ),
+            )
+        conn.commit()
+
+    async def restore_from_db(self, state: Any) -> bool:
+        """Load saved grid state from DB and reconcile fills with the exchange.
+
+        Returns True when state was restored, False when no saved state exists
+        or the grid config has changed (different bounds / step / order size).
+        Reconciliation detects orders that filled while the bot was offline and
+        immediately places the appropriate counter-orders.
+        """
+        conn = state.conn
+        row = conn.execute(
+            """
+            SELECT grid_lower, grid_upper, grid_step, order_size_usdt,
+                   total_cycles, total_profit_usd, initialised, halted
+            FROM grid_state WHERE symbol = ?
+            """,
+            (self.grid.symbol,),
+        ).fetchone()
+
+        if row is None:
+            logger.info(
+                "GridStrategy [%s] — aucun état sauvegardé, initialisation normale",
+                self.grid.symbol,
+            )
+            return False
+
+        (saved_lower, saved_upper, saved_step, saved_size,
+         total_cycles, total_profit, initialised, halted) = row
+
+        tol = 0.01
+        if (abs(saved_lower - self.grid.grid_lower) > tol or
+                abs(saved_upper - self.grid.grid_upper) > tol or
+                abs(saved_step  - self.grid.grid_step)  > tol or
+                abs(saved_size  - self.grid.order_size_usdt) > tol):
+            logger.warning(
+                "GridStrategy [%s] — config modifiée (bornes/step/taille), "
+                "état sauvegardé ignoré et grille réinitialisée",
+                self.grid.symbol,
+            )
+            return False
+
+        self.grid.total_cycles     = total_cycles
+        self.grid.total_profit_usd = total_profit
+        self.grid.initialised      = bool(initialised)
+        self.grid.halted           = bool(halted)
+
+        level_rows = conn.execute(
+            """
+            SELECT level_price, buy_order_id, sell_order_id,
+                   buy_price, sell_price, status, filled_at_ts
+            FROM grid_levels WHERE symbol = ?
+            ORDER BY level_price
+            """,
+            (self.grid.symbol,),
+        ).fetchall()
+
+        saved = {round(r[0], 2): r for r in level_rows}
+        for lvl in self.grid.levels:
+            r = saved.get(lvl.price)
+            if r is None:
+                continue
+            (_, lvl.buy_order_id, lvl.sell_order_id,
+             lvl.buy_price, lvl.sell_price,
+             lvl.status, lvl.filled_at_ts) = r
+
+        if self.grid.halted:
+            logger.warning(
+                "GridStrategy [%s] — état HALTED restauré depuis DB | "
+                "PnL total=$%+.2f",
+                self.grid.symbol, self.grid.total_profit_usd,
+            )
+            return True
+
+        if not self.grid.initialised:
+            logger.info(
+                "GridStrategy [%s] — état restauré (non initialisé), "
+                "initialisation au prochain tick",
+                self.grid.symbol,
+            )
+            return True
+
+        # Reconcile: detect fills that occurred while the bot was offline.
+        logger.info(
+            "GridStrategy [%s] — réconciliation avec l'exchange...",
+            self.grid.symbol,
+        )
+        open_orders = await self._api.get_open_orders(
+            state.session, self.grid.symbol)
+        open_ids = {str(o["order_id"]) for o in (open_orders or [])}
+
+        filled = 0
+        for lvl in self.grid.levels:
+            if lvl.status == "buy_placed" and lvl.buy_order_id:
+                if str(lvl.buy_order_id) not in open_ids:
+                    await self._on_buy_filled(state, lvl)
+                    filled += 1
+            elif lvl.status == "sell_placed" and lvl.sell_order_id:
+                if str(lvl.sell_order_id) not in open_ids:
+                    await self._on_sell_filled(state, lvl)
+                    filled += 1
+
+        self._save_state(conn)
+        logger.info(
+            "GridStrategy [%s] — restauré: %d niveaux actifs | "
+            "%d fills manqués | cycles=%d | PnL total=$%+.2f",
+            self.grid.symbol,
+            sum(1 for l in self.grid.levels if l.is_active),
+            filled, self.grid.total_cycles, self.grid.total_profit_usd,
+        )
+        return True
 
     # ── Stop-loss ──────────────────────────────────────────────────────────────
 
@@ -372,13 +534,23 @@ class GridStrategy:
 
         if self._check_stop_loss(price):
             await self._cancel_all_orders(state)
+            self._save_state(state.conn)
             return
 
         if not self.grid.initialised:
             await self._initialise_grid(state, ts)
+            self._save_state(state.conn)
             return
 
         now = time.time()
         if now - self.grid.last_poll_ts >= self.grid.poll_interval:
             self.grid.last_poll_ts = now
+            prev_state = (self.grid.total_cycles,
+                          tuple((l.buy_order_id, l.sell_order_id)
+                                for l in self.grid.levels))
             await self._poll_fills(state, ts)
+            new_state = (self.grid.total_cycles,
+                         tuple((l.buy_order_id, l.sell_order_id)
+                               for l in self.grid.levels))
+            if prev_state != new_state:
+                self._save_state(state.conn)

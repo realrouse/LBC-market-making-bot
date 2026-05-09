@@ -502,6 +502,32 @@ CREATE INDEX IF NOT EXISTS idx_trades_resolved ON trades(resolved);
 # Add future entries here: MIGRATIONS[2] = "ALTER TABLE trades ADD COLUMN ..."
 MIGRATIONS: dict[int, str] = {
     1: "",
+    2: """
+CREATE TABLE IF NOT EXISTS grid_state (
+    symbol           TEXT    PRIMARY KEY,
+    grid_lower       REAL    NOT NULL,
+    grid_upper       REAL    NOT NULL,
+    grid_step        REAL    NOT NULL,
+    order_size_usdt  REAL    NOT NULL,
+    total_cycles     INTEGER NOT NULL DEFAULT 0,
+    total_profit_usd REAL    NOT NULL DEFAULT 0.0,
+    initialised      INTEGER NOT NULL DEFAULT 0,
+    halted           INTEGER NOT NULL DEFAULT 0,
+    updated_at       REAL    NOT NULL
+);
+CREATE TABLE IF NOT EXISTS grid_levels (
+    symbol        TEXT NOT NULL,
+    level_price   REAL NOT NULL,
+    buy_order_id  TEXT,
+    sell_order_id TEXT,
+    buy_price     REAL,
+    sell_price    REAL,
+    status        TEXT NOT NULL DEFAULT 'idle',
+    filled_at_ts  REAL,
+    updated_at    REAL NOT NULL,
+    PRIMARY KEY (symbol, level_price)
+);
+""",
 }
 
 
@@ -1232,14 +1258,15 @@ async def main() -> None:
     state = BotState(conn, config)
     restore_state_from_db(state)
 
-    if config.strategy_type != "threshold":
-        from strategies import load as _load_strat
-        state.strategy = _load_strat(config.strategy_type, config)
-        logger.info("  Algorithme  : %s", config.strategy_type)
-
     async with aiohttp.ClientSession(
         connector=aiohttp.TCPConnector(limit=10)
     ) as session:
+        state.session = session   # available before ws_loop for strategy restore
+        if config.strategy_type != "threshold":
+            from strategies import load as _load_strat
+            state.strategy = _load_strat(config.strategy_type, config)
+            logger.info("  Algorithme  : %s", config.strategy_type)
+            await state.strategy.restore_from_db(state)
         await ws_loop(state, session)
 
 if __name__ == "__main__":

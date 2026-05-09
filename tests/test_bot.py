@@ -1813,10 +1813,22 @@ class _FakeTokenState:
         self.best_bid = best_bid
         self.best_ask = best_ask
 
+class _FakeConn:
+    """Minimal sqlite3.Connection substitute — discards all writes."""
+    def execute(self, *_a, **_kw):
+        return self
+    def fetchone(self):
+        return None
+    def fetchall(self):
+        return []
+    def commit(self):
+        pass
+
 class _FakeState:
     """Minimal BotState substitute."""
     def __init__(self):
         self.session = object()
+        self.conn    = _FakeConn()
 
 def _run(coro):
     return asyncio.run(coro)
@@ -2180,6 +2192,179 @@ class TestBotConfigStrategyFields(unittest.TestCase):
         state.strategy = GridStrategy(cfg)
         self.assertIsNotNone(state.strategy)
         self.assertEqual(state.strategy.STRATEGY_TYPE, "grid")
+
+
+class TestGridPersistence(unittest.TestCase):
+    """_save_state writes to DB; restore_from_db reloads it."""
+
+    def _make_strategy(self):
+        cfg = bot.BotConfig()
+        cfg.grid_symbol          = "BTCUSDT"
+        cfg.grid_lower           = 98000.0
+        cfg.grid_upper           = 102000.0
+        cfg.grid_levels          = 5
+        cfg.grid_order_size_usdt = 50.0
+        cfg.connector            = "binance"
+        return GridStrategy(cfg)
+
+    def _fake_state_with_db(self):
+        conn = make_db()
+        fs = _FakeState()
+        fs.conn = conn
+        return fs
+
+    # ── _save_state ────────────────────────────────────────────────────────────
+
+    def test_save_state_writes_grid_state_row(self):
+        s     = self._make_strategy()
+        state = self._fake_state_with_db()
+        s.grid.initialised      = True
+        s.grid.total_cycles     = 3
+        s.grid.total_profit_usd = 1.23
+        s._save_state(state.conn)
+        row = state.conn.execute(
+            "SELECT total_cycles, total_profit_usd, initialised FROM grid_state"
+            " WHERE symbol='BTCUSDT'"
+        ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row[0], 3)
+        self.assertAlmostEqual(row[1], 1.23, places=4)
+        self.assertEqual(row[2], 1)
+
+    def test_save_state_writes_all_levels(self):
+        s     = self._make_strategy()
+        state = self._fake_state_with_db()
+        s.grid.levels[0].buy_order_id = "ord_BUY_1"
+        s.grid.levels[0].buy_price    = 98000.0
+        s.grid.levels[0].status       = "buy_placed"
+        s._save_state(state.conn)
+        count = state.conn.execute(
+            "SELECT COUNT(*) FROM grid_levels WHERE symbol='BTCUSDT'"
+        ).fetchone()[0]
+        self.assertEqual(count, 5)
+        row = state.conn.execute(
+            "SELECT buy_order_id, status FROM grid_levels"
+            " WHERE symbol='BTCUSDT' AND level_price=98000.0"
+        ).fetchone()
+        self.assertEqual(row[0], "ord_BUY_1")
+        self.assertEqual(row[1], "buy_placed")
+
+    def test_save_state_upserts_on_second_call(self):
+        s     = self._make_strategy()
+        state = self._fake_state_with_db()
+        s._save_state(state.conn)
+        s.grid.total_cycles = 7
+        s._save_state(state.conn)
+        row = state.conn.execute(
+            "SELECT total_cycles FROM grid_state WHERE symbol='BTCUSDT'"
+        ).fetchone()
+        self.assertEqual(row[0], 7)
+
+    # ── restore_from_db — no saved state ───────────────────────────────────────
+
+    def test_restore_returns_false_when_no_saved_state(self):
+        s     = self._make_strategy()
+        state = self._fake_state_with_db()
+        result = _run(s.restore_from_db(state))
+        self.assertFalse(result)
+
+    # ── restore_from_db — config mismatch ─────────────────────────────────────
+
+    def test_restore_returns_false_on_config_mismatch(self):
+        s     = self._make_strategy()
+        state = self._fake_state_with_db()
+        s._save_state(state.conn)
+        # Create a new strategy with different bounds
+        cfg2 = bot.BotConfig()
+        cfg2.grid_symbol          = "BTCUSDT"
+        cfg2.grid_lower           = 95000.0   # changed
+        cfg2.grid_upper           = 105000.0  # changed
+        cfg2.grid_levels          = 5
+        cfg2.grid_order_size_usdt = 50.0
+        cfg2.connector            = "binance"
+        s2 = GridStrategy(cfg2)
+        result = _run(s2.restore_from_db(state))
+        self.assertFalse(result)
+
+    # ── restore_from_db — halted state ─────────────────────────────────────────
+
+    def test_restore_halted_state_no_reconciliation(self):
+        s     = self._make_strategy()
+        state = self._fake_state_with_db()
+        s.grid.initialised = True
+        s.grid.halted      = True
+        s._save_state(state.conn)
+
+        s2 = self._make_strategy()
+        with unittest.mock.patch.object(
+            s2._api, "get_open_orders",
+            new=unittest.mock.AsyncMock(return_value=[])
+        ) as mock_oo:
+            result = _run(s2.restore_from_db(state))
+        self.assertTrue(result)
+        self.assertTrue(s2.grid.halted)
+        mock_oo.assert_not_called()   # no reconciliation for halted grids
+
+    # ── restore_from_db — active state with offline fill ──────────────────────
+
+    def test_restore_detects_offline_fill(self):
+        """A BUY order that filled while the bot was down triggers _on_buy_filled."""
+        s     = self._make_strategy()
+        state = self._fake_state_with_db()
+
+        # Simulate: grid is initialised, level 98000 has a BUY order
+        s.grid.initialised = True
+        lvl = s.grid.levels[0]   # price=98000
+        lvl.buy_order_id = "ord_123"
+        lvl.buy_price    = 98000.0
+        lvl.status       = "buy_placed"
+        s._save_state(state.conn)
+
+        s2 = self._make_strategy()
+        # open_orders returns empty list → ord_123 filled while bot was down
+        with unittest.mock.patch.object(
+            s2._api, "get_open_orders",
+            new=unittest.mock.AsyncMock(return_value=[])
+        ), unittest.mock.patch.object(
+            s2._api, "post_order",
+            new=unittest.mock.AsyncMock(return_value="ord_SELL_new")
+        ):
+            result = _run(s2.restore_from_db(state))
+
+        self.assertTrue(result)
+        restored_lvl = s2.grid.levels[0]
+        # After _on_buy_filled: a SELL counter-order should have been placed
+        self.assertEqual(restored_lvl.status, "sell_placed")
+        self.assertEqual(restored_lvl.sell_order_id, "ord_SELL_new")
+
+    def test_restore_skips_fill_when_order_still_open(self):
+        """An order still in open_orders is NOT treated as filled."""
+        s     = self._make_strategy()
+        state = self._fake_state_with_db()
+
+        s.grid.initialised = True
+        lvl = s.grid.levels[0]
+        lvl.buy_order_id = "ord_123"
+        lvl.buy_price    = 98000.0
+        lvl.status       = "buy_placed"
+        s._save_state(state.conn)
+
+        s2 = self._make_strategy()
+        open_order = {"order_id": "ord_123", "side": "BUY",
+                      "price": 98000.0, "qty": 0.0005, "status": "NEW"}
+        with unittest.mock.patch.object(
+            s2._api, "get_open_orders",
+            new=unittest.mock.AsyncMock(return_value=[open_order])
+        ), unittest.mock.patch.object(
+            s2._api, "post_order",
+            new=unittest.mock.AsyncMock(return_value="ord_SELL_new")
+        ) as mock_post:
+            result = _run(s2.restore_from_db(state))
+
+        self.assertTrue(result)
+        mock_post.assert_not_called()
+        restored_lvl = s2.grid.levels[0]
+        self.assertEqual(restored_lvl.status, "buy_placed")
 
 
 if __name__ == "__main__":
