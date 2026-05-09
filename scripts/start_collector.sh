@@ -63,12 +63,18 @@ COLLECTOR_DIR="${TEST_REMOTE_COLLECTOR_DIR:-~/tradinebotte-collector}"
 
 LOCAL_REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
+# Populate known_hosts so SSH calls use StrictHostKeyChecking=yes safely
+mkdir -p ~/.ssh && chmod 700 ~/.ssh
+if ! ssh-keygen -F "[$SERVER]:$PORT" &>/dev/null && ! ssh-keygen -F "$SERVER" &>/dev/null; then
+    ssh-keyscan -p "$PORT" -H "$SERVER" >> ~/.ssh/known_hosts 2>/dev/null
+fi
+
 # ── Helpers ───────────────────────────────────────────────────────
 # _ssh_cmd: run a simple one-liner on the remote host
 _ssh_cmd() {
     if [ "$DRY_RUN" = "1" ]; then echo "[DRY-RUN] ssh $*"; return 0; fi
     SSHPASS="$PASSWORD" sshpass -e ssh -p "$PORT" \
-        -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 \
+        -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
         "$RUSER@$SERVER" "$@"
 }
 
@@ -77,21 +83,21 @@ _ssh_cmd() {
 _ssh_script() {
     if [ "$DRY_RUN" = "1" ]; then echo "[DRY-RUN] ssh bash -s (stdin)"; cat; return 0; fi
     SSHPASS="$PASSWORD" sshpass -e ssh -p "$PORT" \
-        -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 \
+        -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
         "$RUSER@$SERVER" bash -s
 }
 
 # ── --status ──────────────────────────────────────────────────────
 if [ "$STATUS_ONLY" = "1" ]; then
     echo "Checking collector status on $SERVER ($RUSER)..."
-    _ssh_cmd "pgrep -u \$(id -u) -f live_bot.py > /dev/null && echo '✅ Running PID:' \$(pgrep -u \$(id -u) -f live_bot.py) || echo '⭕ Not running'"
+    _ssh_cmd "pgrep -u \$(id -u) -f '[l]ive_bot\.py' > /dev/null && echo '✅ Running PID:' \$(pgrep -u \$(id -u) -f '[l]ive_bot\.py') || echo '⭕ Not running'"
     exit 0
 fi
 
 # ── --stop ────────────────────────────────────────────────────────
 if [ "$STOP_ONLY" = "1" ]; then
     echo "Stopping collector on $SERVER ($RUSER)..."
-    _ssh_cmd "pkill -u \$(id -u) -f live_bot.py && echo '✅ Stopped' || echo '⭕ Not running'"
+    _ssh_cmd "pkill -u \$(id -u) -f '[l]ive_bot\.py' && echo '✅ Stopped' || echo '⭕ Not running'"
     exit 0
 fi
 
@@ -110,7 +116,7 @@ else
         --exclude='live.log' \
         --exclude='*.db-shm' \
         --exclude='*.db-wal' \
-        -e "ssh -p $PORT -o StrictHostKeyChecking=accept-new" \
+        -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
         "$LOCAL_REPO/" "$RUSER@$SERVER:$INSTALL_DIR/"
 fi
 echo "✅ Code deployed."
@@ -153,7 +159,7 @@ mkdir -p "\$COLLECTOR/strategies"
 cp -r "\$INSTALL/strategies/." "\$COLLECTOR/strategies/" 2>/dev/null || true
 
 # Stop any running instance
-pkill -u "\$(id -u)" -f live_bot.py 2>/dev/null && echo "Stopped previous instance." || true
+pkill -u "\$(id -u)" -f '[l]ive_bot\.py' 2>/dev/null && echo "Stopped previous instance." || true
 sleep 2
 
 # Launch
@@ -167,8 +173,8 @@ nohup "\$PYTHON" "\$INSTALL/bot/live_bot.py" \
     >> "\$LOG" 2>&1 &
 sleep 5
 
-if pgrep -u "\$(id -u)" -f live_bot.py > /dev/null; then
-    echo "✅ Collector running — PID: \$(pgrep -u \$(id -u) -f live_bot.py)"
+if pgrep -u "\$(id -u)" -f '[l]ive_bot\.py' > /dev/null; then
+    echo "✅ Collector running — PID: \$(pgrep -u \$(id -u) -f '[l]ive_bot\.py')"
     echo "   Data: \$COLLECTOR/live.db"
     echo "   Logs: tail -f \$COLLECTOR/live.log"
 else

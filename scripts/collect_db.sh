@@ -59,6 +59,12 @@ PASSWORD="${TEST_PASSWORDS[0]:?TEST_PASSWORDS[0] not set in $CONF}"
 COLLECTOR_DIR="${TEST_REMOTE_COLLECTOR_DIR:-~/tradinebotte-collector}"
 INSTALL_DIR="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
 
+# Populate known_hosts so SSH calls use StrictHostKeyChecking=yes safely
+mkdir -p ~/.ssh && chmod 700 ~/.ssh
+if ! ssh-keygen -F "[$SERVER]:$PORT" &>/dev/null && ! ssh-keygen -F "$SERVER" &>/dev/null; then
+    ssh-keyscan -p "$PORT" -H "$SERVER" >> ~/.ssh/known_hosts 2>/dev/null
+fi
+
 # ── Output filename ───────────────────────────────────────────────
 YEAR=$(date +%Y)
 WEEK=$(date +%V)
@@ -72,7 +78,7 @@ _ssh() {
         return 0
     fi
     SSHPASS="$PASSWORD" sshpass -e ssh -p "$PORT" \
-        -o StrictHostKeyChecking=accept-new \
+        -o StrictHostKeyChecking=yes \
         -o ConnectTimeout=10 \
         "$USER@$SERVER" "$@"
 }
@@ -83,7 +89,7 @@ _scp() {
         return 0
     fi
     SSHPASS="$PASSWORD" sshpass -e scp -P "$PORT" \
-        -o StrictHostKeyChecking=accept-new \
+        -o StrictHostKeyChecking=yes \
         "$USER@$SERVER:$1" "$2"
 }
 
@@ -156,7 +162,7 @@ if [ "$ROTATE" = "1" ]; then
             cp "\$DB" "\$BAK"
             echo "  Archived: \$BAK"
         fi
-        pkill -u "\$(id -u)" -f live_bot.py 2>/dev/null || true
+        pkill -u "\$(id -u)" -f '[l]ive_bot\.py' 2>/dev/null || true
         sleep 2
         rm -f "\$DB"
         PYTHON=$INSTALL_DIR/venv/bin/python3
@@ -167,8 +173,8 @@ if [ "$ROTATE" = "1" ]; then
             --simulate --snapshot-interval 1 \
             >> "\$LOG" 2>&1 &
         sleep 3
-        if pgrep -u \"\$(id -u)\" -f live_bot.py > /dev/null; then
-            echo \"✅ Collector restarted — PID: \$(pgrep -u \$(id -u) -f live_bot.py)\"
+        if pgrep -u \"\$(id -u)\" -f '[l]ive_bot\.py' > /dev/null; then
+            echo \"✅ Collector restarted — PID: \$(pgrep -u \$(id -u) -f '[l]ive_bot\.py')\"
         else
             echo '❌ Collector failed to restart'
             exit 1

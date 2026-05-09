@@ -100,14 +100,14 @@ done
 run() {
     local idx="$1"; shift
     SSHPASS="${PASSWORDS[$idx]}" /usr/bin/sshpass -e \
-        ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o BatchMode=no \
+        ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
         -p "$PORT" "${USERS[$idx]}@$SERVER" "$@" 2>&1
 }
 
 run_bg() {
     local idx="$1"; shift
     SSHPASS="${PASSWORDS[$idx]}" /usr/bin/sshpass -e \
-        ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o BatchMode=no \
+        ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
         -p "$PORT" "${USERS[$idx]}@$SERVER" "$@" 2>&1 &
 }
 
@@ -120,7 +120,7 @@ deploy_code() {
         --exclude='*.pyc' \
         --exclude='.venv' \
         --exclude='venv/' \
-        -e "ssh -p $PORT -o StrictHostKeyChecking=accept-new" \
+        -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
         "$LOCAL_REPO/" "${USERS[$idx]}@$SERVER:$REMOTE_INSTALL_DIR/" 2>&1
 }
 
@@ -138,6 +138,14 @@ info "Serveur : $SERVER:$PORT — $N_BOTS comptes : ${USERS[*]}"
 info "Repo local : $LOCAL_REPO"
 info "Durée de test : ${DURATION}s"
 [[ "$SKIP_DEPLOY" == "true" ]] && info "Mode --skip-deploy : déploiement ignoré"
+
+# Populate known_hosts so subsequent SSH calls can use StrictHostKeyChecking=yes
+mkdir -p ~/.ssh && chmod 700 ~/.ssh
+if ! ssh-keygen -F "[$SERVER]:$PORT" &>/dev/null && ! ssh-keygen -F "$SERVER" &>/dev/null; then
+    info "Ajout de la clé hôte $SERVER:$PORT dans known_hosts..."
+    ssh-keyscan -p "$PORT" -H "$SERVER" >> ~/.ssh/known_hosts 2>/dev/null
+fi
+ok "Clé hôte $SERVER vérifiée dans known_hosts"
 
 for idx in "${!USERS[@]}"; do
     if run $idx "echo ok" &>/dev/null; then
@@ -271,13 +279,13 @@ done
 
 for idx in "${!USERS[@]}"; do
     user="${USERS[$idx]}"
-    run $idx "grep -q 'Connecte au feed' $REMOTE_BOT_DIR/account.log 2>/dev/null" && \
-        ok "$user : connecté au feed" || err "$user : pas de message 'Connecte au feed'"
-    if run $idx "grep -qE 'Feed démarré|Feed prêt' $REMOTE_BOT_DIR/account.log 2>/dev/null"; then
+    run $idx "grep -q 'Connected to feed' $REMOTE_BOT_DIR/account.log 2>/dev/null" && \
+        ok "$user : connecté au feed" || err "$user : pas de message 'Connected to feed'"
+    if run $idx "grep -qE 'Feed started|Feed ready' $REMOTE_BOT_DIR/account.log 2>/dev/null"; then
         ok "$user : a démarré le feed (gagnant de la race)"
-    elif run $idx "grep -q 'Feed actif sur' $REMOTE_BOT_DIR/account.log 2>/dev/null"; then
+    elif run $idx "grep -q 'Feed active on' $REMOTE_BOT_DIR/account.log 2>/dev/null"; then
         ok "$user : a trouvé le feed déjà actif"
-    elif run $idx "grep -q 'Feed en cours de démarrage' $REMOTE_BOT_DIR/account.log 2>/dev/null"; then
+    elif run $idx "grep -q 'Feed being started' $REMOTE_BOT_DIR/account.log 2>/dev/null"; then
         ok "$user : a attendu le démarrage du feed (perdant de la race)"
     fi
 done
@@ -297,7 +305,7 @@ done
 info "Log feed : $FEED_LOG_PATH (compte : ${USERS[$FEED_LOG_IDX]})"
 if [[ "$FEED_LOG_PATH" != "(introuvable)" ]]; then
     FEED_LOG=$(run $FEED_LOG_IDX "cat $FEED_LOG_PATH 2>/dev/null | head -60 || echo '(vide)'")
-    if echo "$FEED_LOG" | grep -qE "WebSocket connecte|Souscription|Marches BTC"; then
+    if echo "$FEED_LOG" | grep -qE "WebSocket connected|Subscribing|BTC 5-min markets"; then
         ok "Feed : WebSocket Polymarket connecté"
     else
         warn "Feed : pas encore de confirmation WebSocket"
@@ -337,7 +345,7 @@ for idx in "${!USERS[@]}"; do
     echo -e "${BOLD}--- $user : account.log (20 dernières lignes) ---${NC}"
     run $idx "tail -20 $REMOTE_BOT_DIR/account.log 2>/dev/null || echo '(vide)'"
 
-    run $idx "grep -q 'Connecte au feed' $REMOTE_BOT_DIR/account.log 2>/dev/null" && \
+    run $idx "grep -q 'Connected to feed' $REMOTE_BOT_DIR/account.log 2>/dev/null" && \
         ok "$user : connexion feed confirmée" || err "$user : pas de connexion feed"
     BOOK_COUNT=$(run $idx "grep -c '\[FEED\] book' $REMOTE_BOT_DIR/account.log 2>/dev/null || true")
     [[ "$BOOK_COUNT" -gt 0 ]] && ok "$user : $BOOK_COUNT book updates reçus (flux actif)" || \
@@ -356,7 +364,7 @@ if [[ "${FEED_LOG_PATH:-}" != "(introuvable)" && -n "${FEED_LOG_PATH:-}" ]]; the
     echo "..."
     echo "$FEED_LOG_TAIL"
     # Grep sur le serveur pour éviter de transférer un log de plusieurs Mo
-    run $FEED_LOG_IDX "grep -qE 'WebSocket connecte|Souscription|Connected' $FEED_LOG_PATH 2>/dev/null" && \
+    run $FEED_LOG_IDX "grep -qE 'WebSocket connected|Subscribing|BTC 5-min markets' $FEED_LOG_PATH 2>/dev/null" && \
         ok "Feed : WebSocket confirmé dans le log final" || err "Feed : WebSocket non confirmé"
     run $FEED_LOG_IDX "grep -qiE 'BTC|bitcoin|Marche' $FEED_LOG_PATH 2>/dev/null" && \
         ok "Feed : marchés BTC trouvés" || warn "Feed : marchés BTC non trouvés"

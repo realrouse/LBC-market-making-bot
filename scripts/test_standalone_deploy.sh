@@ -78,7 +78,7 @@ INSTALL_DIR="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
 run() {
     local idx="$1"; shift
     SSHPASS="${PASSWORDS[$idx]}" /usr/bin/sshpass -e \
-        ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o BatchMode=no \
+        ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
         -p "$PORT" "${USERS[$idx]}@$SERVER" "$@" 2>&1
 }
 
@@ -89,7 +89,7 @@ deploy_code() {
         --exclude='.git' --exclude='__pycache__' --exclude='*.pyc' \
         --exclude='.venv' --exclude='venv/' \
         --exclude='config.json' --exclude='live.db' --exclude='*.log' \
-        -e "ssh -p $PORT -o StrictHostKeyChecking=accept-new" \
+        -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
         "$LOCAL_REPO/" "${USERS[$idx]}@$SERVER:$INSTALL_DIR/" 2>&1
 }
 
@@ -103,6 +103,13 @@ fi
 ok "sshpass OK"
 ok "Config : $CONF"
 info "Serveur : $SERVER:$PORT — comptes : ${USERS[*]}"
+
+# Populate known_hosts so SSH calls use StrictHostKeyChecking=yes safely
+mkdir -p ~/.ssh && chmod 700 ~/.ssh
+if ! ssh-keygen -F "[$SERVER]:$PORT" &>/dev/null && ! ssh-keygen -F "$SERVER" &>/dev/null; then
+    info "Ajout de la clé hôte $SERVER:$PORT dans known_hosts..."
+    ssh-keyscan -p "$PORT" -H "$SERVER" >> ~/.ssh/known_hosts 2>/dev/null
+fi
 
 for idx in 0 1; do
     if run $idx "echo ok" &>/dev/null; then
@@ -173,7 +180,7 @@ section "PHASE 5 — VÉRIFICATION LOGS"
 sleep 8
 for idx in 0 1; do
     LOG="$INSTALL_DIR/live.log"
-    if run $idx "grep -q 'WebSocket connecte' $LOG 2>/dev/null"; then
+    if run $idx "grep -q 'WebSocket connected' $LOG 2>/dev/null"; then
         ok "${USERS[$idx]} WebSocket connecté"
     else
         err "${USERS[$idx]} WebSocket non connecté dans $LOG"

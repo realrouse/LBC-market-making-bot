@@ -32,8 +32,8 @@ _t() { [ "$LANG" = "FR" ] && printf '%s' "$2" || printf '%s' "$1"; }
 
 # ── Status ────────────────────────────────────────────────────────
 echo "=== STATUS ($INSTALL_DIR) ==="
-if pgrep -fa live_bot.py > /dev/null 2>&1; then
-    pgrep -fa live_bot.py
+if pgrep -fa '[l]ive_bot\.py' > /dev/null 2>&1; then
+    pgrep -fa '[l]ive_bot\.py'
     echo "✅ $(_t "BOT RUNNING" "BOT EN COURS")"
 else
     echo "❌ $(_t "BOT STOPPED" "BOT ARRÊTÉ")"
