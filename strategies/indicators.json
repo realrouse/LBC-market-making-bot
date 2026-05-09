@@ -8,11 +8,23 @@
 
     "streams": [
         {
-            "_comment": "RSI 14 and rolling volatility on 4h BTC/USDT candles from Binance",
+            "_comment": "RSI 14 and rolling volatility on 4h BTC/USDT candles — used by account-a",
             "id":           "btc_4h",
             "asset":        "BTCUSDT",
             "source":       "binance_ws",
             "timeframe":    "4h",
+            "seed_periods": 50,
+            "indicators": [
+                { "type": "rsi",        "period": 14 },
+                { "type": "volatility", "period": 20 }
+            ]
+        },
+        {
+            "_comment": "RSI 14 and rolling volatility on daily BTC/USDT candles — used by account-b",
+            "id":           "btc_1d",
+            "asset":        "BTCUSDT",
+            "source":       "binance_ws",
+            "timeframe":    "1d",
             "seed_periods": 50,
             "indicators": [
                 { "type": "rsi",        "period": 14 },

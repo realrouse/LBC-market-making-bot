@@ -1,6 +1,6 @@
 """Tests for bot/indicators.py — pure-math functions, PriceSeries, and config types."""
 
-import sys, os, math, unittest, json, tempfile
+import sys, os, math, unittest, json, tempfile, time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bot"))
 from indicators import (
@@ -386,6 +386,128 @@ class TestPriceSeriesComputeIndicators(unittest.TestCase):
                 self.assertIsNone(new[key])
             else:
                 self.assertAlmostEqual(legacy[key], new[key], places=10)
+
+
+class TestMultiBotIndicatorSharing(unittest.TestCase):
+    """
+    Verify that two account-bots with different indicator needs (4h vs 1d) can
+    share one indicators.py PUB socket.
+
+    ZeroMQ PUB/SUB is 1→N broadcast: every subscriber receives every message.
+    Filtering to "my" stream is done in application code by checking stream_id.
+    This test simulates that pattern without running real Binance WebSocket tasks.
+    Uses plain sync ZMQ sockets with RCVTIMEO so no async complications arise.
+    """
+
+    def setUp(self) -> None:
+        import zmq
+        self._ctx = zmq.Context()
+
+    def tearDown(self) -> None:
+        self._ctx.term()
+
+    def _pub_sub_pair(self, n_subs: int = 1):
+        """Return (pub, port, [sub, ...]) with RCVTIMEO=500ms on each sub."""
+        import zmq
+        pub = self._ctx.socket(zmq.PUB)
+        port = pub.bind_to_random_port("tcp://127.0.0.1")
+        subs = []
+        for _ in range(n_subs):
+            s = self._ctx.socket(zmq.SUB)
+            s.setsockopt(zmq.SUBSCRIBE, b"")
+            s.setsockopt(zmq.RCVTIMEO, 500)
+            s.connect(f"tcp://127.0.0.1:{port}")
+            subs.append(s)
+        time.sleep(0.05)   # let TCP sockets establish before first send
+        return pub, port, subs
+
+    def test_two_subscribers_each_receive_all_messages(self) -> None:
+        pub, _, (sub_a, sub_b) = self._pub_sub_pair(2)
+
+        msg_4h = {"t": "indicators", "stream_id": "btc_4h", "timeframe": "4h",
+                  "asset": "BTCUSDT", "rsi_14": 52.3, "vol_20": 0.0021, "ts": 1}
+        msg_1d = {"t": "indicators", "stream_id": "btc_1d", "timeframe": "1d",
+                  "asset": "BTCUSDT", "rsi_14": 48.7, "vol_20": 0.0015, "ts": 2}
+
+        for msg in (msg_4h, msg_1d):
+            pub.send_json(msg)
+            time.sleep(0.01)
+
+        received_a = [sub_a.recv_json(), sub_a.recv_json()]
+        received_b = [sub_b.recv_json(), sub_b.recv_json()]
+
+        # Both subscribers got both messages
+        self.assertEqual({m["stream_id"] for m in received_a}, {"btc_4h", "btc_1d"})
+        self.assertEqual({m["stream_id"] for m in received_b}, {"btc_4h", "btc_1d"})
+
+        pub.close(); sub_a.close(); sub_b.close()
+
+    def test_account_a_filters_to_4h_only(self) -> None:
+        """account-a ignores messages not for its stream_id."""
+        pub, _, (sub,) = self._pub_sub_pair(1)
+
+        messages = [
+            {"t": "indicators", "stream_id": "btc_4h", "rsi_14": 52.3, "ts": 1},
+            {"t": "indicators", "stream_id": "btc_1d", "rsi_14": 48.7, "ts": 2},
+            {"t": "indicators", "stream_id": "btc_4h", "rsi_14": 55.1, "ts": 3},
+        ]
+        for msg in messages:
+            pub.send_json(msg)
+            time.sleep(0.01)
+
+        received = [sub.recv_json(), sub.recv_json(), sub.recv_json()]
+        # account-a only processes messages where stream_id == "btc_4h"
+        account_a_relevant = [m for m in received if m["stream_id"] == "btc_4h"]
+        self.assertEqual(len(account_a_relevant), 2)
+        self.assertAlmostEqual(account_a_relevant[0]["rsi_14"], 52.3)
+        self.assertAlmostEqual(account_a_relevant[1]["rsi_14"], 55.1)
+
+        pub.close(); sub.close()
+
+    def test_account_b_filters_to_1d_only(self) -> None:
+        """account-b ignores messages not for its stream_id."""
+        pub, _, (sub,) = self._pub_sub_pair(1)
+
+        messages = [
+            {"t": "indicators", "stream_id": "btc_4h", "rsi_14": 52.3, "ts": 1},
+            {"t": "indicators", "stream_id": "btc_1d", "rsi_14": 48.7, "ts": 2},
+            {"t": "indicators", "stream_id": "btc_4h", "rsi_14": 55.1, "ts": 3},
+        ]
+        for msg in messages:
+            pub.send_json(msg)
+            time.sleep(0.01)
+
+        received = [sub.recv_json(), sub.recv_json(), sub.recv_json()]
+        account_b_relevant = [m for m in received if m["stream_id"] == "btc_1d"]
+        self.assertEqual(len(account_b_relevant), 1)
+        self.assertAlmostEqual(account_b_relevant[0]["rsi_14"], 48.7)
+
+        pub.close(); sub.close()
+
+    def test_config_loads_two_streams(self) -> None:
+        """The updated indicators.json declares both btc_4h and btc_1d streams."""
+        config_path = os.path.join(
+            os.path.dirname(__file__), "..", "strategies", "indicators.json"
+        )
+        if not os.path.exists(config_path):
+            self.skipTest("strategies/indicators.json not found")
+        _, _, _, streams = load_config(config_path)
+        ids = {s.id for s in streams}
+        self.assertIn("btc_4h", ids)
+        self.assertIn("btc_1d", ids)
+        self.assertEqual(len(streams), 2)
+
+    def test_stream_timeframes_distinct(self) -> None:
+        """btc_4h and btc_1d carry different timeframe values."""
+        config_path = os.path.join(
+            os.path.dirname(__file__), "..", "strategies", "indicators.json"
+        )
+        if not os.path.exists(config_path):
+            self.skipTest("strategies/indicators.json not found")
+        _, _, _, streams = load_config(config_path)
+        by_id = {s.id: s for s in streams}
+        self.assertEqual(by_id["btc_4h"].timeframe, "4h")
+        self.assertEqual(by_id["btc_1d"].timeframe, "1d")
 
 
 if __name__ == "__main__":

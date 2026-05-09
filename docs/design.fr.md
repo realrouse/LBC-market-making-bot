@@ -327,6 +327,8 @@ Les indicateurs retournent `None` tant que le buffer n'a pas assez d'historique.
 Aucun message n'est publié tant qu'un seul indicateur n'est pas calculable :
 les consommateurs ne reçoivent jamais de données partielles.
 
+**Partage multi-bots** — `indicators.py` exécute une tâche asyncio par flux configuré (une pour `btc_4h`, une pour `btc_1d`). Tous les messages de sortie sont publiés sur le même socket PUB. Chaque `account_bot` abonné reçoit *tous* les messages et filtre côté client selon `stream_id`. Aucun processus ni port supplémentaire.
+
 **Démarrage du pipeline :**
 
 ```bash

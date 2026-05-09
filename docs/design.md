@@ -322,6 +322,8 @@ Indicators return `None` until the buffer has enough history. No message is
 published until every configured indicator has a valid value, so consumers
 never receive partial data.
 
+**Multi-consumer pattern** — `indicators.py` runs a single asyncio task per configured stream (one task for `btc_4h`, one for `btc_1d`). All output messages are published on the same PUB socket. Each subscribing `account_bot` receives *all* messages and filters client-side by `stream_id`. No extra processes, no extra ports.
+
 **Starting the pipeline:**
 
 ```bash
