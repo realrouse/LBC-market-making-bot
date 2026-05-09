@@ -527,7 +527,7 @@ class TestMultiBotIndicatorSharing(unittest.TestCase):
 
 class TestSplitConfigs(unittest.TestCase):
     """
-    Verify that indicators_4h.json and indicators_1d.json are valid stand-alone
+    Verify that indicators_4h_bitcoin.json and indicators_1d_bitcoin.json are valid stand-alone
     per-account configs with distinct ports and the expected single stream each.
     """
 
@@ -540,10 +540,10 @@ class TestSplitConfigs(unittest.TestCase):
             self.skipTest(f"strategies/{filename} not found")
         return load_config(path)
 
-    # ── indicators_4h.json ────────────────────────────────────────────────────
+    # ── indicators_4h_bitcoin.json ────────────────────────────────────────────────────
 
     def test_4h_config_loads(self) -> None:
-        cfg = self._load("indicators_4h.json")
+        cfg = self._load("indicators_4h_bitcoin.json")
         self.assertEqual(cfg.out_addr, "tcp://127.0.0.1:5559")
         self.assertEqual(cfg.reg_addr, "tcp://127.0.0.1:5561")
         self.assertEqual(len(cfg.streams), 1)
@@ -553,15 +553,15 @@ class TestSplitConfigs(unittest.TestCase):
         self.assertEqual(cfg.streams[0].source, "binance_ws")
 
     def test_4h_has_rsi_and_volatility(self) -> None:
-        cfg = self._load("indicators_4h.json")
+        cfg = self._load("indicators_4h_bitcoin.json")
         types = {s.type for s in cfg.streams[0].indicators}
         self.assertIn("rsi", types)
         self.assertIn("volatility", types)
 
-    # ── indicators_1d.json ────────────────────────────────────────────────────
+    # ── indicators_1d_bitcoin.json ────────────────────────────────────────────────────
 
     def test_1d_config_loads(self) -> None:
-        cfg = self._load("indicators_1d.json")
+        cfg = self._load("indicators_1d_bitcoin.json")
         self.assertEqual(cfg.out_addr, "tcp://127.0.0.1:5560")
         self.assertEqual(cfg.reg_addr, "tcp://127.0.0.1:5562")
         self.assertEqual(len(cfg.streams), 1)
@@ -571,7 +571,7 @@ class TestSplitConfigs(unittest.TestCase):
         self.assertEqual(cfg.streams[0].source, "binance_ws")
 
     def test_1d_has_rsi_and_volatility(self) -> None:
-        cfg = self._load("indicators_1d.json")
+        cfg = self._load("indicators_1d_bitcoin.json")
         types = {s.type for s in cfg.streams[0].indicators}
         self.assertIn("rsi", types)
         self.assertIn("volatility", types)
@@ -580,19 +580,19 @@ class TestSplitConfigs(unittest.TestCase):
 
     def test_pub_ports_are_distinct(self) -> None:
         """4h and 1d configs must bind on different PUB ports."""
-        cfg_4h = self._load("indicators_4h.json")
-        cfg_1d = self._load("indicators_1d.json")
+        cfg_4h = self._load("indicators_4h_bitcoin.json")
+        cfg_1d = self._load("indicators_1d_bitcoin.json")
         self.assertNotEqual(cfg_4h.out_addr, cfg_1d.out_addr)
 
     def test_reg_ports_are_distinct(self) -> None:
         """4h and 1d configs must bind on different REP registration ports."""
-        cfg_4h = self._load("indicators_4h.json")
-        cfg_1d = self._load("indicators_1d.json")
+        cfg_4h = self._load("indicators_4h_bitcoin.json")
+        cfg_1d = self._load("indicators_1d_bitcoin.json")
         self.assertNotEqual(cfg_4h.reg_addr, cfg_1d.reg_addr)
 
     def test_stream_ids_are_distinct(self) -> None:
-        cfg_4h = self._load("indicators_4h.json")
-        cfg_1d = self._load("indicators_1d.json")
+        cfg_4h = self._load("indicators_4h_bitcoin.json")
+        cfg_1d = self._load("indicators_1d_bitcoin.json")
         ids_4h = {s.id for s in cfg_4h.streams}
         ids_1d = {s.id for s in cfg_1d.streams}
         self.assertFalse(ids_4h & ids_1d,

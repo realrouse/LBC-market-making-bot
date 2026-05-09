@@ -502,18 +502,18 @@ Deux fichiers de config prêts à l'emploi sont fournis pour les déploiements m
 
 | Fichier | Compte | Port | Timeframe |
 |---|---|---|---|
-| `strategies/indicators_4h.json` | account-a | `:5559` | 4h |
-| `strategies/indicators_1d.json` | account-b | `:5560` | `1d` |
+| `strategies/indicators_4h_bitcoin.json` | account-a | `:5559` | 4h |
+| `strategies/indicators_1d_bitcoin.json` | account-b | `:5560` | `1d` |
 
 Démarrer avec `start_indicators.sh` :
 
 ```bash
 # account-a
-TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_4h.json \
+TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_4h_bitcoin.json \
   bash scripts/start_indicators.sh
 
 # account-b
-TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_1d.json \
+TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_1d_bitcoin.json \
   bash scripts/start_indicators.sh
 ```
 

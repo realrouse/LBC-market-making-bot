@@ -26,8 +26,8 @@ TEST_PASSWORDS=(pass1 pass2 pass3)
 #   user2 → daily indicators (port 5560)
 #   user3 → no indicators
 TEST_INDICATORS_CONFIGS=(
-    "strategies/indicators_4h.json"
-    "strategies/indicators_1d.json"
+    "strategies/indicators_4h_bitcoin.json"
+    "strategies/indicators_1d_bitcoin.json"
     ""
 )
 

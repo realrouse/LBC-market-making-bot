@@ -23,7 +23,7 @@ Toutes les modifications notables de ce projet sont documentées ici.
 - **`SNAPSHOT_INTERVAL` par défaut passé de 5s à 1s** : tous les bots écrivent désormais une ligne de snapshot par seconde par défaut, éliminant l'angle mort responsable de ~50 LOSS supplémentaires par session de 3 mois dans les backtests alignés ; utiliser `--snapshot-interval N` pour réduire les I/O disque si nécessaire
 
 ### Ajout
-- **`strategies/indicators_4h.json`** + **`strategies/indicators_1d.json`** : configs d'indicateurs par compte séparées de `indicators.json` ; account-a reçoit btc_4h sur le port 5559, account-b reçoit btc_1d sur le port 5560
+- **`strategies/indicators_4h_bitcoin.json`** + **`strategies/indicators_1d_bitcoin.json`** : configs d'indicateurs par compte séparées de `indicators.json` ; account-a reçoit btc_4h sur le port 5559, account-b reçoit btc_1d sur le port 5560
 - **`scripts/start_indicators.sh`** : script de démarrage du service d'indicateurs ; le compte sélectionne son fichier via `TRADINEBOTTE_INDICATORS_CONFIG`
 - **`tests/test_indicators.py`** : ajout de `TestSplitConfigs` (6 tests, 57→63 au total) vérifiant l'isolation des ports, la disjonction des stream_id et le contenu correct de chaque fichier séparé
 - **`scripts/test_multibot_deploy.sh`** : phase 3b démarre `indicators.py` par compte avant les bots ; les phases de nettoyage tuent `indicators.py` et libèrent les ports 5559/5560
