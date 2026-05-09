@@ -45,6 +45,8 @@ Configuration keys in strategy JSON
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import sqlite3
 import time
@@ -141,6 +143,10 @@ class GridStrategy:
 
         from connectors import load as _load_conn
         self._api = _load_conn(config.connector)
+
+        # User data stream state (real-time fills via WebSocket).
+        self._user_stream_task: Optional[asyncio.Task] = None
+        self._user_ws_connected: bool = False
 
         logger.info(
             "GridStrategy: %s  %.2f–%.2f  %d niveaux  step=%.2f  taille=$%.2f",
@@ -321,6 +327,123 @@ class GridStrategy:
         )
         return True
 
+    # ── User data stream ───────────────────────────────────────────────────────
+
+    async def _user_stream_loop(self, state: Any) -> None:
+        """
+        Background task: subscribe to the exchange user data stream for real-time
+        fill notifications.
+
+        Lifecycle:
+          1. Call get_listen_key() to obtain a time-limited key (60-min TTL).
+          2. Open a WebSocket to make_user_stream_url(listen_key).
+          3. Parse every frame with parse_user_stream_msg(); dispatch fills to
+             _on_user_stream_fill().
+          4. Renew the listenKey every KEEPALIVE_SECS (30 min) to prevent expiry.
+          5. On disconnect, reconnect with exponential back-off (5 s → 60 s cap).
+          6. Exit when the grid is halted or after MAX_KEY_FAILURES consecutive
+             failures to obtain a listenKey (no credentials / API unreachable).
+
+        While the stream is active (_user_ws_connected = True), on_book_update
+        skips the REST poll — the stream already provides sub-second fill events.
+        """
+        KEEPALIVE_SECS  = 1800    # renew listenKey every 30 min (TTL = 60 min)
+        MAX_KEY_FAILURES = 3
+        backoff = 5.0
+        key_failures = 0
+
+        while not self.grid.halted:
+            listen_key = await self._api.get_listen_key(state.session)
+            if not listen_key:
+                key_failures += 1
+                if key_failures >= MAX_KEY_FAILURES:
+                    logger.warning(
+                        "GridStrategy [%s] user stream: abandon après %d échecs "
+                        "consécutifs (pas de credentials ?)",
+                        self.grid.symbol, key_failures,
+                    )
+                    return
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 60.0)
+                continue
+
+            key_failures = 0
+            backoff = 5.0
+            ws_url = self._api.make_user_stream_url(listen_key)
+
+            try:
+                keepalive_ts = time.time()
+                async with state.session.ws_connect(ws_url, heartbeat=20) as ws:
+                    self._user_ws_connected = True
+                    logger.info(
+                        "GridStrategy [%s] user stream connecté (fills temps réel)",
+                        self.grid.symbol,
+                    )
+                    async for msg in ws:
+                        if self.grid.halted:
+                            break
+                        if time.time() - keepalive_ts >= KEEPALIVE_SECS:
+                            await self._api.keepalive_listen_key(
+                                state.session, listen_key)
+                            keepalive_ts = time.time()
+                        try:
+                            data = json.loads(msg.data)
+                        except Exception:
+                            continue
+                        fill = self._api.parse_user_stream_msg(data)
+                        if fill:
+                            await self._on_user_stream_fill(state, fill)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(
+                    "GridStrategy [%s] user stream déconnecté: %s",
+                    self.grid.symbol, e,
+                )
+            finally:
+                self._user_ws_connected = False
+
+            if not self.grid.halted:
+                logger.info(
+                    "GridStrategy [%s] user stream: reconnexion dans %.0fs",
+                    self.grid.symbol, backoff,
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 60.0)
+
+    async def _on_user_stream_fill(self, state: Any, fill: dict) -> None:
+        """
+        Dispatch a fill event received from the user data stream.
+
+        Matches the order_id to the active grid level and calls the appropriate
+        fill handler.  Saves state to DB after the counter-order is placed.
+        Unknown order IDs (orders placed outside the grid) are silently ignored.
+        """
+        order_id = fill.get("order_id", "")
+        if not order_id:
+            return
+        for lvl in self.grid.levels:
+            if lvl.status == "buy_placed" and str(lvl.buy_order_id) == order_id:
+                logger.debug(
+                    "GridStrategy [%s] user stream BUY fill %s",
+                    self.grid.symbol, order_id,
+                )
+                await self._on_buy_filled(state, lvl)
+                self._save_state(state.conn)
+                return
+            if lvl.status == "sell_placed" and str(lvl.sell_order_id) == order_id:
+                logger.debug(
+                    "GridStrategy [%s] user stream SELL fill %s",
+                    self.grid.symbol, order_id,
+                )
+                await self._on_sell_filled(state, lvl)
+                self._save_state(state.conn)
+                return
+        logger.debug(
+            "GridStrategy [%s] user stream: ordre %s inconnu (hors grille)",
+            self.grid.symbol, order_id,
+        )
+
     # ── Stop-loss ──────────────────────────────────────────────────────────────
 
     def _check_stop_loss(self, price: float) -> bool:
@@ -341,6 +464,9 @@ class GridStrategy:
             lvl.buy_price     = None
             lvl.sell_price    = None
             lvl.status        = "idle"
+        if self._user_stream_task is not None and not self._user_stream_task.done():
+            self._user_stream_task.cancel()
+            self._user_stream_task = None
         self.grid.halted = True
         logger.warning(
             "GridStrategy [%s] STOP-LOSS — prix=%.2f hors [%.2f, %.2f] "
@@ -542,15 +668,33 @@ class GridStrategy:
             self._save_state(state.conn)
             return
 
-        now = time.time()
-        if now - self.grid.last_poll_ts >= self.grid.poll_interval:
-            self.grid.last_poll_ts = now
-            prev_state = (self.grid.total_cycles,
-                          tuple((l.buy_order_id, l.sell_order_id)
-                                for l in self.grid.levels))
-            await self._poll_fills(state, ts)
-            new_state = (self.grid.total_cycles,
-                         tuple((l.buy_order_id, l.sell_order_id)
-                               for l in self.grid.levels))
-            if prev_state != new_state:
-                self._save_state(state.conn)
+        # Start the user data stream on the first tick after init (non-sim mode).
+        # Re-create the task if it exited unexpectedly (e.g. no credentials).
+        if (self._user_stream_task is None or
+                self._user_stream_task.done()):
+            # Only start for real orders — sim_ IDs have no matching exchange stream.
+            active = [l for l in self.grid.levels if l.is_active]
+            is_sim = any(
+                (l.buy_order_id  or "").startswith("sim_") or
+                (l.sell_order_id or "").startswith("sim_")
+                for l in active
+            )
+            if not is_sim:
+                self._user_stream_task = asyncio.create_task(
+                    self._user_stream_loop(state)
+                )
+
+        # REST polling is the fallback: skip when the user stream is active.
+        if not self._user_ws_connected:
+            now = time.time()
+            if now - self.grid.last_poll_ts >= self.grid.poll_interval:
+                self.grid.last_poll_ts = now
+                prev_state = (self.grid.total_cycles,
+                              tuple((l.buy_order_id, l.sell_order_id)
+                                    for l in self.grid.levels))
+                await self._poll_fills(state, ts)
+                new_state = (self.grid.total_cycles,
+                             tuple((l.buy_order_id, l.sell_order_id)
+                                   for l in self.grid.levels))
+                if prev_state != new_state:
+                    self._save_state(state.conn)

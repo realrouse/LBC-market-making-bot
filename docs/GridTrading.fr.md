@@ -298,7 +298,7 @@ Avec 20 niveaux à 50 USDT = 1 000 USDT de capital engagé maximum.
 | `_check_stop_loss()` — annulation si hors grille | ✅ Implémenté |
 | `_save_state()` — persistance SQLite (`grid_state` + `grid_levels`) | ✅ Implémenté |
 | `restore_from_db()` — reprise au redémarrage + réconciliation exchange | ✅ Implémenté |
-| WebSocket order stream (fills en temps réel) | 🔲 TODO |
+| WebSocket user data stream (fills en temps réel) | ✅ Implémenté |
 
 ---
 

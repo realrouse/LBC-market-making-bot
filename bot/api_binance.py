@@ -381,3 +381,82 @@ async def get_open_orders(session, symbol, *, api_key=None, api_secret=None):
     except Exception as e:
         logger.error("Binance get_open_orders erreur : %s", e)
         return []
+
+
+# ─── USER DATA STREAM ─────────────────────────────────────────────────────────
+
+async def get_listen_key(session, *, api_key=None, api_secret=None):
+    """
+    Create a new user data stream and return its listenKey (60-min TTL).
+    Extend with keepalive_listen_key every 30 min before it expires.
+    Returns the listenKey string, or None on error / missing credentials.
+    Weight: 2.
+    """
+    key = api_key or os.environ.get("BINANCE_API_KEY", "")
+    if not key:
+        return None
+    try:
+        async with session.post(
+            f"{BASE_URL}/api/v3/userDataStream",
+            headers={"X-MBX-APIKEY": key},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            if resp.status != 200:
+                logger.warning("Binance get_listen_key erreur %d", resp.status)
+                return None
+            data = await resp.json(content_type=None)
+            return data.get("listenKey") or None
+    except Exception as e:
+        logger.error("Binance get_listen_key erreur : %s", e)
+        return None
+
+
+async def keepalive_listen_key(session, listen_key, *, api_key=None, api_secret=None):
+    """
+    Extend the TTL of an existing listenKey (PUT /api/v3/userDataStream).
+    Should be called every ~30 min to prevent key expiry (TTL = 60 min).
+    Returns True on success.  Weight: 2.
+    """
+    key = api_key or os.environ.get("BINANCE_API_KEY", "")
+    if not key or not listen_key:
+        return False
+    try:
+        async with session.put(
+            f"{BASE_URL}/api/v3/userDataStream",
+            params={"listenKey": listen_key},
+            headers={"X-MBX-APIKEY": key},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            return resp.status == 200
+    except Exception as e:
+        logger.error("Binance keepalive_listen_key erreur : %s", e)
+        return False
+
+
+def make_user_stream_url(listen_key: str) -> str:
+    """Return the WebSocket URL for the user data stream."""
+    return f"wss://stream.binance.com:9443/ws/{listen_key}"
+
+
+def parse_user_stream_msg(msg: dict) -> "dict | None":
+    """
+    Parse a Binance executionReport WebSocket event.
+
+    Returns {"order_id", "status", "side", "symbol"} when the order status
+    is FILLED or PARTIALLY_FILLED, otherwise None.
+
+    Binance event shape:
+        {"e": "executionReport", "s": symbol, "i": orderId,
+         "X": currentOrderStatus, "S": side, ...}
+    """
+    if not isinstance(msg, dict) or msg.get("e") != "executionReport":
+        return None
+    status = str(msg.get("X", ""))
+    if status not in ("FILLED", "PARTIALLY_FILLED"):
+        return None
+    return {
+        "order_id": str(msg.get("i", "")),
+        "status":   status,
+        "side":     str(msg.get("S", "")),
+        "symbol":   str(msg.get("s", "")),
+    }

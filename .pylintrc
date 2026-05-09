@@ -49,6 +49,13 @@ disable=
     # let task cancellation propagate; pylint sees it as a pointless re-raise.
     W0706,
 
+    # ── Duplicate code ───────────────────────────────────────────────────────
+    # api_binance.py and api_mexc.py share structurally identical REST helpers
+    # (get_listen_key, keepalive_listen_key, etc.) because each connector must
+    # be self-contained — factoring them into a shared base would break the
+    # plug-and-play import model used by connectors/__init__.py.
+    R0801,
+
     # ── Unused arguments ─────────────────────────────────────────────────────
     # Adapter functions (api_polymarket.post_order, backtest summarise) keep
     # unused parameters to maintain a uniform interface across exchange adapters

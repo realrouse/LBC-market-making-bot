@@ -2194,6 +2194,131 @@ class TestBotConfigStrategyFields(unittest.TestCase):
         self.assertEqual(state.strategy.STRATEGY_TYPE, "grid")
 
 
+class TestUserDataStream(unittest.TestCase):
+    """parse_user_stream_msg and make_user_stream_url for Binance and MEXC."""
+
+    # ── Binance parse_user_stream_msg ─────────────────────────────────────────
+
+    def test_binance_filled_buy(self):
+        import api_binance
+        msg = {"e": "executionReport", "s": "BTCUSDT",
+               "i": 99999, "X": "FILLED", "S": "BUY"}
+        result = api_binance.parse_user_stream_msg(msg)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["order_id"], "99999")
+        self.assertEqual(result["status"],   "FILLED")
+        self.assertEqual(result["side"],     "BUY")
+        self.assertEqual(result["symbol"],   "BTCUSDT")
+
+    def test_binance_partially_filled(self):
+        import api_binance
+        msg = {"e": "executionReport", "s": "BTCUSDT",
+               "i": 88888, "X": "PARTIALLY_FILLED", "S": "SELL"}
+        result = api_binance.parse_user_stream_msg(msg)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["status"], "PARTIALLY_FILLED")
+
+    def test_binance_new_order_ignored(self):
+        import api_binance
+        msg = {"e": "executionReport", "s": "BTCUSDT",
+               "i": 11111, "X": "NEW", "S": "BUY"}
+        self.assertIsNone(api_binance.parse_user_stream_msg(msg))
+
+    def test_binance_wrong_event_type_ignored(self):
+        import api_binance
+        self.assertIsNone(api_binance.parse_user_stream_msg(
+            {"e": "outboundAccountPosition"}))
+
+    def test_binance_make_user_stream_url(self):
+        import api_binance
+        url = api_binance.make_user_stream_url("abc123")
+        self.assertIn("abc123", url)
+        self.assertTrue(url.startswith("wss://"))
+
+    # ── MEXC parse_user_stream_msg ────────────────────────────────────────────
+
+    def test_mexc_filled_buy(self):
+        import api_mexc
+        msg = {"s": "BTCUSDT", "d": {"i": "MX_001", "s": 2, "S": 1}}
+        result = api_mexc.parse_user_stream_msg(msg)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["order_id"], "MX_001")
+        self.assertEqual(result["status"],   "FILLED")
+        self.assertEqual(result["side"],     "BUY")
+
+    def test_mexc_filled_sell(self):
+        import api_mexc
+        msg = {"s": "BTCUSDT", "d": {"i": "MX_002", "s": 2, "S": 2}}
+        result = api_mexc.parse_user_stream_msg(msg)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["side"], "SELL")
+
+    def test_mexc_partially_filled(self):
+        import api_mexc
+        msg = {"s": "BTCUSDT", "d": {"i": "MX_003", "s": 3, "S": 1}}
+        result = api_mexc.parse_user_stream_msg(msg)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["status"], "PARTIALLY_FILLED")
+
+    def test_mexc_new_status_ignored(self):
+        import api_mexc
+        msg = {"s": "BTCUSDT", "d": {"i": "MX_004", "s": 1, "S": 1}}
+        self.assertIsNone(api_mexc.parse_user_stream_msg(msg))
+
+    def test_mexc_canceled_ignored(self):
+        import api_mexc
+        msg = {"s": "BTCUSDT", "d": {"i": "MX_005", "s": 4, "S": 1}}
+        self.assertIsNone(api_mexc.parse_user_stream_msg(msg))
+
+    def test_mexc_no_d_key_ignored(self):
+        import api_mexc
+        self.assertIsNone(api_mexc.parse_user_stream_msg({"s": "BTCUSDT"}))
+
+    def test_mexc_make_user_stream_url(self):
+        import api_mexc
+        url = api_mexc.make_user_stream_url("key_xyz")
+        self.assertIn("key_xyz", url)
+        self.assertTrue(url.startswith("wss://"))
+
+    # ── _on_user_stream_fill dispatch ─────────────────────────────────────────
+
+    def test_user_stream_fill_dispatches_buy(self):
+        """_on_user_stream_fill calls _on_buy_filled for a matching BUY order."""
+        cfg = bot.BotConfig()
+        cfg.grid_symbol = "BTCUSDT"; cfg.grid_lower = 98000.0
+        cfg.grid_upper = 102000.0; cfg.grid_levels = 5
+        cfg.grid_order_size_usdt = 50.0; cfg.connector = "binance"
+        s   = GridStrategy(cfg)
+        lvl = s.grid.levels[0]
+        lvl.buy_order_id = "ORD_BUY_1"
+        lvl.buy_price    = 98000.0
+        lvl.status       = "buy_placed"
+
+        state = _FakeState()
+        fill  = {"order_id": "ORD_BUY_1", "status": "FILLED",
+                 "side": "BUY", "symbol": "BTCUSDT"}
+        with unittest.mock.patch.object(
+            s._api, "post_order",
+            new=unittest.mock.AsyncMock(return_value="ORD_SELL_2")
+        ):
+            _run(s._on_user_stream_fill(state, fill))
+        self.assertEqual(lvl.status, "sell_placed")
+        self.assertEqual(lvl.sell_order_id, "ORD_SELL_2")
+
+    def test_user_stream_fill_unknown_order_is_noop(self):
+        """Unknown order_id is silently ignored — no exception, no state change."""
+        cfg = bot.BotConfig()
+        cfg.grid_symbol = "BTCUSDT"; cfg.grid_lower = 98000.0
+        cfg.grid_upper = 102000.0; cfg.grid_levels = 5
+        cfg.grid_order_size_usdt = 50.0; cfg.connector = "binance"
+        s = GridStrategy(cfg)
+        state = _FakeState()
+        fill  = {"order_id": "UNKNOWN_999", "status": "FILLED",
+                 "side": "BUY", "symbol": "BTCUSDT"}
+        _run(s._on_user_stream_fill(state, fill))  # must not raise
+        self.assertTrue(all(l.status == "idle" for l in s.levels))
+
+
 class TestGridPersistence(unittest.TestCase):
     """_save_state writes to DB; restore_from_db reloads it."""
 
