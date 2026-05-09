@@ -1627,5 +1627,186 @@ class TestStrategyLoading(unittest.TestCase):
         self.assertLess(v2["signal_threshold"], v1["signal_threshold"])
 
 
+# ── Connector factory ─────────────────────────────────────────────────────────
+
+import connectors as _connectors_mod
+
+class TestConnectorFactory(unittest.TestCase):
+    """connectors.load() returns the correct api_* module."""
+
+    def test_polymarket(self):
+        mod = _connectors_mod.load("polymarket")
+        self.assertTrue(hasattr(mod, "parse_book_update"))
+        self.assertTrue(hasattr(mod, "post_order"))
+        self.assertTrue(hasattr(mod, "compute_fee"))
+
+    def test_binance(self):
+        mod = _connectors_mod.load("binance")
+        self.assertTrue(hasattr(mod, "parse_book_update"))
+        self.assertTrue(hasattr(mod, "post_order"))
+
+    def test_mexc(self):
+        mod = _connectors_mod.load("mexc")
+        self.assertTrue(hasattr(mod, "parse_book_update"))
+        self.assertTrue(hasattr(mod, "post_order"))
+
+    def test_unknown_raises(self):
+        with self.assertRaises(ValueError):
+            _connectors_mod.load("unknown_exchange")
+
+    def test_available_lists_three(self):
+        avail = _connectors_mod.available()
+        self.assertIn("polymarket", avail)
+        self.assertIn("binance", avail)
+        self.assertIn("mexc", avail)
+
+    def test_polymarket_and_binance_share_interface(self):
+        """Both modules expose the same public surface."""
+        pm = _connectors_mod.load("polymarket")
+        bn = _connectors_mod.load("binance")
+        for attr in ("parse_book_update", "post_order", "compute_fee",
+                     "make_subscribe_msg", "WS_URL", "WS_BATCH_SIZE"):
+            self.assertTrue(hasattr(pm, attr), f"polymarket missing {attr}")
+            self.assertTrue(hasattr(bn, attr), f"binance missing {attr}")
+
+
+# ── Strategy factory ──────────────────────────────────────────────────────────
+
+import strategies as _strategies_mod
+from strategies.grid import GridStrategy, GridLevel, GridState
+
+class TestStrategyFactory(unittest.TestCase):
+    """strategies.load() returns the correct strategy or None for threshold."""
+
+    def _grid_config(self):
+        cfg = bot.BotConfig()
+        cfg.grid_symbol          = "BTCUSDT"
+        cfg.grid_lower           = 90000.0
+        cfg.grid_upper           = 110000.0
+        cfg.grid_levels          = 10
+        cfg.grid_order_size_usdt = 50.0
+        return cfg
+
+    def test_threshold_returns_none(self):
+        result = _strategies_mod.load("threshold", bot.BotConfig())
+        self.assertIsNone(result)
+
+    def test_grid_returns_strategy(self):
+        s = _strategies_mod.load("grid", self._grid_config())
+        self.assertIsInstance(s, GridStrategy)
+
+    def test_unknown_raises(self):
+        with self.assertRaises(ValueError):
+            _strategies_mod.load("no_such_strategy", bot.BotConfig())
+
+    def test_available_includes_threshold_and_grid(self):
+        avail = _strategies_mod.available()
+        self.assertIn("threshold", avail)
+        self.assertIn("grid", avail)
+
+
+class TestGridStrategy(unittest.TestCase):
+    """GridStrategy initialisation and level computation."""
+
+    def _make(self, lower=90000.0, upper=110000.0, levels=10, size=50.0):
+        cfg = bot.BotConfig()
+        cfg.grid_symbol          = "BTCUSDT"
+        cfg.grid_lower           = lower
+        cfg.grid_upper           = upper
+        cfg.grid_levels          = levels
+        cfg.grid_order_size_usdt = size
+        return GridStrategy(cfg)
+
+    def test_level_count(self):
+        s = self._make(levels=10)
+        self.assertEqual(len(s.levels), 10)
+
+    def test_level_count_20(self):
+        s = self._make(levels=20)
+        self.assertEqual(len(s.levels), 20)
+
+    def test_lower_bound(self):
+        s = self._make(lower=90000.0, upper=110000.0, levels=10)
+        self.assertAlmostEqual(s.levels[0].price, 90000.0)
+
+    def test_upper_bound(self):
+        s = self._make(lower=90000.0, upper=110000.0, levels=10)
+        self.assertAlmostEqual(s.levels[-1].price, 110000.0)
+
+    def test_grid_step(self):
+        s = self._make(lower=90000.0, upper=110000.0, levels=11)
+        self.assertAlmostEqual(s.grid.grid_step, 2000.0)
+
+    def test_all_levels_idle_at_init(self):
+        s = self._make()
+        self.assertTrue(all(lvl.status == "idle" for lvl in s.levels))
+
+    def test_invalid_bounds_raises(self):
+        with self.assertRaises(ValueError):
+            self._make(lower=110000.0, upper=90000.0)
+
+    def test_zero_lower_raises(self):
+        with self.assertRaises(ValueError):
+            self._make(lower=0.0, upper=110000.0)
+
+    def test_single_level_raises(self):
+        with self.assertRaises(ValueError):
+            self._make(levels=1)
+
+    def test_zero_size_raises(self):
+        with self.assertRaises(ValueError):
+            self._make(size=0.0)
+
+    def test_strategy_type(self):
+        s = self._make()
+        self.assertEqual(s.STRATEGY_TYPE, "grid")
+
+    def test_level_at_price_exact(self):
+        s = self._make(lower=90000.0, upper=110000.0, levels=11)
+        lvl = s.level_at_price(92000.0)
+        self.assertIsNotNone(lvl)
+        self.assertAlmostEqual(lvl.price, 92000.0, places=0)
+
+    def test_level_at_price_miss(self):
+        s = self._make(lower=90000.0, upper=110000.0, levels=11)
+        self.assertIsNone(s.level_at_price(50000.0))
+
+
+# ── BotConfig connector / strategy_type fields ────────────────────────────────
+
+class TestBotConfigStrategyFields(unittest.TestCase):
+    """connector and strategy_type are propagated through make_config."""
+
+    def test_defaults(self):
+        cfg = bot.BotConfig()
+        self.assertEqual(cfg.connector, "polymarket")
+        self.assertEqual(cfg.strategy_type, "threshold")
+
+    def test_grid_defaults(self):
+        cfg = bot.BotConfig()
+        self.assertEqual(cfg.grid_symbol, "BTCUSDT")
+        self.assertEqual(cfg.grid_levels, 10)
+        self.assertAlmostEqual(cfg.grid_lower, 0.0)
+        self.assertAlmostEqual(cfg.grid_upper, 0.0)
+
+    def test_state_strategy_is_none_by_default(self):
+        conn = make_db()
+        state = bot.BotState(conn)
+        self.assertIsNone(state.strategy)
+
+    def test_state_strategy_can_be_set(self):
+        cfg = bot.BotConfig()
+        cfg.grid_symbol          = "BTCUSDT"
+        cfg.grid_lower           = 90000.0
+        cfg.grid_upper           = 110000.0
+        cfg.grid_levels          = 5
+        cfg.grid_order_size_usdt = 50.0
+        conn = make_db()
+        state = bot.BotState(conn, cfg)
+        state.strategy = GridStrategy(cfg)
+        self.assertIsNotNone(state.strategy)
+        self.assertEqual(state.strategy.STRATEGY_TYPE, "grid")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -2,7 +2,7 @@
 # 100 chars (pylint default) is tight for async code with long identifiers.
 max-line-length=120
 # live_bot.py is a single-file async state machine; 1000 is too tight.
-max-module-lines=1200
+max-module-lines=1300
 
 [MESSAGES CONTROL]
 disable=

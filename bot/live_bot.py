@@ -72,6 +72,17 @@ SNAPSHOT_INTERVAL  = 1
 DASHBOARD_INTERVAL = 300
 MARKET_REFRESH     = 30
 
+# ─── CONNECTOR / STRATEGY DEFAULTS ────────────────────────────────────────────
+CONNECTOR      = "polymarket"   # api_* module to use; see bot/connectors/
+STRATEGY_TYPE  = "threshold"    # "threshold" (built-in) or "grid" (bot/strategies/grid.py)
+
+# Grid strategy defaults (ignored when strategy_type == "threshold")
+GRID_SYMBOL          = "BTCUSDT"
+GRID_LOWER           = 0.0
+GRID_UPPER           = 0.0
+GRID_LEVELS          = 10
+GRID_ORDER_SIZE_USDT = 50.0
+
 # ─── VOLATILITY FILTER DEFAULTS ───────────────────────────────────────────────
 VOL_FILTER_ENABLED      = True
 VOL_FILTER_WEEKDAY_ONLY = True
@@ -197,6 +208,17 @@ class BotConfig:
     # Strategy file (for logging)
     strategy_loaded: Optional[str] = None
 
+    # Connector + strategy type
+    connector:     str = CONNECTOR
+    strategy_type: str = STRATEGY_TYPE
+
+    # Grid strategy parameters (read only when strategy_type == "grid")
+    grid_symbol:          str   = GRID_SYMBOL
+    grid_lower:           float = GRID_LOWER
+    grid_upper:           float = GRID_UPPER
+    grid_levels:          int   = GRID_LEVELS
+    grid_order_size_usdt: float = GRID_ORDER_SIZE_USDT
+
     def __post_init__(self) -> None:
         # Compute paths from TRADINEBOTTE_DIR when not explicitly provided.
         if not self.install_dir:
@@ -277,6 +299,17 @@ def make_config(simulate: bool = False, no_log: bool = False,
     strat = load_strategy(strat_path) or {}
     strategy_loaded = strat_path if strat else None
 
+    # Connector and strategy type (fall back to module-level defaults).
+    connector     = str(strat.get("connector",     CONNECTOR))
+    strategy_type = str(strat.get("strategy_type", STRATEGY_TYPE))
+
+    # Grid parameters (only used when strategy_type == "grid").
+    grid_symbol          = str(strat.get("grid_symbol",          GRID_SYMBOL))
+    grid_lower           = float(strat.get("grid_lower",           GRID_LOWER))
+    grid_upper           = float(strat.get("grid_upper",           GRID_UPPER))
+    grid_levels          = int(strat.get("grid_levels",           GRID_LEVELS))
+    grid_order_size_usdt = float(strat.get("grid_order_size_usdt", GRID_ORDER_SIZE_USDT))
+
     # Strategy overrides from JSON (fall back to module-level defaults).
     capital_start      = float(strat.get("capital_start",      CAPITAL_START))
     stake              = float(strat.get("stake",               STAKE))
@@ -356,6 +389,13 @@ def make_config(simulate: bool = False, no_log: bool = False,
         webstatus_user=webstatus_user,
         webstatus_password=webstatus_password,
         strategy_loaded=strategy_loaded,
+        connector=connector,
+        strategy_type=strategy_type,
+        grid_symbol=grid_symbol,
+        grid_lower=grid_lower,
+        grid_upper=grid_upper,
+        grid_levels=grid_levels,
+        grid_order_size_usdt=grid_order_size_usdt,
     )
 
     # Sync display config to bot_utils so its functions read the correct values.
@@ -366,6 +406,19 @@ def make_config(simulate: bool = False, no_log: bool = False,
     bot_utils.INSTALL_DIR        = install_dir
 
     return config
+
+
+def _load_connector(name: str) -> None:
+    """
+    Replace the module-level `api` global with the requested exchange connector.
+    No-op when name == "polymarket" (default import already in place).
+    """
+    global api  # pylint: disable=global-statement
+    if name == "polymarket":
+        return
+    from connectors import load as _load
+    api = _load(name)
+    logger.info("Connecteur charge : %s (%s)", name, api.__name__)
 
 
 def _setup_logging(config: "BotConfig") -> Optional[logging.handlers.QueueListener]:
@@ -571,6 +624,9 @@ class BotState:
         # Circuit-breaker: suspend new entries after 3 consecutive CLOB failures.
         self.api_fail_streak: int = 0
         self.api_cooldown_until: float = 0.0
+        # Active strategy instance (None = built-in threshold strategy).
+        # Set in main() after make_config() when strategy_type != "threshold".
+        self.strategy: Any = None
 
     @property
     def win_rate(self) -> float:
@@ -595,9 +651,15 @@ async def handle_book_update(state: BotState, parsed: dict[str, Any]) -> None:
     ts.ask_vol   = parsed["ask_vol"]
     ts.obi       = parsed["obi"]
     ts.last_update_ts = time.time()
-    # Pass t_ws so enter_live_trade can compute end-to-end latency if a trade fires.
-    await check_signal(state, ts, _t_ws=t_ws)
-    check_resolution(state, ts)
+    # Dispatch to the active strategy.
+    # state.strategy is None for the built-in threshold strategy (default),
+    # or a GridStrategy instance when strategy_type == "grid".
+    if state.strategy is not None:
+        await state.strategy.on_book_update(state, ts, _t_ws=t_ws)
+    else:
+        # Default: Polymarket threshold strategy (check_signal / check_resolution).
+        await check_signal(state, ts, _t_ws=t_ws)
+        check_resolution(state, ts)
     now = time.time()
     if now - ts.last_snapshot_ts >= state.config.snapshot_interval:
         ts.bid_history.append(ts.best_bid)
@@ -1138,6 +1200,7 @@ async def main() -> None:
         snapshot_interval=args.snapshot_interval,
     )
     _setup_logging(config)
+    _load_connector(config.connector)
 
     _up = int(time.time() - _BOT_START)
     _start_str = datetime.fromtimestamp(_BOT_START, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -1151,7 +1214,9 @@ async def main() -> None:
         config.signal_threshold, config.stake, config.min_ask_vol,
     )
     if config.strategy_loaded:
-        logger.info("  Strategie : %s", os.path.basename(config.strategy_loaded))
+        logger.info("  Strategie : %s [%s/%s]",
+                    os.path.basename(config.strategy_loaded),
+                    config.strategy_type, config.connector)
     else:
         logger.warning("  Strategie : fichier absent — parametres par defaut")
     if config.hour_filter_enabled:
@@ -1166,6 +1231,12 @@ async def main() -> None:
     conn = init_db(config)
     state = BotState(conn, config)
     restore_state_from_db(state)
+
+    if config.strategy_type != "threshold":
+        from strategies import load as _load_strat
+        state.strategy = _load_strat(config.strategy_type, config)
+        logger.info("  Algorithme  : %s", config.strategy_type)
+
     async with aiohttp.ClientSession(
         connector=aiohttp.TCPConnector(limit=10)
     ) as session:
