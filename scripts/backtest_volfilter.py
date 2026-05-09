@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Simulation du filtre de volatilité sur un ou plusieurs datasets.
+Simulate the volatility filter on one or more datasets.
 
-Mode comparaison (défaut) :
-    Affiche baseline vs filtre calibré pour chaque DB et en agrégé.
+Comparison mode (default):
+    Displays baseline vs calibrated filter for each DB and in aggregate.
 
-Mode calibration (--sweep) :
-    Balaye la grille complète de seuils sur une seule DB pour trouver
-    la meilleure configuration. Résultats sauvegardés dans volstop.txt.
+Calibration mode (--sweep):
+    Scans the full threshold grid on a single DB to find
+    the best configuration. Results saved to volstop.txt.
 
-Usage :
+Usage:
     python3 scripts/backtest_volfilter.py
     python3 scripts/backtest_volfilter.py --db data/liveweek.db data/basicsunday.db
     python3 scripts/backtest_volfilter.py --sweep [--db PATH]
@@ -20,12 +20,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
-# ─── Seuils calibrés (voir volstop.txt) ──────────────────────────────────────
+# ─── Calibrated thresholds (see volstop.txt) ─────────────────────────────────
 VOL_BID_MAX   = 0.07   # std dev best_bid
-RANGE_BID_MAX = 0.30   # amplitude max-min
+RANGE_BID_MAX = 0.30   # max-min amplitude
 OBI_VOL_MAX   = 0.40   # std dev OBI
-WINDOW        = 12     # échantillons × 5s = 60s
-MIN_SAMPLES   = 6      # minimum pour activer le filtre
+WINDOW        = 12     # samples × 5s = 60s
+MIN_SAMPLES   = 6      # minimum to activate the filter
 
 DEFAULT_DBS = [
     "data/liveweek.db",
@@ -43,7 +43,7 @@ SEP2 = "─" * 72
 
 
 def _in_weekend_session(ts_ms: int) -> bool:
-    """Fri ≥ 20:00 UTC  →  Mon < 13:30 UTC (même définition que live_bot.py)."""
+    """Fri >= 20:00 UTC  ->  Mon < 13:30 UTC (same definition as live_bot.py)."""
     dt  = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
     dow, hour, minute = dt.weekday(), dt.hour, dt.minute
     if dow in (5, 6):
@@ -55,7 +55,7 @@ def _in_weekend_session(ts_ms: int) -> bool:
     return False
 
 
-# ─── Structures de données ────────────────────────────────────────────────────
+# ─── Data structures ─────────────────────────────────────────────────────────
 
 @dataclass
 class Row:
@@ -77,7 +77,7 @@ class TradeRecord:
     pnl_net:     float
 
 
-# ─── Chargement ───────────────────────────────────────────────────────────────
+# ─── Loading ──────────────────────────────────────────────────────────────────
 
 def load_data(db_path: str) -> tuple[list[Row], list[TradeRecord]]:
     conn = sqlite3.connect(db_path)
@@ -93,10 +93,10 @@ def load_data(db_path: str) -> tuple[list[Row], list[TradeRecord]]:
     return rows, trades
 
 
-# ─── Calcul des indicateurs au moment de chaque entrée ───────────────────────
+# ─── Indicator calculation at entry time ──────────────────────────────────────
 
 def build_vol_at_entry(rows: list[Row], trades: list[TradeRecord]) -> dict[int, dict]:
-    """Calcule vol_bid, range_bid, obi_vol sur la fenêtre précédant chaque trade."""
+    """Compute vol_bid, range_bid, obi_vol over the window preceding each trade."""
     history: dict[tuple, list[Row]] = defaultdict(list)
     trade_idx = 0
     vol_at_entry: dict[int, dict] = {}
@@ -134,10 +134,10 @@ def build_vol_at_entry(rows: list[Row], trades: list[TradeRecord]) -> dict[int, 
 def simulate(trades: list[TradeRecord], vol_at_entry: dict[int, dict],
              vb_max: float, rb_max: float, ov_max: float,
              weekday_only: bool = False) -> dict:
-    """Simule le filtre de volatilité.
+    """Simulate the volatility filter.
 
-    weekday_only=True : suspend le filtre pendant la session weekend
-    (Fri 20:00 UTC → Mon 13:30 UTC), identique à VOL_FILTER_WEEKDAY_ONLY.
+    weekday_only=True: suspends the filter during the weekend session
+    (Fri 20:00 UTC -> Mon 13:30 UTC), identical to VOL_FILTER_WEEKDAY_ONLY.
     """
     total = wins = losses = skipped = skipped_wd = skipped_we = 0
     pnl_total = 0.0
@@ -145,7 +145,7 @@ def simulate(trades: list[TradeRecord], vol_at_entry: dict[int, dict],
         v = vol_at_entry.get(t.id, {})
         n = v.get("n_snaps", 0)
         is_we = _in_weekend_session(t.created_at)
-        # filtre inactif si : fenêtre trop courte, ou mode weekday_only + weekend
+        # filter inactive if: window too short, or weekday_only mode + weekend entry
         filter_active = n >= MIN_SAMPLES and not (weekday_only and is_we)
         if filter_active and (
             v.get("vol_bid", 0)   > vb_max or
@@ -169,7 +169,7 @@ def simulate(trades: list[TradeRecord], vol_at_entry: dict[int, dict],
             "pnl": pnl_total, "wr": wr, "ev": ev}
 
 
-# ─── Comparaison multi-DB ─────────────────────────────────────────────────────
+# ─── Multi-DB comparison ──────────────────────────────────────────────────────
 
 def _fmt_row(label: str, tag: str, r: dict, extra: str = "") -> str:
     skip_tot = r['skipped']
@@ -187,15 +187,15 @@ def _fmt_row(label: str, tag: str, r: dict, extra: str = "") -> str:
 
 def run_comparison(db_paths: list[str]) -> None:
     print(f"\n{SEP}")
-    print(f"  COMPARAISON — 3 SCÉNARIOS")
-    print(f"  Seuils : vol_bid≤{VOL_BID_MAX}  range≤{RANGE_BID_MAX}  obi_vol≤{OBI_VOL_MAX}  "
-          f"fenêtre {WINDOW}×5s={WINDOW*5}s")
-    print(f"  BASE       : aucun filtre")
-    print(f"  FILT-ALL   : filtre actif 7j/7  (VOL_FILTER_WEEKDAY_ONLY=False)")
-    print(f"  FILT-WD    : filtre actif semaine seulement  (VOL_FILTER_WEEKDAY_ONLY=True)")
+    print(f"  COMPARISON — 3 SCENARIOS")
+    print(f"  Thresholds: vol_bid<={VOL_BID_MAX}  range<={RANGE_BID_MAX}  obi_vol<={OBI_VOL_MAX}  "
+          f"window {WINDOW}x5s={WINDOW*5}s")
+    print(f"  BASE       : no filter")
+    print(f"  FILT-ALL   : filter active 7d/7  (VOL_FILTER_WEEKDAY_ONLY=False)")
+    print(f"  FILT-WD    : filter active weekdays only  (VOL_FILTER_WEEKDAY_ONLY=True)")
     print(SEP)
 
-    hdr = (f"\n  {'Dataset':<28}  {'Scénario':>8}  {'trades':>7}  {'losses':>7}  "
+    hdr = (f"\n  {'Dataset':<28}  {'Scenario':>8}  {'trades':>7}  {'losses':>7}  "
            f"{'WR':>7}  {'PnL':>9}  {'EV':>8}")
     print(hdr)
     print(f"  {'-'*28}  {'-'*8}  {'-'*7}  {'-'*7}  {'-'*7}  {'-'*9}  {'-'*8}")
@@ -206,11 +206,11 @@ def run_comparison(db_paths: list[str]) -> None:
 
     for db_path in db_paths:
         if not os.path.exists(db_path):
-            print(f"  {os.path.basename(db_path):<28}  (fichier introuvable)")
+            print(f"  {os.path.basename(db_path):<28}  (file not found)")
             continue
         rows, trades = load_data(db_path)
         if not trades:
-            print(f"  {os.path.basename(db_path):<28}  (aucun trade résolu)")
+            print(f"  {os.path.basename(db_path):<28}  (no resolved trades)")
             continue
         vol  = build_vol_at_entry(rows, trades)
         base = simulate(trades, vol, 999,         999,          999)
@@ -218,14 +218,14 @@ def run_comparison(db_paths: list[str]) -> None:
         fwd  = simulate(trades, vol, VOL_BID_MAX, RANGE_BID_MAX, OBI_VOL_MAX, weekday_only=True)
         name = os.path.basename(db_path)
 
-        # Compter les trades weekend dans ce dataset
+        # Count weekend trades in this dataset
         we_trades  = sum(1 for t in trades if _in_weekend_session(t.created_at))
         we_losses  = sum(1 for t in trades if t.outcome == "LOSS" and _in_weekend_session(t.created_at))
 
         print(_fmt_row(name,       "BASE",     base))
         print(_fmt_row("",         "FILT-ALL", fall))
         print(_fmt_row("",         "FILT-WD",  fwd,
-                       f"(we: {we_trades}t/{we_losses}L non filtrés)"))
+                       f"(we: {we_trades}t/{we_losses}L unfiltered)"))
         print()
 
         for sc, r in (("base", base), ("fall", fall), ("fwd", fwd)):
@@ -233,12 +233,12 @@ def run_comparison(db_paths: list[str]) -> None:
                 agg[sc][k] += r.get(k, 0)
             agg[sc]["pnl"] += r["pnl"]
 
-    # Calcul WR/EV agrégés
+    # Compute aggregated WR/EV
     for d in agg.values():
         d["wr"] = d["wins"] / d["trades"] if d["trades"] else 0.0
         d["ev"] = d["pnl"]  / d["trades"] if d["trades"] else 0.0
 
-    label = f"AGRÉGAT ({len(db_paths)} fichiers)"
+    label = f"AGGREGATE ({len(db_paths)} files)"
     print(f"  {SEP2}")
     print(_fmt_row(label, "BASE",     agg["base"]))
     print(_fmt_row("",    "FILT-ALL", agg["fall"]))
@@ -252,17 +252,17 @@ def run_comparison(db_paths: list[str]) -> None:
           f"  →  FILT-ALL {fa['losses']}"
           f"  →  FILT-WD  {fw['losses']}")
     extra_trades = fw['trades'] - fa['trades']
-    print(f"  Trades supplémentaires FILT-WD vs FILT-ALL : {extra_trades:+d} "
-          f"(trades weekend réintroduits)\n")
+    print(f"  Extra trades FILT-WD vs FILT-ALL: {extra_trades:+d} "
+          f"(weekend trades reintroduced)\n")
 
 
-# ─── Sweep calibration (mode --sweep) ────────────────────────────────────────
+# ─── Sweep calibration (--sweep mode) ────────────────────────────────────────
 
 def run_sweep(db_path: str) -> None:
     from datetime import datetime
 
     print(f"\n{SEP}")
-    print(f"  CALIBRATION — SWEEP COMPLET — {os.path.basename(db_path)}")
+    print(f"  CALIBRATION — FULL SWEEP — {os.path.basename(db_path)}")
     print(SEP)
 
     rows, trades = load_data(db_path)
@@ -270,13 +270,13 @@ def run_sweep(db_path: str) -> None:
     base = simulate(trades, vol, 999, 999, 999)
 
     print(f"\n  {len(rows):,} snapshots, {len(trades)} trades  |  "
-          f"Fenêtre {WINDOW}×5s={WINDOW*5}s")
+          f"Window {WINDOW}x5s={WINDOW*5}s")
     print(f"  Baseline : {base['trades']} trades, {base['losses']} losses, "
           f"WR={base['wr']*100:.1f}%, PnL={base['pnl']:+.2f}, EV={base['ev']:+.4f}")
 
-    # Indicateurs au moment des pertes
+    # Indicators at the time of losses
     print(f"\n{SEP2}")
-    print(f"  INDICATEURS AU MOMENT DES PERTES")
+    print(f"  INDICATORS AT LOSS ENTRIES")
     print(f"{SEP2}")
     print(f"  {'ID':>4}  {'date':<20}  {'vol_bid':>8}  {'range':>8}  {'obi_vol':>8}  {'n':>4}")
     print(f"  {'-'*4}  {'-'*20}  {'-'*8}  {'-'*8}  {'-'*8}  {'-'*4}")
@@ -299,9 +299,9 @@ def run_sweep(db_path: str) -> None:
     loss_rb = [vol[t.id]["range_bid"] for t in trades if t.outcome == "LOSS" and t.id in vol]
 
     print(f"\n{SEP2}")
-    print(f"  DISTRIBUTION vol_bid / range_bid : WINS vs LOSSES")
+    print(f"  DISTRIBUTION vol_bid / range_bid: WINS vs LOSSES")
     print(f"{SEP2}")
-    print(f"  {'':12} {'médiane':>10}  {'p75':>8}  {'p90':>8}  {'p95':>8}  {'max':>8}")
+    print(f"  {'':12} {'median':>10}  {'p75':>8}  {'p90':>8}  {'p95':>8}  {'max':>8}")
     print(f"  {'-'*12} {'-'*10}  {'-'*8}  {'-'*8}  {'-'*8}  {'-'*8}")
     for lbl, lst in [("vol_bid WIN", wins_vb), ("vol_bid LOSS", loss_vb),
                      ("range WIN",   wins_rb), ("range LOSS",  loss_rb)]:
@@ -316,7 +316,7 @@ def run_sweep(db_path: str) -> None:
         print(f"\n{SEP2}")
         print(f"  SWEEP {metric}")
         print(f"{SEP2}")
-        print(f"  {'seuil':>8}  {'trades':>7}  {'losses':>7}  {'skip':>6}  "
+        print(f"  {'threshold':>8}  {'trades':>7}  {'losses':>7}  {'skip':>6}  "
               f"{'WR':>7}  {'PnL':>9}  {'EV':>8}")
         thresholds = VOL_BID_THRESHOLDS if metric == "vol_bid" else RANGE_BID_THRESHOLDS
         for thr in thresholds:
@@ -325,9 +325,9 @@ def run_sweep(db_path: str) -> None:
             print(f"  {lbl:>8}  {r['trades']:>7}  {r['losses']:>7}  {r['skipped']:>6}  "
                   f"{r['wr']*100:>6.1f}%  {r['pnl']:>+9.2f}  {r['ev']:>+8.4f}")
 
-    # Top 10 combinaisons
+    # Top 10 combinations
     print(f"\n{SEP2}")
-    print(f"  TOP 10 COMBINAISONS (vol_bid × range_bid × obi_vol)")
+    print(f"  TOP 10 COMBINATIONS (vol_bid x range_bid x obi_vol)")
     print(f"{SEP2}")
     results = []
     for vb in VOL_BID_THRESHOLDS[:-1]:
@@ -347,15 +347,15 @@ def run_sweep(db_path: str) -> None:
 
     if results:
         ev, vb, rb, ov, best = results[0]
-        print(f"\n  ★  vol_bid≤{vb}  range≤{rb}  obi_vol≤{ov}")
-        print(f"     Baseline → Filtre : "
+        print(f"\n  ★  vol_bid<={vb}  range<={rb}  obi_vol<={ov}")
+        print(f"     Baseline -> Filter: "
               f"{base['trades']}t/{base['losses']}L/WR{base['wr']*100:.1f}%/PnL{base['pnl']:+.2f}/EV{base['ev']:+.4f}"
               f"  →  "
               f"{best['trades']}t/{best['losses']}L/WR{best['wr']*100:.1f}%/PnL{best['pnl']:+.2f}/EV{ev:+.4f}")
     print()
 
 
-# ─── Entrée ───────────────────────────────────────────────────────────────────
+# ─── Entry point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     sweep_mode = "--sweep" in sys.argv

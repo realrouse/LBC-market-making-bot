@@ -1,29 +1,29 @@
 #!/usr/bin/env bash
 # test_multibot_deploy.sh — Clean install + integration test on configurable test accounts
 #
-# Phases :
-#   1. Cleanup    — tue les processus, supprime les répertoires, nettoie les locks
-#   2. Deploy     — rsync du repo local + création venv + pip install (sans root)
-#   3. Prépare    — crée les répertoires de simulation
-#   4. Lance      — démarre tous les bots simultanément (test de la race condition)
-#   5. Check init — vérifie : 1 feed, N bots, connexions établies
-#   6. Soutenu    — heartbeat toutes les 30s pendant DURATION secondes
-#   7. Analyse    — collecte et analyse les logs, vérifie book updates
-#   8. Teardown   — tue tous les processus
-#   9. Rapport    — SUCCÈS / ÉCHEC avec détail des erreurs
+# Phases:
+#   1. Cleanup    — kill processes, remove directories, clear locks
+#   2. Deploy     — rsync local repo + create venv + pip install (no root)
+#   3. Prepare    — create simulation directories
+#   4. Launch     — start all bots simultaneously (race condition test)
+#   5. Check init — verify: 1 feed, N bots, connections established
+#   6. Sustained  — heartbeat every 30s for DURATION seconds
+#   7. Analysis   — collect and analyse logs, verify book updates
+#   8. Teardown   — kill all processes
+#   9. Report     — SUCCESS / FAILURE with error details
 #
-# Usage :
+# Usage:
 #   bash scripts/test_multibot_deploy.sh
 #   bash scripts/test_multibot_deploy.sh --duration 300
-#   bash scripts/test_multibot_deploy.sh --skip-deploy   # réutilise l'install existante
+#   bash scripts/test_multibot_deploy.sh --skip-deploy   # reuse existing install
 #
-# Configuration (requise) :
+# Configuration (required):
 #   cp scripts/test_multibot.conf.example ~/.tradinebotte-test.conf
-#   editor ~/.tradinebotte-test.conf   # renseigner SERVER, PORT, USERS, PASSWORDS
-#   # ou : TEST_MULTIBOT_CONF=/chemin/vers/conf bash scripts/test_multibot_deploy.sh
+#   editor ~/.tradinebotte-test.conf   # fill in SERVER, PORT, USERS, PASSWORDS
+#   # or: TEST_MULTIBOT_CONF=/path/to/conf bash scripts/test_multibot_deploy.sh
 #
-# Prérequis locaux  : sshpass (apt-get install sshpass)
-# Prérequis serveur : python3-venv, python3-pip, python3.X-venv
+# Local prerequisites  : sshpass (apt-get install sshpass)
+# Server prerequisites : python3-venv, python3-pip, python3.X-venv
 
 set -euo pipefail
 
@@ -52,31 +52,31 @@ while [[ $# -gt 0 ]]; do
         -h|--help)
             grep '^#' "${BASH_SOURCE[0]}" | head -25 | sed 's/^# \?//'
             exit 0 ;;
-        *) echo "Argument inconnu : $1"; exit 1 ;;
+        *) echo "Unknown argument: $1"; exit 1 ;;
     esac
     shift
 done
 
-# ─── Chargement de la configuration ────────────────────────────────────────────
+# ─── Load configuration ─────────────────────────────────────────────────────────
 CONF="${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
 if [[ ! -f "$CONF" ]]; then
-    echo -e "${RED}Configuration manquante : $CONF${NC}"
+    echo -e "${RED}Missing configuration: $CONF${NC}"
     echo ""
-    echo "Créer le fichier de configuration depuis le template :"
+    echo "Create the configuration file from the template:"
     echo "  cp scripts/test_multibot.conf.example ~/.tradinebotte-test.conf"
     echo "  editor ~/.tradinebotte-test.conf"
     echo ""
-    echo "Ou pointer vers un fichier personnalisé :"
-    echo "  TEST_MULTIBOT_CONF=/chemin/vers/conf bash scripts/test_multibot_deploy.sh"
+    echo "Or point to a custom file:"
+    echo "  TEST_MULTIBOT_CONF=/path/to/conf bash scripts/test_multibot_deploy.sh"
     exit 1
 fi
 # shellcheck source=/dev/null
 source "$CONF"
 
-SERVER="${TEST_SERVER:?TEST_SERVER manquant dans $CONF}"
+SERVER="${TEST_SERVER:?TEST_SERVER missing in $CONF}"
 PORT="${TEST_PORT:-22}"
-USERS=("${TEST_USERS[@]:?TEST_USERS manquant dans $CONF}")
-PASSWORDS=("${TEST_PASSWORDS[@]:?TEST_PASSWORDS manquant dans $CONF}")
+USERS=("${TEST_USERS[@]:?TEST_USERS missing in $CONF}")
+PASSWORDS=("${TEST_PASSWORDS[@]:?TEST_PASSWORDS missing in $CONF}")
 # Config can set a default duration; --duration flag takes precedence if already changed
 [[ "$DURATION" -eq 180 && -n "${TEST_DURATION:-}" ]] && DURATION="$TEST_DURATION"
 # Remote directories — override in conf via TEST_REMOTE_INSTALL_DIR / TEST_REMOTE_BOT_DIR
@@ -85,7 +85,7 @@ REMOTE_BOT_DIR="${TEST_REMOTE_BOT_DIR:-~/account-sim}"
 
 N_BOTS=${#USERS[@]}
 if [[ "$N_BOTS" -ne ${#PASSWORDS[@]} ]]; then
-    echo "ERREUR : TEST_USERS et TEST_PASSWORDS doivent avoir la même longueur"
+    echo "ERROR: TEST_USERS and TEST_PASSWORDS must have the same length"
     exit 1
 fi
 
@@ -96,7 +96,7 @@ while [[ ${#INDICATORS_CONFIGS[@]} -lt $N_BOTS ]]; do
     INDICATORS_CONFIGS+=("")
 done
 
-# ─── Helpers SSH ───────────────────────────────────────────────────────────────
+# ─── SSH helpers ───────────────────────────────────────────────────────────────
 run() {
     local idx="$1"; shift
     SSHPASS="${PASSWORDS[$idx]}" /usr/bin/sshpass -e \
@@ -124,43 +124,43 @@ deploy_code() {
         "$LOCAL_REPO/" "${USERS[$idx]}@$SERVER:$REMOTE_INSTALL_DIR/" 2>&1
 }
 
-# ─── Pré-vol ───────────────────────────────────────────────────────────────────
-section "PRÉ-VOL"
+# ─── Pre-flight ────────────────────────────────────────────────────────────────
+section "PRE-FLIGHT"
 
 SSHPASS_BIN=$(command -v sshpass || echo "/usr/bin/sshpass")
 if [[ ! -x "$SSHPASS_BIN" ]]; then
-    echo "ERREUR : sshpass introuvable. Installer : apt-get install sshpass"
+    echo "ERROR: sshpass not found. Install with: apt-get install sshpass"
     exit 1
 fi
-ok "sshpass : $SSHPASS_BIN"
-ok "Config : $CONF"
-info "Serveur : $SERVER:$PORT — $N_BOTS comptes : ${USERS[*]}"
-info "Repo local : $LOCAL_REPO"
-info "Durée de test : ${DURATION}s"
-[[ "$SKIP_DEPLOY" == "true" ]] && info "Mode --skip-deploy : déploiement ignoré"
+ok "sshpass: $SSHPASS_BIN"
+ok "Config: $CONF"
+info "Server: $SERVER:$PORT — $N_BOTS accounts: ${USERS[*]}"
+info "Local repo: $LOCAL_REPO"
+info "Test duration: ${DURATION}s"
+[[ "$SKIP_DEPLOY" == "true" ]] && info "--skip-deploy mode: deployment skipped"
 
 # Populate known_hosts so subsequent SSH calls can use StrictHostKeyChecking=yes
 mkdir -p ~/.ssh && chmod 700 ~/.ssh
 if ! ssh-keygen -F "[$SERVER]:$PORT" &>/dev/null && ! ssh-keygen -F "$SERVER" &>/dev/null; then
-    info "Ajout de la clé hôte $SERVER:$PORT dans known_hosts..."
+    info "Adding host key $SERVER:$PORT to known_hosts..."
     ssh-keyscan -p "$PORT" -H "$SERVER" >> ~/.ssh/known_hosts 2>/dev/null
 fi
-ok "Clé hôte $SERVER vérifiée dans known_hosts"
+ok "Host key $SERVER verified in known_hosts"
 
 for idx in "${!USERS[@]}"; do
     if run $idx "echo ok" &>/dev/null; then
         ok "SSH ${USERS[$idx]}@$SERVER:$PORT"
     else
-        echo "ERREUR : impossible de se connecter à ${USERS[$idx]}@$SERVER:$PORT"
+        echo "ERROR: unable to connect to ${USERS[$idx]}@$SERVER:$PORT"
         exit 1
     fi
 done
 
-# ─── Phase 1 : Cleanup ─────────────────────────────────────────────────────────
+# ─── Phase 1: Cleanup ──────────────────────────────────────────────────────────
 section "PHASE 1 — CLEANUP"
 for idx in "${!USERS[@]}"; do
     user="${USERS[$idx]}"
-    info "Nettoyage $user..."
+    info "Cleaning up $user..."
     run $idx "
         pkill -f '[a]ccount_bot.py' 2>/dev/null || true
         pkill -f '[f]eed.py'        2>/dev/null || true
@@ -175,69 +175,69 @@ for idx in "${!USERS[@]}"; do
         rm -rf $REMOTE_INSTALL_DIR $REMOTE_BOT_DIR || true
         rm -rf /tmp/tradinebotte-feed || true
         exit 0
-    " && ok "$user nettoyé" || warn "$user nettoyage partiel"
+    " && ok "$user cleaned up" || warn "$user partial cleanup"
 done
 
-# Vérification depuis le premier compte (ps aux = tous les utilisateurs)
+# Check from the first account (ps aux = all users)
 STALE=$(run 0 "ps aux | grep -E '(account_bot|feed)\.py' | grep -v grep | wc -l" || echo 0)
 if [[ "$STALE" -eq 0 ]]; then
-    ok "Aucun processus résiduel"
+    ok "No residual processes"
 else
-    warn "$STALE processus résiduel(s) visible(s) — on continue"
+    warn "$STALE residual process(es) visible — continuing"
 fi
 
-# ─── Phase 2 : Deploy ──────────────────────────────────────────────────────────
+# ─── Phase 2: Deploy ───────────────────────────────────────────────────────────
 if [[ "$SKIP_DEPLOY" == "true" ]]; then
-    section "PHASE 2 — DEPLOY (ignoré — --skip-deploy)"
+    section "PHASE 2 — DEPLOY (skipped — --skip-deploy)"
 else
     section "PHASE 2 — DEPLOY"
     for idx in "${!USERS[@]}"; do
         user="${USERS[$idx]}"
         info "rsync → $user..."
-        deploy_code $idx && ok "$user : rsync OK" || { err "$user : rsync échoué"; exit 1; }
+        deploy_code $idx && ok "$user: rsync OK" || { err "$user: rsync failed"; exit 1; }
 
-        info "Création venv $user..."
+        info "Creating venv for $user..."
         run $idx "python3 -m venv $REMOTE_INSTALL_DIR/venv 2>&1" \
-            && ok "$user : venv créé" || { err "$user : création venv échouée"; exit 1; }
+            && ok "$user: venv created" || { err "$user: venv creation failed"; exit 1; }
 
         info "pip install $user..."
         run $idx "
             $REMOTE_INSTALL_DIR/venv/bin/pip install --quiet --upgrade pip
             $REMOTE_INSTALL_DIR/venv/bin/pip install --quiet -r $REMOTE_INSTALL_DIR/requirements.txt
-        " && ok "$user : dépendances installées" || { err "$user : pip install échoué"; exit 1; }
+        " && ok "$user: dependencies installed" || { err "$user: pip install failed"; exit 1; }
     done
 fi
 
-# ─── Phase 3 : Prépare les répertoires de simulation ──────────────────────────
-section "PHASE 3 — RÉPERTOIRES SIMULATION"
+# ─── Phase 3: Prepare simulation directories ───────────────────────────────────
+section "PHASE 3 — SIMULATION DIRECTORIES"
 for idx in "${!USERS[@]}"; do
     user="${USERS[$idx]}"
-    run $idx "mkdir -p $REMOTE_BOT_DIR" && ok "$user : $REMOTE_BOT_DIR prêt"
+    run $idx "mkdir -p $REMOTE_BOT_DIR" && ok "$user: $REMOTE_BOT_DIR ready"
 done
 
-# ─── Phase 3b : Lancement des services d'indicateurs ──────────────────────────
-section "PHASE 3b — SERVICES D'INDICATEURS"
+# ─── Phase 3b: Launch indicator services ───────────────────────────────────────
+section "PHASE 3b — INDICATOR SERVICES"
 IND_STARTED=0
 for idx in "${!USERS[@]}"; do
     cfg="${INDICATORS_CONFIGS[$idx]:-}"
     [[ -z "$cfg" ]] && continue
     user="${USERS[$idx]}"
-    info "Lancement indicators.py pour $user — config=$cfg"
+    info "Launching indicators.py for $user — config=$cfg"
     run $idx "
         cd $REMOTE_INSTALL_DIR
         nohup $REMOTE_INSTALL_DIR/venv/bin/python3 -u bot/indicators.py \
             --config $REMOTE_INSTALL_DIR/$cfg \
             > $REMOTE_BOT_DIR/indicators.log 2>&1 < /dev/null &
         echo \"IND_PID=\$!\"
-    " && ok "$user : indicators.py lancé" || warn "$user : lancement indicators échoué"
+    " && ok "$user: indicators.py started" || warn "$user: indicators launch failed"
     IND_STARTED=$((IND_STARTED + 1))
 done
-[[ $IND_STARTED -gt 0 ]] && { sleep 5; ok "$IND_STARTED service(s) indicators lancé(s)"; } \
-    || info "Aucun service indicators configuré"
+[[ $IND_STARTED -gt 0 ]] && { sleep 5; ok "$IND_STARTED indicator service(s) started"; } \
+    || info "No indicator services configured"
 
-# ─── Phase 4 : Lancement simultané ─────────────────────────────────────────────
-section "PHASE 4 — LANCEMENT SIMULTANÉ DES $N_BOTS BOTS"
-info "Envoi des $N_BOTS commandes de lancement en parallèle (test race condition)..."
+# ─── Phase 4: Simultaneous launch ──────────────────────────────────────────────
+section "PHASE 4 — SIMULTANEOUS LAUNCH OF $N_BOTS BOTS"
+info "Sending $N_BOTS launch commands in parallel (race condition test)..."
 
 LAUNCH_CMD="
     cd $REMOTE_INSTALL_DIR
@@ -250,49 +250,49 @@ LAUNCH_CMD="
 for idx in "${!USERS[@]}"; do
     run_bg $idx "$LAUNCH_CMD"
 done
-wait  # attend que les N sessions SSH retournent (pas que les bots terminent)
+wait  # wait for the N SSH sessions to return (not for bots to finish)
 
-ok "$N_BOTS commandes de lancement envoyées"
-info "Attente 30s — feed auto-start + stabilisation..."
+ok "$N_BOTS launch commands sent"
+info "Waiting 30s — feed auto-start + stabilisation..."
 sleep 30
 
-# ─── Phase 5 : Vérification initiale ───────────────────────────────────────────
-section "PHASE 5 — VÉRIFICATION INITIALE"
+# ─── Phase 5: Initial verification ────────────────────────────────────────────
+section "PHASE 5 — INITIAL VERIFICATION"
 
 FEED_COUNT=$(run 0 "ps aux | grep '[f]eed.py' | wc -l" || echo 0)
 BOT_COUNT=$( run 0 "ps aux | grep '[a]ccount_bot.py' | wc -l" || echo 0)
-info "Processus feed.py     : $FEED_COUNT (attendu : 1)"
-info "Processus account_bot : $BOT_COUNT (attendu : $N_BOTS)"
+info "feed.py processes     : $FEED_COUNT (expected: 1)"
+info "account_bot processes : $BOT_COUNT (expected: $N_BOTS)"
 
-[[ "$FEED_COUNT" -eq 1 ]]       && ok "Feed unique actif" || err "Nombre incorrect de feeds : $FEED_COUNT (attendu 1)"
-[[ "$BOT_COUNT"  -eq "$N_BOTS" ]] && ok "$N_BOTS bots actifs" || err "Nombre incorrect de bots : $BOT_COUNT (attendu $N_BOTS)"
+[[ "$FEED_COUNT" -eq 1 ]]       && ok "Single feed active" || err "Incorrect number of feeds: $FEED_COUNT (expected 1)"
+[[ "$BOT_COUNT"  -eq "$N_BOTS" ]] && ok "$N_BOTS bots active" || err "Incorrect number of bots: $BOT_COUNT (expected $N_BOTS)"
 
-# Vérification des services indicators
+# Verify indicator services
 for idx in "${!USERS[@]}"; do
     cfg="${INDICATORS_CONFIGS[$idx]:-}"
     [[ -z "$cfg" ]] && continue
     user="${USERS[$idx]}"
     IND_COUNT=$(run $idx "ps aux | grep '[i]ndicators.py' | wc -l" || echo 0)
-    [[ "$IND_COUNT" -ge 1 ]] && ok "$user : indicators.py actif ($cfg)" \
-        || err "$user : indicators.py non trouvé pour config $cfg"
+    [[ "$IND_COUNT" -ge 1 ]] && ok "$user: indicators.py active ($cfg)" \
+        || err "$user: indicators.py not found for config $cfg"
 done
 
 for idx in "${!USERS[@]}"; do
     user="${USERS[$idx]}"
     run $idx "grep -q 'Connected to feed' $REMOTE_BOT_DIR/account.log 2>/dev/null" && \
-        ok "$user : connecté au feed" || err "$user : pas de message 'Connected to feed'"
+        ok "$user: connected to feed" || err "$user: no 'Connected to feed' message"
     if run $idx "grep -qE 'Feed started|Feed ready' $REMOTE_BOT_DIR/account.log 2>/dev/null"; then
-        ok "$user : a démarré le feed (gagnant de la race)"
+        ok "$user: started the feed (race winner)"
     elif run $idx "grep -q 'Feed active on' $REMOTE_BOT_DIR/account.log 2>/dev/null"; then
-        ok "$user : a trouvé le feed déjà actif"
+        ok "$user: found feed already active"
     elif run $idx "grep -q 'Feed being started' $REMOTE_BOT_DIR/account.log 2>/dev/null"; then
-        ok "$user : a attendu le démarrage du feed (perdant de la race)"
+        ok "$user: waited for feed to start (race loser)"
     fi
 done
 
-# Le feed a été lancé par le gagnant de la race — cherche son log dans le
-# répertoire partagé /tmp/tradinebotte-feed/ (commun à tous les utilisateurs).
-FEED_LOG_PATH="(introuvable)"
+# The feed was launched by the race winner — look for its log in the
+# shared directory /tmp/tradinebotte-feed/ (common to all users).
+FEED_LOG_PATH="(not found)"
 FEED_LOG_IDX=0
 for idx in "${!USERS[@]}"; do
     fp=$(run $idx "ls -t /tmp/tradinebotte-feed/feed-*.log 2>/dev/null | head -1")
@@ -302,20 +302,20 @@ for idx in "${!USERS[@]}"; do
         break
     fi
 done
-info "Log feed : $FEED_LOG_PATH (compte : ${USERS[$FEED_LOG_IDX]})"
-if [[ "$FEED_LOG_PATH" != "(introuvable)" ]]; then
-    FEED_LOG=$(run $FEED_LOG_IDX "cat $FEED_LOG_PATH 2>/dev/null | head -60 || echo '(vide)'")
+info "Feed log: $FEED_LOG_PATH (account: ${USERS[$FEED_LOG_IDX]})"
+if [[ "$FEED_LOG_PATH" != "(not found)" ]]; then
+    FEED_LOG=$(run $FEED_LOG_IDX "cat $FEED_LOG_PATH 2>/dev/null | head -60 || echo '(empty)'")
     if echo "$FEED_LOG" | grep -qE "WebSocket connected|Subscribing|BTC 5-min markets"; then
-        ok "Feed : WebSocket Polymarket connecté"
+        ok "Feed: Polymarket WebSocket connected"
     else
-        warn "Feed : pas encore de confirmation WebSocket"
+        warn "Feed: WebSocket confirmation not yet seen"
     fi
 else
-    warn "Feed log introuvable dans /tmp/tradinebotte-feed/"
+    warn "Feed log not found in /tmp/tradinebotte-feed/"
 fi
 
-# ─── Phase 6 : Opération soutenue ──────────────────────────────────────────────
-section "PHASE 6 — OPÉRATION SOUTENUE (${DURATION}s)"
+# ─── Phase 6: Sustained operation ──────────────────────────────────────────────
+section "PHASE 6 — SUSTAINED OPERATION (${DURATION}s)"
 ELAPSED=30
 CHECK_INTERVAL=30
 
@@ -323,7 +323,7 @@ while [[ $ELAPSED -lt $DURATION ]]; do
     REMAINING=$((DURATION - ELAPSED))
     SLEEP_FOR=$CHECK_INTERVAL
     [[ $SLEEP_FOR -gt $REMAINING ]] && SLEEP_FOR=$REMAINING
-    info "Heartbeat dans ${SLEEP_FOR}s — temps restant : ${REMAINING}s"
+    info "Heartbeat in ${SLEEP_FOR}s — time remaining: ${REMAINING}s"
     sleep $SLEEP_FOR
     ELAPSED=$((ELAPSED + SLEEP_FOR))
 
@@ -331,52 +331,52 @@ while [[ $ELAPSED -lt $DURATION ]]; do
     BOT_C=$( run 0 "ps aux | grep '[a]ccount_bot.py' | wc -l" 2>/dev/null || echo "?")
     info "  [${ELAPSED}s] feed=$FEED_C bots=$BOT_C"
 
-    [[ "$FEED_C" == "1" ]]        || warn "  ! Nombre anormal de feeds : $FEED_C"
-    [[ "$BOT_C"  == "$N_BOTS" ]]  || warn "  ! Nombre anormal de bots : $BOT_C"
+    [[ "$FEED_C" == "1" ]]        || warn "  ! Abnormal number of feeds: $FEED_C"
+    [[ "$BOT_C"  == "$N_BOTS" ]]  || warn "  ! Abnormal number of bots: $BOT_C"
 done
-ok "Durée ${DURATION}s atteinte"
+ok "Duration ${DURATION}s reached"
 
-# ─── Phase 7 : Analyse finale ──────────────────────────────────────────────────
-section "PHASE 7 — ANALYSE DES LOGS"
+# ─── Phase 7: Final analysis ────────────────────────────────────────────────────
+section "PHASE 7 — LOG ANALYSIS"
 
 for idx in "${!USERS[@]}"; do
     user="${USERS[$idx]}"
     echo ""
-    echo -e "${BOLD}--- $user : account.log (20 dernières lignes) ---${NC}"
-    run $idx "tail -20 $REMOTE_BOT_DIR/account.log 2>/dev/null || echo '(vide)'"
+    echo -e "${BOLD}--- $user: account.log (last 20 lines) ---${NC}"
+    run $idx "tail -20 $REMOTE_BOT_DIR/account.log 2>/dev/null || echo '(empty)'"
 
     run $idx "grep -q 'Connected to feed' $REMOTE_BOT_DIR/account.log 2>/dev/null" && \
-        ok "$user : connexion feed confirmée" || err "$user : pas de connexion feed"
+        ok "$user: feed connection confirmed" || err "$user: no feed connection"
     BOOK_COUNT=$(run $idx "grep -c '\[FEED\] book' $REMOTE_BOT_DIR/account.log 2>/dev/null || true")
-    [[ "$BOOK_COUNT" -gt 0 ]] && ok "$user : $BOOK_COUNT book updates reçus (flux actif)" || \
-        warn "$user : aucun book update — marché peut-être calme"
+    [[ "$BOOK_COUNT" -gt 0 ]] && ok "$user: $BOOK_COUNT book updates received (feed active)" || \
+        warn "$user: no book updates — market may be quiet"
     ERROR_COUNT=$(run $idx "grep -ciE '\[(ERROR|CRITICAL)\]' $REMOTE_BOT_DIR/account.log 2>/dev/null || true")
-    [[ "$ERROR_COUNT" -eq 0 ]] && ok "$user : pas d'erreur critique" || \
-        err "$user : $ERROR_COUNT ligne(s) ERROR/CRITICAL dans les logs"
+    [[ "$ERROR_COUNT" -eq 0 ]] && ok "$user: no critical errors" || \
+        err "$user: $ERROR_COUNT ERROR/CRITICAL line(s) in logs"
 done
 
 echo ""
-echo -e "${BOLD}--- Feed log (30 premières + 10 dernières lignes) ---${NC}"
-if [[ "${FEED_LOG_PATH:-}" != "(introuvable)" && -n "${FEED_LOG_PATH:-}" ]]; then
-    FEED_LOG_HEAD=$(run $FEED_LOG_IDX "head -30 $FEED_LOG_PATH 2>/dev/null || echo '(vide)'")
-    FEED_LOG_TAIL=$(run $FEED_LOG_IDX "tail -10 $FEED_LOG_PATH 2>/dev/null || echo '(vide)'")
+echo -e "${BOLD}--- Feed log (first 30 + last 10 lines) ---${NC}"
+if [[ "${FEED_LOG_PATH:-}" != "(not found)" && -n "${FEED_LOG_PATH:-}" ]]; then
+    FEED_LOG_HEAD=$(run $FEED_LOG_IDX "head -30 $FEED_LOG_PATH 2>/dev/null || echo '(empty)'")
+    FEED_LOG_TAIL=$(run $FEED_LOG_IDX "tail -10 $FEED_LOG_PATH 2>/dev/null || echo '(empty)'")
     echo "$FEED_LOG_HEAD"
     echo "..."
     echo "$FEED_LOG_TAIL"
-    # Grep sur le serveur pour éviter de transférer un log de plusieurs Mo
+    # Grep on the server to avoid transferring a multi-MB log
     run $FEED_LOG_IDX "grep -qE 'WebSocket connected|Subscribing|BTC 5-min markets' $FEED_LOG_PATH 2>/dev/null" && \
-        ok "Feed : WebSocket confirmé dans le log final" || err "Feed : WebSocket non confirmé"
+        ok "Feed: WebSocket confirmed in final log" || err "Feed: WebSocket not confirmed"
     run $FEED_LOG_IDX "grep -qiE 'BTC|bitcoin|Marche' $FEED_LOG_PATH 2>/dev/null" && \
-        ok "Feed : marchés BTC trouvés" || warn "Feed : marchés BTC non trouvés"
+        ok "Feed: BTC markets found" || warn "Feed: BTC markets not found"
 else
-    warn "Feed log introuvable — impossible d'analyser"
+    warn "Feed log not found — cannot analyse"
 fi
 
 FEED_FINAL=$(run 0 "ps aux | grep '[f]eed.py' | wc -l" || echo 0)
 BOT_FINAL=$( run 0 "ps aux | grep '[a]ccount_bot.py' | wc -l" || echo 0)
-[[ "$FEED_FINAL" -eq 1 ]]        && ok "Feed encore actif après ${DURATION}s" || err "Feed arrêté prématurément"
-[[ "$BOT_FINAL"  -eq "$N_BOTS" ]] && ok "$N_BOTS bots encore actifs après ${DURATION}s" || \
-    err "$BOT_FINAL/$N_BOTS bots encore actifs"
+[[ "$FEED_FINAL" -eq 1 ]]        && ok "Feed still active after ${DURATION}s" || err "Feed stopped prematurely"
+[[ "$BOT_FINAL"  -eq "$N_BOTS" ]] && ok "$N_BOTS bots still active after ${DURATION}s" || \
+    err "$BOT_FINAL/$N_BOTS bots still active"
 
 # ─── Phase 8 : Teardown ────────────────────────────────────────────────────────
 section "PHASE 8 — TEARDOWN"
@@ -395,21 +395,21 @@ for idx in "${!USERS[@]}"; do
         fuser -k 5560/tcp 2>/dev/null || true
         rm -rf /tmp/tradinebotte-feed || true
         exit 0
-    " && info "$user : processus arrêtés" || true
+    " && info "$user : processes stopped" || true
 done
 sleep 3
 REMAINING_PROCS=$(run 0 "ps aux | grep -E '(account_bot|feed)\.py' | grep -v grep | wc -l" || echo 0)
-[[ "$REMAINING_PROCS" -eq 0 ]] && ok "Tous les processus terminés" || \
-    warn "$REMAINING_PROCS processus encore actif(s)"
+[[ "$REMAINING_PROCS" -eq 0 ]] && ok "All processes stopped" || \
+    warn "$REMAINING_PROCS process(es) still running"
 
 # ─── Rapport final ─────────────────────────────────────────────────────────────
 section "RAPPORT FINAL"
 TOTAL_SECS=$(( $(date +%s) - START_TS ))
 echo ""
 if [[ $FAILURES -eq 0 ]]; then
-    echo -e "${GREEN}${BOLD}  SUCCÈS — Tous les tests passés (durée totale : ${TOTAL_SECS}s)${NC}"
+    echo -e "${GREEN}${BOLD}  SUCCESS — All tests passed (total duration: ${TOTAL_SECS}s)${NC}"
     exit 0
 else
-    echo -e "${RED}${BOLD}  ÉCHEC — $FAILURES test(s) échoué(s) (durée totale : ${TOTAL_SECS}s)${NC}"
+    echo -e "${RED}${BOLD}  FAILURE — $FAILURES test(s) failed (total duration: ${TOTAL_SECS}s)${NC}"
     exit 1
 fi

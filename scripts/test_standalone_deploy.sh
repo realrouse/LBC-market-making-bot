@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
 # test_standalone_deploy.sh — Multi-user standalone (Option A) integration test
 #
-# Vérifie que deux utilisateurs Linux peuvent lancer start_bot.sh en parallèle
-# sur le même serveur sans se bloquer mutuellement via pgrep.
+# Verifies that two Linux users can run start_bot.sh in parallel
+# on the same server without blocking each other via pgrep.
 #
-# Scénario testé :
-#   1. user[0] lance start_bot.sh → doit réussir
-#   2. user[1] lance start_bot.sh → doit aussi réussir (le bug pgrep bloquait ici)
-#   3. Les deux PIDs tournent, WebSocket connecté dans les deux logs
-#   4. Aucun "ERREUR : une instance est déjà en cours" dans les logs
+# Tested scenario:
+#   1. user[0] runs start_bot.sh → must succeed
+#   2. user[1] runs start_bot.sh → must also succeed (the pgrep bug blocked here)
+#   3. Both PIDs are running, WebSocket connected in both logs
+#   4. No "ERROR: an instance is already running" in the logs
 #
-# Utilise les deux premiers comptes de ~/.tradinebotte-test.conf
-# (le même fichier que test_multibot_deploy.sh).
+# Uses the first two accounts from ~/.tradinebotte-test.conf
+# (the same file as test_multibot_deploy.sh).
 #
-# Usage :
+# Usage:
 #   bash scripts/test_standalone_deploy.sh
 #   bash scripts/test_standalone_deploy.sh --skip-deploy
-#   TEST_MULTIBOT_CONF=/chemin/vers/conf bash scripts/test_standalone_deploy.sh
+#   TEST_MULTIBOT_CONF=/path/to/conf bash scripts/test_standalone_deploy.sh
 #
-# Prérequis locaux  : sshpass (apt-get install sshpass)
-# Prérequis serveur : python3-venv, python3.X-venv
+# Local prerequisites : sshpass (apt-get install sshpass)
+# Server prerequisites: python3-venv, python3.X-venv
 
 set -uo pipefail
 
@@ -65,7 +65,7 @@ ALL_USERS=("${TEST_USERS[@]:?TEST_USERS manquant dans $CONF}")
 ALL_PASSWORDS=("${TEST_PASSWORDS[@]:?TEST_PASSWORDS manquant dans $CONF}")
 
 if [[ ${#ALL_USERS[@]} -lt 2 ]]; then
-    echo "ERREUR : ce test nécessite au moins 2 comptes dans TEST_USERS"
+    echo "ERROR: this test requires at least 2 accounts in TEST_USERS"
     exit 1
 fi
 
@@ -107,7 +107,7 @@ info "Serveur : $SERVER:$PORT — comptes : ${USERS[*]}"
 # Populate known_hosts so SSH calls use StrictHostKeyChecking=yes safely
 mkdir -p ~/.ssh && chmod 700 ~/.ssh
 if ! ssh-keygen -F "[$SERVER]:$PORT" &>/dev/null && ! ssh-keygen -F "$SERVER" &>/dev/null; then
-    info "Ajout de la clé hôte $SERVER:$PORT dans known_hosts..."
+    info "Adding host key $SERVER:$PORT to known_hosts..."
     ssh-keyscan -p "$PORT" -H "$SERVER" >> ~/.ssh/known_hosts 2>/dev/null
 fi
 
@@ -115,7 +115,7 @@ for idx in 0 1; do
     if run $idx "echo ok" &>/dev/null; then
         ok "SSH ${USERS[$idx]}@$SERVER:$PORT"
     else
-        echo "ERREUR : impossible de se connecter à ${USERS[$idx]}@$SERVER:$PORT"
+        echo "ERROR: cannot connect to ${USERS[$idx]}@$SERVER:$PORT"
         exit 1
     fi
 done
@@ -130,7 +130,7 @@ for idx in 0 1; do
         rm -rf $INSTALL_DIR
         rm -rf "\${HOME}/tmp/tradinebotte-test"
         exit 0
-    " && ok "${USERS[$idx]} nettoyé" || warn "${USERS[$idx]} nettoyage partiel"
+    " && ok "${USERS[$idx]} wiped" || warn "${USERS[$idx]} partial cleanup"
 done
 
 # ─── Phase 2 : Deploy ──────────────────────────────────────────────────────────
@@ -144,9 +144,9 @@ if [[ "$SKIP_DEPLOY" == "false" ]]; then
         run $idx "echo '' | python3 $INSTALL_DIR/scripts/setup.py" \
             && ok "${USERS[$idx]} setup.py OK (simulation)" || { err "${USERS[$idx]} setup.py ÉCHEC"; }
     done
-    [[ $FAILURES -gt 0 ]] && { echo -e "${RED}Deploy échoué — abandon.${NC}"; exit 1; }
+    [[ $FAILURES -gt 0 ]] && { echo -e "${RED}Deploy failed — aborting.${NC}"; exit 1; }
 else
-    section "PHASE 2 — DEPLOY (ignoré)"
+    section "PHASE 2 — DEPLOY (skipped)"
 fi
 
 # ─── Phase 3 : Lancer user[0] ──────────────────────────────────────────────────
@@ -154,7 +154,7 @@ section "PHASE 3 — LANCER ${USERS[0]}"
 info "start_bot.sh pour ${USERS[0]}..."
 START0_OUT=$(run 0 "cd $INSTALL_DIR && TRADINEBOTTE_DIR=$INSTALL_DIR bash scripts/start_bot.sh")
 if echo "$START0_OUT" | grep -q "Bot en cours"; then
-    ok "${USERS[0]} bot démarré"
+    ok "${USERS[0]} bot started"
 else
     err "${USERS[0]} start_bot.sh ÉCHEC"
     echo "$START0_OUT"
@@ -165,13 +165,13 @@ section "PHASE 4 — LANCER ${USERS[1]} (test pgrep scope)"
 info "start_bot.sh pour ${USERS[1]} pendant que ${USERS[0]} tourne..."
 START1_OUT=$(run 1 "cd $INSTALL_DIR && TRADINEBOTTE_DIR=$INSTALL_DIR bash scripts/start_bot.sh")
 
-if echo "$START1_OUT" | grep -q "une instance est déjà en cours"; then
+if echo "$START1_OUT" | grep -q "an instance is already running"; then
     err "${USERS[1]} BLOQUÉ par le pgrep de ${USERS[0]} — BUG DÉTECTÉ"
     echo "$START1_OUT"
 elif echo "$START1_OUT" | grep -q "Bot en cours"; then
-    ok "${USERS[1]} bot démarré malgré ${USERS[0]} actif — pgrep scope correct"
+    ok "${USERS[1]} bot started alongside ${USERS[0]} — pgrep scope correct"
 else
-    err "${USERS[1]} start_bot.sh : résultat inattendu"
+    err "${USERS[1]} start_bot.sh: unexpected result"
     echo "$START1_OUT"
 fi
 
@@ -183,10 +183,10 @@ for idx in 0 1; do
     if run $idx "grep -q 'WebSocket connected' $LOG 2>/dev/null"; then
         ok "${USERS[$idx]} WebSocket connecté"
     else
-        err "${USERS[$idx]} WebSocket non connecté dans $LOG"
+        err "${USERS[$idx]} WebSocket not connected in $LOG"
     fi
-    if run $idx "grep -q 'une instance est déjà en cours' $LOG 2>/dev/null"; then
-        err "${USERS[$idx]} log contient 'une instance est déjà en cours'"
+    if run $idx "grep -q 'an instance is already running' $LOG 2>/dev/null"; then
+        err "${USERS[$idx]} log contains 'an instance is already running'"
     else
         ok "${USERS[$idx]} log propre (pas d'erreur instance unique)"
     fi
@@ -196,13 +196,13 @@ done
 section "PHASE 6 — TEARDOWN"
 for idx in 0 1; do
     run $idx "pkill -u \$(id -u) -f '[l]ive_bot.py' 2>/dev/null || true"
-    ok "${USERS[$idx]} bot arrêté"
+    ok "${USERS[$idx]} bot stopped"
 done
 
 # ─── Rapport ───────────────────────────────────────────────────────────────────
 ELAPSED=$(( $(date +%s) - START_TS ))
 section "RAPPORT FINAL"
-echo -e "  Durée : ${ELAPSED}s | Échecs : $FAILURES"
+echo -e "  Duration: ${ELAPSED}s | Failures: $FAILURES"
 echo ""
 if [[ $FAILURES -eq 0 ]]; then
     echo -e "${BOLD}${GREEN}  ✅ SUCCÈS — multi-user standalone OK${NC}"
