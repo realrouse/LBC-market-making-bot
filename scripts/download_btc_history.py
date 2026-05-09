@@ -76,11 +76,10 @@ async def _fetch_klines(session, symbol, interval, start_ms, end_ms):
         return await resp.json(content_type=None)
 
 
-async def download(symbol: str, interval: str, days: int, db_path: str) -> int:
+async def download(symbol: str, interval: str, db_path: str,
+                   start_ms: int, end_ms: int) -> int:
     """Download klines and store them in db_path.  Returns rows inserted."""
-    step_ms  = _INTERVAL_MS[interval]
-    end_ms   = int(time.time() * 1000)
-    start_ms = end_ms - days * 86_400_000
+    step_ms = _INTERVAL_MS[interval]
 
     conn = sqlite3.connect(db_path)
     conn.executescript(SCHEMA)
@@ -154,43 +153,71 @@ async def download(symbol: str, interval: str, days: int, db_path: str) -> int:
     return inserted
 
 
+def _parse_date(s: str) -> int:
+    """Parse YYYY-MM-DD to Unix milliseconds (UTC midnight)."""
+    from datetime import datetime, timezone
+    return int(datetime.strptime(s, "%Y-%m-%d")
+               .replace(tzinfo=timezone.utc).timestamp() * 1000)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Télécharger l'historique OHLCV BTCUSDT depuis Binance",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--symbol",   default="BTCUSDT",
+    parser.add_argument("--symbol",     default="BTCUSDT",
                         help="Paire de trading Binance")
-    parser.add_argument("--interval", default="1m",
+    parser.add_argument("--interval",   default="1m",
                         choices=sorted(_INTERVAL_MS),
                         help="Intervalle des bougies")
-    parser.add_argument("--days",     default=90, type=int,
-                        help="Nombre de jours d'historique")
-    parser.add_argument("--out",      default=None,
+    parser.add_argument("--days",       default=90, type=int,
+                        help="Nombre de jours (ignoré si --start est fourni)")
+    parser.add_argument("--start",      default=None, metavar="YYYY-MM-DD",
+                        help="Date de début (UTC) — ex. 2024-10-15")
+    parser.add_argument("--end",        default=None, metavar="YYYY-MM-DD",
+                        help="Date de fin (UTC, défaut : aujourd'hui)")
+    parser.add_argument("--out",        default=None,
                         help="Chemin du fichier SQLite de sortie")
     args = parser.parse_args()
 
-    if args.interval not in _INTERVAL_MS:
-        print(f"Intervalle invalide : {args.interval}", file=sys.stderr)
-        sys.exit(1)
+    # Resolve time window
+    if args.start:
+        start_ms = _parse_date(args.start)
+        end_ms   = _parse_date(args.end) if args.end else int(time.time() * 1000)
+        start_label = args.start
+        end_label   = args.end or time.strftime("%Y-%m-%d", time.gmtime())
+    else:
+        end_ms   = int(time.time() * 1000)
+        start_ms = end_ms - args.days * 86_400_000
+        start_label = time.strftime(
+            "%Y-%m-%d", time.gmtime(start_ms / 1000))
+        end_label   = time.strftime("%Y-%m-%d", time.gmtime())
 
     data_dir = Path(__file__).resolve().parent.parent / "data"
     data_dir.mkdir(exist_ok=True)
+
+    # Compact date range for filename: YYYYMMDD-YYYYMMDD
+    fn_start = start_label.replace("-", "")
+    fn_end   = end_label.replace("-", "")
+    days_approx = (end_ms - start_ms) // 86_400_000
     db_path = args.out or str(
-        data_dir / f"btc_ohlcv_{args.symbol}_{args.interval}_{args.days}d.db"
+        data_dir / f"{args.symbol}_{args.interval}{days_approx}d"
+                   f"_range_{fn_start}-{fn_end}.db"
     )
 
-    step_ms = _INTERVAL_MS[args.interval]
-    expected = args.days * 86_400_000 // step_ms
+    step_ms  = _INTERVAL_MS[args.interval]
+    expected = (end_ms - start_ms) // step_ms
 
     print(f"Symbole   : {args.symbol}")
-    print(f"Intervalle: {args.interval}  ({args.days} jours → ~{expected:,} bougies)")
+    print(f"Intervalle: {args.interval}  ({start_label} → {end_label}"
+          f", ~{days_approx}j → ~{expected:,} bougies)")
     print(f"Source    : Binance public API (pas d'authentification)")
     print(f"Sortie    : {db_path}")
     print()
 
     t0 = time.time()
-    inserted = asyncio.run(download(args.symbol, args.interval, args.days, db_path))
+    inserted = asyncio.run(download(
+        args.symbol, args.interval, db_path, start_ms, end_ms))
     elapsed  = time.time() - t0
 
     size_mb = Path(db_path).stat().st_size / 1_048_576
