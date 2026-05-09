@@ -183,7 +183,7 @@ async def _run_ws(sock: zmq.asyncio.Socket, session: aiohttp.ClientSession) -> N
     drops.  _market_refresh and _ping_loop run as concurrent background tasks.
     """
     if VERBOSE:
-        logger.debug("[WS] appel get_markets...")
+        logger.debug("[WS] calling get_markets...")
     markets = await api.get_markets(session)
     logger.info("BTC 5-min markets: %d", len(markets))
     if not markets:
@@ -233,12 +233,12 @@ async def _run_ws(sock: zmq.asyncio.Socket, session: aiohttp.ClientSession) -> N
                         logger.warning("No active tokens — reconnecting")
                         break
                     if VERBOSE:
-                        logger.debug("[WS] timeout 30s (normal en periode calme), "
-                                     "%d msgs recus jusqu'ici", msgs_received)
+                        logger.debug("[WS] 30s timeout (normal during quiet period), "
+                                     "%d msgs received so far", msgs_received)
                     continue
                 except Exception as e:
                     if VERBOSE:
-                        logger.debug("[WS] exception recv : %s", e)
+                        logger.debug("[WS] recv exception: %s", e)
                     break
 
                 try:
@@ -275,8 +275,8 @@ async def main() -> None:
     sock.bind(FEED_ADDR)
     logger.info("Feed PUB bound on %s", FEED_ADDR)
     if VERBOSE:
-        logger.debug("[VERBOSE] mode diagnostic actif")
-        logger.debug("[ZMQ] socket PUB bind sur %s", FEED_ADDR)
+        logger.debug("[VERBOSE] diagnostic mode active")
+        logger.debug("[ZMQ] PUB socket bound on %s", FEED_ADDR)
     await asyncio.sleep(0.5)
 
     backoff = 1

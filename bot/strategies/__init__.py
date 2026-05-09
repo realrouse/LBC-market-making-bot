@@ -32,8 +32,8 @@ def load(name: str, config: Any) -> Optional[Any]:
     cls = _REGISTRY.get(name)
     if cls is None:
         raise ValueError(
-            f"Stratégie inconnue: {name!r}. "
-            f"Valides: threshold, {', '.join(sorted(_REGISTRY))}"
+            f"Unknown strategy: {name!r}. "
+            f"Valid names: threshold, {', '.join(sorted(_REGISTRY))}"
         )
     return cls(config)
 

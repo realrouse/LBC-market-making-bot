@@ -220,7 +220,7 @@ async def bench_ws(session, name, cfg, rounds):
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 async def main(rounds, no_ws):
     print(f"\n{'='*82}")
-    print(f"  BENCHMARK API — {rounds} requêtes par endpoint")
+    print(f"  BENCHMARK API — {rounds} requests per endpoint")
     print(f"{'='*82}")
 
     # ── REST ──────────────────────────────────────────────────────────────────
@@ -273,7 +273,7 @@ async def main(rounds, no_ws):
                 "assets_ids": [token_id],
             })
         else:
-            print("  [WS] Polymarket : aucun token actif trouvé (hors fenêtre temporelle ?)")
+            print("  [WS] Polymarket: no active token found (outside time window?)")
 
         ws_results = {}
         for name, cfg in WS_ENDPOINTS.items():
@@ -286,7 +286,7 @@ async def main(rounds, no_ws):
             [(n, compute_stats(s)) for n, (s, _) in ws_results.items() if s],
             key=lambda x: x[1]["mean"]
         )
-        print("\n  Classement WS par latence moyenne (ms) :")
+        print("\n  WS ranking by mean latency (ms):")
         for rank, (name, st) in enumerate(ws_ranked, 1):
             spark = "█" * int(st["mean"] / 10)
             print(f"    {rank}. {name:<22} {st['mean']:6.1f} ms  {spark}")
@@ -297,8 +297,8 @@ async def main(rounds, no_ws):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Benchmark REST + WS latency")
     parser.add_argument("--rounds", type=int, default=15,
-                        help="requêtes REST par endpoint (défaut: 15)")
+                        help="REST requests per endpoint (default: 15)")
     parser.add_argument("--no-ws", action="store_true",
-                        help="sauter les tests WebSocket")
+                        help="skip WebSocket tests")
     args = parser.parse_args()
     asyncio.run(main(args.rounds, args.no_ws))

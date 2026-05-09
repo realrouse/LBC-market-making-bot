@@ -1,20 +1,20 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════
-#  TRADINEBOTTE — Service d'indicateurs techniques
+#  TRADINEBOTTE — Technical indicator service
 #
-#  Lance indicators.py avec le fichier de config JSON choisi.
-#  Chaque compte utilise son propre fichier config et son propre port ZMQ.
+#  Starts indicators.py with the chosen JSON config file.
+#  Each account uses its own config file and its own ZMQ port.
 #
-#  Exemples :
-#    # account-a (4h, port 5559) :
+#  Examples:
+#    # account-a (4h, port 5559):
 #    TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_4h_bitcoin.json \
 #      bash scripts/start_indicators.sh
 #
-#    # account-b (daily, port 5560) :
+#    # account-b (daily, port 5560):
 #    TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_1d_bitcoin.json \
 #      bash scripts/start_indicators.sh
 #
-#    # Répertoire de déploiement personnalisé :
+#    # Custom deployment directory:
 #    TRADINEBOTTE_DIR=~/account-a \
 #    TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_4h_bitcoin.json \
 #      bash scripts/start_indicators.sh
@@ -30,25 +30,25 @@ IND_LOG="$INSTALL_DIR/indicators.log"
 CONFIG="${TRADINEBOTTE_INDICATORS_CONFIG:-$BOT_ROOT/strategies/indicators_4h_bitcoin.json}"
 
 if [ ! -d "$VENV" ]; then
-    echo "ERREUR : venv introuvable dans $INSTALL_DIR"
-    echo "Lance d'abord : bash scripts/install.sh"
+    echo "ERROR: venv not found in $INSTALL_DIR"
+    echo "Run first: bash scripts/install.sh"
     exit 1
 fi
 
 if [ ! -f "$CONFIG" ]; then
-    echo "ERREUR : fichier de config introuvable : $CONFIG"
+    echo "ERROR: config file not found: $CONFIG"
     exit 1
 fi
 
-# Refuse de lancer un second processus avec le même fichier de config.
-if pgrep -a -f "indicators.py" 2>/dev/null | grep -qF "$CONFIG"; then
-    echo "ERREUR : indicators.py déjà en cours pour ce config : $CONFIG"
-    echo "Arrête-le d'abord : pkill -f indicators.py"
+# Refuse to start a second process with the same config file.
+if pgrep -a -f '[i]ndicators.py' 2>/dev/null | grep -qF "$CONFIG"; then
+    echo "ERROR: indicators.py already running for this config: $CONFIG"
+    echo "Stop it first: pkill -f '[i]ndicators.py'"
     exit 1
 fi
 
-echo "Lancement indicators.py — config=$CONFIG"
-echo "Log : $IND_LOG"
+echo "Starting indicators.py — config=$CONFIG"
+echo "Log: $IND_LOG"
 
 nohup "$VENV/bin/python3" "$BOT_ROOT/bot/indicators.py" \
     --config "$CONFIG" \
@@ -56,9 +56,9 @@ nohup "$VENV/bin/python3" "$BOT_ROOT/bot/indicators.py" \
 echo "PID: $!"
 sleep 2
 
-if pgrep -f "indicators.py" > /dev/null; then
-    echo "Indicators en cours — PID: $(pgrep -f indicators.py | tail -1)"
+if pgrep -f '[i]ndicators.py' > /dev/null; then
+    echo "Indicators running — PID: $(pgrep -f '[i]ndicators.py' | tail -1)"
 else
-    echo "Echec — verifier : $IND_LOG"
+    echo "Failed — check: $IND_LOG"
     tail -20 "$IND_LOG"
 fi

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Profil de performance du chemin critique du bot.
+Performance profile of the bot's critical path.
 
-Chemin chaud réel (par message WebSocket) :
+Hot path (per WebSocket message):
   handle_book_update → check_signal → [check_resolution] → [save_snapshot]
 
-Usage : python3 scripts/profile_hotpath.py
+Usage: python3 scripts/profile_hotpath.py
 """
 import asyncio, cProfile, pstats, io, time, sys, os, timeit, shutil, glob
 
@@ -19,7 +19,7 @@ for f in glob.glob("strategies/*.json"):
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import bot.live_bot as bot
 
-N       = 20_000   # itérations par benchmark
+N       = 20_000   # iterations per benchmark
 SEP     = "=" * 64
 
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -38,7 +38,7 @@ ts = state.tokens[token_id]
 ts.best_bid = 0.50; ts.best_ask = 0.51
 ts.bid_vol = 100.0; ts.ask_vol = 100.0; ts.obi = 0.0
 
-# Message parsé tel que handle_book_update le reçoit depuis account_bot / _run_ws
+# Parsed message as received by handle_book_update from account_bot / _run_ws
 PARSED_HIGH = {
     "token_id": token_id,
     "best_bid": 0.96, "best_ask": 0.97, "spread": 0.01,
@@ -53,7 +53,7 @@ PARSED_LOW = {
 
 # ─── 1. timeit — fonctions synchrones ─────────────────────────────────────────
 print(SEP)
-print(f"  TIMEIT — fonctions synchrones ({N:,} itérations)")
+print(f"  TIMEIT — synchronous functions ({N:,} iterations)")
 print(SEP)
 
 sync_results = []
@@ -75,7 +75,7 @@ for name, elapsed in sorted(sync_results, key=lambda x: -x[1]):
 
 # ─── 2. timeit — chemin async complet ─────────────────────────────────────────
 print(f"\n{SEP}")
-print(f"  TIMEIT — chemin async complet ({N:,} itérations)")
+print(f"  TIMEIT — full async path ({N:,} iterations)")
 print(SEP)
 
 async def bench_handle_low():
@@ -83,7 +83,7 @@ async def bench_handle_low():
         await bot.handle_book_update(state, PARSED_LOW)
 
 async def bench_handle_high():
-    # bid haut mais signalled déjà présent → ne déclenche pas de trade
+    # high bid but market already in signalled set → no trade triggered
     state.signalled.add(market_id)
     for _ in range(N):
         await bot.handle_book_update(state, PARSED_HIGH)

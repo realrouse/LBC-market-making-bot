@@ -47,26 +47,26 @@ BOLD="\033[1m"; GREEN="\033[32m"; RED="\033[31m"; YELLOW="\033[33m"; CYAN="\033[
 
 CONF="${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
 if [[ ! -f "$CONF" ]]; then
-    echo -e "${RED}Configuration manquante : $CONF${NC}"
+    echo -e "${RED}Missing configuration: $CONF${NC}"
     echo ""
-    echo "Créer le fichier de configuration depuis le template :"
+    echo "Create the config file from the template:"
     echo "  cp scripts/test_multibot.conf.example ~/.tradinebotte-test.conf"
     echo "  editor ~/.tradinebotte-test.conf"
     echo ""
-    echo "Ou pointer vers un fichier personnalisé :"
-    echo "  TEST_MULTIBOT_CONF=/chemin/vers/conf bash scripts/test_all_accounts.sh"
+    echo "Or point to a custom file:"
+    echo "  TEST_MULTIBOT_CONF=/path/to/conf bash scripts/test_all_accounts.sh"
     exit 1
 fi
 # shellcheck source=/dev/null
 source "$CONF"
 
-HOST="${TEST_SERVER:?TEST_SERVER manquant dans $CONF}"
+HOST="${TEST_SERVER:?TEST_SERVER missing in $CONF}"
 PORT="${TEST_PORT:-22}"
-USERS=("${TEST_USERS[@]:?TEST_USERS manquant dans $CONF}")
-PASSWORDS=("${TEST_PASSWORDS[@]:?TEST_PASSWORDS manquant dans $CONF}")
+USERS=("${TEST_USERS[@]:?TEST_USERS missing in $CONF}")
+PASSWORDS=("${TEST_PASSWORDS[@]:?TEST_PASSWORDS missing in $CONF}")
 
 if [[ ${#USERS[@]} -ne ${#PASSWORDS[@]} ]]; then
-    echo -e "${RED}TEST_USERS et TEST_PASSWORDS doivent avoir la même longueur.${NC}" >&2
+    echo -e "${RED}TEST_USERS and TEST_PASSWORDS must have the same length.${NC}" >&2
     exit 1
 fi
 
@@ -121,27 +121,27 @@ run_account() {
     }
 
     {
-        echo "=== DÉBUT $(date '+%H:%M:%S') — ${user}@${HOST} ==="
+        echo "=== START $(date '+%H:%M:%S') — ${user}@${HOST} ==="
 
-        echo "→ Arrêt du bot..."
+        echo "→ Stopping bot..."
         _ssh "pkill -f '[l]ive_bot\.py' 2>/dev/null; true" 2>/dev/null
 
-        echo "→ Nettoyage du compte..."
+        echo "→ Cleaning account..."
         if _ssh "rm -rf ~/tradinebotte ~/account-sim"; then
-            echo "✓ Compte vidé"
+            echo "✓ Account wiped"
         else
-            echo "✗ Nettoyage échoué"
+            echo "✗ Cleanup failed"
             echo "WIPE ERROR" > "$result_file"
-            echo "=== FIN $(date '+%H:%M:%S') — ${user} ==="
+            echo "=== END $(date '+%H:%M:%S') — ${user} ==="
         fi
 
-        echo "→ Rsync de la dernière version..."
+        echo "→ Rsyncing latest version..."
         if _rsync; then
-            echo "✓ Rsync terminé"
+            echo "✓ Rsync done"
         else
-            echo "✗ Rsync échoué"
+            echo "✗ Rsync failed"
             echo "RSYNC ERROR" > "$result_file"
-            echo "=== FIN $(date '+%H:%M:%S') — ${user} ==="
+            echo "=== END $(date '+%H:%M:%S') — ${user} ==="
         fi
 
         echo "→ Installation et tests..."
@@ -151,7 +151,7 @@ run_account() {
         echo "$INSTALL_OUT"
 
         if [[ $rc -ne 0 ]] && ! echo "$INSTALL_OUT" | grep -q "^Ran [0-9]* tests"; then
-            echo "✗ install.sh a échoué (exit $rc)"
+            echo "✗ install.sh failed (exit $rc)"
             echo "INSTALL ERROR (exit $rc)" > "$result_file"
         elif echo "$INSTALL_OUT" | grep -q "^Ran [0-9]* tests"; then
             TEST_LINE=$(echo "$INSTALL_OUT" | grep "^Ran [0-9]* tests")
@@ -164,11 +164,11 @@ run_account() {
                 echo "FAILED — ${FAIL_LINE}" > "$result_file"
             fi
         else
-            echo "✗ install.sh n'a produit aucune sortie de test"
+            echo "✗ install.sh produced no test output"
             echo "NO OUTPUT" > "$result_file"
         fi
 
-        echo "=== FIN $(date '+%H:%M:%S') — ${user} ==="
+        echo "=== END $(date '+%H:%M:%S') — ${user} ==="
     } >> "$log_file" 2>&1
 }
 
@@ -184,7 +184,7 @@ TOTAL=${#USERS[@]}
 
 # ── Parallel mode ─────────────────────────────────────────────────
 if $PARALLEL; then
-    section "MODE PARALLÈLE — ${TOTAL} comptes sur ${HOST}"
+    section "PARALLEL MODE — ${TOTAL} accounts on ${HOST}"
     PIDS=()
     LOG_FILES=()
     RESULT_FILES=()
@@ -199,13 +199,13 @@ if $PARALLEL; then
         LOG_FILES+=("$LOG_FILE")
         RESULT_FILES+=("$RESULT_FILE")
 
-        info "Lancement de ${USER} en arrière-plan..."
+        info "Launching ${USER} in background..."
         run_account "$USER" "$PWD" "$LOG_FILE" "$RESULT_FILE" &
         PIDS+=($!)
     done
 
     echo ""
-    info "Attente de la fin des ${TOTAL} jobs parallèles..."
+    info "Waiting for ${TOTAL} parallel jobs to complete..."
     for pid in "${PIDS[@]}"; do
         wait "$pid" || true
     done
@@ -232,7 +232,7 @@ else
         cat "$LOG_FILE"
 
         if [[ $ACCOUNT_NUM -lt $TOTAL && $DELAY -gt 0 ]]; then
-            info "Pause ${DELAY}s avant le prochain compte..."
+            info "Pausing ${DELAY}s before next account..."
             sleep "$DELAY"
         fi
     done
@@ -240,7 +240,7 @@ fi
 
 # ── Summary ───────────────────────────────────────────────────────
 ELAPSED=$(( $(date +%s) - START_TOTAL ))
-section "RÉSUMÉ — ${ELAPSED}s total"
+section "SUMMARY — ${ELAPSED}s total"
 
 ALL_OK=true
 for i in "${!USERS[@]}"; do
@@ -261,9 +261,9 @@ done
 
 echo ""
 if $ALL_OK; then
-    echo -e "${GREEN}${BOLD}Tous les comptes : installation et tests OK.${NC}"
+    echo -e "${GREEN}${BOLD}All accounts: install and tests OK.${NC}"
     exit 0
 else
-    echo -e "${RED}${BOLD}Certains comptes ont échoué.${NC}"
+    echo -e "${RED}${BOLD}Some accounts failed.${NC}"
     exit 1
 fi

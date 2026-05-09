@@ -122,13 +122,13 @@ class GridStrategy:
 
         if lower <= 0 or upper <= lower:
             raise ValueError(
-                f"Grid bounds invalides: lower={lower}, upper={upper}. "
-                "Requis: 0 < lower < upper."
+                f"Grid bounds invalid: lower={lower}, upper={upper}. "
+                "Required: 0 < lower < upper."
             )
         if n < 2:
-            raise ValueError(f"grid_levels doit être >= 2, reçu {n}")
+            raise ValueError(f"grid_levels must be >= 2, got {n}")
         if size <= 0:
-            raise ValueError(f"grid_order_size_usdt doit être > 0, reçu {size}")
+            raise ValueError(f"grid_order_size_usdt must be > 0, got {size}")
 
         step   = (upper - lower) / (n - 1)
         levels = [GridLevel(price=round(lower + i * step, 2)) for i in range(n)]
@@ -239,7 +239,7 @@ class GridStrategy:
 
         if row is None:
             logger.info(
-                "GridStrategy [%s] — aucun état sauvegardé, initialisation normale",
+                "GridStrategy [%s] — no saved state, normal initialization",
                 self.grid.symbol,
             )
             return False
@@ -253,8 +253,8 @@ class GridStrategy:
                 abs(saved_step  - self.grid.grid_step)  > tol or
                 abs(saved_size  - self.grid.order_size_usdt) > tol):
             logger.warning(
-                "GridStrategy [%s] — config modifiée (bornes/step/taille), "
-                "état sauvegardé ignoré et grille réinitialisée",
+                "GridStrategy [%s] — config changed (bounds/step/size), "
+                "saved state discarded and grid re-initialized",
                 self.grid.symbol,
             )
             return False
@@ -285,23 +285,23 @@ class GridStrategy:
 
         if self.grid.halted:
             logger.warning(
-                "GridStrategy [%s] — état HALTED restauré depuis DB | "
-                "PnL total=$%+.2f",
+                "GridStrategy [%s] — HALTED state restored from DB | "
+                "total PnL=$%+.2f",
                 self.grid.symbol, self.grid.total_profit_usd,
             )
             return True
 
         if not self.grid.initialised:
             logger.info(
-                "GridStrategy [%s] — état restauré (non initialisé), "
-                "initialisation au prochain tick",
+                "GridStrategy [%s] — state restored (not initialized), "
+                "will initialize on next tick",
                 self.grid.symbol,
             )
             return True
 
         # Reconcile: detect fills that occurred while the bot was offline.
         logger.info(
-            "GridStrategy [%s] — réconciliation avec l'exchange...",
+            "GridStrategy [%s] — reconciling with exchange...",
             self.grid.symbol,
         )
         open_orders = await self._api.get_open_orders(
@@ -321,8 +321,8 @@ class GridStrategy:
 
         self._save_state(conn)
         logger.info(
-            "GridStrategy [%s] — restauré: %d niveaux actifs | "
-            "%d fills manqués | cycles=%d | PnL total=$%+.2f",
+            "GridStrategy [%s] — restored: %d active levels | "
+            "%d missed fills | cycles=%d | total PnL=$%+.2f",
             self.grid.symbol,
             sum(1 for l in self.grid.levels if l.is_active),
             filled, self.grid.total_cycles, self.grid.total_profit_usd,
@@ -360,8 +360,8 @@ class GridStrategy:
                 key_failures += 1
                 if key_failures >= MAX_KEY_FAILURES:
                     logger.warning(
-                        "GridStrategy [%s] user stream: abandon après %d échecs "
-                        "consécutifs (pas de credentials ?)",
+                        "GridStrategy [%s] user stream: giving up after %d consecutive "
+                        "failures (no credentials?)",
                         self.grid.symbol, key_failures,
                     )
                     return
@@ -378,7 +378,7 @@ class GridStrategy:
                 async with state.session.ws_connect(ws_url, heartbeat=20) as ws:
                     self._user_ws_connected = True
                     logger.info(
-                        "GridStrategy [%s] user stream connecté (fills temps réel)",
+                        "GridStrategy [%s] user stream connected (real-time fills)",
                         self.grid.symbol,
                     )
                     async for msg in ws:
@@ -399,7 +399,7 @@ class GridStrategy:
                 raise
             except Exception as e:
                 logger.warning(
-                    "GridStrategy [%s] user stream déconnecté: %s",
+                    "GridStrategy [%s] user stream disconnected: %s",
                     self.grid.symbol, e,
                 )
             finally:
@@ -407,7 +407,7 @@ class GridStrategy:
 
             if not self.grid.halted:
                 logger.info(
-                    "GridStrategy [%s] user stream: reconnexion dans %.0fs",
+                    "GridStrategy [%s] user stream: reconnecting in %.0fs",
                     self.grid.symbol, backoff,
                 )
                 await asyncio.sleep(backoff)
@@ -472,7 +472,7 @@ class GridStrategy:
         self.grid.halted = True
         logger.warning(
             "GridStrategy [%s] STOP-LOSS — prix=%.2f hors [%.2f, %.2f] "
-            "| %d ordres annulés | PnL=$%+.2f",
+            "| %d orders cancelled | PnL=$%+.2f",
             self.grid.symbol, self.grid.last_price,
             self.grid.grid_lower, self.grid.grid_upper,
             cancelled, self.grid.total_profit_usd,
@@ -511,7 +511,7 @@ class GridStrategy:
 
         self.grid.initialised = True
         logger.info(
-            "GridStrategy [%s] initialisé: prix=%.2f | %d/%d niveaux actifs",
+            "GridStrategy [%s] initialized: price=%.2f | %d/%d levels active",
             self.grid.symbol, current, placed, len(self.grid.levels),
         )
 
@@ -589,7 +589,7 @@ class GridStrategy:
         else:
             lvl.status = "idle"
             logger.error(
-                "GridStrategy [%s] BUY fill %.2f → échec post_order SELL %.2f",
+                "GridStrategy [%s] BUY fill %.2f → post_order SELL %.2f failed",
                 self.grid.symbol, buy_p, sell_p,
             )
 
@@ -618,8 +618,8 @@ class GridStrategy:
             # Bottom of grid: no BUY counter-order, mark idle
             lvl.status = "idle"
             logger.info(
-                "GridStrategy [%s] SELL fill %.2f → bas de grille, idle | "
-                "PnL total=$%+.2f",
+                "GridStrategy [%s] SELL fill %.2f → grid bottom, idle | "
+                "total PnL=$%+.2f",
                 self.grid.symbol, sell_p, self.grid.total_profit_usd,
             )
             return
@@ -641,7 +641,7 @@ class GridStrategy:
         else:
             lvl.status = "idle"
             logger.error(
-                "GridStrategy [%s] SELL fill %.2f → échec post_order BUY %.2f",
+                "GridStrategy [%s] SELL fill %.2f → post_order BUY %.2f failed",
                 self.grid.symbol, sell_p, new_buy,
             )
 

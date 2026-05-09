@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# run_integration_tests.sh — Lance les tests d'intégration SSH en séquence
+# run_integration_tests.sh — Run SSH integration tests in sequence
 #
-# Prérequis : ~/.tradinebotte-test.conf configuré (voir test_multibot.conf.example)
+# Prerequisites: ~/.tradinebotte-test.conf configured (see test_multibot.conf.example)
 #
-# Usage :
-#   bash scripts/run_integration_tests.sh              # tous les tests
-#   bash scripts/run_integration_tests.sh --standalone # seulement test standalone
-#   bash scripts/run_integration_tests.sh --multibot   # seulement test multibot
+# Usage:
+#   bash scripts/run_integration_tests.sh              # all tests
+#   bash scripts/run_integration_tests.sh --standalone # standalone test only
+#   bash scripts/run_integration_tests.sh --multibot   # multibot test only
 #
-# Ces tests requièrent un accès SSH à un serveur de test distant.
-# Pour les tests unitaires (sans SSH) : bash scripts/run_tests.sh
+# These tests require SSH access to a remote test server.
+# For unit tests (no SSH): bash scripts/run_tests.sh
 
 set -uo pipefail
 
@@ -26,7 +26,7 @@ while [[ $# -gt 0 ]]; do
         -h|--help)
             grep '^#' "${BASH_SOURCE[0]}" | head -15 | sed 's/^# \?//'
             exit 0 ;;
-        *) echo "Argument inconnu : $1"; exit 1 ;;
+        *) echo "Unknown argument: $1"; exit 1 ;;
     esac
     shift
 done
@@ -36,19 +36,19 @@ PASS=0; FAIL=0; START_TS=$(date +%s)
 run_test() {
     local name="$1"; local script="$2"
     echo -e "\n${BOLD}${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${BOLD}  TEST : $name${NC}"
+    echo -e "${BOLD}  TEST: $name${NC}"
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
     if bash "$script"; then
         PASS=$((PASS + 1))
-        echo -e "\n${GREEN}  ✅ $name : SUCCÈS${NC}"
+        echo -e "\n${GREEN}  ✅ $name: PASSED${NC}"
     else
         FAIL=$((FAIL + 1))
-        echo -e "\n${RED}  ❌ $name : ÉCHEC${NC}"
+        echo -e "\n${RED}  ❌ $name: FAILED${NC}"
     fi
 }
 
-echo -e "${BOLD}tradinebotte — Tests d'intégration SSH${NC}"
-echo -e "Config : ${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
+echo -e "${BOLD}tradinebotte — SSH Integration Tests${NC}"
+echo -e "Config: ${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
 
 [[ "$RUN_STANDALONE" == "true" ]] && \
     run_test "Standalone multi-user (Option A)" "$SCRIPT_DIR/test_standalone_deploy.sh"
@@ -58,7 +58,7 @@ echo -e "Config : ${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
 
 ELAPSED=$(( $(date +%s) - START_TS ))
 echo -e "\n${BOLD}${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "  TOTAL : $((PASS + FAIL)) test(s) | ✅ $PASS réussi(s) | ❌ $FAIL échoué(s) | ${ELAPSED}s"
+echo -e "  TOTAL: $((PASS + FAIL)) test(s) | ✅ $PASS passed | ❌ $FAIL failed | ${ELAPSED}s"
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
 
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1
