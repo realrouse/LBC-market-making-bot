@@ -89,18 +89,25 @@ if [[ "$N_BOTS" -ne ${#PASSWORDS[@]} ]]; then
     exit 1
 fi
 
+# Per-account indicators config paths (relative to REMOTE_INSTALL_DIR). "" = skip.
+INDICATORS_CONFIGS=("${TEST_INDICATORS_CONFIGS[@]:-}")
+# Pad with empty strings if the conf omitted the array or it's shorter than USERS.
+while [[ ${#INDICATORS_CONFIGS[@]} -lt $N_BOTS ]]; do
+    INDICATORS_CONFIGS+=("")
+done
+
 # ─── Helpers SSH ───────────────────────────────────────────────────────────────
 run() {
     local idx="$1"; shift
     SSHPASS="${PASSWORDS[$idx]}" /usr/bin/sshpass -e \
-        ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o BatchMode=no \
+        ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
         -p "$PORT" "${USERS[$idx]}@$SERVER" "$@" 2>&1
 }
 
 run_bg() {
     local idx="$1"; shift
     SSHPASS="${PASSWORDS[$idx]}" /usr/bin/sshpass -e \
-        ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o BatchMode=no \
+        ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
         -p "$PORT" "${USERS[$idx]}@$SERVER" "$@" 2>&1 &
 }
 
@@ -113,7 +120,7 @@ deploy_code() {
         --exclude='*.pyc' \
         --exclude='.venv' \
         --exclude='venv/' \
-        -e "ssh -p $PORT -o StrictHostKeyChecking=accept-new" \
+        -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
         "$LOCAL_REPO/" "${USERS[$idx]}@$SERVER:$REMOTE_INSTALL_DIR/" 2>&1
 }
 
@@ -132,6 +139,14 @@ info "Repo local : $LOCAL_REPO"
 info "Durée de test : ${DURATION}s"
 [[ "$SKIP_DEPLOY" == "true" ]] && info "Mode --skip-deploy : déploiement ignoré"
 
+# Populate known_hosts so subsequent SSH calls can use StrictHostKeyChecking=yes
+mkdir -p ~/.ssh && chmod 700 ~/.ssh
+if ! ssh-keygen -F "[$SERVER]:$PORT" &>/dev/null && ! ssh-keygen -F "$SERVER" &>/dev/null; then
+    info "Ajout de la clé hôte $SERVER:$PORT dans known_hosts..."
+    ssh-keyscan -p "$PORT" -H "$SERVER" >> ~/.ssh/known_hosts 2>/dev/null
+fi
+ok "Clé hôte $SERVER vérifiée dans known_hosts"
+
 for idx in "${!USERS[@]}"; do
     if run $idx "echo ok" &>/dev/null; then
         ok "SSH ${USERS[$idx]}@$SERVER:$PORT"
@@ -149,10 +164,14 @@ for idx in "${!USERS[@]}"; do
     run $idx "
         pkill -f '[a]ccount_bot.py' 2>/dev/null || true
         pkill -f '[f]eed.py'        2>/dev/null || true
+        pkill -f '[i]ndicators.py'  2>/dev/null || true
         sleep 3
         pkill -9 -f '[a]ccount_bot.py' 2>/dev/null || true
         pkill -9 -f '[f]eed.py'        2>/dev/null || true
+        pkill -9 -f '[i]ndicators.py'  2>/dev/null || true
         fuser -k 5557/tcp 2>/dev/null || true
+        fuser -k 5559/tcp 2>/dev/null || true
+        fuser -k 5560/tcp 2>/dev/null || true
         rm -rf $REMOTE_INSTALL_DIR $REMOTE_BOT_DIR || true
         rm -rf /tmp/tradinebotte-feed || true
         exit 0
@@ -196,6 +215,26 @@ for idx in "${!USERS[@]}"; do
     run $idx "mkdir -p $REMOTE_BOT_DIR" && ok "$user : $REMOTE_BOT_DIR prêt"
 done
 
+# ─── Phase 3b : Lancement des services d'indicateurs ──────────────────────────
+section "PHASE 3b — SERVICES D'INDICATEURS"
+IND_STARTED=0
+for idx in "${!USERS[@]}"; do
+    cfg="${INDICATORS_CONFIGS[$idx]:-}"
+    [[ -z "$cfg" ]] && continue
+    user="${USERS[$idx]}"
+    info "Lancement indicators.py pour $user — config=$cfg"
+    run $idx "
+        cd $REMOTE_INSTALL_DIR
+        nohup $REMOTE_INSTALL_DIR/venv/bin/python3 -u bot/indicators.py \
+            --config $REMOTE_INSTALL_DIR/$cfg \
+            > $REMOTE_BOT_DIR/indicators.log 2>&1 < /dev/null &
+        echo \"IND_PID=\$!\"
+    " && ok "$user : indicators.py lancé" || warn "$user : lancement indicators échoué"
+    IND_STARTED=$((IND_STARTED + 1))
+done
+[[ $IND_STARTED -gt 0 ]] && { sleep 5; ok "$IND_STARTED service(s) indicators lancé(s)"; } \
+    || info "Aucun service indicators configuré"
+
 # ─── Phase 4 : Lancement simultané ─────────────────────────────────────────────
 section "PHASE 4 — LANCEMENT SIMULTANÉ DES $N_BOTS BOTS"
 info "Envoi des $N_BOTS commandes de lancement en parallèle (test race condition)..."
@@ -228,15 +267,25 @@ info "Processus account_bot : $BOT_COUNT (attendu : $N_BOTS)"
 [[ "$FEED_COUNT" -eq 1 ]]       && ok "Feed unique actif" || err "Nombre incorrect de feeds : $FEED_COUNT (attendu 1)"
 [[ "$BOT_COUNT"  -eq "$N_BOTS" ]] && ok "$N_BOTS bots actifs" || err "Nombre incorrect de bots : $BOT_COUNT (attendu $N_BOTS)"
 
+# Vérification des services indicators
+for idx in "${!USERS[@]}"; do
+    cfg="${INDICATORS_CONFIGS[$idx]:-}"
+    [[ -z "$cfg" ]] && continue
+    user="${USERS[$idx]}"
+    IND_COUNT=$(run $idx "ps aux | grep '[i]ndicators.py' | wc -l" || echo 0)
+    [[ "$IND_COUNT" -ge 1 ]] && ok "$user : indicators.py actif ($cfg)" \
+        || err "$user : indicators.py non trouvé pour config $cfg"
+done
+
 for idx in "${!USERS[@]}"; do
     user="${USERS[$idx]}"
-    run $idx "grep -q 'Connecte au feed' $REMOTE_BOT_DIR/account.log 2>/dev/null" && \
-        ok "$user : connecté au feed" || err "$user : pas de message 'Connecte au feed'"
-    if run $idx "grep -qE 'Feed démarré|Feed prêt' $REMOTE_BOT_DIR/account.log 2>/dev/null"; then
+    run $idx "grep -q 'Connected to feed' $REMOTE_BOT_DIR/account.log 2>/dev/null" && \
+        ok "$user : connecté au feed" || err "$user : pas de message 'Connected to feed'"
+    if run $idx "grep -qE 'Feed started|Feed ready' $REMOTE_BOT_DIR/account.log 2>/dev/null"; then
         ok "$user : a démarré le feed (gagnant de la race)"
-    elif run $idx "grep -q 'Feed actif sur' $REMOTE_BOT_DIR/account.log 2>/dev/null"; then
+    elif run $idx "grep -q 'Feed active on' $REMOTE_BOT_DIR/account.log 2>/dev/null"; then
         ok "$user : a trouvé le feed déjà actif"
-    elif run $idx "grep -q 'Feed en cours de démarrage' $REMOTE_BOT_DIR/account.log 2>/dev/null"; then
+    elif run $idx "grep -q 'Feed being started' $REMOTE_BOT_DIR/account.log 2>/dev/null"; then
         ok "$user : a attendu le démarrage du feed (perdant de la race)"
     fi
 done
@@ -256,7 +305,7 @@ done
 info "Log feed : $FEED_LOG_PATH (compte : ${USERS[$FEED_LOG_IDX]})"
 if [[ "$FEED_LOG_PATH" != "(introuvable)" ]]; then
     FEED_LOG=$(run $FEED_LOG_IDX "cat $FEED_LOG_PATH 2>/dev/null | head -60 || echo '(vide)'")
-    if echo "$FEED_LOG" | grep -qE "WebSocket connecte|Souscription|Marches BTC"; then
+    if echo "$FEED_LOG" | grep -qE "WebSocket connected|Subscribing|BTC 5-min markets"; then
         ok "Feed : WebSocket Polymarket connecté"
     else
         warn "Feed : pas encore de confirmation WebSocket"
@@ -296,7 +345,7 @@ for idx in "${!USERS[@]}"; do
     echo -e "${BOLD}--- $user : account.log (20 dernières lignes) ---${NC}"
     run $idx "tail -20 $REMOTE_BOT_DIR/account.log 2>/dev/null || echo '(vide)'"
 
-    run $idx "grep -q 'Connecte au feed' $REMOTE_BOT_DIR/account.log 2>/dev/null" && \
+    run $idx "grep -q 'Connected to feed' $REMOTE_BOT_DIR/account.log 2>/dev/null" && \
         ok "$user : connexion feed confirmée" || err "$user : pas de connexion feed"
     BOOK_COUNT=$(run $idx "grep -c '\[FEED\] book' $REMOTE_BOT_DIR/account.log 2>/dev/null || true")
     [[ "$BOOK_COUNT" -gt 0 ]] && ok "$user : $BOOK_COUNT book updates reçus (flux actif)" || \
@@ -315,7 +364,7 @@ if [[ "${FEED_LOG_PATH:-}" != "(introuvable)" && -n "${FEED_LOG_PATH:-}" ]]; the
     echo "..."
     echo "$FEED_LOG_TAIL"
     # Grep sur le serveur pour éviter de transférer un log de plusieurs Mo
-    run $FEED_LOG_IDX "grep -qE 'WebSocket connecte|Souscription|Connected' $FEED_LOG_PATH 2>/dev/null" && \
+    run $FEED_LOG_IDX "grep -qE 'WebSocket connected|Subscribing|BTC 5-min markets' $FEED_LOG_PATH 2>/dev/null" && \
         ok "Feed : WebSocket confirmé dans le log final" || err "Feed : WebSocket non confirmé"
     run $FEED_LOG_IDX "grep -qiE 'BTC|bitcoin|Marche' $FEED_LOG_PATH 2>/dev/null" && \
         ok "Feed : marchés BTC trouvés" || warn "Feed : marchés BTC non trouvés"
@@ -336,10 +385,14 @@ for idx in "${!USERS[@]}"; do
     run $idx "
         pkill -f '[a]ccount_bot.py' 2>/dev/null || true
         pkill -f '[f]eed.py'        2>/dev/null || true
+        pkill -f '[i]ndicators.py'  2>/dev/null || true
         sleep 2
         pkill -9 -f '[a]ccount_bot.py' 2>/dev/null || true
         pkill -9 -f '[f]eed.py'        2>/dev/null || true
+        pkill -9 -f '[i]ndicators.py'  2>/dev/null || true
         fuser -k 5557/tcp 2>/dev/null || true
+        fuser -k 5559/tcp 2>/dev/null || true
+        fuser -k 5560/tcp 2>/dev/null || true
         rm -rf /tmp/tradinebotte-feed || true
         exit 0
     " && info "$user : processus arrêtés" || true

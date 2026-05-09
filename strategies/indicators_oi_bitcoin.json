@@ -1,0 +1,17 @@
+{
+  "_comment": "indicators_oi_bitcoin.json — Binance futures open interest for BTC",
+  "zmq_feed_addr": "tcp://127.0.0.1:5557",
+  "zmq_out_addr":  "tcp://127.0.0.1:5569",
+  "zmq_reg_addr":  "tcp://127.0.0.1:5570",
+  "min_ticks": 1,
+  "streams": [
+    {
+      "id":              "btc_oi",
+      "asset":           "BTCUSDT",
+      "source":          "binance_oi",
+      "timeframe":       "n/a",
+      "indicators":      [],
+      "poll_interval_s": 300
+    }
+  ]
+}

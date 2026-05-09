@@ -70,6 +70,12 @@ if [[ ${#USERS[@]} -ne ${#PASSWORDS[@]} ]]; then
     exit 1
 fi
 
+# Populate known_hosts so SSH calls use StrictHostKeyChecking=yes safely
+mkdir -p ~/.ssh && chmod 700 ~/.ssh
+if ! ssh-keygen -F "[$HOST]:$PORT" &>/dev/null && ! ssh-keygen -F "$HOST" &>/dev/null; then
+    ssh-keyscan -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+fi
+
 # ── Helpers ───────────────────────────────────────────────────────
 ok()      { echo -e "  ${GREEN}✓${NC} $*"; }
 err()     { echo -e "  ${RED}✗${NC} $*"; }
@@ -83,7 +89,7 @@ section() {
 
 ssh_run() {
     local user="$1" pwd="$2"; shift 2
-    SSHPASS="$pwd" sshpass -e ssh -p "$PORT" -o StrictHostKeyChecking=accept-new \
+    SSHPASS="$pwd" sshpass -e ssh -p "$PORT" -o StrictHostKeyChecking=yes \
         -o ConnectTimeout=10 "${user}@${HOST}" "$@"
 }
 
@@ -92,7 +98,7 @@ rsync_to() {
     SSHPASS="$pwd" sshpass -e rsync -a \
         --exclude='*.db' --exclude='__pycache__' \
         --exclude='.git' --exclude='venv' \
-        -e "ssh -p $PORT -o StrictHostKeyChecking=accept-new" \
+        -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
         "$REPO_DIR/" "${user}@${HOST}:/home/${user}/tradinebotte/"
 }
 
@@ -104,13 +110,13 @@ run_account() {
     # and we must always reach the result-write at the end.
     set +e
 
-    _ssh() { SSHPASS="$pwd" sshpass -e ssh -p "$PORT" -o StrictHostKeyChecking=accept-new \
+    _ssh() { SSHPASS="$pwd" sshpass -e ssh -p "$PORT" -o StrictHostKeyChecking=yes \
                  -o ConnectTimeout=15 "${user}@${HOST}" "$@"; }
     _rsync() {
         SSHPASS="$pwd" sshpass -e rsync -a \
             --exclude='*.db' --exclude='__pycache__' \
             --exclude='.git' --exclude='venv' \
-            -e "ssh -p $PORT -o StrictHostKeyChecking=accept-new" \
+            -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
             "$REPO_DIR/" "${user}@${HOST}:/home/${user}/tradinebotte/"
     }
 
@@ -118,7 +124,7 @@ run_account() {
         echo "=== DÉBUT $(date '+%H:%M:%S') — ${user}@${HOST} ==="
 
         echo "→ Arrêt du bot..."
-        _ssh "pkill -f live_bot.py 2>/dev/null; true" 2>/dev/null
+        _ssh "pkill -f '[l]ive_bot\.py' 2>/dev/null; true" 2>/dev/null
 
         echo "→ Nettoyage du compte..."
         if _ssh "rm -rf ~/tradinebotte ~/account-sim"; then

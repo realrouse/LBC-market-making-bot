@@ -1,0 +1,36 @@
+{
+    "_name": "Indicators — default configuration",
+    "_description": "Configures which technical indicators to compute on which assets and from which data source. Each stream entry defines one asset/timeframe/source combination and the list of indicators to compute on it. source='binance_ws' fetches live klines from Binance WebSocket and seeds from REST on startup. source='feed' accumulates best_bid ticks from the ZeroMQ Polymarket feed.",
+
+    "zmq_feed_addr": "tcp://127.0.0.1:5557",
+    "zmq_out_addr":  "tcp://127.0.0.1:5559",
+    "zmq_reg_addr":  "tcp://127.0.0.1:5561",
+    "min_ticks": 25,
+
+    "streams": [
+        {
+            "_comment": "RSI 14 and rolling volatility on 4h BTC/USDT candles — used by account-a",
+            "id":           "btc_4h",
+            "asset":        "BTCUSDT",
+            "source":       "binance_ws",
+            "timeframe":    "4h",
+            "seed_periods": 50,
+            "indicators": [
+                { "type": "rsi",        "period": 14 },
+                { "type": "volatility", "period": 20 }
+            ]
+        },
+        {
+            "_comment": "RSI 14 and rolling volatility on daily BTC/USDT candles — used by account-b",
+            "id":           "btc_1d",
+            "asset":        "BTCUSDT",
+            "source":       "binance_ws",
+            "timeframe":    "1d",
+            "seed_periods": 50,
+            "indicators": [
+                { "type": "rsi",        "period": 14 },
+                { "type": "volatility", "period": 20 }
+            ]
+        }
+    ]
+}

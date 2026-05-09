@@ -1,0 +1,24 @@
+{
+    "_name": "Indicators — account-a (4h timeframe)",
+    "_description": "Per-account config for account-a. Computes RSI(14) and volatility(20) on 4h BTC/USDT candles from Binance WebSocket. Published on :5559. Use with: TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_4h_bitcoin.json bash scripts/start_indicators.sh",
+
+    "zmq_feed_addr": "tcp://127.0.0.1:5557",
+    "zmq_out_addr":  "tcp://127.0.0.1:5559",
+    "zmq_reg_addr":  "tcp://127.0.0.1:5561",
+    "min_ticks": 25,
+
+    "streams": [
+        {
+            "_comment": "RSI 14 and rolling volatility on 4h BTC/USDT candles",
+            "id":           "btc_4h",
+            "asset":        "BTCUSDT",
+            "source":       "binance_ws",
+            "timeframe":    "4h",
+            "seed_periods": 50,
+            "indicators": [
+                { "type": "rsi",        "period": 14 },
+                { "type": "volatility", "period": 20 }
+            ]
+        }
+    ]
+}

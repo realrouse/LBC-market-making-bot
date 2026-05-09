@@ -32,7 +32,16 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import api_polymarket as api
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────
-FEED_ADDR       = os.environ.get("TRADINEBOTTE_FEED_ADDR", "tcp://127.0.0.1:5557")
+_PORT_BASE      = int(os.environ.get("TRADINEBOTTE_PORT_BASE", "5557"))
+FEED_ADDR       = os.environ.get("TRADINEBOTTE_FEED_ADDR", f"tcp://127.0.0.1:{_PORT_BASE}")
+
+def _warn_if_external_bind(addr: str, name: str) -> None:
+    """Log a security warning if a ZMQ bind address is not loopback."""
+    if addr.startswith("tcp://") and "127.0.0.1" not in addr and "localhost" not in addr:
+        logging.getLogger("feed").warning(
+            "SECURITY: %s (%s) is bound to a non-loopback address — "
+            "ensure ZMQ CURVE auth is active before exposing to the network.", name, addr
+        )
 MARKET_REFRESH  = 30   # seconds between Gamma API polls
 PING_INTERVAL   = 10   # seconds between keepalive pings to subscribers
 LOG_FORMAT      = "%(asctime)s [%(levelname)s] %(message)s"
@@ -57,6 +66,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _pub_json(sock: zmq.asyncio.Socket, msg: dict[str, Any]) -> None:
+    """Publish one JSON message on the PUB socket (non-blocking) and log it in VERBOSE mode."""
     sock.send_json(msg, zmq.NOBLOCK)
     if VERBOSE:
         t = msg.get("t", "?")
@@ -103,6 +113,11 @@ def register_market(market: dict[str, Any]) -> list[str]:
 async def _market_refresh(sock: zmq.asyncio.Socket,
                            session: aiohttp.ClientSession,
                            ws: Any) -> None:
+    """
+    Background task: poll the Gamma API every MARKET_REFRESH seconds, publish
+    new market registrations on the PUB socket, subscribe newly discovered tokens
+    to the WebSocket, and purge expired markets from the local registry.
+    """
     while True:
         await asyncio.sleep(MARKET_REFRESH)
         try:
@@ -130,7 +145,7 @@ async def _market_refresh(sock: zmq.asyncio.Socket,
             if new_ids:
                 for i in range(0, len(new_ids), api.WS_BATCH_SIZE):
                     await ws.send(api.make_subscribe_msg(new_ids[i:i + api.WS_BATCH_SIZE]))
-                logger.info("Nouveaux tokens : %d", len(new_ids))
+                logger.info("New tokens: %d", len(new_ids))
 
             # Purge expired markets.
             now_ms = time.time() * 1000
@@ -141,17 +156,18 @@ async def _market_refresh(sock: zmq.asyncio.Socket,
                 for tid in (r.get("up", ""), r.get("dn", "")):
                     token_meta.pop(tid, None)
             if expired:
-                logger.info("Marches expires purges : %d", len(expired))
+                logger.info("Expired markets purged: %d", len(expired))
             if VERBOSE:
-                logger.debug("[REFRESH] done — %d markets, %d tokens actifs",
+                logger.debug("[REFRESH] done — %d markets, %d active tokens",
                              len(registered), len(token_meta))
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.warning("Refresh erreur : %s", e)
+            logger.warning("Refresh error: %s", e)
 
 
 async def _ping_loop(sock: zmq.asyncio.Socket) -> None:
+    """Send a keepalive ping message to all subscribers every PING_INTERVAL seconds."""
     while True:
         await asyncio.sleep(PING_INTERVAL)
         try:
@@ -161,12 +177,17 @@ async def _ping_loop(sock: zmq.asyncio.Socket) -> None:
 
 
 async def _run_ws(sock: zmq.asyncio.Socket, session: aiohttp.ClientSession) -> None:
+    """
+    One WebSocket session: fetch active markets, subscribe their tokens, then relay
+    every book-update message to subscribers via the PUB socket until the connection
+    drops.  _market_refresh and _ping_loop run as concurrent background tasks.
+    """
     if VERBOSE:
         logger.debug("[WS] appel get_markets...")
     markets = await api.get_markets(session)
-    logger.info("Marches BTC 5-min : %d", len(markets))
+    logger.info("BTC 5-min markets: %d", len(markets))
     if not markets:
-        logger.warning("Aucun marche — attente 30s")
+        logger.warning("No markets — waiting 30s")
         await asyncio.sleep(30)
         return
 
@@ -187,17 +208,17 @@ async def _run_ws(sock: zmq.asyncio.Socket, session: aiohttp.ClientSession) -> N
 
     all_token_ids = list(token_meta.keys())
     if not all_token_ids:
-        logger.warning("Aucun token actif — attente 30s")
+        logger.warning("No active tokens — waiting 30s")
         await asyncio.sleep(30)
         return
 
-    logger.info("Souscription %d tokens...", len(all_token_ids))
+    logger.info("Subscribing to %d tokens...", len(all_token_ids))
     if VERBOSE:
         logger.debug("[WS] tokens: %s", all_token_ids[:6])
     async with websockets.connect(api.WS_URL, ping_interval=20, ping_timeout=10) as ws:
         for i in range(0, len(all_token_ids), api.WS_BATCH_SIZE):
             await ws.send(api.make_subscribe_msg(all_token_ids[i:i + api.WS_BATCH_SIZE]))
-        logger.info("WebSocket connecte — diffusion sur %s", FEED_ADDR)
+        logger.info("WebSocket connected — broadcasting on %s", FEED_ADDR)
 
         refresh_task = asyncio.create_task(_market_refresh(sock, session, ws))
         ping_task    = asyncio.create_task(_ping_loop(sock))
@@ -209,7 +230,7 @@ async def _run_ws(sock: zmq.asyncio.Socket, session: aiohttp.ClientSession) -> N
                     raw = await asyncio.wait_for(ws.recv(), timeout=30)
                 except asyncio.TimeoutError:
                     if not token_meta:
-                        logger.warning("Aucun token actif — reconnexion")
+                        logger.warning("No active tokens — reconnecting")
                         break
                     if VERBOSE:
                         logger.debug("[WS] timeout 30s (normal en periode calme), "
@@ -224,7 +245,8 @@ async def _run_ws(sock: zmq.asyncio.Socket, session: aiohttp.ClientSession) -> N
                     msgs = json.loads(raw)
                     if isinstance(msgs, dict):
                         msgs = [msgs]
-                except Exception:
+                except Exception as _json_exc:
+                    logger.debug("JSON parse failed: %s | raw=%r", _json_exc, raw[:200])
                     continue
 
                 for msg in msgs:
@@ -247,10 +269,11 @@ async def _run_ws(sock: zmq.asyncio.Socket, session: aiohttp.ClientSession) -> N
 
 
 async def main() -> None:
+    _warn_if_external_bind(FEED_ADDR, "FEED_ADDR")
     ctx  = zmq.asyncio.Context()
     sock = ctx.socket(zmq.PUB)
     sock.bind(FEED_ADDR)
-    logger.info("Feed PUB bind sur %s", FEED_ADDR)
+    logger.info("Feed PUB bound on %s", FEED_ADDR)
     if VERBOSE:
         logger.debug("[VERBOSE] mode diagnostic actif")
         logger.debug("[ZMQ] socket PUB bind sur %s", FEED_ADDR)
@@ -262,8 +285,8 @@ async def main() -> None:
             try:
                 await _run_ws(sock, session)
                 backoff = 1
-            except Exception as e:
-                logger.warning("WS erreur (%s) — reconnexion %ds", e, backoff)
+            except Exception:
+                logger.warning("WS error — reconnecting in %ds", backoff, exc_info=True)
                 if VERBOSE:
                     import traceback
                     logger.debug("[WS ERREUR] %s", traceback.format_exc())

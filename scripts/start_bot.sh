@@ -55,10 +55,10 @@ if [ ! -f "$CONFIG" ]; then
 fi
 
 # ── Check for a running instance (current user only) ──────────────
-if pgrep -u "$(id -u)" -f live_bot.py > /dev/null; then
-    _pid=$(pgrep -u "$(id -u)" -f live_bot.py)
+if pgrep -u "$(id -u)" -f '[l]ive_bot\.py' > /dev/null; then
+    _pid=$(pgrep -u "$(id -u)" -f '[l]ive_bot\.py')
     echo "$(_t "❌ ERROR: an instance is already running (PID:" "❌ ERREUR : une instance est déjà en cours (PID:") $_pid)"
-    echo "   $(_t "Stop it first:" "Arrêtez-la d'abord :") pkill -u \$(id -u) -f live_bot.py"
+    echo "   $(_t "Stop it first:" "Arrêtez-la d'abord :") pkill -u \$(id -u) -f '[l]ive_bot\.py'"
     exit 1
 fi
 
@@ -99,8 +99,8 @@ nohup "$PYTHON" "$INSTALL_DIR/live_bot.py" "${BOT_EXTRA_ARGS[@]}" >> "$LOG" 2>&1
 echo "PID: $!"
 sleep 3
 
-if pgrep -u "$(id -u)" -f live_bot.py > /dev/null; then
-    echo "✅ $(_t "Bot running — PID:" "Bot en cours — PID:") $(pgrep -u "$(id -u)" -f live_bot.py)"
+if pgrep -u "$(id -u)" -f '[l]ive_bot\.py' > /dev/null; then
+    echo "✅ $(_t "Bot running — PID:" "Bot en cours — PID:") $(pgrep -u "$(id -u)" -f '[l]ive_bot\.py')"
     echo "$(_t "Logs:" "Logs :") tail -f $DISPLAY_LOG"
 else
     echo "$(_t "❌ Bot stopped — last log lines:" "❌ Bot arrêté — dernières lignes du log :")"

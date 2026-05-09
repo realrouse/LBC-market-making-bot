@@ -2,7 +2,7 @@
 # 100 chars (pylint default) is tight for async code with long identifiers.
 max-line-length=120
 # live_bot.py is a single-file async state machine; 1000 is too tight.
-max-module-lines=1200
+max-module-lines=1300
 
 [MESSAGES CONTROL]
 disable=
@@ -48,6 +48,13 @@ disable=
     # try: ... except CancelledError: raise  is the correct asyncio pattern to
     # let task cancellation propagate; pylint sees it as a pointless re-raise.
     W0706,
+
+    # ── Duplicate code ───────────────────────────────────────────────────────
+    # api_binance.py and api_mexc.py share structurally identical REST helpers
+    # (get_listen_key, keepalive_listen_key, etc.) because each connector must
+    # be self-contained — factoring them into a shared base would break the
+    # plug-and-play import model used by connectors/__init__.py.
+    R0801,
 
     # ── Unused arguments ─────────────────────────────────────────────────────
     # Adapter functions (api_polymarket.post_order, backtest summarise) keep

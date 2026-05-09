@@ -288,18 +288,28 @@ def summarize(trades: List[SimTrade], params: Params, capital_final: float) -> d
 
 # ─── Actual-params detection ──────────────────────────────────────────────────
 
+# Production call sites for _percentile — all use string literals, no external input.
+# Allowlisted for reference; not enforced at runtime (offline script, private function).
+_PERCENTILE_TABLES = frozenset({"trades", "snapshots"})
+_PERCENTILE_COLS   = frozenset({
+    "pnl", "stake", "signal_best_bid", "signal_secs_remaining",
+    "entry_price", "exit_price", "duration_s",
+})
+
 def _percentile(conn: sqlite3.Connection, col: str, table: str,
                 where: str, pct: float) -> Optional[float]:
     """
     Return the value at the given percentile (0–1) for a numeric column.
     Uses an ORDER BY + OFFSET approach compatible with SQLite.
+    Private — only called from detect_actual_params() with hardcoded string
+    literals. col/table are never derived from network or user input.
     """
-    n_row = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE {where}").fetchone()
+    n_row = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE {where}").fetchone()  # nosec B608
     if not n_row or not n_row[0]:
         return None
     offset = max(0, int(pct * n_row[0]))
     row = conn.execute(
-        f"SELECT {col} FROM {table} WHERE {where} ORDER BY {col} LIMIT 1 OFFSET ?",
+        f"SELECT {col} FROM {table} WHERE {where} ORDER BY {col} LIMIT 1 OFFSET ?",  # nosec B608
         (offset,),
     ).fetchone()
     return row[0] if row else None

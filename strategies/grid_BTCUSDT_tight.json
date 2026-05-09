@@ -1,0 +1,28 @@
+{
+    "_name": "Grid BTC/USDT — tight (backtested)",
+    "_description": "±15% range, 30 levels. Backtested on three BTC market regimes: +5.0%/90d (+20%/yr) on lateral 2026, -3.3% loss on LUNA crash bear 2022 (stops after 9%), +0.1% on Oct-Jan 2024-25 bull run (stops after 25%). Best for expected ranging/consolidating conditions — tighter step means more cycles per day when price oscillates. Recalibrate grid_lower/grid_upper when BTC moves significantly (target ±15% from current price). Capital must equal grid_levels × grid_order_size_usdt.",
+    "_backtest": {
+        "range_pct":        "±15%",
+        "lateral_2026":     "+5.0% / 90d (+20% ann) — 96% time in grid",
+        "bear_2022":        "-3.3% loss — stops after 9% of period (LUNA crash -54%)",
+        "bullrun_2024":     "+0.1% — stops after 25% of period (BTC +64%)",
+        "calibrated_at":    "2026-05-09  BTC=$80,705"
+    },
+
+    "strategy_type": "grid",
+    "connector":     "binance",
+
+    "grid_symbol":          "BTCUSDT",
+    "grid_lower":           68599.0,
+    "grid_upper":           92811.0,
+    "grid_levels":          30,
+    "grid_order_size_usdt": 50.0,
+
+    "capital_start": 1500.0,
+    "stake":           50.0,
+    "daily_stop_loss": 150.0,
+
+    "hour_filter": {
+        "enabled": false
+    }
+}

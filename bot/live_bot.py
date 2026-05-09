@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# pylint: disable=too-many-lines  # single-file async state machine by design
 """
 POLYMARKET LIVE BOT v0.41 — BTC Up/Down 5-minute markets
 
@@ -23,7 +24,7 @@ Launch:
   bash scripts/start_bot.sh     # starts the bot in the background
 """
 
-import argparse, asyncio, copy, json, logging, logging.handlers, math, os, queue, sqlite3, sys, time
+import argparse, asyncio, copy, json, logging, logging.handlers, math, os, queue, sqlite3, sys, time, uuid
 from collections import deque
 from dataclasses import dataclass, field
 import functools
@@ -72,6 +73,17 @@ SNAPSHOT_INTERVAL  = 1
 DASHBOARD_INTERVAL = 300
 MARKET_REFRESH     = 30
 
+# ─── CONNECTOR / STRATEGY DEFAULTS ────────────────────────────────────────────
+CONNECTOR      = "polymarket"   # api_* module to use; see bot/connectors/
+STRATEGY_TYPE  = "threshold"    # "threshold" (built-in) or "grid" (bot/strategies/grid.py)
+
+# Grid strategy defaults (ignored when strategy_type == "threshold")
+GRID_SYMBOL          = "BTCUSDT"
+GRID_LOWER           = 0.0
+GRID_UPPER           = 0.0
+GRID_LEVELS          = 10
+GRID_ORDER_SIZE_USDT = 50.0
+
 # ─── VOLATILITY FILTER DEFAULTS ───────────────────────────────────────────────
 VOL_FILTER_ENABLED      = True
 VOL_FILTER_WEEKDAY_ONLY = True
@@ -82,6 +94,8 @@ RANGE_BID_MAX           = 0.30
 OBI_VOL_MAX             = 0.40
 
 # ─── LOGGING FORMATTERS ───────────────────────────────────────────────────────
+_SESSION_ID = uuid.uuid4().hex[:8].upper()
+
 _LEVEL_ABBR: dict[str, str] = {
     "DEBUG": "DEBUG", "INFO": "INFO ", "WARNING": "WARN ",
     "ERROR": "ERROR", "CRITICAL": "CRIT ",
@@ -92,12 +106,20 @@ _ANSI_COLOR: dict[str, str] = {
     "CRIT ": "\033[35m",
 }
 _ANSI_RESET = "\033[0m"
-_LOG_FMT  = "%(asctime)s [%(levelname)s] %(message)s"
+_LOG_FMT  = "%(asctime)s [%(levelname)s] [%(session)s] %(message)s"
 _LOG_DATE = "%Y-%m-%d %H:%M:%S"
+
+class _SessionFilter(logging.Filter):
+    """Inject session ID into every log record without changing call sites."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Attach the module-level _SESSION_ID to the record and allow it through."""
+        record.session = _SESSION_ID  # type: ignore[attr-defined]
+        return True
 
 class _PlainFmt(logging.Formatter):
     """File formatter: no colors, fixed-width level abbreviation."""
     def format(self, record: logging.LogRecord) -> str:
+        """Replace the full level name with a 5-char abbreviation before formatting."""
         r = copy.copy(record)
         r.levelname = _LEVEL_ABBR.get(r.levelname, r.levelname[:5])
         return super().format(r)
@@ -105,6 +127,7 @@ class _PlainFmt(logging.Formatter):
 class _ColorFmt(logging.Formatter):
     """Stdout formatter: same as _PlainFmt plus ANSI color on WARN/ERROR."""
     def format(self, record: logging.LogRecord) -> str:
+        """Apply abbreviated level name and ANSI escape codes for WARNING/ERROR/CRITICAL."""
         abbr = _LEVEL_ABBR.get(record.levelname, record.levelname[:5])
         r = copy.copy(record)
         r.levelname = abbr
@@ -197,6 +220,17 @@ class BotConfig:
     # Strategy file (for logging)
     strategy_loaded: Optional[str] = None
 
+    # Connector + strategy type
+    connector:     str = CONNECTOR
+    strategy_type: str = STRATEGY_TYPE
+
+    # Grid strategy parameters (read only when strategy_type == "grid")
+    grid_symbol:          str   = GRID_SYMBOL
+    grid_lower:           float = GRID_LOWER
+    grid_upper:           float = GRID_UPPER
+    grid_levels:          int   = GRID_LEVELS
+    grid_order_size_usdt: float = GRID_ORDER_SIZE_USDT
+
     def __post_init__(self) -> None:
         # Compute paths from TRADINEBOTTE_DIR when not explicitly provided.
         if not self.install_dir:
@@ -277,6 +311,17 @@ def make_config(simulate: bool = False, no_log: bool = False,
     strat = load_strategy(strat_path) or {}
     strategy_loaded = strat_path if strat else None
 
+    # Connector and strategy type (fall back to module-level defaults).
+    connector     = str(strat.get("connector",     CONNECTOR))
+    strategy_type = str(strat.get("strategy_type", STRATEGY_TYPE))
+
+    # Grid parameters (only used when strategy_type == "grid").
+    grid_symbol          = str(strat.get("grid_symbol",          GRID_SYMBOL))
+    grid_lower           = float(strat.get("grid_lower",           GRID_LOWER))
+    grid_upper           = float(strat.get("grid_upper",           GRID_UPPER))
+    grid_levels          = int(strat.get("grid_levels",           GRID_LEVELS))
+    grid_order_size_usdt = float(strat.get("grid_order_size_usdt", GRID_ORDER_SIZE_USDT))
+
     # Strategy overrides from JSON (fall back to module-level defaults).
     capital_start      = float(strat.get("capital_start",      CAPITAL_START))
     stake              = float(strat.get("stake",               STAKE))
@@ -356,6 +401,13 @@ def make_config(simulate: bool = False, no_log: bool = False,
         webstatus_user=webstatus_user,
         webstatus_password=webstatus_password,
         strategy_loaded=strategy_loaded,
+        connector=connector,
+        strategy_type=strategy_type,
+        grid_symbol=grid_symbol,
+        grid_lower=grid_lower,
+        grid_upper=grid_upper,
+        grid_levels=grid_levels,
+        grid_order_size_usdt=grid_order_size_usdt,
     )
 
     # Sync display config to bot_utils so its functions read the correct values.
@@ -368,6 +420,19 @@ def make_config(simulate: bool = False, no_log: bool = False,
     return config
 
 
+def _load_connector(name: str) -> None:
+    """
+    Replace the module-level `api` global with the requested exchange connector.
+    No-op when name == "polymarket" (default import already in place).
+    """
+    global api  # pylint: disable=global-statement
+    if name == "polymarket":
+        return
+    from connectors import load as _load
+    api = _load(name)
+    logger.info("Connector loaded: %s (%s)", name, api.__name__)
+
+
 def _setup_logging(config: "BotConfig") -> Optional[logging.handlers.QueueListener]:
     """
     Configure the root logger according to config and return the QueueListener
@@ -378,28 +443,34 @@ def _setup_logging(config: "BotConfig") -> Optional[logging.handlers.QueueListen
     """
     global _log_listener  # pylint: disable=global-statement
 
+    _sf = _SessionFilter()
     if config.no_log:
         if config.simulate:
             _h = logging.StreamHandler(sys.stdout)
             _h.setFormatter(_ColorFmt(_LOG_FMT, datefmt=_LOG_DATE))
+            _h.addFilter(_sf)
             _log_handlers: list[logging.Handler] = [_h]
         else:
             _log_handlers = [logging.NullHandler()]
         listener = None
     else:
         _log_queue: queue.Queue[logging.LogRecord] = queue.Queue()
-        _file_handler = logging.FileHandler(config.log_path)
+        _file_handler = logging.handlers.TimedRotatingFileHandler(
+            config.log_path, when="midnight", backupCount=30, encoding="utf-8")
         _file_handler.setFormatter(_PlainFmt(_LOG_FMT, datefmt=_LOG_DATE))
+        _file_handler.addFilter(_sf)
         listener = logging.handlers.QueueListener(
             _log_queue, _file_handler, respect_handler_level=True)
         listener.start()
         _qh = logging.handlers.QueueHandler(_log_queue)
         # Passthrough formatter prevents double-formatting (raw message only).
         _qh.setFormatter(logging.Formatter("%(message)s"))
+        _qh.addFilter(_sf)
         _log_handlers = [_qh]
         if config.simulate:
             _h = logging.StreamHandler(sys.stdout)
             _h.setFormatter(_ColorFmt(_LOG_FMT, datefmt=_LOG_DATE))
+            _h.addFilter(_sf)
             _log_handlers.append(_h)
 
     logging.basicConfig(
@@ -449,6 +520,32 @@ CREATE INDEX IF NOT EXISTS idx_trades_resolved ON trades(resolved);
 # Add future entries here: MIGRATIONS[2] = "ALTER TABLE trades ADD COLUMN ..."
 MIGRATIONS: dict[int, str] = {
     1: "",
+    2: """
+CREATE TABLE IF NOT EXISTS grid_state (
+    symbol           TEXT    PRIMARY KEY,
+    grid_lower       REAL    NOT NULL,
+    grid_upper       REAL    NOT NULL,
+    grid_step        REAL    NOT NULL,
+    order_size_usdt  REAL    NOT NULL,
+    total_cycles     INTEGER NOT NULL DEFAULT 0,
+    total_profit_usd REAL    NOT NULL DEFAULT 0.0,
+    initialised      INTEGER NOT NULL DEFAULT 0,
+    halted           INTEGER NOT NULL DEFAULT 0,
+    updated_at       REAL    NOT NULL
+);
+CREATE TABLE IF NOT EXISTS grid_levels (
+    symbol        TEXT NOT NULL,
+    level_price   REAL NOT NULL,
+    buy_order_id  TEXT,
+    sell_order_id TEXT,
+    buy_price     REAL,
+    sell_price    REAL,
+    status        TEXT NOT NULL DEFAULT 'idle',
+    filled_at_ts  REAL,
+    updated_at    REAL NOT NULL,
+    PRIMARY KEY (symbol, level_price)
+);
+""",
 }
 
 
@@ -467,7 +564,7 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
             row = True
         else:
             conn.execute("UPDATE schema_version SET version=?", (version,))
-        logger.info("DB schema migration v%d appliquee", version)
+        logger.info("DB schema migration v%d applied", version)
 
 
 def init_db(config: "BotConfig") -> sqlite3.Connection:
@@ -480,10 +577,10 @@ def init_db(config: "BotConfig") -> sqlite3.Connection:
     if config.db_mmap_mb > 0:
         # Memory-map the DB file so SQLite accesses it via RAM pages managed
         # by the kernel rather than read() syscalls.
-        conn.execute(f"PRAGMA mmap_size = {config.db_mmap_mb * 1024 * 1024};")
-        logger.info("DB mmap active : %d MB", config.db_mmap_mb)
+        conn.execute("PRAGMA mmap_size = ?", (config.db_mmap_mb * 1024 * 1024,))
+        logger.info("DB mmap enabled: %d MB", config.db_mmap_mb)
     conn.commit()
-    logger.info("DB initialisee : %s", config.db_path)
+    logger.info("DB initialized: %s", config.db_path)
     return conn
 
 
@@ -542,6 +639,24 @@ class TokenState:
         return self.market_end_ms > 0 and time.time() * 1000 > self.market_end_ms + 5000
 
 
+@dataclass
+class RejectionStats:
+    """Counts of check_signal() early-exits per reason, logged every 60 s."""
+    signalled:     int = 0
+    market_ended:  int = 0
+    trading_hour:  int = 0
+    best_bid:      int = 0
+    entry_max:     int = 0
+    best_ask:      int = 0
+    ask_vol:       int = 0
+    secs_remaining: int = 0
+    obi:           int = 0
+    vol_filter:    int = 0
+    capital:       int = 0
+    daily_stop:    int = 0
+    api_cooldown:  int = 0
+
+
 class BotState:
     """
     Global runtime state shared across all async tasks.
@@ -571,6 +686,12 @@ class BotState:
         # Circuit-breaker: suspend new entries after 3 consecutive CLOB failures.
         self.api_fail_streak: int = 0
         self.api_cooldown_until: float = 0.0
+        # Active strategy instance (None = built-in threshold strategy).
+        # Set in main() after make_config() when strategy_type != "threshold".
+        self.strategy: Any = None
+        # Rejection counters — reset and logged every 60 s.
+        self.rejection_stats = RejectionStats()
+        self._last_stats_log: float = time.time()
 
     @property
     def win_rate(self) -> float:
@@ -595,9 +716,15 @@ async def handle_book_update(state: BotState, parsed: dict[str, Any]) -> None:
     ts.ask_vol   = parsed["ask_vol"]
     ts.obi       = parsed["obi"]
     ts.last_update_ts = time.time()
-    # Pass t_ws so enter_live_trade can compute end-to-end latency if a trade fires.
-    await check_signal(state, ts, _t_ws=t_ws)
-    check_resolution(state, ts)
+    # Dispatch to the active strategy.
+    # state.strategy is None for the built-in threshold strategy (default),
+    # or a GridStrategy instance when strategy_type == "grid".
+    if state.strategy is not None:
+        await state.strategy.on_book_update(state, ts, _t_ws=t_ws)
+    else:
+        # Default: Polymarket threshold strategy (check_signal / check_resolution).
+        await check_signal(state, ts, _t_ws=t_ws)
+        check_resolution(state, ts)
     now = time.time()
     if now - ts.last_snapshot_ts >= state.config.snapshot_interval:
         ts.bid_history.append(ts.best_bid)
@@ -731,16 +858,30 @@ async def check_signal(state: BotState, ts: TokenState, _t_ws: Optional[float] =
         state.daily_pnl = 0.0
         state._daily_pnl_day = today_day
 
-    if ts.market_id in state.signalled: return
-    if ts.market_ended: return
-    if not is_trading_hour(cfg): return
-    if ts.best_bid < cfg.signal_threshold: return
-    if ts.best_bid > cfg.entry_max: return
-    if ts.best_ask >= 1.0: return       # expired markets still emit WS messages
-    if ts.best_ask > cfg.entry_max: return
-    if ts.ask_vol > 0 and ts.ask_vol < cfg.min_ask_vol: return
-    if ts.secs_remaining < cfg.min_secs_remaining: return
-    if ts.obi < cfg.obi_reject_thresh: return
+    # Periodic rejection stats — every 60 s.
+    _now_t = time.time()
+    if _now_t - state._last_stats_log >= 60:
+        r = state.rejection_stats
+        logger.info(
+            "[REJECTIONS] signalled=%d ended=%d hour=%d bid=%d emax=%d"
+            " ask=%d askvol=%d secs=%d obi=%d vol=%d capital=%d dstop=%d cooldown=%d",
+            r.signalled, r.market_ended, r.trading_hour, r.best_bid, r.entry_max,
+            r.best_ask, r.ask_vol, r.secs_remaining, r.obi, r.vol_filter,
+            r.capital, r.daily_stop, r.api_cooldown,
+        )
+        state.rejection_stats = RejectionStats()
+        state._last_stats_log = _now_t
+
+    if ts.market_id in state.signalled: state.rejection_stats.signalled += 1; return
+    if ts.market_ended: state.rejection_stats.market_ended += 1; return
+    if not is_trading_hour(cfg): state.rejection_stats.trading_hour += 1; return
+    if ts.best_bid < cfg.signal_threshold: state.rejection_stats.best_bid += 1; return
+    if ts.best_bid > cfg.entry_max: state.rejection_stats.entry_max += 1; return
+    if ts.best_ask >= 1.0: state.rejection_stats.best_ask += 1; return   # expired markets
+    if ts.best_ask > cfg.entry_max: state.rejection_stats.entry_max += 1; return
+    if ts.ask_vol > 0 and ts.ask_vol < cfg.min_ask_vol: state.rejection_stats.ask_vol += 1; return
+    if ts.secs_remaining < cfg.min_secs_remaining: state.rejection_stats.secs_remaining += 1; return
+    if ts.obi < cfg.obi_reject_thresh: state.rejection_stats.obi += 1; return
     if cfg.vol_filter_enabled \
             and not (cfg.vol_filter_weekday_only and _in_weekend_session()) \
             and len(ts.bid_history) >= cfg.vol_min_samples:
@@ -754,10 +895,12 @@ async def check_signal(state: BotState, ts: TokenState, _t_ws: Optional[float] =
         if vol_bid > cfg.vol_bid_max or range_bid > cfg.range_bid_max or obi_vol > cfg.obi_vol_max:
             logger.debug("VOL FILTER bid_vol=%.3f range=%.3f obi_vol=%.3f — skip %s",
                          vol_bid, range_bid, obi_vol, ts.market_id[:12])
+            state.rejection_stats.vol_filter += 1
             return
-    if state.capital - len(state.open_trades) * cfg.stake < cfg.stake: return
-    if state.daily_pnl < -cfg.daily_stop_loss: return
-    if time.time() < state.api_cooldown_until: return
+    if state.capital - len(state.open_trades) * cfg.stake < cfg.stake:
+        state.rejection_stats.capital += 1; return
+    if state.daily_pnl < -cfg.daily_stop_loss: state.rejection_stats.daily_stop += 1; return
+    if time.time() < state.api_cooldown_until: state.rejection_stats.api_cooldown += 1; return
 
     state.signalled.add(ts.market_id)
     await enter_live_trade(state, ts, _t_ws=_t_ws)
@@ -799,7 +942,7 @@ async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[floa
             if state.api_fail_streak >= 3:
                 state.api_cooldown_until = time.time() + 300
                 logger.warning(
-                    "CIRCUIT-BREAKER: %d échecs CLOB consécutifs — entrées suspendues 5 min",
+                    "CIRCUIT-BREAKER: %d consecutive CLOB failures — entries suspended 5 min",
                     state.api_fail_streak,
                 )
         else:
@@ -832,8 +975,8 @@ async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[floa
         total_ms = t_signal_ms + order_rtt_ms
         logger.info(
             "[LATENCY] signal_ms=%.2f order_rtt_ms=%.2f total_ms=%.2f"
-            " direction=%s market=%s",
-            t_signal_ms, order_rtt_ms, total_ms, ts.direction, ts.market_id[:12],
+            " ts_ms=%d direction=%s market=%s",
+            t_signal_ms, order_rtt_ms, total_ms, now_ms, ts.direction, ts.market_id[:12],
         )
 
 def check_resolution(state: BotState, ts: TokenState) -> None:
@@ -961,8 +1104,8 @@ async def ws_loop(state: BotState, session: aiohttp.ClientSession) -> None:
         try:
             await _run_ws(state, session)
             backoff = 1
-        except Exception as e:
-            logger.warning("WS erreur (%s) — reconnexion %ds", e, backoff)
+        except Exception:
+            logger.warning("WS error — reconnecting in %ds", backoff, exc_info=True)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60)
 
@@ -982,15 +1125,15 @@ async def _market_refresh_loop(state: BotState, session: aiohttp.ClientSession, 
             if ni:
                 for i in range(0, len(ni), api.WS_BATCH_SIZE):
                     await ws.send(api.make_subscribe_msg(ni[i:i + api.WS_BATCH_SIZE]))
-                logger.info("Nouveaux tokens : %d", len(ni))
+                logger.info("New tokens: %d", len(ni))
 
             n = purge_expired_markets(state)
             if n:
-                logger.info("Tokens expires purges : %d", n)
+                logger.info("Expired tokens purged: %d", n)
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.warning("Refresh marches erreur : %s", e)
+            logger.warning("Market refresh error: %s", e)
 
 
 async def _run_ws(state: BotState, session: aiohttp.ClientSession) -> None:
@@ -1008,7 +1151,7 @@ async def _run_ws(state: BotState, session: aiohttp.ClientSession) -> None:
     """
     markets = await api.get_markets(session)
     if not markets:
-        logger.warning("Aucun marche — attente 30s")
+        logger.warning("No markets — waiting 30s")
         await asyncio.sleep(30)
         return
 
@@ -1023,18 +1166,18 @@ async def _run_ws(state: BotState, session: aiohttp.ClientSession) -> None:
             all_token_ids.append(tid)
 
     if not all_token_ids:
-        logger.warning("Aucun token actif — attente 30s")
+        logger.warning("No active tokens — waiting 30s")
         await asyncio.sleep(30)
         return
 
     state.session = session
-    logger.info("Souscription %d tokens...", len(all_token_ids))
+    logger.info("Subscribing to %d tokens...", len(all_token_ids))
 
     async with websockets.connect(api.WS_URL, ping_interval=20, ping_timeout=10) as ws:
         for i in range(0, len(all_token_ids), api.WS_BATCH_SIZE):
             await ws.send(api.make_subscribe_msg(all_token_ids[i:i + api.WS_BATCH_SIZE]))
         ld = time.time()
-        logger.info("WebSocket connecte")
+        logger.info("WebSocket connected")
         refresh_task = asyncio.create_task(_market_refresh_loop(state, session, ws))
 
         try:
@@ -1043,10 +1186,11 @@ async def _run_ws(state: BotState, session: aiohttp.ClientSession) -> None:
                     raw = await asyncio.wait_for(ws.recv(), timeout=30)
                 except asyncio.TimeoutError:
                     if not any(not t.market_ended for t in state.tokens.values()):
-                        logger.warning("Aucun token actif — reconnexion")
+                        logger.warning("No active tokens — reconnecting")
                         break
                     continue
-                except Exception:
+                except Exception as _exc:
+                    logger.warning("Unexpected WS recv exception", exc_info=True)
                     break
 
                 now = time.time()
@@ -1057,7 +1201,8 @@ async def _run_ws(state: BotState, session: aiohttp.ClientSession) -> None:
                 try:
                     msgs = json.loads(raw)
                     if isinstance(msgs, dict): msgs = [msgs]
-                except Exception:
+                except Exception as _json_exc:
+                    logger.debug("JSON parse failed: %s | raw=%r", _json_exc, raw[:200])
                     continue
 
                 for msg in msgs:
@@ -1086,7 +1231,7 @@ def restore_state_from_db(state: BotState) -> None:
         state.open_trades[mid] = tid
         state.traded_direction[mid] = d
         state.signalled.add(mid)
-    if rows: logger.info("Restaure %d trade(s)", len(rows))
+    if rows: logger.info("Restored %d open trade(s)", len(rows))
 
     # Mark recently resolved markets as signalled to prevent re-entry if the
     # bot restarts within the same 5-minute market window (e.g. a restart 30s
@@ -1100,7 +1245,7 @@ def restore_state_from_db(state: BotState) -> None:
     for (mid,) in recent_rows:
         state.signalled.add(mid)
     if recent_rows:
-        logger.info("Signalles recents : %d marche(s) exclus du re-signal", len(recent_rows))
+        logger.info("Recent resolved: %d market(s) excluded from re-signal", len(recent_rows))
 
     row = state.conn.execute(
         "SELECT COUNT(*), "
@@ -1138,44 +1283,54 @@ async def main() -> None:
         snapshot_interval=args.snapshot_interval,
     )
     _setup_logging(config)
+    _load_connector(config.connector)
 
     _up = int(time.time() - _BOT_START)
     _start_str = datetime.fromtimestamp(_BOT_START, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     logger.info("=" * 65)
     if config.simulate:
-        logger.warning("  MODE SIMULATION — donnees isolees dans %s", config.install_dir)
+        logger.warning("  SIMULATION MODE — data isolated in %s", config.install_dir)
     logger.info(
         "  LIVE BOT v0.41 | start=%s UTC | up %dh%02dm%02ds"
-        " | seuil=%.2f mise=$%.0f minAskVol=%.0f",
+        " | thresh=%.2f stake=$%.0f minAskVol=%.0f",
         _start_str, _up // 3600, (_up % 3600) // 60, _up % 60,
         config.signal_threshold, config.stake, config.min_ask_vol,
     )
     if config.strategy_loaded:
-        logger.info("  Strategie : %s", os.path.basename(config.strategy_loaded))
+        logger.info("  Strategy: %s [%s/%s]",
+                    os.path.basename(config.strategy_loaded),
+                    config.strategy_type, config.connector)
     else:
-        logger.warning("  Strategie : fichier absent — parametres par defaut")
+        logger.warning("  Strategy: file not found — using defaults")
     if config.hour_filter_enabled:
-        _wd = " ".join(f"{s}-{e}h" for s, e in config.weekday_utc_ranges) or "toutes heures"
-        _we = " ".join(f"{s}-{e}h" for s, e in config.weekend_utc_ranges) or "bloque"
-        _mo = " ouv.lun=13h30" if config.us_weekly_open else ""
-        _fr = " ferm.ven=20h00" if config.us_weekly_close else ""
-        logger.info("  Filtre horaire : sem=%s | we=%s%s%s", _wd, _we, _mo, _fr)
+        _wd = " ".join(f"{s}-{e}h" for s, e in config.weekday_utc_ranges) or "all hours"
+        _we = " ".join(f"{s}-{e}h" for s, e in config.weekend_utc_ranges) or "blocked"
+        _mo = " mon-open=13h30" if config.us_weekly_open else ""
+        _fr = " fri-close=20h00" if config.us_weekly_close else ""
+        logger.info("  Hour filter: weekday=%s | weekend=%s%s%s", _wd, _we, _mo, _fr)
     if not config.private_key:
-        logger.warning("  POLY_PRIVATE_KEY non definie — ordres SIMULES")
+        logger.warning("  POLY_PRIVATE_KEY not set — orders SIMULATED")
     logger.info("=" * 65)
     conn = init_db(config)
     state = BotState(conn, config)
     restore_state_from_db(state)
+
     async with aiohttp.ClientSession(
         connector=aiohttp.TCPConnector(limit=10)
     ) as session:
+        state.session = session   # available before ws_loop for strategy restore
+        if config.strategy_type != "threshold":
+            from strategies import load as _load_strat
+            state.strategy = _load_strat(config.strategy_type, config)
+            logger.info("  Algorithm   : %s", config.strategy_type)
+            await state.strategy.restore_from_db(state)
         await ws_loop(state, session)
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("Arret.")
+        logger.info("Stopped.")
     finally:
         # Flush the async log queue before exit. Without this, records still
         # sitting in the queue when the process ends would be silently dropped.

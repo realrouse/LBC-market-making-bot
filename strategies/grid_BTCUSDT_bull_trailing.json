@@ -1,0 +1,32 @@
+{
+    "_name": "Grid BTC/USDT — bull-adapted trailing (backtested)",
+    "_description": "Trailing grid: re-centers upward when price rises above grid_upper (trail_mode=bull). Does NOT re-center downward — if price falls below grid_lower the grid stops with a limited loss. Backtested on three regimes at ±15%/30 levels: +5.0%/90d lateral 2026 (100% time in grid, 1 re-center), +3.7% bull run 2024 (+3.6 points vs static +0.1%, 3 re-centers at $76K/$87K/$101K), -3.3% bear 2022 (identical to static — stopped at exit_low). Suited for bull or uncertain market with expected further upside. Recalibrate grid_lower/grid_upper to ±15% of current BTC price. Capital = grid_levels × grid_order_size_usdt.",
+    "_backtest": {
+        "trail_mode":       "bull (re-center upward only)",
+        "range_pct":        "±15%",
+        "lateral_2026":     "+5.0% / 90d (+20% ann) — 100% time in grid — 1 re-center at $81,715",
+        "bear_2022":        "-3.3% — 0 re-centers — identical to static (stopped at exit_low after 9%)",
+        "bullrun_2024":     "+3.7% (+15% ann) — 3 re-centers ($75,982 / $87,348 / $100,761) — 100% time in grid",
+        "key_insight":      "trailing upward captures oscillations at each price level throughout the bull run (134 cycles vs 5 static)",
+        "comparison":       "bull run: static +$2 / trailing +$55 — 26x more profit",
+        "calibrated_at":    "2026-05-09  BTC=$80,705"
+    },
+    "_run_backtest": "python3 scripts/backtest_grid.py --all --trail bull --range 15 --levels 30 --compare",
+
+    "strategy_type": "grid",
+    "connector":     "binance",
+
+    "grid_symbol":          "BTCUSDT",
+    "grid_lower":           68599.0,
+    "grid_upper":           92811.0,
+    "grid_levels":          30,
+    "grid_order_size_usdt": 50.0,
+
+    "capital_start": 1500.0,
+    "stake":           50.0,
+    "daily_stop_loss": 150.0,
+
+    "hour_filter": {
+        "enabled": false
+    }
+}

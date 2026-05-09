@@ -3,6 +3,11 @@ Binance spot API adapter — implements the same public interface as
 api_polymarket.py: get_markets, post_order, parse_book_update, compute_fee,
 and market metadata helpers.
 
+Grid trading extensions (not in api_polymarket):
+    get_order_status(session, symbol, order_id) → status string or None
+    cancel_order(session, symbol, order_id)     → bool
+    get_open_orders(session, symbol)            → list[dict]
+
 Credentials: BINANCE_API_KEY and BINANCE_API_SECRET env vars,
 or pass api_key / api_secret kwargs to post_order.
 
@@ -41,19 +46,23 @@ def compute_fee(price, quantity):
 # without modification. For spot markets, "UP token" = BUY side, "DOWN" = SELL.
 
 def get_market_id(market):
+    """Return the trading symbol as the market identifier."""
     return market.get("symbol", "")
 
 
 def get_market_question(market):
+    """Return a human-readable market description (falls back to symbol)."""
     return market.get("question", market.get("symbol", ""))
 
 
 def get_market_end_ts_ms(market):
-    return 0.0  # spot markets have no expiry
+    """Return 0 — spot markets have no scheduled expiry."""
+    return 0.0
 
 
 def get_market_start_ts_ms(market):
-    return 0.0  # not applicable to spot
+    """Return 0 — start time is not applicable to spot markets."""
+    return 0.0
 
 
 def get_up_token_id(market):
@@ -247,3 +256,211 @@ async def post_order(session, symbol, price, size_usdc, *,
     except Exception as e:
         logger.error("Binance post_order erreur : %s", e)
         return None
+
+
+# ─── ORDER MANAGEMENT (grid trading) ─────────────────────────────────────────
+
+async def get_order_status(session, symbol, order_id, *,
+                           api_key=None, api_secret=None):
+    """
+    Query the status of a single order.
+
+    Returns "NEW" | "FILLED" | "CANCELED" | "PARTIALLY_FILLED" | "EXPIRED",
+    or None on error or when running in simulation mode (no credentials).
+
+    Weight: 4 (per Binance rate-limit documentation).
+    """
+    _key    = api_key    or os.environ.get("BINANCE_API_KEY", "")
+    _secret = api_secret or os.environ.get("BINANCE_API_SECRET", "")
+    if not _key or not _secret:
+        return None
+    if str(order_id).startswith("sim_"):
+        return None
+    try:
+        params = {
+            "symbol":    str(symbol).split(":", maxsplit=1)[0],
+            "orderId":   int(order_id),
+            "timestamp": int(time.time() * 1000),
+        }
+        params["signature"] = _sign(params, _secret)
+        async with session.get(
+            f"{BASE_URL}/api/v3/order",
+            params=params,
+            headers={"X-MBX-APIKEY": _key},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            data = await resp.json(content_type=None)
+            if resp.status != 200:
+                logger.warning("Binance get_order_status erreur %d : %s", resp.status, data)
+                return None
+            return str(data.get("status", "")) or None
+    except Exception as e:
+        logger.error("Binance get_order_status erreur : %s", e)
+        return None
+
+
+async def cancel_order(session, symbol, order_id, *,
+                       api_key=None, api_secret=None):
+    """
+    Cancel an open order.
+
+    Returns True on success (status == "CANCELED"), False on error.
+    Simulated orders (sim_ prefix) and missing credentials both return True
+    immediately — they require no real cancellation.
+
+    Weight: 1.
+    """
+    if str(order_id).startswith("sim_"):
+        return True
+    _key    = api_key    or os.environ.get("BINANCE_API_KEY", "")
+    _secret = api_secret or os.environ.get("BINANCE_API_SECRET", "")
+    if not _key or not _secret:
+        return True
+    try:
+        params = {
+            "symbol":    str(symbol).split(":", maxsplit=1)[0],
+            "orderId":   int(order_id),
+            "timestamp": int(time.time() * 1000),
+        }
+        params["signature"] = _sign(params, _secret)
+        async with session.delete(
+            f"{BASE_URL}/api/v3/order",
+            params=params,
+            headers={"X-MBX-APIKEY": _key},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            data = await resp.json(content_type=None)
+            if resp.status != 200:
+                logger.warning("Binance cancel_order erreur %d : %s", resp.status, data)
+                return False
+            return str(data.get("status", "")) == "CANCELED"
+    except Exception as e:
+        logger.error("Binance cancel_order erreur : %s", e)
+        return False
+
+
+async def get_open_orders(session, symbol, *, api_key=None, api_secret=None):
+    """
+    Return all open orders for `symbol` as a normalised list.
+
+    Each element: {"order_id": str, "side": str, "price": float,
+                   "qty": float, "status": str}
+
+    Returns [] on error or in simulation mode (no credentials).
+    Prefer this over repeated get_order_status calls: costs 40 weight vs
+    4 × N weight for N individual status queries.
+
+    Weight: 40 (with symbol filter).
+    """
+    _key    = api_key    or os.environ.get("BINANCE_API_KEY", "")
+    _secret = api_secret or os.environ.get("BINANCE_API_SECRET", "")
+    if not _key or not _secret:
+        return []
+    try:
+        params = {
+            "symbol":    str(symbol).split(":", maxsplit=1)[0],
+            "timestamp": int(time.time() * 1000),
+        }
+        params["signature"] = _sign(params, _secret)
+        async with session.get(
+            f"{BASE_URL}/api/v3/openOrders",
+            params=params,
+            headers={"X-MBX-APIKEY": _key},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            data = await resp.json(content_type=None)
+            if resp.status != 200:
+                logger.warning("Binance get_open_orders erreur %d : %s", resp.status, data)
+                return []
+            return [
+                {
+                    "order_id": str(o.get("orderId", "")),
+                    "side":     str(o.get("side", "")),
+                    "price":    float(o.get("price", 0)),
+                    "qty":      float(o.get("origQty", 0)),
+                    "status":   str(o.get("status", "")),
+                }
+                for o in data
+            ]
+    except Exception as e:
+        logger.error("Binance get_open_orders erreur : %s", e)
+        return []
+
+
+# ─── USER DATA STREAM ─────────────────────────────────────────────────────────
+
+async def get_listen_key(session, *, api_key=None, api_secret=None):
+    """
+    Create a new user data stream and return its listenKey (60-min TTL).
+    Extend with keepalive_listen_key every 30 min before it expires.
+    Returns the listenKey string, or None on error / missing credentials.
+    Weight: 2.
+    """
+    key = api_key or os.environ.get("BINANCE_API_KEY", "")
+    if not key:
+        return None
+    try:
+        async with session.post(
+            f"{BASE_URL}/api/v3/userDataStream",
+            headers={"X-MBX-APIKEY": key},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            if resp.status != 200:
+                logger.warning("Binance get_listen_key erreur %d", resp.status)
+                return None
+            data = await resp.json(content_type=None)
+            return data.get("listenKey") or None
+    except Exception as e:
+        logger.error("Binance get_listen_key erreur : %s", e)
+        return None
+
+
+async def keepalive_listen_key(session, listen_key, *, api_key=None, api_secret=None):
+    """
+    Extend the TTL of an existing listenKey (PUT /api/v3/userDataStream).
+    Should be called every ~30 min to prevent key expiry (TTL = 60 min).
+    Returns True on success.  Weight: 2.
+    """
+    key = api_key or os.environ.get("BINANCE_API_KEY", "")
+    if not key or not listen_key:
+        return False
+    try:
+        async with session.put(
+            f"{BASE_URL}/api/v3/userDataStream",
+            params={"listenKey": listen_key},
+            headers={"X-MBX-APIKEY": key},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            return resp.status == 200
+    except Exception as e:
+        logger.error("Binance keepalive_listen_key erreur : %s", e)
+        return False
+
+
+def make_user_stream_url(listen_key: str) -> str:
+    """Return the WebSocket URL for the user data stream."""
+    return f"wss://stream.binance.com:9443/ws/{listen_key}"
+
+
+def parse_user_stream_msg(msg: dict) -> "dict | None":
+    """
+    Parse a Binance executionReport WebSocket event.
+
+    Returns {"order_id", "status", "side", "symbol"} when the order status
+    is FILLED or PARTIALLY_FILLED, otherwise None.
+
+    Binance event shape:
+        {"e": "executionReport", "s": symbol, "i": orderId,
+         "X": currentOrderStatus, "S": side, ...}
+    """
+    if not isinstance(msg, dict) or msg.get("e") != "executionReport":
+        return None
+    status = str(msg.get("X", ""))
+    if status not in ("FILLED", "PARTIALLY_FILLED"):
+        return None
+    return {
+        "order_id": str(msg.get("i", "")),
+        "status":   status,
+        "side":     str(msg.get("S", "")),
+        "symbol":   str(msg.get("s", "")),
+    }

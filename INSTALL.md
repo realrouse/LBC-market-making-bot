@@ -444,6 +444,145 @@ When more than one file is processed, each file runs with capital reset to `capi
 | `--top N` | 0 (all) | Show only top-N unique configs in sweep table (deduped on threshold/min_secs/obi) |
 
 
+## Technical Indicator Service
+
+`bot/indicators.py` is a ZeroMQ pipeline stage that sits between feed.py and any consumer. It subscribes to the feed PUB socket, accumulates a price history per token, and republishes enriched indicator messages on a second PUB socket.
+
+```
+feed.py  PUB :5557  ──SUB──▶  indicators.py  ──PUB :5559──▶  consumers
+```
+
+```bash
+# Start with default settings (SUB :5557 → PUB :5559)
+python3 bot/indicators.py
+
+# Custom periods
+python3 bot/indicators.py --rsi 7 --sma 10 --ema 5 --vol 10
+
+# Custom ZMQ addresses
+python3 bot/indicators.py --feed tcp://127.0.0.1:5558 --out tcp://127.0.0.1:5560
+
+# Verbose (prints each indicator publish to stdout)
+python3 bot/indicators.py --verbose
+```
+
+**Output message format:**
+
+```json
+{"t": "indicators", "token_id": "...", "ts": 1746800000000,
+ "rsi_14": 72.3, "sma_20": 0.9612, "ema_9": 0.9634, "vol_20": 0.0021}
+```
+
+Messages are only published once `--min-ticks` (default: 25) price updates have been received **and** all indicator periods are satisfied.
+
+**Flags:**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--feed ADDR` | `tcp://127.0.0.1:5557` | ZMQ address to subscribe to (feed.py PUB) |
+| `--out ADDR` | `tcp://127.0.0.1:5559` | ZMQ address to bind and publish on |
+| `--rsi N` | 14 | RSI period |
+| `--sma N` | 20 | SMA period |
+| `--ema N` | 9 | EMA period |
+| `--vol N` | 20 | Volatility window (std-dev of log-returns) |
+| `--min-ticks N` | 25 | Minimum price ticks before any publish |
+| `--verbose` | — | Print each publish at DEBUG level |
+
+**Environment variables:** `TRADINEBOTTE_FEED_ADDR` and `TRADINEBOTTE_INDICATORS_ADDR` override the defaults for `--feed` and `--out`.
+
+### Per-account split configs
+
+Two ready-to-use configs are provided for multi-bot deployments:
+
+| File | Account | Port | Timeframe |
+|---|---|---|---|
+| `strategies/indicators_4h_bitcoin.json` | account-a | `:5559` | 4h |
+| `strategies/indicators_1d_bitcoin.json` | account-b | `:5560` | `1d` |
+
+Start each with `start_indicators.sh`:
+
+```bash
+# account-a
+TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_4h_bitcoin.json \
+  bash scripts/start_indicators.sh
+
+# account-b
+TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_1d_bitcoin.json \
+  bash scripts/start_indicators.sh
+```
+
+
+## Grid Trading Backtest
+
+Replay historical BTC/USDT OHLCV data against a configurable grid strategy. Fill model: price-touch on the candle `[low, high]` range. Requires 1-minute SQLite databases in `data/` — download with `scripts/download_btc_history.py`.
+
+```bash
+# Static grid (default) — all DBs in data/
+python3 scripts/backtest_grid.py --all
+
+# Bear-adapted trailing — re-center grid downward on each exit_low
+python3 scripts/backtest_grid.py --all --trail bear
+
+# Bull-adapted trailing — re-center grid upward on each exit_high
+python3 scripts/backtest_grid.py --all --trail bull
+
+# Side-by-side comparison: static vs trailing
+python3 scripts/backtest_grid.py --all --trail bear --compare
+python3 scripts/backtest_grid.py --all --trail bull --compare
+
+# Parameter sweep (range × levels combos)
+python3 scripts/backtest_grid.py --all --sweep
+python3 scripts/backtest_grid.py --all --sweep --sort pnl
+
+# Explicit DB file
+python3 scripts/backtest_grid.py data/BTCUSDT_1m90d_range_20260208-20260509.db
+```
+
+**Parameter flags:**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--all` | — | Use all `BTCUSDT_1m*.db` files found in `data/` |
+| `--range FLOAT` | 15.0 | Grid ±% from start/re-center price (`grid_lower = price × (1 − range/100)`) |
+| `--levels INT` | 30 | Number of evenly-spaced grid levels; capital = `levels × size` |
+| `--size FLOAT` | 50.0 | USDT per order |
+| `--fee FLOAT` | 0.1 | Fee rate % per side |
+| `--trail MODE` | `off` | Trailing mode: `off` (static), `bear` (re-center down), `bull` (re-center up), `both` (both — dangerous in trending markets) |
+| `--max-recenters INT` | 10 | Max re-centers before treating as stop-loss |
+| `--compare` | — | Run static alongside trailing and print side-by-side per DB |
+| `--sweep` | — | Sweep `range_pct × levels` (5×3 = 15 combos) |
+| `--sort METRIC` | `calmar` | Sort sweep results by `calmar` (PnL%/MaxDD) or `pnl` |
+
+### Download historical OHLCV data
+
+```bash
+# Last 90 days (default)
+python3 scripts/download_btc_history.py
+
+# Historical range — 2022 bear market (LUNA crash)
+python3 scripts/download_btc_history.py --start 2022-05-01 --end 2022-08-01
+
+# Historical range — 2024 bull run
+python3 scripts/download_btc_history.py --start 2024-10-15 --end 2025-01-15
+
+# Custom output path
+python3 scripts/download_btc_history.py --out data/my_range.db
+```
+
+**Flags:**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--symbol STR` | `BTCUSDT` | Trading pair |
+| `--interval STR` | `1m` | Candle interval (`1m`, `5m`, `15m`, `1h`, …) |
+| `--days INT` | 90 | Days to download (used when `--start` is absent) |
+| `--start DATE` | — | Start date `YYYY-MM-DD`; overrides `--days` |
+| `--end DATE` | today | End date `YYYY-MM-DD` |
+| `--out FILE` | auto | Output SQLite path (default: `data/BTCUSDT_1m<N>d_range_<dates>.db`) |
+
+Output databases are excluded from git (`.gitignore`). The download resumes from the last stored candle on re-run. See [`docs/AdaptedGridTrading.md`](docs/AdaptedGridTrading.md) for backtest results, strategy selection, and parameter sweep tables.
+
+
 ## Hour / Day Filter
 
 The bot can restrict trade entries to specific UTC hour ranges depending on the day of the week. The filter is configured in the strategy JSON file (`strategies/polymarket_BTC5M.json`) and is **disabled by default** — existing behaviour is preserved until you explicitly enable it.

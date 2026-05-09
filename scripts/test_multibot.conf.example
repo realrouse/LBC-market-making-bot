@@ -14,10 +14,22 @@ TEST_SERVER="myserver.example.com"
 TEST_PORT="22"
 
 # ─── Test accounts ─────────────────────────────────────────────────────────────
-# All three arrays must have the same length.
+# All arrays below must have the same length.
 # Each entry corresponds to one account bot instance.
 TEST_USERS=(user1 user2 user3)
 TEST_PASSWORDS=(pass1 pass2 pass3)
+
+# ─── Per-account indicator configs ────────────────────────────────────────────
+# Path (relative to REMOTE_INSTALL_DIR) to the indicators JSON config for each
+# account. Use "" to skip the indicators service for that account.
+#   user1 → 4h indicators (port 5559)
+#   user2 → daily indicators (port 5560)
+#   user3 → no indicators
+TEST_INDICATORS_CONFIGS=(
+    "strategies/indicators_4h_bitcoin.json"
+    "strategies/indicators_1d_bitcoin.json"
+    ""
+)
 
 # ─── Optional overrides ────────────────────────────────────────────────────────
 # Duration of the sustained-operation phase (seconds). Default: 180.

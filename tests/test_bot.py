@@ -7,7 +7,7 @@ Run with:
     .venv/bin/python3 -m unittest discover tests/ -v
 """
 
-import os, sys, time, sqlite3, unittest
+import logging, os, sys, time, sqlite3, unittest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch
 
@@ -1625,6 +1625,1079 @@ class TestStrategyLoading(unittest.TestCase):
         v1 = self._load("polymarket_BTC5M.json")
         v2 = self._load("polymarket_BTC5M_v2.json")
         self.assertLess(v2["signal_threshold"], v1["signal_threshold"])
+
+
+# ── Connector factory ─────────────────────────────────────────────────────────
+
+import connectors as _connectors_mod
+
+class TestConnectorFactory(unittest.TestCase):
+    """connectors.load() returns the correct api_* module."""
+
+    def test_polymarket(self):
+        mod = _connectors_mod.load("polymarket")
+        self.assertTrue(hasattr(mod, "parse_book_update"))
+        self.assertTrue(hasattr(mod, "post_order"))
+        self.assertTrue(hasattr(mod, "compute_fee"))
+
+    def test_binance(self):
+        mod = _connectors_mod.load("binance")
+        self.assertTrue(hasattr(mod, "parse_book_update"))
+        self.assertTrue(hasattr(mod, "post_order"))
+
+    def test_mexc(self):
+        mod = _connectors_mod.load("mexc")
+        self.assertTrue(hasattr(mod, "parse_book_update"))
+        self.assertTrue(hasattr(mod, "post_order"))
+
+    def test_unknown_raises(self):
+        with self.assertRaises(ValueError):
+            _connectors_mod.load("unknown_exchange")
+
+    def test_available_lists_three(self):
+        avail = _connectors_mod.available()
+        self.assertIn("polymarket", avail)
+        self.assertIn("binance", avail)
+        self.assertIn("mexc", avail)
+
+    def test_polymarket_and_binance_share_interface(self):
+        """Both modules expose the same public surface."""
+        pm = _connectors_mod.load("polymarket")
+        bn = _connectors_mod.load("binance")
+        for attr in ("parse_book_update", "post_order", "compute_fee",
+                     "make_subscribe_msg", "WS_URL", "WS_BATCH_SIZE"):
+            self.assertTrue(hasattr(pm, attr), f"polymarket missing {attr}")
+            self.assertTrue(hasattr(bn, attr), f"binance missing {attr}")
+
+    def test_binance_grid_extensions(self):
+        """Binance exposes cancel_order, get_order_status, get_open_orders."""
+        mod = _connectors_mod.load("binance")
+        for fn in ("cancel_order", "get_order_status", "get_open_orders"):
+            self.assertTrue(hasattr(mod, fn), f"binance missing {fn}")
+
+    def test_mexc_grid_extensions(self):
+        mod = _connectors_mod.load("mexc")
+        for fn in ("cancel_order", "get_order_status", "get_open_orders"):
+            self.assertTrue(hasattr(mod, fn), f"mexc missing {fn}")
+
+
+# ── Strategy factory ──────────────────────────────────────────────────────────
+
+import strategies as _strategies_mod
+from strategies.grid import GridStrategy, GridLevel, GridState
+
+class TestStrategyFactory(unittest.TestCase):
+    """strategies.load() returns the correct strategy or None for threshold."""
+
+    def _grid_config(self):
+        cfg = bot.BotConfig()
+        cfg.grid_symbol          = "BTCUSDT"
+        cfg.grid_lower           = 90000.0
+        cfg.grid_upper           = 110000.0
+        cfg.grid_levels          = 10
+        cfg.grid_order_size_usdt = 50.0
+        return cfg
+
+    def test_threshold_returns_none(self):
+        result = _strategies_mod.load("threshold", bot.BotConfig())
+        self.assertIsNone(result)
+
+    def test_grid_returns_strategy(self):
+        s = _strategies_mod.load("grid", self._grid_config())
+        self.assertIsInstance(s, GridStrategy)
+
+    def test_unknown_raises(self):
+        with self.assertRaises(ValueError):
+            _strategies_mod.load("no_such_strategy", bot.BotConfig())
+
+    def test_available_includes_threshold_and_grid(self):
+        avail = _strategies_mod.available()
+        self.assertIn("threshold", avail)
+        self.assertIn("grid", avail)
+
+
+class TestGridStrategy(unittest.TestCase):
+    """GridStrategy initialisation and level computation."""
+
+    def _make(self, lower=90000.0, upper=110000.0, levels=10, size=50.0):
+        cfg = bot.BotConfig()
+        cfg.grid_symbol          = "BTCUSDT"
+        cfg.grid_lower           = lower
+        cfg.grid_upper           = upper
+        cfg.grid_levels          = levels
+        cfg.grid_order_size_usdt = size
+        return GridStrategy(cfg)
+
+    def test_level_count(self):
+        s = self._make(levels=10)
+        self.assertEqual(len(s.levels), 10)
+
+    def test_level_count_20(self):
+        s = self._make(levels=20)
+        self.assertEqual(len(s.levels), 20)
+
+    def test_lower_bound(self):
+        s = self._make(lower=90000.0, upper=110000.0, levels=10)
+        self.assertAlmostEqual(s.levels[0].price, 90000.0)
+
+    def test_upper_bound(self):
+        s = self._make(lower=90000.0, upper=110000.0, levels=10)
+        self.assertAlmostEqual(s.levels[-1].price, 110000.0)
+
+    def test_grid_step(self):
+        s = self._make(lower=90000.0, upper=110000.0, levels=11)
+        self.assertAlmostEqual(s.grid.grid_step, 2000.0)
+
+    def test_all_levels_idle_at_init(self):
+        s = self._make()
+        self.assertTrue(all(lvl.status == "idle" for lvl in s.levels))
+
+    def test_invalid_bounds_raises(self):
+        with self.assertRaises(ValueError):
+            self._make(lower=110000.0, upper=90000.0)
+
+    def test_zero_lower_raises(self):
+        with self.assertRaises(ValueError):
+            self._make(lower=0.0, upper=110000.0)
+
+    def test_single_level_raises(self):
+        with self.assertRaises(ValueError):
+            self._make(levels=1)
+
+    def test_zero_size_raises(self):
+        with self.assertRaises(ValueError):
+            self._make(size=0.0)
+
+    def test_strategy_type(self):
+        s = self._make()
+        self.assertEqual(s.STRATEGY_TYPE, "grid")
+
+    def test_level_at_price_exact(self):
+        s = self._make(lower=90000.0, upper=110000.0, levels=11)
+        lvl = s.level_at_price(92000.0)
+        self.assertIsNotNone(lvl)
+        self.assertAlmostEqual(lvl.price, 92000.0, places=0)
+
+    def test_level_at_price_miss(self):
+        s = self._make(lower=90000.0, upper=110000.0, levels=11)
+        self.assertIsNone(s.level_at_price(50000.0))
+
+    def test_stop_loss_below(self):
+        s = self._make(lower=90000.0, upper=110000.0)
+        self.assertTrue(s._check_stop_loss(89999.0))
+
+    def test_stop_loss_above(self):
+        s = self._make(lower=90000.0, upper=110000.0)
+        self.assertTrue(s._check_stop_loss(110001.0))
+
+    def test_no_stop_loss_inside(self):
+        s = self._make(lower=90000.0, upper=110000.0)
+        self.assertFalse(s._check_stop_loss(100000.0))
+
+    def test_grid_not_initialised_at_start(self):
+        s = self._make()
+        self.assertFalse(s.grid.initialised)
+
+    def test_grid_not_halted_at_start(self):
+        s = self._make()
+        self.assertFalse(s.grid.halted)
+
+
+# ─── Grid strategy async behaviour ────────────────────────────────────────────
+
+import asyncio, unittest.mock
+
+class _FakeTokenState:
+    """Minimal TokenState substitute for grid tests."""
+    def __init__(self, best_bid=100000.0, best_ask=100050.0):
+        self.best_bid = best_bid
+        self.best_ask = best_ask
+
+class _FakeConn:
+    """Minimal sqlite3.Connection substitute — discards all writes."""
+    def execute(self, *_a, **_kw):
+        return self
+    def fetchone(self):
+        return None
+    def fetchall(self):
+        return []
+    def commit(self):
+        pass
+
+class _FakeState:
+    """Minimal BotState substitute."""
+    def __init__(self):
+        self.session = object()
+        self.conn    = _FakeConn()
+
+def _run(coro):
+    return asyncio.run(coro)
+
+
+class TestGridInitialise(unittest.TestCase):
+    """_initialise_grid places BUY below ask and SELL above ask."""
+
+    def _make_strategy(self):
+        cfg = bot.BotConfig()
+        cfg.grid_symbol          = "BTCUSDT"
+        cfg.grid_lower           = 98000.0
+        cfg.grid_upper           = 102000.0
+        cfg.grid_levels          = 5       # 98k 99k 100k 101k 102k, step=1000
+        cfg.grid_order_size_usdt = 50.0
+        cfg.connector            = "binance"
+        return GridStrategy(cfg)
+
+    def test_buy_placed_below_ask(self):
+        s = self._make_strategy()
+        ts = _FakeTokenState(best_bid=99900.0, best_ask=100000.0)
+        with unittest.mock.patch.object(
+            s._api, "post_order",
+            new=unittest.mock.AsyncMock(side_effect=lambda *a, **kw: f"sim_{kw.get('side','')}")
+        ):
+            _run(s._initialise_grid(_FakeState(), ts))
+        buys  = [l for l in s.levels if l.status == "buy_placed"]
+        sells = [l for l in s.levels if l.status == "sell_placed"]
+        self.assertTrue(all(l.price < 100000.0 for l in buys))
+        self.assertTrue(all(l.price > 100000.0 for l in sells))
+
+    def test_initialised_flag_set(self):
+        s = self._make_strategy()
+        ts = _FakeTokenState(best_bid=99900.0, best_ask=100000.0)
+        with unittest.mock.patch.object(
+            s._api, "post_order",
+            new=unittest.mock.AsyncMock(return_value="sim_abc")
+        ):
+            _run(s._initialise_grid(_FakeState(), ts))
+        self.assertTrue(s.grid.initialised)
+
+    def test_level_at_ask_price_is_idle(self):
+        """Level exactly at ask price must be skipped."""
+        s = self._make_strategy()
+        ts = _FakeTokenState(best_ask=100000.0)   # 100k is level index 2
+        with unittest.mock.patch.object(
+            s._api, "post_order",
+            new=unittest.mock.AsyncMock(return_value="sim_x")
+        ):
+            _run(s._initialise_grid(_FakeState(), ts))
+        lvl_100k = s.level_at_price(100000.0)
+        self.assertEqual(lvl_100k.status, "idle")
+
+
+class TestGridFills(unittest.TestCase):
+    """_on_buy_filled and _on_sell_filled place counter-orders and track PnL."""
+
+    def _make_strategy(self):
+        cfg = bot.BotConfig()
+        cfg.grid_symbol          = "BTCUSDT"
+        cfg.grid_lower           = 90000.0
+        cfg.grid_upper           = 110000.0
+        cfg.grid_levels          = 21      # step = 1000
+        cfg.grid_order_size_usdt = 50.0
+        cfg.connector            = "binance"
+        return GridStrategy(cfg)
+
+    def test_buy_filled_places_sell_above(self):
+        s  = self._make_strategy()
+        lvl = s.level_at_price(99000.0)
+        lvl.buy_order_id = "sim_buy1"
+        lvl.buy_price    = 99000.0
+        lvl.status       = "buy_placed"
+
+        with unittest.mock.patch.object(
+            s._api, "post_order",
+            new=unittest.mock.AsyncMock(return_value="sim_sell1")
+        ):
+            _run(s._on_buy_filled(_FakeState(), lvl))
+
+        self.assertEqual(lvl.status, "sell_placed")
+        self.assertAlmostEqual(lvl.sell_price, 100000.0)
+        self.assertIsNone(lvl.buy_order_id)
+
+    def test_sell_filled_places_buy_below_and_counts_cycle(self):
+        s   = self._make_strategy()
+        lvl = s.level_at_price(99000.0)
+        # Simulate the level after a full BUY→SELL cycle
+        lvl.buy_price     = 99000.0
+        lvl.sell_order_id = "sim_sell1"
+        lvl.sell_price    = 100000.0
+        lvl.status        = "sell_placed"
+
+        with unittest.mock.patch.object(
+            s._api, "post_order",
+            new=unittest.mock.AsyncMock(return_value="sim_buy2")
+        ):
+            _run(s._on_sell_filled(_FakeState(), lvl))
+
+        self.assertEqual(s.grid.total_cycles, 1)
+        self.assertGreater(s.grid.total_profit_usd, 0.0)
+        self.assertEqual(lvl.status, "buy_placed")
+        self.assertAlmostEqual(lvl.buy_price, 99000.0)
+
+    def test_sell_filled_profit_positive(self):
+        s   = self._make_strategy()
+        lvl = s.level_at_price(99000.0)
+        lvl.buy_price     = 99000.0
+        lvl.sell_order_id = "sim_sell1"
+        lvl.sell_price    = 100000.0
+        lvl.status        = "sell_placed"
+
+        with unittest.mock.patch.object(
+            s._api, "post_order",
+            new=unittest.mock.AsyncMock(return_value="sim_buy2")
+        ):
+            _run(s._on_sell_filled(_FakeState(), lvl))
+
+        # grid_step=1000, qty=50/99000≈0.000505, fees≈0.10 USDT
+        self.assertGreater(s.grid.total_profit_usd, 0.3)
+        self.assertLess(s.grid.total_profit_usd, 1.0)
+
+    def test_buy_at_top_of_grid_goes_idle(self):
+        """BUY at top level: sell_price would exceed grid_upper → idle."""
+        s   = self._make_strategy()
+        lvl = s.level_at_price(110000.0)   # grid_upper level
+        lvl.buy_order_id = "sim_top"
+        lvl.buy_price    = 110000.0
+        lvl.status       = "buy_placed"
+
+        post_mock = unittest.mock.AsyncMock(return_value="sim_sell_top")
+        with unittest.mock.patch.object(s._api, "post_order", new=post_mock):
+            _run(s._on_buy_filled(_FakeState(), lvl))
+
+        self.assertEqual(lvl.status, "idle")
+        post_mock.assert_not_called()
+
+    def test_sell_at_bottom_of_grid_goes_idle(self):
+        """SELL at bottom level: buy_price would be below grid_lower → idle."""
+        s   = self._make_strategy()
+        lvl = s.level_at_price(90000.0)   # grid_lower level
+        lvl.sell_order_id = "sim_bot"
+        lvl.sell_price    = 90000.0
+        lvl.status        = "sell_placed"
+
+        post_mock = unittest.mock.AsyncMock(return_value="sim_buy_bot")
+        with unittest.mock.patch.object(s._api, "post_order", new=post_mock):
+            _run(s._on_sell_filled(_FakeState(), lvl))
+
+        self.assertEqual(lvl.status, "idle")
+        post_mock.assert_not_called()
+
+
+class TestGridSimFillDetection(unittest.TestCase):
+    """_poll_fills detects simulated fills via price-crossing logic."""
+
+    def _make_strategy(self):
+        cfg = bot.BotConfig()
+        cfg.grid_symbol          = "BTCUSDT"
+        cfg.grid_lower           = 90000.0
+        cfg.grid_upper           = 110000.0
+        cfg.grid_levels          = 21
+        cfg.grid_order_size_usdt = 50.0
+        cfg.connector            = "binance"
+        s = GridStrategy(cfg)
+        s.grid.initialised = True
+        return s
+
+    def test_sim_buy_fill_detected(self):
+        s   = self._make_strategy()
+        lvl = s.level_at_price(99000.0)
+        lvl.buy_order_id = "sim_buy1"
+        lvl.buy_price    = 99000.0
+        lvl.status       = "buy_placed"
+
+        ts = _FakeTokenState(best_bid=98950.0, best_ask=98980.0)  # ask <= buy_price
+
+        counter_oids = []
+        async def fake_post(*a, **kw):
+            oid = f"sim_counter_{len(counter_oids)}"
+            counter_oids.append(kw.get("side", "?"))
+            return oid
+
+        with unittest.mock.patch.object(s._api, "post_order", new=fake_post):
+            _run(s._poll_fills(_FakeState(), ts))
+
+        self.assertIn("SELL", counter_oids)
+        self.assertEqual(lvl.status, "sell_placed")
+
+    def test_sim_sell_fill_detected(self):
+        s   = self._make_strategy()
+        lvl = s.level_at_price(99000.0)
+        lvl.buy_price     = 99000.0
+        lvl.sell_order_id = "sim_sell1"
+        lvl.sell_price    = 100000.0
+        lvl.status        = "sell_placed"
+
+        ts = _FakeTokenState(best_bid=100100.0, best_ask=100150.0)  # bid >= sell_price
+
+        with unittest.mock.patch.object(
+            s._api, "post_order",
+            new=unittest.mock.AsyncMock(return_value="sim_buy2")
+        ):
+            _run(s._poll_fills(_FakeState(), ts))
+
+        self.assertEqual(s.grid.total_cycles, 1)
+
+    def test_no_fill_when_price_not_crossed(self):
+        s   = self._make_strategy()
+        lvl = s.level_at_price(99000.0)
+        lvl.buy_order_id = "sim_buy1"
+        lvl.buy_price    = 99000.0
+        lvl.status       = "buy_placed"
+
+        ts = _FakeTokenState(best_bid=100000.0, best_ask=100050.0)  # ask > buy_price
+
+        post_mock = unittest.mock.AsyncMock()
+        with unittest.mock.patch.object(s._api, "post_order", new=post_mock):
+            _run(s._poll_fills(_FakeState(), ts))
+
+        post_mock.assert_not_called()
+        self.assertEqual(lvl.status, "buy_placed")
+
+
+class TestGridStopLoss(unittest.TestCase):
+    """Stop-loss cancels all orders and halts the grid."""
+
+    def _make_strategy(self):
+        cfg = bot.BotConfig()
+        cfg.grid_symbol          = "BTCUSDT"
+        cfg.grid_lower           = 90000.0
+        cfg.grid_upper           = 110000.0
+        cfg.grid_levels          = 5
+        cfg.grid_order_size_usdt = 50.0
+        cfg.connector            = "binance"
+        s = GridStrategy(cfg)
+        s.grid.initialised = True
+        # Arm two levels with simulated orders
+        s.levels[0].buy_order_id  = "sim_buy_a"
+        s.levels[0].buy_price     = 90000.0
+        s.levels[0].status        = "buy_placed"
+        s.levels[4].sell_order_id = "sim_sell_a"
+        s.levels[4].sell_price    = 110000.0
+        s.levels[4].status        = "sell_placed"
+        return s
+
+    def test_cancel_all_called(self):
+        s  = self._make_strategy()
+        cancel_calls = []
+        async def fake_cancel(session, symbol, oid, **_):
+            cancel_calls.append(oid)
+            return True
+        with unittest.mock.patch.object(s._api, "cancel_order", new=fake_cancel):
+            _run(s._cancel_all_orders(_FakeState()))
+        self.assertIn("sim_buy_a",  cancel_calls)
+        self.assertIn("sim_sell_a", cancel_calls)
+
+    def test_halted_after_cancel(self):
+        s = self._make_strategy()
+        with unittest.mock.patch.object(
+            s._api, "cancel_order",
+            new=unittest.mock.AsyncMock(return_value=True)
+        ):
+            _run(s._cancel_all_orders(_FakeState()))
+        self.assertTrue(s.grid.halted)
+
+    def test_all_levels_idle_after_cancel(self):
+        s = self._make_strategy()
+        with unittest.mock.patch.object(
+            s._api, "cancel_order",
+            new=unittest.mock.AsyncMock(return_value=True)
+        ):
+            _run(s._cancel_all_orders(_FakeState()))
+        self.assertTrue(all(l.status == "idle" for l in s.levels))
+
+    def test_on_book_update_halted_is_noop(self):
+        s = self._make_strategy()
+        s.grid.halted = True
+        post_mock = unittest.mock.AsyncMock()
+        ts = _FakeTokenState(best_bid=89000.0)   # below lower bound
+        with unittest.mock.patch.object(s._api, "post_order", new=post_mock):
+            _run(s.on_book_update(_FakeState(), ts))
+        post_mock.assert_not_called()
+
+    def test_on_book_update_triggers_stop_loss(self):
+        s  = self._make_strategy()
+        ts = _FakeTokenState(best_bid=85000.0)  # below grid_lower=90000
+        with unittest.mock.patch.object(
+            s._api, "cancel_order",
+            new=unittest.mock.AsyncMock(return_value=True)
+        ):
+            _run(s.on_book_update(_FakeState(), ts))
+        self.assertTrue(s.grid.halted)
+
+
+class TestConnectorSimMode(unittest.TestCase):
+    """Connector functions behave correctly without real credentials."""
+
+    def test_binance_cancel_sim_order_returns_true(self):
+        import api_binance
+        result = _run(api_binance.cancel_order(None, "BTCUSDT", "sim_abc123"))
+        self.assertTrue(result)
+
+    def test_mexc_cancel_sim_order_returns_true(self):
+        import api_mexc
+        result = _run(api_mexc.cancel_order(None, "BTCUSDT", "sim_xyz456"))
+        self.assertTrue(result)
+
+    def test_binance_get_open_orders_no_creds_returns_empty(self):
+        import api_binance
+        result = _run(api_binance.get_open_orders(None, "BTCUSDT"))
+        self.assertEqual(result, [])
+
+    def test_mexc_get_open_orders_no_creds_returns_empty(self):
+        import api_mexc
+        result = _run(api_mexc.get_open_orders(None, "BTCUSDT"))
+        self.assertEqual(result, [])
+
+    def test_binance_get_order_status_no_creds_returns_none(self):
+        import api_binance
+        result = _run(api_binance.get_order_status(None, "BTCUSDT", "sim_abc"))
+        self.assertIsNone(result)
+
+    def test_mexc_get_order_status_no_creds_returns_none(self):
+        import api_mexc
+        result = _run(api_mexc.get_order_status(None, "BTCUSDT", "sim_abc"))
+        self.assertIsNone(result)
+
+
+# ── BotConfig connector / strategy_type fields ────────────────────────────────
+
+class TestBotConfigStrategyFields(unittest.TestCase):
+    """connector and strategy_type are propagated through make_config."""
+
+    def test_defaults(self):
+        cfg = bot.BotConfig()
+        self.assertEqual(cfg.connector, "polymarket")
+        self.assertEqual(cfg.strategy_type, "threshold")
+
+    def test_grid_defaults(self):
+        cfg = bot.BotConfig()
+        self.assertEqual(cfg.grid_symbol, "BTCUSDT")
+        self.assertEqual(cfg.grid_levels, 10)
+        self.assertAlmostEqual(cfg.grid_lower, 0.0)
+        self.assertAlmostEqual(cfg.grid_upper, 0.0)
+
+    def test_state_strategy_is_none_by_default(self):
+        conn = make_db()
+        state = bot.BotState(conn)
+        self.assertIsNone(state.strategy)
+
+    def test_state_strategy_can_be_set(self):
+        cfg = bot.BotConfig()
+        cfg.grid_symbol          = "BTCUSDT"
+        cfg.grid_lower           = 90000.0
+        cfg.grid_upper           = 110000.0
+        cfg.grid_levels          = 5
+        cfg.grid_order_size_usdt = 50.0
+        conn = make_db()
+        state = bot.BotState(conn, cfg)
+        state.strategy = GridStrategy(cfg)
+        self.assertIsNotNone(state.strategy)
+        self.assertEqual(state.strategy.STRATEGY_TYPE, "grid")
+
+
+class TestUserDataStream(unittest.TestCase):
+    """parse_user_stream_msg and make_user_stream_url for Binance and MEXC."""
+
+    # ── Binance parse_user_stream_msg ─────────────────────────────────────────
+
+    def test_binance_filled_buy(self):
+        import api_binance
+        msg = {"e": "executionReport", "s": "BTCUSDT",
+               "i": 99999, "X": "FILLED", "S": "BUY"}
+        result = api_binance.parse_user_stream_msg(msg)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["order_id"], "99999")
+        self.assertEqual(result["status"],   "FILLED")
+        self.assertEqual(result["side"],     "BUY")
+        self.assertEqual(result["symbol"],   "BTCUSDT")
+
+    def test_binance_partially_filled(self):
+        import api_binance
+        msg = {"e": "executionReport", "s": "BTCUSDT",
+               "i": 88888, "X": "PARTIALLY_FILLED", "S": "SELL"}
+        result = api_binance.parse_user_stream_msg(msg)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["status"], "PARTIALLY_FILLED")
+
+    def test_binance_new_order_ignored(self):
+        import api_binance
+        msg = {"e": "executionReport", "s": "BTCUSDT",
+               "i": 11111, "X": "NEW", "S": "BUY"}
+        self.assertIsNone(api_binance.parse_user_stream_msg(msg))
+
+    def test_binance_wrong_event_type_ignored(self):
+        import api_binance
+        self.assertIsNone(api_binance.parse_user_stream_msg(
+            {"e": "outboundAccountPosition"}))
+
+    def test_binance_make_user_stream_url(self):
+        import api_binance
+        url = api_binance.make_user_stream_url("abc123")
+        self.assertIn("abc123", url)
+        self.assertTrue(url.startswith("wss://"))
+
+    # ── MEXC parse_user_stream_msg ────────────────────────────────────────────
+
+    def test_mexc_filled_buy(self):
+        import api_mexc
+        msg = {"s": "BTCUSDT", "d": {"i": "MX_001", "s": 2, "S": 1}}
+        result = api_mexc.parse_user_stream_msg(msg)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["order_id"], "MX_001")
+        self.assertEqual(result["status"],   "FILLED")
+        self.assertEqual(result["side"],     "BUY")
+
+    def test_mexc_filled_sell(self):
+        import api_mexc
+        msg = {"s": "BTCUSDT", "d": {"i": "MX_002", "s": 2, "S": 2}}
+        result = api_mexc.parse_user_stream_msg(msg)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["side"], "SELL")
+
+    def test_mexc_partially_filled(self):
+        import api_mexc
+        msg = {"s": "BTCUSDT", "d": {"i": "MX_003", "s": 3, "S": 1}}
+        result = api_mexc.parse_user_stream_msg(msg)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["status"], "PARTIALLY_FILLED")
+
+    def test_mexc_new_status_ignored(self):
+        import api_mexc
+        msg = {"s": "BTCUSDT", "d": {"i": "MX_004", "s": 1, "S": 1}}
+        self.assertIsNone(api_mexc.parse_user_stream_msg(msg))
+
+    def test_mexc_canceled_ignored(self):
+        import api_mexc
+        msg = {"s": "BTCUSDT", "d": {"i": "MX_005", "s": 4, "S": 1}}
+        self.assertIsNone(api_mexc.parse_user_stream_msg(msg))
+
+    def test_mexc_no_d_key_ignored(self):
+        import api_mexc
+        self.assertIsNone(api_mexc.parse_user_stream_msg({"s": "BTCUSDT"}))
+
+    def test_mexc_make_user_stream_url(self):
+        import api_mexc
+        url = api_mexc.make_user_stream_url("key_xyz")
+        self.assertIn("key_xyz", url)
+        self.assertTrue(url.startswith("wss://"))
+
+    # ── _on_user_stream_fill dispatch ─────────────────────────────────────────
+
+    def test_user_stream_fill_dispatches_buy(self):
+        """_on_user_stream_fill calls _on_buy_filled for a matching BUY order."""
+        cfg = bot.BotConfig()
+        cfg.grid_symbol = "BTCUSDT"; cfg.grid_lower = 98000.0
+        cfg.grid_upper = 102000.0; cfg.grid_levels = 5
+        cfg.grid_order_size_usdt = 50.0; cfg.connector = "binance"
+        s   = GridStrategy(cfg)
+        lvl = s.grid.levels[0]
+        lvl.buy_order_id = "ORD_BUY_1"
+        lvl.buy_price    = 98000.0
+        lvl.status       = "buy_placed"
+
+        state = _FakeState()
+        fill  = {"order_id": "ORD_BUY_1", "status": "FILLED",
+                 "side": "BUY", "symbol": "BTCUSDT"}
+        with unittest.mock.patch.object(
+            s._api, "post_order",
+            new=unittest.mock.AsyncMock(return_value="ORD_SELL_2")
+        ):
+            _run(s._on_user_stream_fill(state, fill))
+        self.assertEqual(lvl.status, "sell_placed")
+        self.assertEqual(lvl.sell_order_id, "ORD_SELL_2")
+
+    def test_user_stream_fill_unknown_order_is_noop(self):
+        """Unknown order_id is silently ignored — no exception, no state change."""
+        cfg = bot.BotConfig()
+        cfg.grid_symbol = "BTCUSDT"; cfg.grid_lower = 98000.0
+        cfg.grid_upper = 102000.0; cfg.grid_levels = 5
+        cfg.grid_order_size_usdt = 50.0; cfg.connector = "binance"
+        s = GridStrategy(cfg)
+        state = _FakeState()
+        fill  = {"order_id": "UNKNOWN_999", "status": "FILLED",
+                 "side": "BUY", "symbol": "BTCUSDT"}
+        _run(s._on_user_stream_fill(state, fill))  # must not raise
+        self.assertTrue(all(l.status == "idle" for l in s.levels))
+
+
+class TestGridPersistence(unittest.TestCase):
+    """_save_state writes to DB; restore_from_db reloads it."""
+
+    def _make_strategy(self):
+        cfg = bot.BotConfig()
+        cfg.grid_symbol          = "BTCUSDT"
+        cfg.grid_lower           = 98000.0
+        cfg.grid_upper           = 102000.0
+        cfg.grid_levels          = 5
+        cfg.grid_order_size_usdt = 50.0
+        cfg.connector            = "binance"
+        return GridStrategy(cfg)
+
+    def _fake_state_with_db(self):
+        conn = make_db()
+        fs = _FakeState()
+        fs.conn = conn
+        return fs
+
+    # ── _save_state ────────────────────────────────────────────────────────────
+
+    def test_save_state_writes_grid_state_row(self):
+        s     = self._make_strategy()
+        state = self._fake_state_with_db()
+        s.grid.initialised      = True
+        s.grid.total_cycles     = 3
+        s.grid.total_profit_usd = 1.23
+        s._save_state(state.conn)
+        row = state.conn.execute(
+            "SELECT total_cycles, total_profit_usd, initialised FROM grid_state"
+            " WHERE symbol='BTCUSDT'"
+        ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row[0], 3)
+        self.assertAlmostEqual(row[1], 1.23, places=4)
+        self.assertEqual(row[2], 1)
+
+    def test_save_state_writes_all_levels(self):
+        s     = self._make_strategy()
+        state = self._fake_state_with_db()
+        s.grid.levels[0].buy_order_id = "ord_BUY_1"
+        s.grid.levels[0].buy_price    = 98000.0
+        s.grid.levels[0].status       = "buy_placed"
+        s._save_state(state.conn)
+        count = state.conn.execute(
+            "SELECT COUNT(*) FROM grid_levels WHERE symbol='BTCUSDT'"
+        ).fetchone()[0]
+        self.assertEqual(count, 5)
+        row = state.conn.execute(
+            "SELECT buy_order_id, status FROM grid_levels"
+            " WHERE symbol='BTCUSDT' AND level_price=98000.0"
+        ).fetchone()
+        self.assertEqual(row[0], "ord_BUY_1")
+        self.assertEqual(row[1], "buy_placed")
+
+    def test_save_state_upserts_on_second_call(self):
+        s     = self._make_strategy()
+        state = self._fake_state_with_db()
+        s._save_state(state.conn)
+        s.grid.total_cycles = 7
+        s._save_state(state.conn)
+        row = state.conn.execute(
+            "SELECT total_cycles FROM grid_state WHERE symbol='BTCUSDT'"
+        ).fetchone()
+        self.assertEqual(row[0], 7)
+
+    # ── restore_from_db — no saved state ───────────────────────────────────────
+
+    def test_restore_returns_false_when_no_saved_state(self):
+        s     = self._make_strategy()
+        state = self._fake_state_with_db()
+        result = _run(s.restore_from_db(state))
+        self.assertFalse(result)
+
+    # ── restore_from_db — config mismatch ─────────────────────────────────────
+
+    def test_restore_returns_false_on_config_mismatch(self):
+        s     = self._make_strategy()
+        state = self._fake_state_with_db()
+        s._save_state(state.conn)
+        # Create a new strategy with different bounds
+        cfg2 = bot.BotConfig()
+        cfg2.grid_symbol          = "BTCUSDT"
+        cfg2.grid_lower           = 95000.0   # changed
+        cfg2.grid_upper           = 105000.0  # changed
+        cfg2.grid_levels          = 5
+        cfg2.grid_order_size_usdt = 50.0
+        cfg2.connector            = "binance"
+        s2 = GridStrategy(cfg2)
+        result = _run(s2.restore_from_db(state))
+        self.assertFalse(result)
+
+    # ── restore_from_db — halted state ─────────────────────────────────────────
+
+    def test_restore_halted_state_no_reconciliation(self):
+        s     = self._make_strategy()
+        state = self._fake_state_with_db()
+        s.grid.initialised = True
+        s.grid.halted      = True
+        s._save_state(state.conn)
+
+        s2 = self._make_strategy()
+        with unittest.mock.patch.object(
+            s2._api, "get_open_orders",
+            new=unittest.mock.AsyncMock(return_value=[])
+        ) as mock_oo:
+            result = _run(s2.restore_from_db(state))
+        self.assertTrue(result)
+        self.assertTrue(s2.grid.halted)
+        mock_oo.assert_not_called()   # no reconciliation for halted grids
+
+    # ── restore_from_db — active state with offline fill ──────────────────────
+
+    def test_restore_detects_offline_fill(self):
+        """A BUY order that filled while the bot was down triggers _on_buy_filled."""
+        s     = self._make_strategy()
+        state = self._fake_state_with_db()
+
+        # Simulate: grid is initialised, level 98000 has a BUY order
+        s.grid.initialised = True
+        lvl = s.grid.levels[0]   # price=98000
+        lvl.buy_order_id = "ord_123"
+        lvl.buy_price    = 98000.0
+        lvl.status       = "buy_placed"
+        s._save_state(state.conn)
+
+        s2 = self._make_strategy()
+        # open_orders returns empty list → ord_123 filled while bot was down
+        with unittest.mock.patch.object(
+            s2._api, "get_open_orders",
+            new=unittest.mock.AsyncMock(return_value=[])
+        ), unittest.mock.patch.object(
+            s2._api, "post_order",
+            new=unittest.mock.AsyncMock(return_value="ord_SELL_new")
+        ):
+            result = _run(s2.restore_from_db(state))
+
+        self.assertTrue(result)
+        restored_lvl = s2.grid.levels[0]
+        # After _on_buy_filled: a SELL counter-order should have been placed
+        self.assertEqual(restored_lvl.status, "sell_placed")
+        self.assertEqual(restored_lvl.sell_order_id, "ord_SELL_new")
+
+    def test_restore_skips_fill_when_order_still_open(self):
+        """An order still in open_orders is NOT treated as filled."""
+        s     = self._make_strategy()
+        state = self._fake_state_with_db()
+
+        s.grid.initialised = True
+        lvl = s.grid.levels[0]
+        lvl.buy_order_id = "ord_123"
+        lvl.buy_price    = 98000.0
+        lvl.status       = "buy_placed"
+        s._save_state(state.conn)
+
+        s2 = self._make_strategy()
+        open_order = {"order_id": "ord_123", "side": "BUY",
+                      "price": 98000.0, "qty": 0.0005, "status": "NEW"}
+        with unittest.mock.patch.object(
+            s2._api, "get_open_orders",
+            new=unittest.mock.AsyncMock(return_value=[open_order])
+        ), unittest.mock.patch.object(
+            s2._api, "post_order",
+            new=unittest.mock.AsyncMock(return_value="ord_SELL_new")
+        ) as mock_post:
+            result = _run(s2.restore_from_db(state))
+
+        self.assertTrue(result)
+        mock_post.assert_not_called()
+        restored_lvl = s2.grid.levels[0]
+        self.assertEqual(restored_lvl.status, "buy_placed")
+
+
+# ── _SessionFilter ────────────────────────────────────────────────────────────
+
+class TestSessionFilter(unittest.TestCase):
+    """_SessionFilter injects the session ID into every log record."""
+
+    def test_filter_returns_true(self):
+        sf = bot._SessionFilter()
+        record = logging.LogRecord("live", logging.INFO, "", 0, "msg", (), None)
+        self.assertTrue(sf.filter(record))
+
+    def test_filter_attaches_session_attribute(self):
+        sf = bot._SessionFilter()
+        record = logging.LogRecord("live", logging.INFO, "", 0, "msg", (), None)
+        sf.filter(record)
+        self.assertTrue(hasattr(record, "session"))
+
+    def test_session_matches_module_constant(self):
+        sf = bot._SessionFilter()
+        record = logging.LogRecord("live", logging.INFO, "", 0, "msg", (), None)
+        sf.filter(record)
+        self.assertEqual(record.session, bot._SESSION_ID)
+
+    def test_session_id_is_eight_hex_chars(self):
+        self.assertEqual(len(bot._SESSION_ID), 8)
+        self.assertTrue(all(c in "0123456789ABCDEF" for c in bot._SESSION_ID))
+
+
+# ── RejectionStats ────────────────────────────────────────────────────────────
+
+class TestRejectionStats(unittest.TestCase):
+    """RejectionStats starts at zero and each field increments independently."""
+
+    def test_all_fields_start_at_zero(self):
+        r = bot.RejectionStats()
+        for field in ("signalled", "market_ended", "trading_hour", "best_bid",
+                      "entry_max", "best_ask", "ask_vol", "secs_remaining",
+                      "obi", "vol_filter", "capital", "daily_stop", "api_cooldown"):
+            self.assertEqual(getattr(r, field), 0, field)
+
+    def test_fields_are_independent(self):
+        r = bot.RejectionStats()
+        r.signalled += 1
+        self.assertEqual(r.signalled, 1)
+        self.assertEqual(r.best_bid, 0)
+
+    def test_botstate_initialises_rejection_stats(self):
+        state = make_state()
+        self.addCleanup(state.conn.close)
+        self.assertIsInstance(state.rejection_stats, bot.RejectionStats)
+
+    def test_botstate_has_last_stats_log_timestamp(self):
+        state = make_state()
+        self.addCleanup(state.conn.close)
+        self.assertIsInstance(state._last_stats_log, float)
+        self.assertGreater(state._last_stats_log, 0)
+
+
+class TestRejectionCounters(unittest.IsolatedAsyncioTestCase):
+    """check_signal() increments the right counter for each rejection reason."""
+
+    def setUp(self):
+        self.state = make_state()
+        # Freeze the periodic-log timer so it never fires during these tests.
+        self.state._last_stats_log = time.time() + 10_000
+
+    def tearDown(self):
+        self.state.conn.close()
+
+    async def test_counter_signalled(self):
+        self.state.signalled.add("mkt1")
+        await bot.check_signal(self.state, make_token())
+        self.assertEqual(self.state.rejection_stats.signalled, 1)
+
+    async def test_counter_market_ended(self):
+        ts = make_token()
+        ts.market_end_ms = (time.time() - 10) * 1000
+        await bot.check_signal(self.state, ts)
+        self.assertEqual(self.state.rejection_stats.market_ended, 1)
+
+    async def test_counter_trading_hour(self):
+        with patch.object(bot, "is_trading_hour", return_value=False):
+            await bot.check_signal(self.state, make_token())
+        self.assertEqual(self.state.rejection_stats.trading_hour, 1)
+
+    async def test_counter_best_bid(self):
+        await bot.check_signal(self.state, make_token(best_bid=0.50))
+        self.assertEqual(self.state.rejection_stats.best_bid, 1)
+
+    async def test_counter_best_ask(self):
+        await bot.check_signal(self.state, make_token(best_ask=1.0))
+        self.assertEqual(self.state.rejection_stats.best_ask, 1)
+
+    async def test_counter_ask_vol(self):
+        await bot.check_signal(self.state, make_token(ask_vol=1.0))
+        self.assertEqual(self.state.rejection_stats.ask_vol, 1)
+
+    async def test_counter_secs_remaining(self):
+        await bot.check_signal(self.state, make_token(secs_remaining=5))
+        self.assertEqual(self.state.rejection_stats.secs_remaining, 1)
+
+    async def test_counter_obi(self):
+        await bot.check_signal(self.state, make_token(obi=-0.9))
+        self.assertEqual(self.state.rejection_stats.obi, 1)
+
+    async def test_counter_capital(self):
+        self.state.capital = 0.0
+        await bot.check_signal(self.state, make_token())
+        self.assertEqual(self.state.rejection_stats.capital, 1)
+
+    async def test_counter_daily_stop(self):
+        self.state.daily_pnl = -99.0
+        self.state._daily_pnl_day = int(time.time() // 86400)
+        await bot.check_signal(self.state, make_token())
+        self.assertEqual(self.state.rejection_stats.daily_stop, 1)
+
+    async def test_counter_api_cooldown(self):
+        self.state.api_cooldown_until = time.time() + 300
+        await bot.check_signal(self.state, make_token())
+        self.assertEqual(self.state.rejection_stats.api_cooldown, 1)
+
+    async def test_no_counters_incremented_on_fire(self):
+        await bot.check_signal(self.state, make_token())
+        r = self.state.rejection_stats
+        total = sum(getattr(r, f) for f in vars(r))
+        self.assertEqual(total, 0)
+
+    async def test_periodic_log_resets_counters(self):
+        # Back-date the timer so the periodic log fires on the next call.
+        self.state._last_stats_log = time.time() - 61
+        self.state.signalled.add("mkt1")
+        await bot.check_signal(self.state, make_token())
+        # After the reset the counter for this call should still be 1,
+        # but the object has been replaced with a fresh RejectionStats.
+        self.assertIsInstance(self.state.rejection_stats, bot.RejectionStats)
+        # The timer should have been reset to now.
+        self.assertAlmostEqual(self.state._last_stats_log, time.time(), delta=2)
+
+
+# ── LATENCY ts_ms ─────────────────────────────────────────────────────────────
+
+class TestLatencyLog(unittest.IsolatedAsyncioTestCase):
+    """ts_ms must appear in the [LATENCY] log line."""
+
+    async def test_latency_log_includes_ts_ms(self):
+        state = make_state()
+        self.addCleanup(state.conn.close)
+        ts = make_token()
+
+        logged: list[str] = []
+        original_info = bot.logger.info
+
+        def capture_info(msg, *args, **kwargs):
+            logged.append(msg % args if args else msg)
+            original_info(msg, *args, **kwargs)
+
+        with patch.object(bot, "logger") as mock_logger:
+            mock_logger.info.side_effect = capture_info
+            mock_logger.warning = bot.logger.warning
+            t_ws = time.monotonic()
+            await bot.enter_live_trade(state, ts, _t_ws=t_ws)
+
+        latency_lines = [m for m in logged if "[LATENCY]" in m]
+        self.assertTrue(latency_lines, "No [LATENCY] line was logged")
+        self.assertIn("ts_ms=", latency_lines[0])
+
+
+# ── _PlainFmt / _ColorFmt ─────────────────────────────────────────────────────
+
+class TestLogFormatters(unittest.TestCase):
+    """Format helpers produce abbreviated level names and correct ANSI codes."""
+
+    def _make_record(self, level=logging.INFO, msg="hello"):
+        return logging.LogRecord("live", level, "", 0, msg, (), None)
+
+    def test_plain_fmt_abbreviates_info(self):
+        fmt = bot._PlainFmt(bot._LOG_FMT, datefmt=bot._LOG_DATE)
+        # Inject session so the format string resolves.
+        r = self._make_record()
+        r.session = "TESTSESS"  # type: ignore[attr-defined]
+        out = fmt.format(r)
+        self.assertIn("INFO ", out)
+        self.assertNotIn("INFO\n", out)
+
+    def test_plain_fmt_abbreviates_warning(self):
+        fmt = bot._PlainFmt(bot._LOG_FMT, datefmt=bot._LOG_DATE)
+        r = self._make_record(logging.WARNING)
+        r.session = "TESTSESS"  # type: ignore[attr-defined]
+        out = fmt.format(r)
+        self.assertIn("WARN ", out)
+
+    def test_color_fmt_adds_ansi_on_warning(self):
+        fmt = bot._ColorFmt(bot._LOG_FMT, datefmt=bot._LOG_DATE)
+        r = self._make_record(logging.WARNING)
+        r.session = "TESTSESS"  # type: ignore[attr-defined]
+        out = fmt.format(r)
+        self.assertIn("\033[", out)
+
+    def test_color_fmt_no_ansi_on_info(self):
+        fmt = bot._ColorFmt(bot._LOG_FMT, datefmt=bot._LOG_DATE)
+        r = self._make_record(logging.INFO)
+        r.session = "TESTSESS"  # type: ignore[attr-defined]
+        out = fmt.format(r)
+        self.assertNotIn("\033[", out)
+
+    def test_log_fmt_contains_session_placeholder(self):
+        self.assertIn("%(session)s", bot._LOG_FMT)
 
 
 if __name__ == "__main__":
