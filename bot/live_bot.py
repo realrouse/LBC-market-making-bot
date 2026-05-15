@@ -208,6 +208,14 @@ class BotConfig:
     # is unreachable. Set to false when feed is managed by systemd.
     feed_auto_start: bool = True
 
+    # Shared indicators service (optional).
+    # indicators_addr: PUB socket to subscribe for published indicator messages.
+    # indicators_reg_addr: REP socket to register streams dynamically at startup.
+    # indicators_streams: list of subscribe requests sent at account_bot startup.
+    indicators_addr:     str  = "tcp://127.0.0.1:5559"
+    indicators_reg_addr: str  = "tcp://127.0.0.1:5561"
+    indicators_streams:  list = field(default_factory=list)
+
     # Credentials
     private_key:    str = ""
     api_key:        str = ""
@@ -357,6 +365,17 @@ def make_config(simulate: bool = False, no_log: bool = False,
     )
     feed_auto_start = bool(cfg.get("feed_auto_start", True))
 
+    # Indicators service: config.json first, env vars as fallback.
+    indicators_addr = cfg.get(
+        "indicators_addr",
+        os.environ.get("TRADINEBOTTE_INDICATORS_ADDR", f"tcp://127.0.0.1:{_port_base + 2}"),
+    )
+    indicators_reg_addr = cfg.get(
+        "indicators_reg_addr",
+        os.environ.get("TRADINEBOTTE_INDICATORS_REG_ADDR", f"tcp://127.0.0.1:{_port_base + 4}"),
+    )
+    indicators_streams = cfg.get("indicators_streams", [])
+
     # Credentials: config.json first, env vars as fallback for containers.
     private_key    = cfg.get("private_key",    os.environ.get("POLY_PRIVATE_KEY", ""))
     api_key        = cfg.get("api_key",        os.environ.get("POLY_API_KEY", ""))
@@ -407,6 +426,9 @@ def make_config(simulate: bool = False, no_log: bool = False,
         enable_snapshots=not no_snapshots,
         feed_addr=feed_addr,
         feed_auto_start=feed_auto_start,
+        indicators_addr=indicators_addr,
+        indicators_reg_addr=indicators_reg_addr,
+        indicators_streams=indicators_streams,
         private_key=private_key,
         api_key=api_key,
         api_secret=api_secret,

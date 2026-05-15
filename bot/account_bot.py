@@ -165,6 +165,65 @@ def _ensure_feed() -> None:
         lock_file.close()
 
 
+# ─── Indicators registration ─────────────────────────────────────────────────
+
+def _register_indicators_sync(config: "bot.BotConfig") -> None:
+    """
+    Register indicator streams with the shared indicators service via REQ/REP.
+
+    Sends each entry from config.indicators_streams as a subscribe request to
+    the indicators REP socket.  Silently skips if no streams are configured.
+    A timeout on any single request is logged as a warning — the bot continues
+    running even if the indicators service is unavailable.
+
+    config.json example:
+        "indicators_streams": [
+            {
+                "source": "binance_ws",
+                "asset":  "BTCUSDT",
+                "timeframe": "4h",
+                "indicators": [{"type": "rsi", "period": 14},
+                               {"type": "vol", "period": 20}]
+            }
+        ]
+    """
+    streams = config.indicators_streams
+    if not streams:
+        if VERBOSE:
+            logger.debug("[IND] no indicators_streams configured — skipping registration")
+        return
+
+    logger.info("Registering %d indicator stream(s) with %s",
+                len(streams), config.indicators_reg_addr)
+    ctx = zmq.Context()
+    req = ctx.socket(zmq.REQ)
+    req.setsockopt(zmq.RCVTIMEO, 5_000)
+    req.setsockopt(zmq.SNDTIMEO, 5_000)
+    req.connect(config.indicators_reg_addr)
+    try:
+        for spec in streams:
+            label = spec.get("stream_id") or (
+                f"{spec.get('asset', '?')} {spec.get('timeframe', spec.get('source', '?'))}"
+            )
+            try:
+                req.send_json({**spec, "cmd": "subscribe"})
+                resp = req.recv_json()
+                if resp.get("status") == "ok":
+                    logger.info("[IND] registered: %s → stream_id=%s",
+                                label, resp.get("stream_id"))
+                else:
+                    logger.warning("[IND] registration failed for %s: %s",
+                                   label, resp.get("message", "unknown error"))
+            except zmq.Again:
+                logger.warning("[IND] registration timeout for %s — "
+                               "indicators service may not be running", label)
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("[IND] registration error for %s: %s", label, exc)
+    finally:
+        req.close(linger=0)
+        ctx.term()
+
+
 # ─── Market / book handlers ───────────────────────────────────────────────────
 
 def _register_from_market_msg(state: bot.BotState, msg: dict) -> None:
@@ -300,6 +359,8 @@ async def main() -> None:
             )
             sys.exit(1)
         logger.info("Feed active on %s", _FEED_ADDR)
+
+    _register_indicators_sync(config)
 
     if VERBOSE:
         logger.debug("[INIT] init_db...")

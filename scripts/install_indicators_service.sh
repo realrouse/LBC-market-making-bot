@@ -1,21 +1,29 @@
 #!/usr/bin/env bash
-# Generates a ready-to-install systemd unit file for one tradinebotte indicator
-# service instance (indicators.py).
+# Generates a ready-to-install systemd unit file for the shared tradinebotte
+# indicator service (indicators.py).
 #
-# Multiple instances can coexist on the same machine — each needs its own
-# INDICATORS_CONFIG file and distinct ZMQ output ports
-# (TRADINEBOTTE_INDICATORS_ADDR / TRADINEBOTTE_INDICATORS_REG_ADDR).
+# The indicators service is a SHARED process: all account_bot instances on the
+# machine connect to it.  Each bot registers its own indicator streams at
+# startup via the REP socket (config.json key "indicators_streams").
+#
+# Typically installed as a SYSTEM service alongside tradinebotte-feed, owned
+# by the same user as the feed service.
 #
 # Usage:
-#   INDICATORS_CONFIG=~/tradinebotte/strategies/indicators_4h_bitcoin.json \
+#   INDICATORS_CONFIG=~/tradinebotte/strategies/indicators_base.json \
 #   bash scripts/install_indicators_service.sh
 #
 # Optional overrides:
-#   INDICATORS_LABEL=btc-4h               # service name suffix (default: derived from config)
+#   INDICATORS_LABEL=btc               # suffix for multi-instance setups
 #   TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5557
 #   TRADINEBOTTE_INDICATORS_ADDR=tcp://127.0.0.1:5559    # PUB socket
-#   TRADINEBOTTE_INDICATORS_REG_ADDR=tcp://127.0.0.1:5561  # REP registration socket
+#   TRADINEBOTTE_INDICATORS_REG_ADDR=tcp://127.0.0.1:5561  # REP registration
 #   TRADINEBOTTE_INSTALL_DIR=~/tradinebotte               # where the venv lives
+#
+# Multiple instances (rare):
+#   If two independent indicator services are needed (e.g. different markets),
+#   set INDICATORS_LABEL and different port addresses for each.
+#   Normal deployments need only one instance.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,7 +39,7 @@ if [[ -z "$CONFIG_FILE" ]]; then
     echo "ERROR: INDICATORS_CONFIG must be set to the strategy JSON config file." >&2
     echo "" >&2
     echo "  Example:" >&2
-    echo "  INDICATORS_CONFIG=~/tradinebotte/strategies/indicators_4h_bitcoin.json \\" >&2
+    echo "  INDICATORS_CONFIG=~/tradinebotte/strategies/indicators_base.json \\" >&2
     echo "  bash scripts/install_indicators_service.sh" >&2
     exit 1
 fi
@@ -41,27 +49,20 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
     exit 1
 fi
 
-# ── Service label (used in Description and service name) ──────────────────────
-# Derive from config filename by default: indicators_4h_bitcoin.json → 4h-bitcoin
-# User can override with INDICATORS_LABEL.
+# ── Service label ─────────────────────────────────────────────────────────────
+# Single shared service → no label needed by default.
+# Set INDICATORS_LABEL only when running two independent instances.
 if [[ -n "${INDICATORS_LABEL:-}" ]]; then
     LABEL="$INDICATORS_LABEL"
+    SERVICE_NAME="tradinebotte-indicators-${LABEL}"
 else
-    _base="$(basename "$CONFIG_FILE" .json)"
-    # Strip leading "indicators_" or "indicators-" prefix if present
-    _base="${_base#indicators_}"
-    _base="${_base#indicators-}"
-    # Replace underscores with dashes, lowercase
-    LABEL="${_base//_/-}"
-    LABEL="${LABEL,,}"
+    LABEL="shared"
+    SERVICE_NAME="tradinebotte-indicators"
 fi
-
-SERVICE_NAME="tradinebotte-indicators-${USER_NAME}-${LABEL}"
 
 # ── Install directory and venv ────────────────────────────────────────────────
 INSTALL_DIR="${TRADINEBOTTE_INSTALL_DIR:-}"
 if [[ -z "$INSTALL_DIR" ]]; then
-    # Auto-detect: prefer project .venv (dev), fall back to ~/tradinebotte (prod)
     if [[ -f "$PROJECT_DIR/.venv/bin/python3" ]]; then
         INSTALL_DIR="$PROJECT_DIR"
     elif [[ -f "${HOME}/tradinebotte/venv/bin/python3" ]]; then
@@ -96,7 +97,6 @@ fi
 
 if [[ ! -f "$BOT_DIR/indicators.py" ]]; then
     echo "ERROR: indicators.py not found at $BOT_DIR" >&2
-    echo "  Run from the project root or adjust TRADINEBOTTE_INSTALL_DIR." >&2
     exit 1
 fi
 
@@ -109,12 +109,10 @@ fi
 # ── Check for already-running instance ────────────────────────────────────────
 if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
     echo "WARNING: $SERVICE_NAME is currently ACTIVE as a system service." >&2
-    echo "  Replacing the unit file without stopping it first may cause issues." >&2
     echo "  Run: sudo systemctl stop $SERVICE_NAME" >&2
     echo ""
 elif systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
-    echo "WARNING: $SERVICE_NAME is installed as a system service (enabled, not running)." >&2
-    echo "  The generated file will overwrite the existing unit if copied." >&2
+    echo "WARNING: $SERVICE_NAME is installed (enabled, not running)." >&2
     echo ""
 fi
 
@@ -137,24 +135,22 @@ echo ""
 cat "$OUTPUT"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  Label   : $LABEL"
-echo "  Config  : $CONFIG_FILE"
 echo "  Service : $SERVICE_NAME"
+echo "  Config  : $CONFIG_FILE"
 echo "  User    : $USER_NAME"
 echo "  Feed    : $FEED_ADDR"
-echo "  PUB out : $IND_ADDR"
-echo "  REP reg : $REG_ADDR"
+echo "  PUB out : $IND_ADDR    (TRADINEBOTTE_INDICATORS_ADDR)"
+echo "  REP reg : $REG_ADDR    (TRADINEBOTTE_INDICATORS_REG_ADDR)"
 echo "  venv    : $VENV"
 echo ""
-echo "  Note: if multiple indicator instances run on the same machine,"
-echo "  each must use distinct PUB and REP ports:"
-echo "    Instance 1:  TRADINEBOTTE_INDICATORS_ADDR=tcp://127.0.0.1:5559"
-echo "                 TRADINEBOTTE_INDICATORS_REG_ADDR=tcp://127.0.0.1:5561"
-echo "    Instance 2:  TRADINEBOTTE_INDICATORS_ADDR=tcp://127.0.0.1:5563"
-echo "                 TRADINEBOTTE_INDICATORS_REG_ADDR=tcp://127.0.0.1:5565"
-echo "  Or use TRADINEBOTTE_PORT_BASE=<base> to shift all ports uniformly."
+echo "  Each account_bot registers its streams at startup via config.json:"
+echo "  \"indicators_reg_addr\": \"$REG_ADDR\","
+echo "  \"indicators_streams\": ["
+echo "    {\"source\": \"binance_ws\", \"asset\": \"BTCUSDT\", \"timeframe\": \"4h\","
+echo "     \"indicators\": [{\"type\": \"rsi\", \"period\": 14}]}"
+echo "  ]"
 echo ""
-echo "  To install as a SYSTEM service:"
+echo "  To install as a SYSTEM service (start before account_bot services):"
 echo ""
 echo "  sudo cp $OUTPUT /etc/systemd/system/${SERVICE_NAME}.service"
 echo "  sudo systemctl daemon-reload"
