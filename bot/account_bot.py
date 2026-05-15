@@ -93,7 +93,7 @@ def _probe_feed_sync(addr: str, timeout_ms: int) -> bool:
         return True
     except zmq.Again:
         if VERBOSE:
-            logger.debug("[PROBE] timeout — pas de feed")
+            logger.debug("[PROBE] timeout — no feed response")
         return False
     finally:
         sock.close(linger=0)
@@ -255,7 +255,13 @@ async def _run(state: bot.BotState) -> None:
 
 
 async def main() -> None:
+    global _FEED_ADDR, _FEED_LOCK_PATH
     config = bot.make_config()
+
+    # config.json key "feed_addr" (or TRADINEBOTTE_FEED_ADDR env var) wins over
+    # the module-level default that was resolved before config.json was read.
+    _FEED_ADDR = config.feed_addr
+    _FEED_LOCK_PATH = f"{_FEED_TMP_DIR}/feed-{abs(hash(_FEED_ADDR)) % 100000}.lock"
 
     logger.info("=" * 65)
     logger.info("  ACCOUNT BOT — dir=%s", config.install_dir)
@@ -270,7 +276,30 @@ async def main() -> None:
         logger.debug("[INIT] STAKE=%.2f WIN=%.2f LOSS=%.2f",
                      config.stake, config.win_threshold, config.loss_threshold)
 
-    _ensure_feed()
+    if config.feed_auto_start:
+        _ensure_feed()
+    else:
+        # Feed is managed externally (e.g. systemd). Probe with retries — the
+        # feed may be mid-reconnect to the exchange (typically <30s window).
+        _retries = max(1, _FEED_READY_S * 1000 // _FEED_PROBE_MS)
+        _reached = False
+        for _attempt in range(_retries):
+            if _probe_feed_sync(_FEED_ADDR, _FEED_PROBE_MS):
+                _reached = True
+                break
+            logger.warning(
+                "Feed not yet reachable on %s (attempt %d/%d) — "
+                "waiting for feed service to publish...",
+                _FEED_ADDR, _attempt + 1, _retries,
+            )
+        if not _reached:
+            logger.error(
+                "Feed not reachable on %s after %d attempts — "
+                "is the feed service running? (sudo systemctl start tradinebotte-feed)",
+                _FEED_ADDR, _retries,
+            )
+            sys.exit(1)
+        logger.info("Feed active on %s", _FEED_ADDR)
 
     if VERBOSE:
         logger.debug("[INIT] init_db...")

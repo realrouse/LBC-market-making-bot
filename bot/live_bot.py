@@ -202,6 +202,12 @@ class BotConfig:
     range_bid_max:           float = RANGE_BID_MAX
     obi_vol_max:             float = OBI_VOL_MAX
 
+    # ZeroMQ feed address (account_bot / indicators only)
+    feed_addr: str = "tcp://127.0.0.1:5557"
+    # When False, account_bot will not auto-start feed.py; it exits if the feed
+    # is unreachable. Set to false when feed is managed by systemd.
+    feed_auto_start: bool = True
+
     # Credentials
     private_key:    str = ""
     api_key:        str = ""
@@ -343,6 +349,14 @@ def make_config(simulate: bool = False, no_log: bool = False,
     us_weekly_close     = bool(_hf.get("us_weekly_close",   True))
     us_holiday_filter   = bool(_hf.get("us_holiday_filter", US_HOLIDAY_FILTER))
 
+    # Feed address: config.json first, env var as fallback.
+    _port_base = int(os.environ.get("TRADINEBOTTE_PORT_BASE", "5557"))
+    feed_addr = cfg.get(
+        "feed_addr",
+        os.environ.get("TRADINEBOTTE_FEED_ADDR", f"tcp://127.0.0.1:{_port_base}"),
+    )
+    feed_auto_start = bool(cfg.get("feed_auto_start", True))
+
     # Credentials: config.json first, env vars as fallback for containers.
     private_key    = cfg.get("private_key",    os.environ.get("POLY_PRIVATE_KEY", ""))
     api_key        = cfg.get("api_key",        os.environ.get("POLY_API_KEY", ""))
@@ -391,6 +405,8 @@ def make_config(simulate: bool = False, no_log: bool = False,
         us_weekly_open=us_weekly_open,
         us_weekly_close=us_weekly_close,
         enable_snapshots=not no_snapshots,
+        feed_addr=feed_addr,
+        feed_auto_start=feed_auto_start,
         private_key=private_key,
         api_key=api_key,
         api_secret=api_secret,

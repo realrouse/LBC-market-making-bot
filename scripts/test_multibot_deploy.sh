@@ -1,16 +1,24 @@
 #!/usr/bin/env bash
-# test_multibot_deploy.sh — Clean install + integration test on configurable test accounts
+# test_multibot_deploy.sh — Multibot integration test (account_bot + systemd feed)
+#
+# Architecture under test:
+#   Feed owner  (TEST_FEED_USER_IDX)      — systemd tradinebotte-feed service
+#   Account bots (TEST_ACCOUNT_USER_IDXS) — account_bot.py, feed_auto_start=false
 #
 # Phases:
-#   1. Cleanup    — kill processes, remove directories, clear locks
-#   2. Deploy     — rsync local repo + create venv + pip install (no root)
-#   3. Prepare    — create simulation directories
-#   4. Launch     — start all bots simultaneously (race condition test)
-#   5. Check init — verify: 1 feed, N bots, connections established
-#   6. Sustained  — heartbeat every 30s for DURATION seconds
-#   7. Analysis   — collect and analyse logs, verify book updates
-#   8. Teardown   — kill all processes
-#   9. Report     — SUCCESS / FAILURE with error details
+#   1. Pre-flight  — sshpass, SSH connectivity, host-key scan
+#   2. Cleanup     — kill stale account_bot/indicators, wipe REMOTE_BOT_DIR
+#   3. Feed check  — capture feed.py hash before any deploy
+#   4. Deploy      — rsync code + venv + pip to all users
+#   5. Feed update — if feed.py changed, restart service or print instructions
+#   6. Configure   — write config.json (feed_addr, feed_auto_start=false)
+#   7. Indicators  — start optional indicators services
+#   8. Launch      — start account_bot instances simultaneously
+#   9. Verify init — systemd feed running + N account bots connected
+#  10. Sustained   — heartbeat every 30s for DURATION seconds
+#  11. Analysis    — collect and analyse logs
+#  12. Teardown    — kill account_bot processes ONLY (feed service untouched)
+#  13. Report      — SUCCESS / FAILURE with error count
 #
 # Usage:
 #   bash scripts/test_multibot_deploy.sh
@@ -19,11 +27,11 @@
 #
 # Configuration (required):
 #   cp scripts/test_multibot.conf.example ~/.tradinebotte-test.conf
-#   editor ~/.tradinebotte-test.conf   # fill in SERVER, PORT, USERS, PASSWORDS
-#   # or: TEST_MULTIBOT_CONF=/path/to/conf bash scripts/test_multibot_deploy.sh
+#   editor ~/.tradinebotte-test.conf
 #
 # Local prerequisites  : sshpass (apt-get install sshpass)
-# Server prerequisites : python3-venv, python3-pip, python3.X-venv
+# Server prerequisites : python3-venv, python3-pip, python3.X-venv,
+#                        systemd tradinebotte-feed service installed and enabled
 
 set -euo pipefail
 
@@ -31,7 +39,7 @@ LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DURATION=180
 SKIP_DEPLOY=false
 
-# ─── Couleurs ──────────────────────────────────────────────────────────────────
+# ─── Output helpers ────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; BOLD='\033[1m'; NC='\033[0m'
 
@@ -50,7 +58,7 @@ while [[ $# -gt 0 ]]; do
         --skip-deploy) SKIP_DEPLOY=true ;;
         --duration)    DURATION="$2"; shift ;;
         -h|--help)
-            grep '^#' "${BASH_SOURCE[0]}" | head -25 | sed 's/^# \?//'
+            grep '^#' "${BASH_SOURCE[0]}" | head -30 | sed 's/^# \?//'
             exit 0 ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
@@ -75,57 +83,71 @@ source "$CONF"
 
 SERVER="${TEST_SERVER:?TEST_SERVER missing in $CONF}"
 PORT="${TEST_PORT:-22}"
-USERS=("${TEST_USERS[@]:?TEST_USERS missing in $CONF}")
-PASSWORDS=("${TEST_PASSWORDS[@]:?TEST_PASSWORDS missing in $CONF}")
-# Config can set a default duration; --duration flag takes precedence if already changed
+ALL_USERS=("${TEST_USERS[@]:?TEST_USERS missing in $CONF}")
+ALL_PASSWORDS=("${TEST_PASSWORDS[@]:?TEST_PASSWORDS missing in $CONF}")
+
 [[ "$DURATION" -eq 180 && -n "${TEST_DURATION:-}" ]] && DURATION="$TEST_DURATION"
-# Remote directories — override in conf via TEST_REMOTE_INSTALL_DIR / TEST_REMOTE_BOT_DIR
 REMOTE_INSTALL_DIR="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
 REMOTE_BOT_DIR="${TEST_REMOTE_BOT_DIR:-~/account-sim}"
 
-N_BOTS=${#USERS[@]}
-if [[ "$N_BOTS" -ne ${#PASSWORDS[@]} ]]; then
-    echo "ERROR: TEST_USERS and TEST_PASSWORDS must have the same length"
-    exit 1
+# Role indices
+FEED_IDX="${TEST_FEED_USER_IDX:-0}"
+if [[ -n "${TEST_ACCOUNT_USER_IDXS+_}" ]]; then
+    ACCOUNT_IDXS=("${TEST_ACCOUNT_USER_IDXS[@]}")
+else
+    ACCOUNT_IDXS=(0 1)
 fi
+FEED_ADDR="${TEST_FEED_ADDR:-tcp://127.0.0.1:5557}"
+FEED_AUTO_RESTART="${TEST_FEED_AUTO_RESTART:-false}"
+
+# Build deduplicated list of user indices to deploy to
+declare -A _SEEN_DEPLOY
+DEPLOY_IDXS=()
+for _i in "$FEED_IDX" "${ACCOUNT_IDXS[@]}"; do
+    [[ -z "${_SEEN_DEPLOY[$_i]+_}" ]] && { DEPLOY_IDXS+=("$_i"); _SEEN_DEPLOY[$_i]=1; }
+done
+unset _SEEN_DEPLOY _i
 
 # Per-account indicators config paths (relative to REMOTE_INSTALL_DIR). "" = skip.
 INDICATORS_CONFIGS=("${TEST_INDICATORS_CONFIGS[@]:-}")
-# Pad with empty strings if the conf omitted the array or it's shorter than USERS.
-while [[ ${#INDICATORS_CONFIGS[@]} -lt $N_BOTS ]]; do
+while [[ ${#INDICATORS_CONFIGS[@]} -lt ${#ALL_USERS[@]} ]]; do
     INDICATORS_CONFIGS+=("")
 done
 
-# ─── SSH helpers ───────────────────────────────────────────────────────────────
+# Helpers: run / run_bg / deploy_code all accept indices into ALL_USERS
 run() {
     local idx="$1"; shift
-    SSHPASS="${PASSWORDS[$idx]}" /usr/bin/sshpass -e \
+    SSHPASS="${ALL_PASSWORDS[$idx]}" /usr/bin/sshpass -e \
         ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
-        -p "$PORT" "${USERS[$idx]}@$SERVER" "$@" 2>&1
+        -p "$PORT" "${ALL_USERS[$idx]}@$SERVER" "$@" 2>&1
 }
 
 run_bg() {
     local idx="$1"; shift
-    SSHPASS="${PASSWORDS[$idx]}" /usr/bin/sshpass -e \
+    SSHPASS="${ALL_PASSWORDS[$idx]}" /usr/bin/sshpass -e \
         ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
-        -p "$PORT" "${USERS[$idx]}@$SERVER" "$@" 2>&1 &
+        -p "$PORT" "${ALL_USERS[$idx]}@$SERVER" "$@" 2>&1 &
 }
 
 deploy_code() {
     local idx="$1"
-    SSHPASS="${PASSWORDS[$idx]}" /usr/bin/sshpass -e \
+    SSHPASS="${ALL_PASSWORDS[$idx]}" /usr/bin/sshpass -e \
         rsync -az --delete \
         --exclude='.git' \
         --exclude='__pycache__' \
         --exclude='*.pyc' \
         --exclude='.venv' \
         --exclude='venv/' \
+        --exclude='*.db' \
+        --exclude='config.json' \
+        --exclude='credentials' \
+        --exclude='*.log' \
         -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
-        "$LOCAL_REPO/" "${USERS[$idx]}@$SERVER:$REMOTE_INSTALL_DIR/" 2>&1
+        "$LOCAL_REPO/" "${ALL_USERS[$idx]}@$SERVER:$REMOTE_INSTALL_DIR/" 2>&1
 }
 
-# ─── Pre-flight ────────────────────────────────────────────────────────────────
-section "PRE-FLIGHT"
+# ─── Phase 1: Pre-flight ────────────────────────────────────────────────────────
+section "PHASE 1 — PRE-FLIGHT"
 
 SSHPASS_BIN=$(command -v sshpass || echo "/usr/bin/sshpass")
 if [[ ! -x "$SSHPASS_BIN" ]]; then
@@ -134,12 +156,15 @@ if [[ ! -x "$SSHPASS_BIN" ]]; then
 fi
 ok "sshpass: $SSHPASS_BIN"
 ok "Config: $CONF"
-info "Server: $SERVER:$PORT — $N_BOTS accounts: ${USERS[*]}"
+info "Server: $SERVER:$PORT"
+info "Feed user   : ${ALL_USERS[$FEED_IDX]} (index $FEED_IDX)"
+info "Account bots: $(for i in "${ACCOUNT_IDXS[@]}"; do echo -n "${ALL_USERS[$i]} "; done)"
+info "Feed address: $FEED_ADDR"
+info "Feed auto-restart: $FEED_AUTO_RESTART"
 info "Local repo: $LOCAL_REPO"
 info "Test duration: ${DURATION}s"
 [[ "$SKIP_DEPLOY" == "true" ]] && info "--skip-deploy mode: deployment skipped"
 
-# Populate known_hosts so subsequent SSH calls can use StrictHostKeyChecking=yes
 mkdir -p ~/.ssh && chmod 700 ~/.ssh
 if ! ssh-keygen -F "[$SERVER]:$PORT" &>/dev/null && ! ssh-keygen -F "$SERVER" &>/dev/null; then
     info "Adding host key $SERVER:$PORT to known_hosts..."
@@ -147,97 +172,185 @@ if ! ssh-keygen -F "[$SERVER]:$PORT" &>/dev/null && ! ssh-keygen -F "$SERVER" &>
 fi
 ok "Host key $SERVER verified in known_hosts"
 
-for idx in "${!USERS[@]}"; do
-    if run $idx "echo ok" &>/dev/null; then
-        ok "SSH ${USERS[$idx]}@$SERVER:$PORT"
+for idx in "${DEPLOY_IDXS[@]}"; do
+    if run "$idx" "echo ok" &>/dev/null; then
+        ok "SSH ${ALL_USERS[$idx]}@$SERVER:$PORT"
     else
-        echo "ERROR: unable to connect to ${USERS[$idx]}@$SERVER:$PORT"
+        echo "ERROR: unable to connect to ${ALL_USERS[$idx]}@$SERVER:$PORT"
         exit 1
     fi
 done
 
-# ─── Phase 1: Cleanup ──────────────────────────────────────────────────────────
-section "PHASE 1 — CLEANUP"
-for idx in "${!USERS[@]}"; do
-    user="${USERS[$idx]}"
-    info "Cleaning up $user..."
-    run $idx "
-        pkill -f '[a]ccount_bot.py' 2>/dev/null || true
-        pkill -f '[f]eed.py'        2>/dev/null || true
-        pkill -f '[i]ndicators.py'  2>/dev/null || true
-        sleep 3
-        pkill -9 -f '[a]ccount_bot.py' 2>/dev/null || true
-        pkill -9 -f '[f]eed.py'        2>/dev/null || true
-        pkill -9 -f '[i]ndicators.py'  2>/dev/null || true
-        fuser -k 5557/tcp 2>/dev/null || true
-        fuser -k 5559/tcp 2>/dev/null || true
-        fuser -k 5560/tcp 2>/dev/null || true
-        rm -rf $REMOTE_INSTALL_DIR $REMOTE_BOT_DIR || true
-        rm -rf /tmp/tradinebotte-feed || true
-        exit 0
-    " && ok "$user cleaned up" || warn "$user partial cleanup"
-done
+# Verify the systemd feed service is installed and enabled on the feed user
+FEED_SVC_STATUS=$(run "$FEED_IDX" \
+    "systemctl is-active tradinebotte-feed 2>/dev/null || echo inactive")
+FEED_SVC_ENABLED=$(run "$FEED_IDX" \
+    "systemctl is-enabled tradinebotte-feed 2>/dev/null || echo disabled")
+info "Feed service on ${ALL_USERS[$FEED_IDX]}: status=$FEED_SVC_STATUS enabled=$FEED_SVC_ENABLED"
 
-# Check from the first account (ps aux = all users)
-STALE=$(run 0 "ps aux | grep -E '(account_bot|feed)\.py' | grep -v grep | wc -l" || echo 0)
-if [[ "$STALE" -eq 0 ]]; then
-    ok "No residual processes"
-else
-    warn "$STALE residual process(es) visible — continuing"
+if [[ "$FEED_SVC_STATUS" != "active" ]]; then
+    warn "Feed service is NOT active on ${ALL_USERS[$FEED_IDX]}"
+    warn "  Start it first: sudo systemctl start tradinebotte-feed"
+    warn "  (install with: bash scripts/install_feed_service.sh)"
+    warn "Continuing — account_bot will fail to connect if feed is not running"
 fi
 
-# ─── Phase 2: Deploy ───────────────────────────────────────────────────────────
-if [[ "$SKIP_DEPLOY" == "true" ]]; then
-    section "PHASE 2 — DEPLOY (skipped — --skip-deploy)"
+# ─── Phase 2: Cleanup stale processes and runtime dirs ────────────────────────
+section "PHASE 2 — CLEANUP"
+info "Killing stale account_bot / indicators processes and wiping runtime dirs..."
+for idx in "${ACCOUNT_IDXS[@]}"; do
+    user="${ALL_USERS[$idx]}"
+    run "$idx" "
+        pkill -f '[a]ccount_bot.py' 2>/dev/null || true
+        pkill -f '[i]ndicators.py'  2>/dev/null || true
+        sleep 2
+        pkill -9 -f '[a]ccount_bot.py' 2>/dev/null || true
+        pkill -9 -f '[i]ndicators.py'  2>/dev/null || true
+        fuser -k 5559/tcp 2>/dev/null || true
+        fuser -k 5560/tcp 2>/dev/null || true
+        rm -rf $REMOTE_BOT_DIR
+        exit 0
+    " && ok "$user: cleaned (processes + $REMOTE_BOT_DIR)" \
+      || warn "$user: partial cleanup"
+done
+
+# Confirm no residual account_bot processes
+STALE=$(run "${ACCOUNT_IDXS[0]}" \
+    "ps aux | grep '[a]ccount_bot.py' | wc -l" || echo 0)
+[[ "$STALE" -eq 0 ]] && ok "No residual account_bot processes" \
+    || warn "$STALE residual account_bot process(es) — continuing"
+
+# ─── Phase 3: Capture current feed.py hash BEFORE any deploy ───────────────────
+section "PHASE 3 — FEED VERSION CHECK"
+
+LOCAL_FEED_HASH=$(sha256sum "$LOCAL_REPO/bot/feed.py" | cut -d' ' -f1)
+REMOTE_FEED_HASH=$(run "$FEED_IDX" \
+    "sha256sum $REMOTE_INSTALL_DIR/bot/feed.py 2>/dev/null | cut -d' ' -f1" || echo "")
+FEED_UPDATE_NEEDED=false
+
+if [[ -z "$REMOTE_FEED_HASH" ]]; then
+    info "feed.py not yet deployed on ${ALL_USERS[$FEED_IDX]} — first deploy"
+    FEED_UPDATE_NEEDED=true
+elif [[ "$REMOTE_FEED_HASH" == "$LOCAL_FEED_HASH" ]]; then
+    ok "feed.py unchanged (hash: ${LOCAL_FEED_HASH:0:12}…) — no service restart needed"
 else
-    section "PHASE 2 — DEPLOY"
-    for idx in "${!USERS[@]}"; do
-        user="${USERS[$idx]}"
+    warn "feed.py changed (remote: ${REMOTE_FEED_HASH:0:12}… → local: ${LOCAL_FEED_HASH:0:12}…)"
+    FEED_UPDATE_NEEDED=true
+fi
+
+# ─── Phase 4: Deploy ───────────────────────────────────────────────────────────
+if [[ "$SKIP_DEPLOY" == "true" ]]; then
+    section "PHASE 4 — DEPLOY (skipped — --skip-deploy)"
+else
+    section "PHASE 4 — DEPLOY"
+    for idx in "${DEPLOY_IDXS[@]}"; do
+        user="${ALL_USERS[$idx]}"
         info "rsync → $user..."
-        deploy_code $idx && ok "$user: rsync OK" || { err "$user: rsync failed"; exit 1; }
+        deploy_code "$idx" && ok "$user: rsync OK" || { err "$user: rsync failed"; exit 1; }
 
         info "Creating venv for $user..."
-        run $idx "python3 -m venv $REMOTE_INSTALL_DIR/venv 2>&1" \
+        run "$idx" "python3 -m venv $REMOTE_INSTALL_DIR/venv 2>&1" \
             && ok "$user: venv created" || { err "$user: venv creation failed"; exit 1; }
 
         info "pip install $user..."
-        run $idx "
+        run "$idx" "
             $REMOTE_INSTALL_DIR/venv/bin/pip install --quiet --upgrade pip
             $REMOTE_INSTALL_DIR/venv/bin/pip install --quiet -r $REMOTE_INSTALL_DIR/requirements.txt
         " && ok "$user: dependencies installed" || { err "$user: pip install failed"; exit 1; }
     done
 fi
 
-# ─── Phase 3: Prepare simulation directories ───────────────────────────────────
-section "PHASE 3 — SIMULATION DIRECTORIES"
-for idx in "${!USERS[@]}"; do
-    user="${USERS[$idx]}"
-    run $idx "mkdir -p $REMOTE_BOT_DIR" && ok "$user: $REMOTE_BOT_DIR ready"
+# ─── Phase 4: Feed service update ─────────────────────────────────────────────
+section "PHASE 5 — FEED SERVICE UPDATE"
+
+if [[ "$FEED_UPDATE_NEEDED" == "false" ]] || [[ "$SKIP_DEPLOY" == "true" ]]; then
+    ok "No feed service restart required"
+else
+    info "feed.py was updated — feed service restart needed"
+    RESTART_OK=false
+    if [[ "$FEED_AUTO_RESTART" == "true" ]]; then
+        info "Attempting automatic restart via sudo -n systemctl restart..."
+        if run "$FEED_IDX" "sudo -n systemctl restart tradinebotte-feed 2>&1"; then
+            sleep 5
+            NEW_STATUS=$(run "$FEED_IDX" \
+                "systemctl is-active tradinebotte-feed 2>/dev/null || echo inactive")
+            if [[ "$NEW_STATUS" == "active" ]]; then
+                ok "Feed service restarted successfully (now: $NEW_STATUS)"
+                RESTART_OK=true
+            else
+                warn "Restart command ran but service status: $NEW_STATUS"
+            fi
+        else
+            warn "sudo -n systemctl failed (NOPASSWD sudo may not be configured)"
+        fi
+    fi
+    if [[ "$RESTART_OK" == "false" ]]; then
+        warn "Manual restart required on ${ALL_USERS[$FEED_IDX]}:"
+        warn "  sudo systemctl restart tradinebotte-feed"
+        warn "  sudo systemctl status tradinebotte-feed"
+        warn "Run these commands now, then re-run this script with --skip-deploy"
+    fi
+fi
+
+# Verify feed is actually reachable after any update step
+FEED_SVC_STATUS=$(run "$FEED_IDX" \
+    "systemctl is-active tradinebotte-feed 2>/dev/null || echo inactive")
+[[ "$FEED_SVC_STATUS" == "active" ]] && ok "Feed service active" \
+    || err "Feed service not active (status: $FEED_SVC_STATUS)"
+
+# ─── Phase 5: Configure account bots ──────────────────────────────────────────
+section "PHASE 6 — CONFIGURE ACCOUNT BOTS"
+
+for idx in "${ACCOUNT_IDXS[@]}"; do
+    user="${ALL_USERS[$idx]}"
+    run "$idx" "mkdir -p $REMOTE_BOT_DIR"
+    # Write minimal config.json: feed_auto_start=false + feed address.
+    # Preserves any existing credentials (private_key, api_key, etc.) using
+    # python json.load+update so we don't overwrite what was already there.
+    run "$idx" "python3 - <<'PYEOF'
+import json, os
+path = os.path.expanduser('$REMOTE_BOT_DIR/config.json')
+cfg = {}
+if os.path.exists(path):
+    try:
+        with open(path) as f:
+            cfg = json.load(f)
+    except Exception:
+        pass
+cfg['feed_addr'] = '$FEED_ADDR'
+cfg['feed_auto_start'] = False
+with open(path, 'w') as f:
+    json.dump(cfg, f, indent=2)
+print('config.json updated')
+PYEOF" && ok "$user: config.json → feed_auto_start=false, feed_addr=$FEED_ADDR" \
+         || err "$user: config.json update failed"
 done
 
-# ─── Phase 3b: Launch indicator services ───────────────────────────────────────
-section "PHASE 3b — INDICATOR SERVICES"
+# ─── Phase 6: Start indicator services ────────────────────────────────────────
+section "PHASE 7 — INDICATOR SERVICES"
 IND_STARTED=0
-for idx in "${!USERS[@]}"; do
-    cfg="${INDICATORS_CONFIGS[$idx]:-}"
-    [[ -z "$cfg" ]] && continue
-    user="${USERS[$idx]}"
-    info "Launching indicators.py for $user — config=$cfg"
-    run $idx "
+for idx in "${ACCOUNT_IDXS[@]}"; do
+    cfg_rel="${INDICATORS_CONFIGS[$idx]:-}"
+    [[ -z "$cfg_rel" ]] && continue
+    user="${ALL_USERS[$idx]}"
+    info "Launching indicators.py for $user — config=$cfg_rel"
+    run_bg "$idx" "
         cd $REMOTE_INSTALL_DIR
         nohup $REMOTE_INSTALL_DIR/venv/bin/python3 -u bot/indicators.py \
-            --config $REMOTE_INSTALL_DIR/$cfg \
+            --config $REMOTE_INSTALL_DIR/$cfg_rel \
             > $REMOTE_BOT_DIR/indicators.log 2>&1 < /dev/null &
         echo \"IND_PID=\$!\"
     " && ok "$user: indicators.py started" || warn "$user: indicators launch failed"
     IND_STARTED=$((IND_STARTED + 1))
 done
+wait
 [[ $IND_STARTED -gt 0 ]] && { sleep 5; ok "$IND_STARTED indicator service(s) started"; } \
     || info "No indicator services configured"
 
-# ─── Phase 4: Simultaneous launch ──────────────────────────────────────────────
-section "PHASE 4 — SIMULTANEOUS LAUNCH OF $N_BOTS BOTS"
-info "Sending $N_BOTS launch commands in parallel (race condition test)..."
+# ─── Phase 7: Simultaneous launch of account bots ─────────────────────────────
+N_BOTS=${#ACCOUNT_IDXS[@]}
+section "PHASE 8 — SIMULTANEOUS LAUNCH OF $N_BOTS ACCOUNT BOTS"
+info "Sending $N_BOTS launch commands in parallel..."
 
 LAUNCH_CMD="
     cd $REMOTE_INSTALL_DIR
@@ -247,75 +360,58 @@ LAUNCH_CMD="
     echo \"PID=\$!\"
 "
 
-for idx in "${!USERS[@]}"; do
-    run_bg $idx "$LAUNCH_CMD"
+for idx in "${ACCOUNT_IDXS[@]}"; do
+    run_bg "$idx" "$LAUNCH_CMD"
 done
-wait  # wait for the N SSH sessions to return (not for bots to finish)
+wait
 
 ok "$N_BOTS launch commands sent"
-info "Waiting 30s — feed auto-start + stabilisation..."
+info "Waiting 30s — feed connection + stabilisation..."
 sleep 30
 
-# ─── Phase 5: Initial verification ────────────────────────────────────────────
-section "PHASE 5 — INITIAL VERIFICATION"
+# ─── Phase 8: Initial verification ────────────────────────────────────────────
+section "PHASE 9 — INITIAL VERIFICATION"
 
-FEED_COUNT=$(run 0 "ps aux | grep '[f]eed.py' | wc -l" || echo 0)
-BOT_COUNT=$( run 0 "ps aux | grep '[a]ccount_bot.py' | wc -l" || echo 0)
-info "feed.py processes     : $FEED_COUNT (expected: 1)"
-info "account_bot processes : $BOT_COUNT (expected: $N_BOTS)"
+# Feed service must be running (managed by systemd — not ps aux)
+FEED_SVC_NOW=$(run "$FEED_IDX" \
+    "systemctl is-active tradinebotte-feed 2>/dev/null || echo inactive")
+[[ "$FEED_SVC_NOW" == "active" ]] && ok "Feed service: active (systemd)" \
+    || err "Feed service: $FEED_SVC_NOW (expected: active)"
 
-[[ "$FEED_COUNT" -eq 1 ]]       && ok "Single feed active" || err "Incorrect number of feeds: $FEED_COUNT (expected 1)"
-[[ "$BOT_COUNT"  -eq "$N_BOTS" ]] && ok "$N_BOTS bots active" || err "Incorrect number of bots: $BOT_COUNT (expected $N_BOTS)"
+# Count account_bot processes (visible to all users via ps aux)
+BOT_COUNT=$(run "${ACCOUNT_IDXS[0]}" "ps aux | grep '[a]ccount_bot.py' | wc -l" || echo 0)
+info "account_bot processes: $BOT_COUNT (expected: $N_BOTS)"
+[[ "$BOT_COUNT" -eq "$N_BOTS" ]] && ok "$N_BOTS account bots active" \
+    || err "Expected $N_BOTS bots, found $BOT_COUNT"
 
 # Verify indicator services
-for idx in "${!USERS[@]}"; do
-    cfg="${INDICATORS_CONFIGS[$idx]:-}"
-    [[ -z "$cfg" ]] && continue
-    user="${USERS[$idx]}"
-    IND_COUNT=$(run $idx "ps aux | grep '[i]ndicators.py' | wc -l" || echo 0)
-    [[ "$IND_COUNT" -ge 1 ]] && ok "$user: indicators.py active ($cfg)" \
-        || err "$user: indicators.py not found for config $cfg"
+for idx in "${ACCOUNT_IDXS[@]}"; do
+    cfg_rel="${INDICATORS_CONFIGS[$idx]:-}"
+    [[ -z "$cfg_rel" ]] && continue
+    user="${ALL_USERS[$idx]}"
+    IND_COUNT=$(run "$idx" "ps aux | grep '[i]ndicators.py' | wc -l" || echo 0)
+    [[ "$IND_COUNT" -ge 1 ]] && ok "$user: indicators.py active" \
+        || err "$user: indicators.py not found for $cfg_rel"
 done
 
-for idx in "${!USERS[@]}"; do
-    user="${USERS[$idx]}"
-    run $idx "grep -q 'Connected to feed' $REMOTE_BOT_DIR/account.log 2>/dev/null" && \
-        ok "$user: connected to feed" || err "$user: no 'Connected to feed' message"
-    if run $idx "grep -qE 'Feed started|Feed ready' $REMOTE_BOT_DIR/account.log 2>/dev/null"; then
-        ok "$user: started the feed (race winner)"
-    elif run $idx "grep -q 'Feed active on' $REMOTE_BOT_DIR/account.log 2>/dev/null"; then
-        ok "$user: found feed already active"
-    elif run $idx "grep -q 'Feed being started' $REMOTE_BOT_DIR/account.log 2>/dev/null"; then
-        ok "$user: waited for feed to start (race loser)"
-    fi
-done
-
-# The feed was launched by the race winner — look for its log in the
-# shared directory /tmp/tradinebotte-feed/ (common to all users).
-FEED_LOG_PATH="(not found)"
-FEED_LOG_IDX=0
-for idx in "${!USERS[@]}"; do
-    fp=$(run $idx "ls -t /tmp/tradinebotte-feed/feed-*.log 2>/dev/null | head -1")
-    if [[ -n "$fp" ]]; then
-        FEED_LOG_PATH="$fp"
-        FEED_LOG_IDX=$idx
-        break
-    fi
-done
-info "Feed log: $FEED_LOG_PATH (account: ${USERS[$FEED_LOG_IDX]})"
-if [[ "$FEED_LOG_PATH" != "(not found)" ]]; then
-    FEED_LOG=$(run $FEED_LOG_IDX "cat $FEED_LOG_PATH 2>/dev/null | head -60 || echo '(empty)'")
-    if echo "$FEED_LOG" | grep -qE "WebSocket connected|Subscribing|BTC 5-min markets"; then
-        ok "Feed: Polymarket WebSocket connected"
+# Verify each bot connected to the feed
+for idx in "${ACCOUNT_IDXS[@]}"; do
+    user="${ALL_USERS[$idx]}"
+    if run "$idx" "grep -q 'Connected to feed' $REMOTE_BOT_DIR/account.log 2>/dev/null"; then
+        ok "$user: connected to feed"
     else
-        warn "Feed: WebSocket confirmation not yet seen"
+        err "$user: 'Connected to feed' not found in log"
     fi
-else
-    warn "Feed log not found in /tmp/tradinebotte-feed/"
-fi
+    # With feed_auto_start=false, no auto-start race; just verify no startup errors
+    if run "$idx" "grep -qiE '\[ERROR\]|\[CRITICAL\]' $REMOTE_BOT_DIR/account.log 2>/dev/null"; then
+        EARLY_ERR=$(run "$idx" \
+            "grep -iE '\[ERROR\]|\[CRITICAL\]' $REMOTE_BOT_DIR/account.log 2>/dev/null | head -3")
+        err "$user: errors at startup: $EARLY_ERR"
+    fi
+done
 
-# ─── Phase 6: Sustained operation ──────────────────────────────────────────────
-section "PHASE 6 — SUSTAINED OPERATION (${DURATION}s)"
+# ─── Phase 9: Sustained operation ──────────────────────────────────────────────
+section "PHASE 10 — SUSTAINED OPERATION (${DURATION}s)"
 ELAPSED=30
 CHECK_INTERVAL=30
 
@@ -327,83 +423,86 @@ while [[ $ELAPSED -lt $DURATION ]]; do
     sleep $SLEEP_FOR
     ELAPSED=$((ELAPSED + SLEEP_FOR))
 
-    FEED_C=$(run 0 "ps aux | grep '[f]eed.py' | wc -l" 2>/dev/null || echo "?")
-    BOT_C=$( run 0 "ps aux | grep '[a]ccount_bot.py' | wc -l" 2>/dev/null || echo "?")
-    info "  [${ELAPSED}s] feed=$FEED_C bots=$BOT_C"
+    FEED_C=$(run "$FEED_IDX" \
+        "systemctl is-active tradinebotte-feed 2>/dev/null || echo inactive")
+    BOT_C=$(run "${ACCOUNT_IDXS[0]}" \
+        "ps aux | grep '[a]ccount_bot.py' | wc -l" 2>/dev/null || echo "?")
+    info "  [${ELAPSED}s] feed=${FEED_C} bots=${BOT_C}"
 
-    [[ "$FEED_C" == "1" ]]        || warn "  ! Abnormal number of feeds: $FEED_C"
-    [[ "$BOT_C"  == "$N_BOTS" ]]  || warn "  ! Abnormal number of bots: $BOT_C"
+    [[ "$FEED_C" == "active" ]] || warn "  ! Feed service not active: $FEED_C"
+    [[ "$BOT_C"  == "$N_BOTS" ]] || warn "  ! Expected $N_BOTS bots, found: $BOT_C"
 done
 ok "Duration ${DURATION}s reached"
 
-# ─── Phase 7: Final analysis ────────────────────────────────────────────────────
-section "PHASE 7 — LOG ANALYSIS"
+# ─── Phase 10: Final analysis ───────────────────────────────────────────────────
+section "PHASE 11 — LOG ANALYSIS"
 
-for idx in "${!USERS[@]}"; do
-    user="${USERS[$idx]}"
+for idx in "${ACCOUNT_IDXS[@]}"; do
+    user="${ALL_USERS[$idx]}"
     echo ""
     echo -e "${BOLD}--- $user: account.log (last 20 lines) ---${NC}"
-    run $idx "tail -20 $REMOTE_BOT_DIR/account.log 2>/dev/null || echo '(empty)'"
+    run "$idx" "tail -20 $REMOTE_BOT_DIR/account.log 2>/dev/null || echo '(empty)'"
 
-    run $idx "grep -q 'Connected to feed' $REMOTE_BOT_DIR/account.log 2>/dev/null" && \
+    run "$idx" "grep -q 'Connected to feed' $REMOTE_BOT_DIR/account.log 2>/dev/null" && \
         ok "$user: feed connection confirmed" || err "$user: no feed connection"
-    BOOK_COUNT=$(run $idx "grep -c '\[FEED\] book' $REMOTE_BOT_DIR/account.log 2>/dev/null || true")
-    [[ "$BOOK_COUNT" -gt 0 ]] && ok "$user: $BOOK_COUNT book updates received (feed active)" || \
-        warn "$user: no book updates — market may be quiet"
-    ERROR_COUNT=$(run $idx "grep -ciE '\[(ERROR|CRITICAL)\]' $REMOTE_BOT_DIR/account.log 2>/dev/null || true")
-    [[ "$ERROR_COUNT" -eq 0 ]] && ok "$user: no critical errors" || \
-        err "$user: $ERROR_COUNT ERROR/CRITICAL line(s) in logs"
+    BOOK_COUNT=$(run "$idx" \
+        "grep -c '\[FEED\] book' $REMOTE_BOT_DIR/account.log 2>/dev/null || true")
+    [[ "$BOOK_COUNT" -gt 0 ]] && ok "$user: $BOOK_COUNT book updates received" \
+        || warn "$user: no book updates — market may be quiet"
+    ERROR_COUNT=$(run "$idx" \
+        "grep -ciE '\[(ERROR|CRITICAL)\]' $REMOTE_BOT_DIR/account.log 2>/dev/null || true")
+    [[ "$ERROR_COUNT" -eq 0 ]] && ok "$user: no critical errors" \
+        || err "$user: $ERROR_COUNT ERROR/CRITICAL line(s) in logs"
 done
 
+# Feed service journal (last 30 lines)
 echo ""
-echo -e "${BOLD}--- Feed log (first 30 + last 10 lines) ---${NC}"
-if [[ "${FEED_LOG_PATH:-}" != "(not found)" && -n "${FEED_LOG_PATH:-}" ]]; then
-    FEED_LOG_HEAD=$(run $FEED_LOG_IDX "head -30 $FEED_LOG_PATH 2>/dev/null || echo '(empty)'")
-    FEED_LOG_TAIL=$(run $FEED_LOG_IDX "tail -10 $FEED_LOG_PATH 2>/dev/null || echo '(empty)'")
-    echo "$FEED_LOG_HEAD"
-    echo "..."
-    echo "$FEED_LOG_TAIL"
-    # Grep on the server to avoid transferring a multi-MB log
-    run $FEED_LOG_IDX "grep -qE 'WebSocket connected|Subscribing|BTC 5-min markets' $FEED_LOG_PATH 2>/dev/null" && \
-        ok "Feed: WebSocket confirmed in final log" || err "Feed: WebSocket not confirmed"
-    run $FEED_LOG_IDX "grep -qiE 'BTC|bitcoin|Marche' $FEED_LOG_PATH 2>/dev/null" && \
-        ok "Feed: BTC markets found" || warn "Feed: BTC markets not found"
-else
-    warn "Feed log not found — cannot analyse"
-fi
+echo -e "${BOLD}--- Feed service journal (last 30 lines via journalctl) ---${NC}"
+FEED_JOURNAL=$(run "$FEED_IDX" \
+    "journalctl -u tradinebotte-feed --no-pager -n 30 2>/dev/null || echo '(not available)'")
+echo "$FEED_JOURNAL"
+echo "$FEED_JOURNAL" | grep -qE "WebSocket connected|Subscribing|BTC 5-min markets" && \
+    ok "Feed: WebSocket confirmed in journal" || warn "Feed: WebSocket not confirmed in journal"
 
-FEED_FINAL=$(run 0 "ps aux | grep '[f]eed.py' | wc -l" || echo 0)
-BOT_FINAL=$( run 0 "ps aux | grep '[a]ccount_bot.py' | wc -l" || echo 0)
-[[ "$FEED_FINAL" -eq 1 ]]        && ok "Feed still active after ${DURATION}s" || err "Feed stopped prematurely"
-[[ "$BOT_FINAL"  -eq "$N_BOTS" ]] && ok "$N_BOTS bots still active after ${DURATION}s" || \
-    err "$BOT_FINAL/$N_BOTS bots still active"
+FEED_FINAL=$(run "$FEED_IDX" \
+    "systemctl is-active tradinebotte-feed 2>/dev/null || echo inactive")
+BOT_FINAL=$(run "${ACCOUNT_IDXS[0]}" \
+    "ps aux | grep '[a]ccount_bot.py' | wc -l" || echo 0)
+[[ "$FEED_FINAL" == "active" ]] && ok "Feed service still active after ${DURATION}s" \
+    || err "Feed service stopped (status: $FEED_FINAL)"
+[[ "$BOT_FINAL" -eq "$N_BOTS" ]] && ok "$N_BOTS bots still active after ${DURATION}s" \
+    || err "$BOT_FINAL/$N_BOTS bots still active"
 
-# ─── Phase 8 : Teardown ────────────────────────────────────────────────────────
-section "PHASE 8 — TEARDOWN"
-for idx in "${!USERS[@]}"; do
-    user="${USERS[$idx]}"
-    run $idx "
+# ─── Phase 11: Teardown ────────────────────────────────────────────────────────
+section "PHASE 12 — TEARDOWN"
+info "Stopping account_bot processes (feed service left running)"
+for idx in "${ACCOUNT_IDXS[@]}"; do
+    user="${ALL_USERS[$idx]}"
+    run "$idx" "
         pkill -f '[a]ccount_bot.py' 2>/dev/null || true
-        pkill -f '[f]eed.py'        2>/dev/null || true
         pkill -f '[i]ndicators.py'  2>/dev/null || true
         sleep 2
         pkill -9 -f '[a]ccount_bot.py' 2>/dev/null || true
-        pkill -9 -f '[f]eed.py'        2>/dev/null || true
         pkill -9 -f '[i]ndicators.py'  2>/dev/null || true
-        fuser -k 5557/tcp 2>/dev/null || true
         fuser -k 5559/tcp 2>/dev/null || true
         fuser -k 5560/tcp 2>/dev/null || true
-        rm -rf /tmp/tradinebotte-feed || true
         exit 0
-    " && info "$user : processes stopped" || true
+    " && info "$user: processes stopped" || true
 done
 sleep 3
-REMAINING_PROCS=$(run 0 "ps aux | grep -E '(account_bot|feed)\.py' | grep -v grep | wc -l" || echo 0)
-[[ "$REMAINING_PROCS" -eq 0 ]] && ok "All processes stopped" || \
-    warn "$REMAINING_PROCS process(es) still running"
+REMAINING_BOTS=$(run "${ACCOUNT_IDXS[0]}" \
+    "ps aux | grep '[a]ccount_bot.py' | grep -v grep | wc -l" || echo 0)
+[[ "$REMAINING_BOTS" -eq 0 ]] && ok "All account_bot processes stopped" \
+    || warn "$REMAINING_BOTS account_bot process(es) still running"
 
-# ─── Rapport final ─────────────────────────────────────────────────────────────
-section "RAPPORT FINAL"
+# Confirm the feed service was not affected
+FEED_AFTER=$(run "$FEED_IDX" \
+    "systemctl is-active tradinebotte-feed 2>/dev/null || echo inactive")
+[[ "$FEED_AFTER" == "active" ]] && ok "Feed service still running after teardown (as expected)" \
+    || warn "Feed service status after teardown: $FEED_AFTER"
+
+# ─── Phase 12: Final report ─────────────────────────────────────────────────────
+section "FINAL REPORT"
 TOTAL_SECS=$(( $(date +%s) - START_TS ))
 echo ""
 if [[ $FAILURES -eq 0 ]]; then

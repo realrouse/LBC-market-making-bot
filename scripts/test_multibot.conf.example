@@ -15,19 +15,44 @@ TEST_PORT="22"
 
 # ─── Test accounts ─────────────────────────────────────────────────────────────
 # All arrays below must have the same length.
-# Each entry corresponds to one account bot instance.
-TEST_USERS=(user1 user2 user3)
+# Three accounts are required: feed owner (claude1), second bot (claude2),
+# standalone (claude3).
+TEST_USERS=(claude1 claude2 claude3)
 TEST_PASSWORDS=(pass1 pass2 pass3)
+
+# ─── Role assignments (indices into TEST_USERS) ────────────────────────────────
+#
+# Feed owner: runs the systemd tradinebotte-feed service.
+# account_bot on this host also uses feed_auto_start=false (systemd manages it).
+TEST_FEED_USER_IDX=0
+
+# Account bot users: run account_bot.py in multibot mode (feed_auto_start=false).
+# Must include the feed owner index if that host also runs an account_bot.
+TEST_ACCOUNT_USER_IDXS=(0 1)
+
+# Standalone user: runs live_bot.py via start_bot.sh (test_standalone_deploy.sh).
+TEST_STANDALONE_USER_IDX=2
+
+# ─── Feed address ──────────────────────────────────────────────────────────────
+# ZeroMQ PUB address where the feed service listens. All account bots on the
+# same server share this address. Default: tcp://127.0.0.1:5557.
+# TEST_FEED_ADDR="tcp://127.0.0.1:5557"
+
+# ─── Feed service auto-restart ─────────────────────────────────────────────────
+# When true: if feed.py changed since last deploy, the script attempts
+#   sudo -n systemctl restart tradinebotte-feed   (requires NOPASSWD sudo).
+# When false (default): the script prints the commands and leaves them to you.
+TEST_FEED_AUTO_RESTART=false
 
 # ─── Per-account indicator configs ────────────────────────────────────────────
 # Path (relative to REMOTE_INSTALL_DIR) to the indicators JSON config for each
 # account. Use "" to skip the indicators service for that account.
-#   user1 → 4h indicators (port 5559)
-#   user2 → daily indicators (port 5560)
-#   user3 → no indicators
+#   claude1 → 4h indicators (port 5559)
+#   claude2 → no indicators
+#   claude3 → no indicators (standalone, handled by test_standalone_deploy.sh)
 TEST_INDICATORS_CONFIGS=(
     "strategies/indicators_4h_bitcoin.json"
-    "strategies/indicators_1d_bitcoin.json"
+    ""
     ""
 )
 
