@@ -168,6 +168,79 @@ export TRADINEBOTTE_DIR=~/tradinebotte
 ```
 
 
+## Variables d'environnement
+
+Toutes les variables d'environnement sont optionnelles — chacune a une valeur
+par défaut sensée. Pour les valeurs persistantes, la plupart peuvent aussi être
+stockées dans `config.json` (voir [Configuration du wallet](#configuration-du-wallet-une-seule-fois))
+plutôt que définies dans le shell.
+
+### Ordre de priorité
+
+Quand une valeur peut provenir de plusieurs sources, la priorité est :
+
+```
+config.json  >  variable d'environnement  >  valeur par défaut
+```
+
+Les variables d'environnement prennent toujours le dessus sur les valeurs par
+défaut, mais `config.json` est prioritaire sur les deux.
+
+### Tableau de référence
+
+| Variable | Clé config.json | Défaut | Portée | Description |
+|---|---|---|---|---|
+| `TRADINEBOTTE_DIR` | — | `~/tradinebotte` | tous les scripts | Répertoire d'exécution : contient `config.json`, `live.db`, `live.log`, le venv et les fichiers de stratégie. **Pas de clé config.json** — c'est le chemin bootstrap nécessaire pour localiser le fichier. |
+| `TRADINEBOTTE_FEED_ADDR` | `feed_addr` | `tcp://127.0.0.1:5557` | feed, account\_bot, indicators | Adresse ZeroMQ PUB/SUB du feed WebSocket partagé (Option B multi-bot). Changer le port si plusieurs feeds tournent sur la même machine. |
+| `TRADINEBOTTE_PORT_BASE` | — | `5557` | feed, account\_bot, indicators | Port de base ; `TRADINEBOTTE_FEED_ADDR` prend la valeur `tcp://127.0.0.1:<PORT_BASE>` quand l'adresse complète n'est pas définie. |
+| `TRADINEBOTTE_INDICATORS_ADDR` | `indicators_addr` | `tcp://127.0.0.1:5559` | indicators, account\_bot | Adresse ZeroMQ PUB du service d'indicateurs partagé. `account_bot` s'y abonne si `indicators_streams` est défini. |
+| `TRADINEBOTTE_INDICATORS_REG_ADDR` | `indicators_reg_addr` | `tcp://127.0.0.1:5561` | account\_bot | Adresse ZeroMQ REP du service d'indicateurs pour l'enregistrement dynamique de flux. Chaque `account_bot` envoie ses demandes d'abonnement ici au démarrage. |
+| — | `feed_auto_start` | `true` | account\_bot | Si `false`, `account_bot` s'attend à ce que `feed.py` soit géré par un processus externe (ex. systemd) ; sonde avec des tentatives répétées plutôt que de le démarrer automatiquement. Quitte si le feed est inaccessible après 30 s. |
+| — | `indicators_streams` | `[]` | account\_bot | Liste de spécifications d'abonnement envoyées au service d'indicateurs partagé au démarrage. Voir [Service d'indicateurs techniques](#service-dindicateurs-techniques). |
+| `TRADINEBOTTE_INSTALL_DIR` | — | auto-détecté | scripts d'install | Remplace le répertoire d'installation utilisé par `install_feed_service.sh` et `install_indicators_service.sh` lors de la recherche du virtualenv. |
+| `POLY_PRIVATE_KEY` | `private_key` | `""` | live\_bot, account\_bot | Clé privée du wallet Polygon (`0x` + 64 caractères hex). Si vide, les ordres sont simulés sans exécution on-chain. |
+| `POLY_API_KEY` | `api_key` | `""` | live\_bot, account\_bot | Clé API Polymarket CLOB (dérivée par `setup.py`). |
+| `POLY_API_SECRET` | `api_secret` | `""` | live\_bot, account\_bot | Secret API Polymarket CLOB. |
+| `POLY_PASSPHRASE` | `api_passphrase` | `""` | live\_bot, account\_bot | Passphrase API Polymarket CLOB. |
+| `MEXC_API_KEY` | — | `""` | api\_mexc | Clé API exchange MEXC. Variable d'env uniquement — pas de clé `config.json`. |
+| `MEXC_API_SECRET` | — | `""` | api\_mexc | Secret API MEXC. Variable d'env uniquement. |
+| `BINANCE_API_KEY` | — | `""` | api\_binance | Clé API Binance. Variable d'env uniquement. |
+| `BINANCE_API_SECRET` | — | `""` | api\_binance | Secret API Binance. Variable d'env uniquement. |
+
+### Services systemd et héritage de l'environnement
+
+Les services système systemd n'héritent **pas** de l'environnement shell
+(`.bashrc`, `.profile`, etc.). Les fichiers unit générés gèrent cela de deux
+façons :
+
+1. **`Environment=` inline** — les chemins non sensibles (`TRADINEBOTTE_DIR`,
+   `TRADINEBOTTE_FEED_ADDR`) sont intégrés dans le fichier unit par le script
+   d'installation.
+2. **`EnvironmentFile=`** — chaque service charge `<TRADINEBOTTE_DIR>/credentials`
+   s'il existe (le préfixe `-` le rend optionnel — un fichier absent est ignoré
+   silencieusement). Créer ce fichier pour les clés API non stockées dans
+   `config.json` :
+
+```bash
+# Exemple : ~/tradinebotte/credentials  (chmod 600)
+MEXC_API_KEY=...
+MEXC_API_SECRET=...
+BINANCE_API_KEY=...
+BINANCE_API_SECRET=...
+# Les credentials POLY_* sont en général dans config.json — ajouter ici
+# uniquement pour surcharger les valeurs du fichier
+```
+
+```bash
+chmod 600 ~/tradinebotte/credentials
+```
+
+> Les credentials Polymarket (`POLY_*`) sont écrits dans `config.json` par
+> `setup.py` et chargés automatiquement. Le fichier `credentials` n'est
+> nécessaire que pour les secrets sans clé `config.json` (MEXC, Binance) ou
+> pour surcharger `config.json` sans l'éditer.
+
+
 ## Installation
 
 Exécuter le script d'installation depuis la racine du dépôt :
@@ -342,8 +415,7 @@ Le service redémarre automatiquement en cas d'erreur (`Restart=on-failure`, dé
 max 5 redémarrages par 5 minutes). Au reboot, le bot revient dès que le réseau est
 disponible (`After=network-online.target`).
 
-> **Multi-bot (Option B)** : utiliser `scripts/install_feed_service.sh` et
-> `scripts/install_account_service.sh` à la place. Voir [docs/multi.md](docs/multi.md).
+> **Multi-bot (Option B)** : utilisez `scripts/install_feed_service.sh`, `scripts/install_indicators_service.sh` (indicateurs partagés, optionnel) et `scripts/install_account_service.sh`. Voir [docs/multi.md](docs/multi.md).
 
 **Flags :**
 - *(aucun flag)* — mode normal : les écritures de logs sont asynchrones (thread daemon, ne bloque jamais le event loop)
@@ -485,37 +557,78 @@ Les messages ne sont publiés qu'une fois `--min-ticks` (défaut : 25) mises à 
 
 | Flag | Défaut | Description |
 |---|---|---|
-| `--feed ADDR` | `tcp://127.0.0.1:5557` | Adresse ZMQ à laquelle souscrire (PUB de feed.py) |
-| `--out ADDR` | `tcp://127.0.0.1:5559` | Adresse ZMQ sur laquelle binder et publier |
-| `--rsi N` | 14 | Période RSI |
-| `--sma N` | 20 | Période SMA |
-| `--ema N` | 9 | Période EMA |
+| `--config FICHIER` | — | Chemin vers le fichier de config JSON des indicateurs (recommandé) |
+| `--feed ADDR` | `tcp://127.0.0.1:5557` | Adresse ZMQ à laquelle s'abonner (PUB de feed.py) |
+| `--out ADDR` | `tcp://127.0.0.1:5559` | Adresse ZMQ PUB sur laquelle publier |
+| `--reg-addr ADDR` | `tcp://127.0.0.1:5561` | Adresse ZMQ REP pour l'enregistrement dynamique des flux |
+| `--rsi N` | 14 | Période du RSI |
+| `--sma N` | 20 | Période de la SMA |
+| `--ema N` | 9 | Période de l'EMA |
 | `--vol N` | 20 | Fenêtre de volatilité (écart-type des log-rendements) |
-| `--min-ticks N` | 25 | Nombre minimal de ticks de prix avant toute publication |
-| `--verbose` | — | Afficher chaque publication en niveau DEBUG |
+| `--min-ticks N` | 25 | Ticks minimum avant toute publication |
+| `--verbose` | — | Affiche chaque publication au niveau DEBUG |
 
 **Variables d'environnement :** `TRADINEBOTTE_FEED_ADDR` et `TRADINEBOTTE_INDICATORS_ADDR` surchargent les valeurs par défaut de `--feed` et `--out`.
 
-### Configs séparées par compte
+### Architecture partagée — une instance, chaque bot s'enregistre dynamiquement
 
-Deux fichiers de config prêts à l'emploi sont fournis pour les déploiements multi-bots :
+Le service d'indicateurs est un **processus partagé** : une seule instance tourne sur la machine (gérée comme le feed), et chaque `account_bot` enregistre les flux dont il a besoin au démarrage via la socket REP.
 
-| Fichier | Compte | Port | Timeframe |
-|---|---|---|---|
-| `strategies/indicators_4h_bitcoin.json` | account-a | `:5559` | 4h |
-| `strategies/indicators_1d_bitcoin.json` | account-b | `:5560` | `1d` |
+Chaque compte déclare ses besoins dans `config.json` :
 
-Démarrer avec `start_indicators.sh` :
+```json
+{
+  "indicators_reg_addr": "tcp://127.0.0.1:5561",
+  "indicators_streams": [
+    {
+      "source": "binance_ws",
+      "asset":  "BTCUSDT",
+      "timeframe": "4h",
+      "indicators": [{"type": "rsi", "period": 14},
+                     {"type": "vol", "period": 20}]
+    }
+  ]
+}
+```
+
+`account_bot` se connecte à la socket REP au démarrage, envoie chaque entrée sous forme de requête `{"cmd":"subscribe", ...}` et journalise le `stream_id` attribué. Un délai d'expiration est journalisé comme avertissement — le bot continue de fonctionner sans indicateurs.
+
+Sources disponibles : `binance_ws`, `binance_funding`, `deribit_iv`, `fear_greed`, `feed`.
+
+### Service systemd (recommandé)
 
 ```bash
-# account-a
-TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_4h_bitcoin.json \
-  bash scripts/start_indicators.sh
-
-# account-b
-TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_1d_bitcoin.json \
-  bash scripts/start_indicators.sh
+INDICATORS_CONFIG=~/tradinebotte/strategies/indicators_base.json \
+bash scripts/install_indicators_service.sh
 ```
+
+Génère `~/tmp/tradinebotte-indicators.service`. Installer aux côtés du service feed :
+
+```bash
+sudo cp ~/tmp/tradinebotte-indicators.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable tradinebotte-indicators
+sudo systemctl start tradinebotte-indicators
+journalctl -u tradinebotte-indicators -f
+```
+
+Optionnel : définir `INDICATORS_LABEL=btc` pour nommer le service `tradinebotte-indicators-btc` en cas de deux instances indépendantes.
+
+### Démarrage manuel
+
+```bash
+python3 bot/indicators.py --config strategies/indicators_base.json
+```
+
+Fichiers de config prêts à l'emploi dans `strategies/` :
+
+| Fichier | Sources |
+|---|---|
+| `indicators_4h_bitcoin.json` | Bougies Binance BTC/USDT 4h |
+| `indicators_1d_bitcoin.json` | Bougies Binance BTC/USDT 1d |
+| `indicators_funding_bitcoin.json` | Taux de financement perpétuel Binance |
+| `indicators_deribit_iv_bitcoin.json` | Volatilité implicite DVOL Deribit |
+| `indicators_fear_greed.json` | Indice Fear & Greed d'Alternative.me |
 
 
 ## Backtest grid trading
