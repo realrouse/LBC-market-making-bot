@@ -44,17 +44,15 @@ TEST_STANDALONE_USER_IDX=2
 # When false (default): the script prints the commands and leaves them to you.
 TEST_FEED_AUTO_RESTART=false
 
-# ─── Per-account indicator configs ────────────────────────────────────────────
-# Path (relative to REMOTE_INSTALL_DIR) to the indicators JSON config for each
-# account. Use "" to skip the indicators service for that account.
-#   claude1 → 4h indicators (port 5559)
-#   claude2 → no indicators
-#   claude3 → no indicators (standalone, handled by test_standalone_deploy.sh)
-TEST_INDICATORS_CONFIGS=(
-    "strategies/indicators_4h_bitcoin.json"
-    ""
-    ""
-)
+# ─── Shared indicator service config ──────────────────────────────────────────
+# The indicators service is a SINGLE shared process on the machine, started
+# under the feed owner user (TEST_FEED_USER_IDX). Set the path (relative to
+# REMOTE_INSTALL_DIR) to the indicators JSON config file. Leave unset or empty
+# to skip the indicators service entirely.
+#
+# Each account_bot registers the streams it needs at startup via the REP socket
+# declared in its own config.json (indicators_reg_addr + indicators_streams).
+# TEST_INDICATORS_CONFIG="strategies/indicators_base.json"
 
 # ─── Optional overrides ────────────────────────────────────────────────────────
 # Duration of the sustained-operation phase (seconds). Default: 180.

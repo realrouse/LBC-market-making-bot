@@ -108,12 +108,6 @@ for _i in "$FEED_IDX" "${ACCOUNT_IDXS[@]}"; do
 done
 unset _SEEN_DEPLOY _i
 
-# Per-account indicators config paths (relative to REMOTE_INSTALL_DIR). "" = skip.
-INDICATORS_CONFIGS=("${TEST_INDICATORS_CONFIGS[@]:-}")
-while [[ ${#INDICATORS_CONFIGS[@]} -lt ${#ALL_USERS[@]} ]]; do
-    INDICATORS_CONFIGS+=("")
-done
-
 # Helpers: run / run_bg / deploy_code all accept indices into ALL_USERS
 run() {
     local idx="$1"; shift
@@ -198,6 +192,17 @@ fi
 # ─── Phase 2: Cleanup stale processes and runtime dirs ────────────────────────
 section "PHASE 2 — CLEANUP"
 info "Killing stale account_bot / indicators processes and wiping runtime dirs..."
+
+# Kill shared indicators.py on the feed owner (may not be in ACCOUNT_IDXS)
+run "$FEED_IDX" "
+    pkill -f '[i]ndicators.py' 2>/dev/null || true
+    sleep 1
+    pkill -9 -f '[i]ndicators.py' 2>/dev/null || true
+    fuser -k 5559/tcp 2>/dev/null || true
+    fuser -k 5561/tcp 2>/dev/null || true
+    exit 0
+" && ok "${ALL_USERS[$FEED_IDX]}: stale indicators.py cleared" || true
+
 for idx in "${ACCOUNT_IDXS[@]}"; do
     user="${ALL_USERS[$idx]}"
     run "$idx" "
@@ -208,6 +213,7 @@ for idx in "${ACCOUNT_IDXS[@]}"; do
         pkill -9 -f '[i]ndicators.py'  2>/dev/null || true
         fuser -k 5559/tcp 2>/dev/null || true
         fuser -k 5560/tcp 2>/dev/null || true
+        fuser -k 5561/tcp 2>/dev/null || true
         rm -rf $REMOTE_BOT_DIR
         exit 0
     " && ok "$user: cleaned (processes + $REMOTE_BOT_DIR)" \
@@ -319,6 +325,7 @@ if os.path.exists(path):
         pass
 cfg['feed_addr'] = '$FEED_ADDR'
 cfg['feed_auto_start'] = False
+cfg['indicators_reg_addr'] = 'tcp://127.0.0.1:5561'
 with open(path, 'w') as f:
     json.dump(cfg, f, indent=2)
 print('config.json updated')
@@ -326,26 +333,30 @@ PYEOF" && ok "$user: config.json → feed_auto_start=false, feed_addr=$FEED_ADDR
          || err "$user: config.json update failed"
 done
 
-# ─── Phase 6: Start indicator services ────────────────────────────────────────
-section "PHASE 7 — INDICATOR SERVICES"
-IND_STARTED=0
-for idx in "${ACCOUNT_IDXS[@]}"; do
-    cfg_rel="${INDICATORS_CONFIGS[$idx]:-}"
-    [[ -z "$cfg_rel" ]] && continue
-    user="${ALL_USERS[$idx]}"
-    info "Launching indicators.py for $user — config=$cfg_rel"
-    run_bg "$idx" "
+# ─── Phase 6: Start shared indicator service (under feed owner) ───────────────
+section "PHASE 7 — SHARED INDICATOR SERVICE"
+# Indicators is a single machine-wide process (like the feed), owned by the feed
+# user. Launch it under FEED_IDX only — each account_bot registers its streams
+# at startup via the REP socket (indicators_reg_addr in config.json).
+IND_CFG_REL="${TEST_INDICATORS_CONFIG:-}"
+[[ -n "${TEST_INDICATORS_CONFIGS:-}" ]] && \
+    warn "TEST_INDICATORS_CONFIGS is obsolete — use TEST_INDICATORS_CONFIG (singular)"
+if [[ -n "$IND_CFG_REL" ]]; then
+    info "Launching shared indicators.py under ${ALL_USERS[$FEED_IDX]} — config=$IND_CFG_REL"
+    run_bg "$FEED_IDX" "
         cd $REMOTE_INSTALL_DIR
         nohup $REMOTE_INSTALL_DIR/venv/bin/python3 -u bot/indicators.py \
-            --config $REMOTE_INSTALL_DIR/$cfg_rel \
-            > $REMOTE_BOT_DIR/indicators.log 2>&1 < /dev/null &
+            --config $REMOTE_INSTALL_DIR/$IND_CFG_REL \
+            > $REMOTE_INSTALL_DIR/indicators.log 2>&1 < /dev/null &
         echo \"IND_PID=\$!\"
-    " && ok "$user: indicators.py started" || warn "$user: indicators launch failed"
-    IND_STARTED=$((IND_STARTED + 1))
-done
-wait
-[[ $IND_STARTED -gt 0 ]] && { sleep 5; ok "$IND_STARTED indicator service(s) started"; } \
-    || info "No indicator services configured"
+    " && ok "${ALL_USERS[$FEED_IDX]}: shared indicators.py started" \
+      || warn "${ALL_USERS[$FEED_IDX]}: indicators launch failed"
+    wait
+    sleep 5
+    ok "Shared indicators service started"
+else
+    info "TEST_INDICATORS_CONFIG not set — indicators service skipped"
+fi
 
 # ─── Phase 7: Simultaneous launch of account bots ─────────────────────────────
 N_BOTS=${#ACCOUNT_IDXS[@]}
@@ -384,15 +395,15 @@ info "account_bot processes: $BOT_COUNT (expected: $N_BOTS)"
 [[ "$BOT_COUNT" -eq "$N_BOTS" ]] && ok "$N_BOTS account bots active" \
     || err "Expected $N_BOTS bots, found $BOT_COUNT"
 
-# Verify indicator services
-for idx in "${ACCOUNT_IDXS[@]}"; do
-    cfg_rel="${INDICATORS_CONFIGS[$idx]:-}"
-    [[ -z "$cfg_rel" ]] && continue
-    user="${ALL_USERS[$idx]}"
-    IND_COUNT=$(run "$idx" "ps aux | grep '[i]ndicators.py' | wc -l" || echo 0)
-    [[ "$IND_COUNT" -ge 1 ]] && ok "$user: indicators.py active" \
-        || err "$user: indicators.py not found for $cfg_rel"
-done
+# Verify shared indicators service (runs under feed owner, not per account)
+if [[ -n "${IND_CFG_REL:-}" ]]; then
+    IND_COUNT=$(run "$FEED_IDX" "ps aux | grep '[i]ndicators.py' | wc -l" || echo 0)
+    [[ "$IND_COUNT" -ge 1 ]] \
+        && ok "${ALL_USERS[$FEED_IDX]}: shared indicators.py active" \
+        || err "${ALL_USERS[$FEED_IDX]}: indicators.py not running (config=$IND_CFG_REL)"
+else
+    info "Indicators service not configured — skipping check"
+fi
 
 # Verify each bot connected to the feed
 for idx in "${ACCOUNT_IDXS[@]}"; do
@@ -455,6 +466,17 @@ for idx in "${ACCOUNT_IDXS[@]}"; do
         || err "$user: $ERROR_COUNT ERROR/CRITICAL line(s) in logs"
 done
 
+# Indicators log (shared service under feed owner)
+if [[ -n "${IND_CFG_REL:-}" ]]; then
+    echo ""
+    echo -e "${BOLD}--- Shared indicators.log (last 10 lines) ---${NC}"
+    run "$FEED_IDX" "tail -10 $REMOTE_INSTALL_DIR/indicators.log 2>/dev/null || echo '(empty)'"
+    IND_ERR=$(run "$FEED_IDX" \
+        "grep -ciE '\[(ERROR|CRITICAL)\]' $REMOTE_INSTALL_DIR/indicators.log 2>/dev/null || true")
+    [[ "$IND_ERR" -eq 0 ]] && ok "${ALL_USERS[$FEED_IDX]}: indicators — no critical errors" \
+        || err "${ALL_USERS[$FEED_IDX]}: indicators — $IND_ERR ERROR/CRITICAL line(s)"
+fi
+
 # Feed service journal (last 30 lines)
 echo ""
 echo -e "${BOLD}--- Feed service journal (last 30 lines via journalctl) ---${NC}"
@@ -476,16 +498,25 @@ BOT_FINAL=$(run "${ACCOUNT_IDXS[0]}" \
 # ─── Phase 11: Teardown ────────────────────────────────────────────────────────
 section "PHASE 12 — TEARDOWN"
 info "Stopping account_bot processes (feed service left running)"
+
+# Stop shared indicators.py under the feed owner
+if [[ -n "${IND_CFG_REL:-}" ]]; then
+    run "$FEED_IDX" "
+        pkill -f '[i]ndicators.py' 2>/dev/null || true
+        sleep 2
+        pkill -9 -f '[i]ndicators.py' 2>/dev/null || true
+        fuser -k 5559/tcp 2>/dev/null || true
+        fuser -k 5561/tcp 2>/dev/null || true
+        exit 0
+    " && info "${ALL_USERS[$FEED_IDX]}: indicators.py stopped" || true
+fi
+
 for idx in "${ACCOUNT_IDXS[@]}"; do
     user="${ALL_USERS[$idx]}"
     run "$idx" "
         pkill -f '[a]ccount_bot.py' 2>/dev/null || true
-        pkill -f '[i]ndicators.py'  2>/dev/null || true
         sleep 2
         pkill -9 -f '[a]ccount_bot.py' 2>/dev/null || true
-        pkill -9 -f '[i]ndicators.py'  2>/dev/null || true
-        fuser -k 5559/tcp 2>/dev/null || true
-        fuser -k 5560/tcp 2>/dev/null || true
         exit 0
     " && info "$user: processes stopped" || true
 done
