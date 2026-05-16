@@ -10,6 +10,36 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.4.4] - 2026-05-16
+
+### Ajout
+- **Architecture d'indicateurs partagée** (`bot/indicators.py`, `bot/account_bot.py`) : `indicators.py` est désormais un processus unique par machine, démarré une seule fois sous l'utilisateur du feed ; chaque `account_bot` enregistre ses streams souhaités au démarrage via un socket ZMQ REP (`tcp://127.0.0.1:5561`) et reçoit les messages d'indicateurs sur le socket PUB partagé (`:5559`) ; remplace l'ancien modèle par processus par compte qui causait des conflits de port
+- **Enregistrement dynamique des streams** (`bot/indicators.py` `--reg-addr`) : nouveau socket ZMQ REP bind `:5561` acceptant des requêtes JSON `{"streams": [...]}` des bots comptes au démarrage ; `indicators.py` n'active que l'union des streams enregistrés, éliminant les connexions Binance WebSocket inactives
+- **Support de `feed_auto_start=false`** (`bot/account_bot.py`, `bot/bot_utils.py`) : quand `config.json` définit `"feed_auto_start": false`, `account_bot` sonde le feed avec une boucle de retry (6 tentatives × 5 s = 30 s max) au lieu de fork `feed.py` ; requis pour les déploiements gérés par systemd où `tradinebotte-feed.service` possède le processus feed
+- **Templates de services systemd** — trois nouveaux scripts d'installation et templates d'unités :
+  - `scripts/install_feed_service.sh` + `scripts/tradinebotte-feed.service` : installe le feed partagé en service système (`After=network-online.target`) ; détecte une unité déjà active/activée avant d'écraser
+  - `scripts/install_indicators_service.sh` + `scripts/tradinebotte-indicators.service` : installe le processus d'indicateurs partagé en service utilisateur (`Wants=tradinebotte-feed.service`)
+  - `scripts/install_account_service.sh` + `scripts/tradinebotte-account.service` : unité bot compte avec `Requires=tradinebotte-feed.service`, `Wants=tradinebotte-indicators.service` ; valide `feed_auto_start=false` dans `config.json` avant l'installation
+- **`EnvironmentFile=-<credentials>`** dans `tradinebotte-feed.service` et `tradinebotte.service` : les unités systemd chargent désormais un fichier `credentials` optionnel depuis le répertoire d'installation pour l'injection des clés API, évitant les secrets dans le fichier d'unité
+- **`scripts/test_multibot_deploy.sh` — phase indicateurs partagés** : la Phase 7 restructurée démarre un seul processus `indicators.py` sous l'utilisateur feed (pas un par compte) ; `TEST_INDICATORS_CONFIG` scalaire remplace l'ancien tableau `TEST_INDICATORS_CONFIGS` par compte ; la Phase 9 vérifie le processus unique ; la Phase 12 le stoppe proprement sans toucher aux ports du feed
+
+### Modifié
+- **`scripts/start_collector.sh` — unité transitoire `systemd-run --user`** : `nohup ... &` remplacé par `systemd-run --user --description=... --setenv=...` pour survivre à la déconnexion SSH sur les hôtes avec `KillUserProcesses=yes` (`loginctl enable-linger` requis une fois par utilisateur) ; la vérification de vivacité déplacée dans un appel SSH direct séparé après 15 s
+- **`scripts/tradinebotte-feed.service` + `scripts/tradinebotte.service`** : `StartLimitIntervalSec` et `StartLimitBurst` déplacés de `[Service]` vers `[Unit]` (section systemd correcte) ; `EnvironmentFile=-__ENV_FILE__` ajouté
+
+### Correction
+- **Chaînes françaises restantes dans les scripts shell** (`scripts/install.sh`, `scripts/run_tests.sh`, `scripts/setup.py`, `scripts/start_bot.sh`) : commentaires d'en-tête et messages echo traduits en anglais ; docstring bilingue de `setup.py` réduite à l'anglais uniquement
+- **Assertion de test en français obsolète** (`tests/test_bot.py`) : `assertIn("Aucun trade", ...)` mis à jour en `assertIn("No resolved trades", ...)` après la migration de `generate_status_html()` vers l'anglais en 0.4.3
+- **Pylint 10.00/10** sur tous les fichiers scripts : `scripts/backtest_volfilter.py` (import `Optional` inutilisé, réimport redondant de `datetime`, f-strings sans interpolation), `scripts/download_btc_history.py` (import `sys` inutilisé, variable `total_expected` inutilisée, nom interdit `bar` → `progress`, f-strings sans interpolation), `scripts/backtest_grid.py` (`if/assign` → `max()`, variable `trail_label` inutilisée, f-string sans interpolation), `scripts/backtest.py` (f-string sans interpolation, `best_s` inutilisé → `_`), `scripts/profile_compare.py` (f-strings sans interpolation, faux positif `import-error` supprimé), `bot/account_bot.py` (`global-statement` supprimé inline)
+- **`scripts/test_multibot_deploy.sh` — bugs de conflit de port** : suppression du `fuser -k 5557/tcp` erroné dans la boucle de teardown des comptes (aurait tué le service feed) ; suppression du tableau `INDICATORS_CONFIGS` mort qui était renseigné mais jamais utilisé après la restructuration de la Phase 7
+
+### Documentation
+- **`docs/design.md` + `docs/design.fr.md`** : inventaire des processus mis à jour avec le socket REP d'`indicators.py` (`:5561`) ; sous-section `feed_auto_start=false` ajoutée avec diagramme ASCII de la boucle de retry ; section ordre de démarrage mise à jour pour les indicateurs partagés ; table des scopes des variables d'env corrigée (`TRADINEBOTTE_INDICATORS_ADDR` et `TRADINEBOTTE_INDICATORS_REG_ADDR` utilisées par `indicators.py` et `account_bot.py`)
+- **`docs/multi.md` + `docs/multi.fr.md`** : tableau des variables d'env enrichi de `TRADINEBOTTE_INDICATORS_ADDR` et `TRADINEBOTTE_INDICATORS_REG_ADDR` ; tableau des clés multi-bot `config.json` par compte ajouté (`feed_addr`, `feed_auto_start`, `indicators_reg_addr`, `indicators_streams`) ; séquence de lancement divisée en sous-sections manuelle et systemd ; tableau des services systemd étendu à 3 lignes incluant `install_indicators_service.sh`
+- **`INSTALL.md` + `INSTALL.fr.md`** : tableau de référence complet des variables d'env ajouté ; note sur l'héritage d'environnement systemd avec exemple de fichier credentials ; section architecture indicateurs partagés remplaçant l'ancien modèle par compte ; flags `--config FILE` et `--reg-addr ADDR` documentés
+
+---
+
 ## [0.4.3] - 2026-05-09
 
 ### Correction
