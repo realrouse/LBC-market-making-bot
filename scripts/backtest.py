@@ -503,7 +503,7 @@ def print_aggregate(results: List[dict]) -> None:
     print(f"  Total PnL: ${total_pnl:+.2f}")
     total_capital = sum(r.get("capital_start", 100.0) for r in results)
     if total_capital > 0:
-        print(f"  PnL%     : {total_pnl / total_capital * 100:+.1f}%  (sur capital total ${total_capital:.2f})")
+        print(f"  PnL%     : {total_pnl / total_capital * 100:+.1f}%  (on total capital ${total_capital:.2f})")
     print(f"  Worst DD : ${worst_dd:.2f}  (worst single session)")
     print("=" * 62)
 
@@ -533,10 +533,10 @@ def print_comparison(
 
     print()
     print("=" * (22 + W * 3 + 2))
-    print(f"  COMPARAISON — {db_name}")
+    print(f"  COMPARISON — {db_name}")
     print("=" * (22 + W * 3 + 2))
     print(_row("", "BACKTEST", "BACKTEST", "BOT"))
-    print(_row("", "(paramètres)", "(aligné)", "RÉEL"))
+    print(_row("", "(params)", "(aligned)", "ACTUAL"))
     print("  " + "-" * (20 + W * 3 + 2))
     # Config rows
     thr_b = f"{user_params.signal_threshold}"
@@ -653,7 +653,7 @@ def print_comparison(
             )
         if mismatches:
             print()
-            print("  ⚠  Paramètres divergents :")
+            print("  ⚠  Divergent parameters:")
             for m in mismatches:
                 print(f"     {m}")
             parts = [f"--stake {detected['stake']:.0f}"]
@@ -661,8 +661,8 @@ def print_comparison(
                 parts.append(f"--threshold {detected['threshold']}")
             if detected["min_secs"]:
                 parts.append(f"--min-secs {detected['min_secs']:.0f}")
-            print(f"\n     Pour une comparaison exacte (colonne alignée) :")
-            print(f"     python3 scripts/backtest.py --db <fichier> --compare {' '.join(parts)}")
+            print("\n     For an exact comparison (aligned column):")
+            print(f"     python3 scripts/backtest.py --db <file> --compare {' '.join(parts)}")
             print()
 
 
@@ -709,7 +709,7 @@ def print_sweep_table(results: list, sort_by: str = "ratio", show_dsl: bool = Fa
                 rows_to_print.append((params, stats))
                 if len(rows_to_print) >= top_n:
                     break
-        note = f"  (top {top_n} configs uniques thr/secs/obi — {len(results)} combos au total)"
+        note = f"  (top {top_n} unique configs thr/secs/obi — {len(results)} combos total)"
     else:
         rows_to_print = sorted_results
         note = ""
@@ -754,25 +754,25 @@ def print_recommendations(results: list, n: int = 5) -> None:
     filtered = [(p, s) for p, s in results if s["total"] >= 50]  # ignore thin configs
 
     print("\n" + "=" * 80)
-    print("  RECOMMANDATIONS — top configs par critère (configs avec ≥50 trades)")
+    print("  RECOMMENDATIONS — top configs by criterion (configs with ≥50 trades)")
     print("=" * 80)
 
-    print("\n  ── Par ratio PnL/MaxDD (risque ajusté — recommandé) ──")
+    print("\n  ── By PnL/MaxDD ratio (risk-adjusted — recommended) ──")
     for i, (p, s) in enumerate(sorted(filtered, key=lambda x: -_r(x))[:n], 1):
         print(_row(i, p, s))
 
-    print("\n  ── Par PnL total ──")
+    print("\n  ── By total PnL ──")
     for i, (p, s) in enumerate(sorted(filtered, key=lambda x: -x[1]["total_pnl"])[:n], 1):
         print(_row(i, p, s))
 
-    print("\n  ── Par win rate ──")
+    print("\n  ── By win rate ──")
     for i, (p, s) in enumerate(sorted(filtered, key=lambda x: -x[1]["win_rate"])[:n], 1):
         print(_row(i, p, s))
 
     # Single best recommendation
     if filtered:
-        best_p, best_s = sorted(filtered, key=lambda x: -_r(x))[0]
-        print("\n  ★  MEILLEURE CONFIG GLOBALE (ratio PnL/DD) :")
+        best_p, _ = sorted(filtered, key=lambda x: -_r(x))[0]
+        print("\n  ★  BEST OVERALL CONFIG (PnL/DD ratio):")
         print(f"     python3 scripts/backtest.py --threshold {best_p.signal_threshold}"
               f" --min-secs {best_p.min_secs_remaining:.0f}"
               f" --min-ask {best_p.min_ask_vol:.0f}"
@@ -990,7 +990,7 @@ def main():
         print(f"SWEEP-ALL — {len(all_db_rows)} DB(s): {db_names}")
         print(f"Grid search: {len(thresholds)}×{len(min_secs)}×{len(min_asks)}"
               f"×{len(obi_vals)}×{len(dsl_vals)} = {combos} combinations")
-        print(f"Snapshots  : {total_snaps:,} (agrégés — capital reset par fichier)")
+        print(f"Snapshots  : {total_snaps:,} (aggregated — capital reset per file)")
 
         sweep_results = []
         for thr, secs, ask, obi, dsl in product(

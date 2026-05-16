@@ -314,7 +314,7 @@ async def _run(state: bot.BotState) -> None:
 
 
 async def main() -> None:
-    global _FEED_ADDR, _FEED_LOCK_PATH
+    global _FEED_ADDR, _FEED_LOCK_PATH  # pylint: disable=global-statement
     config = bot.make_config()
 
     # config.json key "feed_addr" (or TRADINEBOTTE_FEED_ADDR env var) wins over

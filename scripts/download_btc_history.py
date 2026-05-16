@@ -21,7 +21,6 @@ Output DB schema:
 import argparse
 import asyncio
 import sqlite3
-import sys
 import time
 from pathlib import Path
 
@@ -69,7 +68,7 @@ async def _fetch_klines(session, symbol, interval, start_ms, end_ms):
     ) as resp:
         if resp.status == 429:
             retry_after = int(resp.headers.get("Retry-After", 60))
-            raise RuntimeError(f"Rate-limited — attente {retry_after}s")
+            raise RuntimeError(f"Rate-limited — waiting {retry_after}s")
         if resp.status != 200:
             body = await resp.text()
             raise RuntimeError(f"HTTP {resp.status}: {body[:200]}")
@@ -96,9 +95,8 @@ async def download(symbol: str, interval: str, db_path: str,
     row = conn.execute("SELECT MAX(ts_ms) FROM klines").fetchone()
     if row and row[0]:
         start_ms = row[0] + step_ms
-        print(f"  Reprise depuis la dernière bougie enregistrée")
+        print("  Resuming from last stored candle")
 
-    total_expected = (end_ms - start_ms) // step_ms
     inserted = 0
 
     async with aiohttp.ClientSession() as session:
@@ -114,10 +112,10 @@ async def download(symbol: str, interval: str, db_path: str,
             except RuntimeError as exc:
                 consecutive_errors += 1
                 delay = min(5 * consecutive_errors, 60)
-                print(f"\n  Erreur : {exc} — retry dans {delay}s")
+                print(f"\n  Error: {exc} — retrying in {delay}s")
                 await asyncio.sleep(delay)
                 if consecutive_errors >= 5:
-                    print("  5 erreurs consécutives — abandon")
+                    print("  5 consecutive errors — aborting")
                     break
                 continue
 
@@ -140,16 +138,16 @@ async def download(symbol: str, interval: str, db_path: str,
             done = current - start_ms
             total = end_ms - start_ms
             pct   = min(100.0, done / total * 100)
-            bar   = "█" * int(pct // 5) + "░" * (20 - int(pct // 5))
+            progress = "█" * int(pct // 5) + "░" * (20 - int(pct // 5))
             print(
-                f"\r  [{bar}] {pct:5.1f}%  {inserted:>8,} lignes",
+                f"\r  [{progress}] {pct:5.1f}%  {inserted:>8,} rows",
                 end="", flush=True,
             )
 
             await asyncio.sleep(0.12)   # ~8 req/s  (weight 2 per req, limit 1200/min)
 
     conn.close()
-    print(f"\r  {'█'*20} 100.0%  {inserted:>8,} lignes{' '*20}")
+    print(f"\r  {'█'*20} 100.0%  {inserted:>8,} rows{' '*20}")
     return inserted
 
 
@@ -162,22 +160,22 @@ def _parse_date(s: str) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Télécharger l'historique OHLCV BTCUSDT depuis Binance",
+        description="Download OHLCV history for BTCUSDT from Binance",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--symbol",     default="BTCUSDT",
-                        help="Paire de trading Binance")
+                        help="Binance trading pair")
     parser.add_argument("--interval",   default="1m",
                         choices=sorted(_INTERVAL_MS),
-                        help="Intervalle des bougies")
+                        help="Candle interval")
     parser.add_argument("--days",       default=90, type=int,
-                        help="Nombre de jours (ignoré si --start est fourni)")
+                        help="Number of days (ignored if --start is provided)")
     parser.add_argument("--start",      default=None, metavar="YYYY-MM-DD",
-                        help="Date de début (UTC) — ex. 2024-10-15")
+                        help="Start date (UTC) — e.g. 2024-10-15")
     parser.add_argument("--end",        default=None, metavar="YYYY-MM-DD",
-                        help="Date de fin (UTC, défaut : aujourd'hui)")
+                        help="End date (UTC, default: today)")
     parser.add_argument("--out",        default=None,
-                        help="Chemin du fichier SQLite de sortie")
+                        help="Path to the SQLite output file")
     args = parser.parse_args()
 
     # Resolve time window
@@ -208,11 +206,11 @@ def main() -> None:
     step_ms  = _INTERVAL_MS[args.interval]
     expected = (end_ms - start_ms) // step_ms
 
-    print(f"Symbole   : {args.symbol}")
-    print(f"Intervalle: {args.interval}  ({start_label} → {end_label}"
-          f", ~{days_approx}j → ~{expected:,} bougies)")
-    print(f"Source    : Binance public API (pas d'authentification)")
-    print(f"Sortie    : {db_path}")
+    print(f"Symbol    : {args.symbol}")
+    print(f"Interval  : {args.interval}  ({start_label} → {end_label}"
+          f", ~{days_approx}d → ~{expected:,} candles)")
+    print("Source    : Binance public API (no authentication required)")
+    print(f"Output    : {db_path}")
     print()
 
     t0 = time.time()
@@ -221,9 +219,9 @@ def main() -> None:
     elapsed  = time.time() - t0
 
     size_mb = Path(db_path).stat().st_size / 1_048_576
-    print(f"Durée     : {elapsed:.1f}s")
-    print(f"Taille DB : {size_mb:.1f} MB")
-    print(f"✓ {inserted:,} bougies téléchargées dans {db_path}")
+    print(f"Duration  : {elapsed:.1f}s")
+    print(f"DB size   : {size_mb:.1f} MB")
+    print(f"✓ {inserted:,} candles downloaded to {db_path}")
 
 
 if __name__ == "__main__":

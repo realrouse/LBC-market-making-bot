@@ -180,11 +180,9 @@ def _run_engine(rows: list, params: GridParams) -> GridResult:
 
         # ── Portfolio & drawdown ───────────────────────────────────────────
         pv = usdt + btc * close
-        if pv > peak_val:
-            peak_val = pv
+        peak_val = max(peak_val, pv)
         dd = (peak_val - pv) / peak_val * 100 if peak_val > 0 else 0.0
-        if dd > max_dd:
-            max_dd = dd
+        max_dd = max(max_dd, dd)
 
         # ── Boundary check ────────────────────────────────────────────────
         hit_low  = low  < lower
@@ -317,7 +315,6 @@ def print_compare(static: GridResult, trailing: GridResult) -> None:
     """Side-by-side comparison of static vs trailing for the same DB."""
     W   = 34
     sep = "─" * (W * 2 + 7)
-    trail_label = _TRAIL_LABEL.get(trailing.params.trail_mode, trailing.params.trail_mode)
     print(f"\n  {static.label}")
     print(sep)
     print(f"  {'Metric':<20}  {'STATIC':>{W}}  {'TRAILING':>{W}}")
@@ -399,7 +396,7 @@ def print_sweep_table(
     sep = "─" * (18 + len(labels) * 17 + 18)
     mode = _TRAIL_LABEL.get(scored[0][0].trail_mode if scored else "off", "")
     print(f"\n  Sweep ({mode}) — size=${scored[0][0].size:.0f}, fee={FEE_RATE*100:.2f}%")
-    print(f"  Columns per DB: PnL%  MaxDD%  Time%\n")
+    print("  Columns per DB: PnL%  MaxDD%  Time%\n")
     db_hdr = "  ".join(f"{lb[:14]:>14}" for lb in labels)
     print(f"  {'±Rng':>4} {'Lvl':>4}  {db_hdr}  {'AvgCal':>7} {'AvgPnL%':>8}")
     print(f"  {'':>4} {'':>4}  {sub_hdr}  {'':>7} {'':>8}")
