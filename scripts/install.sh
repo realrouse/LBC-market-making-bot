@@ -2,18 +2,18 @@
 # ═══════════════════════════════════════════════════════════════════
 #  POLYMARKET LIVE BOT v3 — Installation (Linux/Mac)
 #
-#  Prérequis root (une seule fois par machine, si absents) :
+#  Root prerequisites (once per machine, if missing):
 #    sudo apt-get install -y python3 python3-venv python3.X-venv sqlite3
-#  Ce script détecte les manquants et affiche la commande exacte à lancer.
+#  This script detects missing packages and prints the exact command to run.
 #
-#  Répertoire d'installation (par ordre de priorité) :
-#    1. Argument positionnel : bash scripts/install.sh ~/tradinebotte
-#    2. Variable d'environnement : TRADINEBOTTE_DIR=~/tradinebotte bash scripts/install.sh
-#    3. Valeur par défaut : ~/tradinebotte
+#  Installation directory (in order of priority):
+#    1. Positional argument: bash scripts/install.sh ~/tradinebotte
+#    2. Environment variable: TRADINEBOTTE_DIR=~/tradinebotte bash scripts/install.sh
+#    3. Default value: ~/tradinebotte
 #
-#  Options :
-#    --lang EN|FR   langue (défaut : prompt interactif)
-#    --with-tests   copie aussi tests/ et scripts/backtest.py
+#  Options:
+#    --lang EN|FR   language (default: interactive prompt)
+#    --with-tests   also copies tests/ and scripts/backtest.py
 # ═══════════════════════════════════════════════════════════════════
 set -eo pipefail
 

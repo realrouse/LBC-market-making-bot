@@ -18,7 +18,6 @@ import sqlite3, sys, os, math
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
 
 # ─── Calibrated thresholds (see volstop.txt) ─────────────────────────────────
 VOL_BID_MAX   = 0.07   # std dev best_bid
@@ -187,12 +186,12 @@ def _fmt_row(label: str, tag: str, r: dict, extra: str = "") -> str:
 
 def run_comparison(db_paths: list[str]) -> None:
     print(f"\n{SEP}")
-    print(f"  COMPARISON — 3 SCENARIOS")
+    print("  COMPARISON — 3 SCENARIOS")
     print(f"  Thresholds: vol_bid<={VOL_BID_MAX}  range<={RANGE_BID_MAX}  obi_vol<={OBI_VOL_MAX}  "
           f"window {WINDOW}x5s={WINDOW*5}s")
-    print(f"  BASE       : no filter")
-    print(f"  FILT-ALL   : filter active 7d/7  (VOL_FILTER_WEEKDAY_ONLY=False)")
-    print(f"  FILT-WD    : filter active weekdays only  (VOL_FILTER_WEEKDAY_ONLY=True)")
+    print("  BASE       : no filter")
+    print("  FILT-ALL   : filter active 7d/7  (VOL_FILTER_WEEKDAY_ONLY=False)")
+    print("  FILT-WD    : filter active weekdays only  (VOL_FILTER_WEEKDAY_ONLY=True)")
     print(SEP)
 
     hdr = (f"\n  {'Dataset':<28}  {'Scenario':>8}  {'trades':>7}  {'losses':>7}  "
@@ -259,7 +258,6 @@ def run_comparison(db_paths: list[str]) -> None:
 # ─── Sweep calibration (--sweep mode) ────────────────────────────────────────
 
 def run_sweep(db_path: str) -> None:
-    from datetime import datetime
 
     print(f"\n{SEP}")
     print(f"  CALIBRATION — FULL SWEEP — {os.path.basename(db_path)}")
@@ -276,7 +274,7 @@ def run_sweep(db_path: str) -> None:
 
     # Indicators at the time of losses
     print(f"\n{SEP2}")
-    print(f"  INDICATORS AT LOSS ENTRIES")
+    print("  INDICATORS AT LOSS ENTRIES")
     print(f"{SEP2}")
     print(f"  {'ID':>4}  {'date':<20}  {'vol_bid':>8}  {'range':>8}  {'obi_vol':>8}  {'n':>4}")
     print(f"  {'-'*4}  {'-'*20}  {'-'*8}  {'-'*8}  {'-'*8}  {'-'*4}")
@@ -299,7 +297,7 @@ def run_sweep(db_path: str) -> None:
     loss_rb = [vol[t.id]["range_bid"] for t in trades if t.outcome == "LOSS" and t.id in vol]
 
     print(f"\n{SEP2}")
-    print(f"  DISTRIBUTION vol_bid / range_bid: WINS vs LOSSES")
+    print("  DISTRIBUTION vol_bid / range_bid: WINS vs LOSSES")
     print(f"{SEP2}")
     print(f"  {'':12} {'median':>10}  {'p75':>8}  {'p90':>8}  {'p95':>8}  {'max':>8}")
     print(f"  {'-'*12} {'-'*10}  {'-'*8}  {'-'*8}  {'-'*8}  {'-'*8}")
@@ -327,7 +325,7 @@ def run_sweep(db_path: str) -> None:
 
     # Top 10 combinations
     print(f"\n{SEP2}")
-    print(f"  TOP 10 COMBINATIONS (vol_bid x range_bid x obi_vol)")
+    print("  TOP 10 COMBINATIONS (vol_bid x range_bid x obi_vol)")
     print(f"{SEP2}")
     results = []
     for vb in VOL_BID_THRESHOLDS[:-1]:

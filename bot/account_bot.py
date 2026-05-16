@@ -93,7 +93,7 @@ def _probe_feed_sync(addr: str, timeout_ms: int) -> bool:
         return True
     except zmq.Again:
         if VERBOSE:
-            logger.debug("[PROBE] timeout — pas de feed")
+            logger.debug("[PROBE] timeout — no feed response")
         return False
     finally:
         sock.close(linger=0)
@@ -163,6 +163,65 @@ def _ensure_feed() -> None:
     finally:
         fcntl.flock(lock_file, fcntl.LOCK_UN)
         lock_file.close()
+
+
+# ─── Indicators registration ─────────────────────────────────────────────────
+
+def _register_indicators_sync(config: "bot.BotConfig") -> None:
+    """
+    Register indicator streams with the shared indicators service via REQ/REP.
+
+    Sends each entry from config.indicators_streams as a subscribe request to
+    the indicators REP socket.  Silently skips if no streams are configured.
+    A timeout on any single request is logged as a warning — the bot continues
+    running even if the indicators service is unavailable.
+
+    config.json example:
+        "indicators_streams": [
+            {
+                "source": "binance_ws",
+                "asset":  "BTCUSDT",
+                "timeframe": "4h",
+                "indicators": [{"type": "rsi", "period": 14},
+                               {"type": "vol", "period": 20}]
+            }
+        ]
+    """
+    streams = config.indicators_streams
+    if not streams:
+        if VERBOSE:
+            logger.debug("[IND] no indicators_streams configured — skipping registration")
+        return
+
+    logger.info("Registering %d indicator stream(s) with %s",
+                len(streams), config.indicators_reg_addr)
+    ctx = zmq.Context()
+    req = ctx.socket(zmq.REQ)
+    req.setsockopt(zmq.RCVTIMEO, 5_000)
+    req.setsockopt(zmq.SNDTIMEO, 5_000)
+    req.connect(config.indicators_reg_addr)
+    try:
+        for spec in streams:
+            label = spec.get("stream_id") or (
+                f"{spec.get('asset', '?')} {spec.get('timeframe', spec.get('source', '?'))}"
+            )
+            try:
+                req.send_json({**spec, "cmd": "subscribe"})
+                resp = req.recv_json()
+                if resp.get("status") == "ok":
+                    logger.info("[IND] registered: %s → stream_id=%s",
+                                label, resp.get("stream_id"))
+                else:
+                    logger.warning("[IND] registration failed for %s: %s",
+                                   label, resp.get("message", "unknown error"))
+            except zmq.Again:
+                logger.warning("[IND] registration timeout for %s — "
+                               "indicators service may not be running", label)
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("[IND] registration error for %s: %s", label, exc)
+    finally:
+        req.close(linger=0)
+        ctx.term()
 
 
 # ─── Market / book handlers ───────────────────────────────────────────────────
@@ -255,7 +314,13 @@ async def _run(state: bot.BotState) -> None:
 
 
 async def main() -> None:
+    global _FEED_ADDR, _FEED_LOCK_PATH  # pylint: disable=global-statement
     config = bot.make_config()
+
+    # config.json key "feed_addr" (or TRADINEBOTTE_FEED_ADDR env var) wins over
+    # the module-level default that was resolved before config.json was read.
+    _FEED_ADDR = config.feed_addr
+    _FEED_LOCK_PATH = f"{_FEED_TMP_DIR}/feed-{abs(hash(_FEED_ADDR)) % 100000}.lock"
 
     logger.info("=" * 65)
     logger.info("  ACCOUNT BOT — dir=%s", config.install_dir)
@@ -270,7 +335,32 @@ async def main() -> None:
         logger.debug("[INIT] STAKE=%.2f WIN=%.2f LOSS=%.2f",
                      config.stake, config.win_threshold, config.loss_threshold)
 
-    _ensure_feed()
+    if config.feed_auto_start:
+        _ensure_feed()
+    else:
+        # Feed is managed externally (e.g. systemd). Probe with retries — the
+        # feed may be mid-reconnect to the exchange (typically <30s window).
+        _retries = max(1, _FEED_READY_S * 1000 // _FEED_PROBE_MS)
+        _reached = False
+        for _attempt in range(_retries):
+            if _probe_feed_sync(_FEED_ADDR, _FEED_PROBE_MS):
+                _reached = True
+                break
+            logger.warning(
+                "Feed not yet reachable on %s (attempt %d/%d) — "
+                "waiting for feed service to publish...",
+                _FEED_ADDR, _attempt + 1, _retries,
+            )
+        if not _reached:
+            logger.error(
+                "Feed not reachable on %s after %d attempts — "
+                "is the feed service running? (sudo systemctl start tradinebotte-feed)",
+                _FEED_ADDR, _retries,
+            )
+            sys.exit(1)
+        logger.info("Feed active on %s", _FEED_ADDR)
+
+    _register_indicators_sync(config)
 
     if VERBOSE:
         logger.debug("[INIT] init_db...")

@@ -1,21 +1,22 @@
 [Unit]
 Description=tradinebotte — Account bot (__ACCOUNT_NAME__)
 Documentation=https://github.com/neofutur/tradinebotte/blob/main/docs/multi.md
-After=network-online.target tradinebotte-feed.service
-Wants=network-online.target
+After=network-online.target tradinebotte-feed.service tradinebotte-indicators.service
+Wants=network-online.target tradinebotte-indicators.service
 Requires=tradinebotte-feed.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=__USER__
 Environment=TRADINEBOTTE_DIR=__TRADINEBOTTE_DIR__
 Environment=TRADINEBOTTE_FEED_ADDR=__FEED_ADDR__
+EnvironmentFile=-__ENV_FILE__
 WorkingDirectory=__INSTALL_DIR__
 ExecStart=__VENV__/bin/python3 __BOT_DIR__/account_bot.py
 Restart=on-failure
 RestartSec=30
-StartLimitIntervalSec=300
-StartLimitBurst=5
 
 [Install]
 WantedBy=multi-user.target

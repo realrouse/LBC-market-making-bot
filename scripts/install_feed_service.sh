@@ -36,6 +36,7 @@ fi
 
 VENV="$INSTALL_DIR/venv"
 [[ -d "$INSTALL_DIR/.venv" ]] && VENV="$INSTALL_DIR/.venv"
+ENV_FILE="$INSTALL_DIR/credentials"
 
 # ── Validations ───────────────────────────────────────────────────────────────
 if [[ ! -f "$TEMPLATE" ]]; then
@@ -56,6 +57,18 @@ if ! "$VENV/bin/python3" -c "import zmq" 2>/dev/null; then
     exit 1
 fi
 
+# ── Check for already-running system service ─────────────────────────────────
+if systemctl is-active --quiet tradinebotte-feed 2>/dev/null; then
+    echo "WARNING: tradinebotte-feed is currently ACTIVE as a system service." >&2
+    echo "  Replacing the unit file without stopping it first may cause issues." >&2
+    echo "  Run: sudo systemctl stop tradinebotte-feed" >&2
+    echo ""
+elif systemctl is-enabled --quiet tradinebotte-feed 2>/dev/null; then
+    echo "WARNING: tradinebotte-feed is installed as a system service (enabled but not running)." >&2
+    echo "  The generated file will overwrite the existing unit if copied." >&2
+    echo ""
+fi
+
 # ── Generate unit file ────────────────────────────────────────────────────────
 sed \
     -e "s|__USER__|$USER_NAME|g" \
@@ -63,6 +76,7 @@ sed \
     -e "s|__VENV__|$VENV|g" \
     -e "s|__BOT_DIR__|$BOT_DIR|g" \
     -e "s|__FEED_ADDR__|$FEED_ADDR|g" \
+    -e "s|__ENV_FILE__|$ENV_FILE|g" \
     "$TEMPLATE" > "$OUTPUT"
 
 echo "Generated: $OUTPUT"

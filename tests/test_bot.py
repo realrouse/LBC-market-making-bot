@@ -941,7 +941,7 @@ class TestGenerateStatusHtml(unittest.TestCase):
         self.assertIn("Direction", html)
 
     def test_no_trades_message_when_empty(self):
-        self.assertIn("Aucun trade", bot_utils.generate_status_html(self._state()))
+        self.assertIn("No resolved trades", bot_utils.generate_status_html(self._state()))
 
     def test_win_rate_shown(self):
         self.assertIn("80.0%", bot_utils.generate_status_html(self._state()))

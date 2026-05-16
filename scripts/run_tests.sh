@@ -36,10 +36,10 @@ if ls "$PROJECT_DIR"/data/*.db >/dev/null 2>&1; then
     echo ""
     echo "=== Backtest multi-DB (data/*.db) ==="
     "$PYTHON" scripts/backtest.py --all \
-        || { echo "⚠️  Backtest --all non bloquant — vérifier manuellement"; true; }
+        || { echo "⚠️  Backtest --all non-blocking — check manually"; true; }
 else
     echo ""
-    echo "ℹ️  Aucun fichier data/*.db — backtest multi-DB ignoré"
+    echo "ℹ️  No data/*.db files found — multi-DB backtest skipped"
 fi
 
 # ── Documentation audit ───────────────────────────────────────────
@@ -49,8 +49,8 @@ if command -v claude &>/dev/null; then
     claude --agent doc-sync -p "Run the documentation audit" \
         --allowedTools "Read,Bash,Glob,Grep" \
         --dangerously-skip-permissions --print \
-        || echo "⚠️  Audit doc non bloquant — vérifier manuellement"
+        || echo "⚠️  Doc audit non-blocking — check manually"
 else
     echo ""
-    echo "ℹ️  claude CLI absent — audit doc ignoré (agent : .claude/agents/doc-sync.md)"
+    echo "ℹ️  claude CLI not found — doc audit skipped (agent: .claude/agents/doc-sync.md)"
 fi

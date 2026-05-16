@@ -10,6 +10,36 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.4.4] - 2026-05-16
+
+### Added
+- **Shared indicators architecture** (`bot/indicators.py`, `bot/account_bot.py`): `indicators.py` is now a single process per machine, started once under the feed owner user; each `account_bot` registers its desired streams at startup via a ZMQ REP socket (`tcp://127.0.0.1:5561`) and receives indicator messages on the shared PUB socket (`:5559`); replaces the previous per-account process model that caused port conflicts
+- **Dynamic stream registration** (`bot/indicators.py` `--reg-addr`): new ZMQ REP socket binds `:5561` and accepts JSON registration requests `{"streams": [...]}` from account bots at startup; `indicators.py` only activates the union of registered streams, eliminating idle Binance WebSocket connections
+- **`feed_auto_start=false` support** (`bot/account_bot.py`, `bot/bot_utils.py`): when `config.json` sets `"feed_auto_start": false`, `account_bot` probes the feed with a retry loop (6 attempts × 5 s = 30 s max) instead of forking `feed.py`; required for systemd-managed deployments where `tradinebotte-feed.service` owns the feed process
+- **systemd service templates** — three new installer scripts and unit templates:
+  - `scripts/install_feed_service.sh` + `scripts/tradinebotte-feed.service`: installs the shared feed as a system service (`After=network-online.target`); detects already-active/enabled unit before overwriting
+  - `scripts/install_indicators_service.sh` + `scripts/tradinebotte-indicators.service`: installs the shared indicators process as a user-level service (`Wants=tradinebotte-feed.service`)
+  - `scripts/install_account_service.sh` + `scripts/tradinebotte-account.service`: account bot unit with `Requires=tradinebotte-feed.service`, `Wants=tradinebotte-indicators.service`; validates `feed_auto_start=false` in `config.json` before installation
+- **`EnvironmentFile=-<credentials>`** in `tradinebotte-feed.service` and `tradinebotte.service`: systemd units now load an optional `credentials` file from the install directory for API key injection, keeping secrets out of the unit file itself
+- **`scripts/test_multibot_deploy.sh` — shared indicators phase**: Phase 7 restructured to start one `indicators.py` process under the feed user (not one per account); `TEST_INDICATORS_CONFIG` scalar replaces the old per-account `TEST_INDICATORS_CONFIGS` array; Phase 9 verifies the single process; Phase 12 tears it down cleanly without touching feed ports
+
+### Changed
+- **`scripts/start_collector.sh` — `systemd-run --user` transient unit**: replaced `nohup ... &` with `systemd-run --user --description=... --setenv=...` to survive SSH session logout on hosts with `KillUserProcesses=yes` (`loginctl enable-linger` required once per user); liveness check moved to a separate direct SSH call after 15 s
+- **`scripts/tradinebotte-feed.service` + `scripts/tradinebotte.service`**: `StartLimitIntervalSec` and `StartLimitBurst` moved from `[Service]` to `[Unit]` (correct systemd section); `EnvironmentFile=-__ENV_FILE__` added
+
+### Fixed
+- **Remaining French strings in shell scripts** (`scripts/install.sh`, `scripts/run_tests.sh`, `scripts/setup.py`, `scripts/start_bot.sh`): header comments and echo messages translated to English; `setup.py` bilingual docstring reduced to English-only
+- **Stale French test assertion** (`tests/test_bot.py`): `assertIn("Aucun trade", ...)` updated to `assertIn("No resolved trades", ...)` after `generate_status_html()` was migrated to English in 0.4.3
+- **Pylint 10.00/10** across all script files: `scripts/backtest_volfilter.py` (unused `Optional` import, redundant `datetime` re-import, non-interpolated f-strings), `scripts/download_btc_history.py` (unused `sys` import, unused `total_expected` variable, disallowed name `bar` → `progress`, non-interpolated f-strings), `scripts/backtest_grid.py` (`if/assign` → `max()`, unused `trail_label` variable, non-interpolated f-string), `scripts/backtest.py` (non-interpolated f-string, unused `best_s` → `_`), `scripts/profile_compare.py` (non-interpolated f-strings, suppress pre-existing `import-error` false positive), `bot/account_bot.py` (`global-statement` suppressed inline)
+- **`scripts/test_multibot_deploy.sh` — port conflict bugs**: removed erroneous `fuser -k 5557/tcp` from account teardown loop (would have killed the feed service); removed dead `INDICATORS_CONFIGS` array that was populated but never used after the Phase 7 restructure
+
+### Documentation
+- **`docs/design.md` + `docs/design.fr.md`**: process inventory updated with `indicators.py` REP socket (`:5561`); `feed_auto_start=false` subsection added with ASCII retry-loop flow diagram; startup order section updated to reflect shared indicators; env vars scope table corrected (`TRADINEBOTTE_INDICATORS_ADDR` and `TRADINEBOTTE_INDICATORS_REG_ADDR` used by both `indicators.py` and `account_bot.py`)
+- **`docs/multi.md` + `docs/multi.fr.md`**: env vars table gains `TRADINEBOTTE_INDICATORS_ADDR` and `TRADINEBOTTE_INDICATORS_REG_ADDR`; per-account `config.json` multi-bot keys table added (`feed_addr`, `feed_auto_start`, `indicators_reg_addr`, `indicators_streams`); launch sequence split into manual and systemd subsections; systemd services table expanded to 3 rows including `install_indicators_service.sh`
+- **`INSTALL.md` + `INSTALL.fr.md`**: complete env var reference table added; systemd environment inheritance note with credentials file example; shared indicators architecture section replacing per-account split model; `--config FILE` and `--reg-addr ADDR` flags documented
+
+---
+
 ## [0.4.3] - 2026-05-09
 
 ### Fixed

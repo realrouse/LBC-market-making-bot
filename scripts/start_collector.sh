@@ -97,7 +97,7 @@ fi
 # ── --stop ────────────────────────────────────────────────────────
 if [ "$STOP_ONLY" = "1" ]; then
     echo "Stopping collector on $SERVER ($RUSER)..."
-    _ssh_cmd "pkill -u \$(id -u) -f '[l]ive_bot\.py' && echo '✅ Stopped' || echo '⭕ Not running'"
+    _ssh_cmd "pkill -u \$(id -u) -f '[l]ive_bot\.py' 2>/dev/null && echo '✅ Bot process stopped' || echo '⭕ Bot not running'"
     exit 0
 fi
 
@@ -165,21 +165,39 @@ sleep 2
 # Launch
 PYTHON="\$INSTALL/venv/bin/python3"
 LOG="\$COLLECTOR/live.log"
-export TRADINEBOTTE_DIR="\$COLLECTOR"
-cd "\$INSTALL/bot"
-nohup "\$PYTHON" "\$INSTALL/bot/live_bot.py" \
-    --simulate \
-    --snapshot-interval "\$SNAP" \
-    >> "\$LOG" 2>&1 &
-sleep 5
 
-if pgrep -u "\$(id -u)" -f '[l]ive_bot\.py' > /dev/null; then
-    echo "✅ Collector running — PID: \$(pgrep -u \$(id -u) -f '[l]ive_bot\.py')"
-    echo "   Data: \$COLLECTOR/live.db"
-    echo "   Logs: tail -f \$COLLECTOR/live.log"
-else
-    echo "❌ Collector failed — last log lines:"
-    tail -20 "\$LOG" 2>/dev/null || echo "(no log)"
-    exit 1
-fi
+# systemd-run --user creates a transient SERVICE unit in the user's own
+# cgroup slice — completely outside the SSH session's scope cgroup.
+# nohup, setsid, and screen all fail on systems with KillUserProcesses
+# because they remain in the SSH session's cgroup and are killed on logout.
+# Requires: loginctl enable-linger <user>  (done once by admin or user).
+# No --unit= flag: letting systemd auto-name the unit avoids conflicts when
+# restarting; lifecycle is managed via pgrep/pkill on live_bot.py.
+systemd-run --user \
+    --description="tradinebotte data collector" \
+    --working-directory="\$INSTALL/bot" \
+    --setenv=TRADINEBOTTE_DIR="\$COLLECTOR" \
+    "\$PYTHON" "\$INSTALL/bot/live_bot.py" \
+    --simulate \
+    --snapshot-interval "\$SNAP"
+# systemd-run exits non-zero if it fails to launch the unit; set -e catches that.
+# Liveness check is done in a separate direct SSH call (not bash -s) because
+# bash -s heredocs cannot see processes in the user's systemd cgroup slice.
 REMOTE
+
+# Wait for the bot to start, then verify with a direct SSH call.
+# Direct SSH (not bash -s) has full visibility into the user's systemd cgroup.
+sleep 15
+echo "Checking collector status..."
+_ssh_cmd "
+    if pgrep -u \$(id -u) -f '[l]ive_bot\.py' > /dev/null; then
+        echo '✅ Collector running — PID:' \$(pgrep -u \$(id -u) -f '[l]ive_bot\.py')
+        echo '   Data:   $COLLECTOR_DIR/live.db'
+        echo '   Logs:   tail -f $COLLECTOR_DIR/live.log'
+        echo '   Units:  systemctl --user list-units --type=service'
+    else
+        echo '❌ Collector failed — last log lines:'
+        tail -20 '$COLLECTOR_DIR/live.log' 2>/dev/null || echo '(no log)'
+        exit 1
+    fi
+"

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Comparaison de performance sur trois configurations :
-  CAS 1 — défaut         : snapshots activés, pas de mmap
-  CAS 2 — mmap 256 MB   : snapshots activés, mmap SQLite
-  CAS 3 — no-snapshots  : snapshots désactivés (pas d'I/O SQLite)
+Performance comparison across three configurations:
+  CASE 1 — default       : snapshots enabled, no mmap
+  CASE 2 — mmap 256 MB  : snapshots enabled, SQLite mmap
+  CASE 3 — no-snapshots : snapshots disabled (no SQLite I/O)
 
-Usage : python3 scripts/profile_compare.py
+Usage: python3 scripts/profile_compare.py
 """
 import asyncio, time, timeit, sys, os, shutil, glob, sqlite3
 
@@ -17,7 +17,7 @@ for f in glob.glob("strategies/*.json"):
     shutil.copy(f, f"{PROFILE_DIR}/strategies/")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-import bot.live_bot as bot
+import bot.live_bot as bot  # pylint: disable=import-error
 
 N   = 20_000
 SEP = "=" * 72
@@ -60,9 +60,9 @@ def conn_mmap() -> sqlite3.Connection:
     return c
 
 
-# ─── Cas 1 : défaut ───────────────────────────────────────────────────────────
+# ─── Case 1: default ──────────────────────────────────────────────────────────
 print(f"\n{SEP}")
-print(f"  CAS 1 — DÉFAUT  (snapshots ON, mmap OFF)")
+print("  CASE 1 — DEFAULT  (snapshots ON, mmap OFF)")
 print(SEP)
 
 bot.ENABLE_SNAPSHOTS = True
@@ -79,14 +79,14 @@ t0 = time.perf_counter()
 asyncio.run(_run_low1())
 t_hbu1 = time.perf_counter() - t0
 
-print(f"  save_snapshot × {N:,}        : {t_snap1*1000:8.1f} ms  |  {t_snap1/N*1e6:7.2f} µs/appel")
+print(f"  save_snapshot × {N:,}        : {t_snap1*1000:8.1f} ms  |  {t_snap1/N*1e6:7.2f} µs/call")
 print(f"  handle_book_update × {N:,}   : {t_hbu1*1000:8.1f} ms  |  {t_hbu1/N*1e6:7.2f} µs/msg")
 c1.close()
 
 
-# ─── Cas 2 : mmap ─────────────────────────────────────────────────────────────
+# ─── Case 2: mmap ─────────────────────────────────────────────────────────────
 print(f"\n{SEP}")
-print(f"  CAS 2 — MMAP {MMAP_MB} MB  (snapshots ON, mmap ON)")
+print(f"  CASE 2 — MMAP {MMAP_MB} MB  (snapshots ON, mmap ON)")
 print(SEP)
 
 bot.ENABLE_SNAPSHOTS = True
@@ -103,21 +103,21 @@ t0 = time.perf_counter()
 asyncio.run(_run_low2())
 t_hbu2 = time.perf_counter() - t0
 
-print(f"  save_snapshot × {N:,}        : {t_snap2*1000:8.1f} ms  |  {t_snap2/N*1e6:7.2f} µs/appel")
+print(f"  save_snapshot × {N:,}        : {t_snap2*1000:8.1f} ms  |  {t_snap2/N*1e6:7.2f} µs/call")
 print(f"  handle_book_update × {N:,}   : {t_hbu2*1000:8.1f} ms  |  {t_hbu2/N*1e6:7.2f} µs/msg")
 c2.close()
 
 
-# ─── Cas 3 : no-snapshots ─────────────────────────────────────────────────────
+# ─── Case 3: no-snapshots ─────────────────────────────────────────────────────
 print(f"\n{SEP}")
-print(f"  CAS 3 — NO-SNAPSHOTS  (snapshots OFF, mmap OFF)")
+print("  CASE 3 — NO-SNAPSHOTS  (snapshots OFF, mmap OFF)")
 print(SEP)
 
 bot.ENABLE_SNAPSHOTS = False
 c3 = conn_default()
 s3, ts3 = make_state(c3)
 
-# save_snapshot n'est pas appelé — on mesure handle_book_update sans I/O
+# save_snapshot is not called — measuring handle_book_update without I/O
 async def _run_low3():
     for _ in range(N):
         await bot.handle_book_update(s3, PARSED_LOW)
@@ -133,9 +133,9 @@ c3.close()
 bot.ENABLE_SNAPSHOTS = True  # restore
 
 
-# ─── Tableau comparatif ───────────────────────────────────────────────────────
+# ─── Comparison table ─────────────────────────────────────────────────────────
 print(f"\n{SEP}")
-print(f"  TABLEAU COMPARATIF ({N:,} itérations)")
+print(f"  COMPARISON TABLE ({N:,} iterations)")
 print(SEP)
 
 def delta(a: float, b: float) -> str:
@@ -143,16 +143,16 @@ def delta(a: float, b: float) -> str:
     sign = "+" if pct > 0 else ""
     return f"{sign}{pct:.1f}%"
 
-print(f"\n  {'Mesure':<38} {'Cas 1 défaut':>14} {'Cas 2 mmap':>14} {'Cas 3 no-snap':>14}")
+print(f"\n  {'Metric':<38} {'Case 1 default':>14} {'Case 2 mmap':>14} {'Case 3 no-snap':>14}")
 print(f"  {'-'*38}  {'-'*14}  {'-'*14}  {'-'*14}")
 
-print(f"  {'save_snapshot (µs/appel)':<38} {t_snap1/N*1e6:>13.2f}  {t_snap2/N*1e6:>13.2f}  {'—':>14}")
+print(f"  {'save_snapshot (µs/call)':<38} {t_snap1/N*1e6:>13.2f}  {t_snap2/N*1e6:>13.2f}  {'—':>14}")
 print(f"  {'save_snapshot (ms total)':<38} {t_snap1*1000:>13.1f}  {t_snap2*1000:>13.1f}  {'—':>14}")
 print(f"  {'handle_book_update (µs/msg)':<38} {t_hbu1/N*1e6:>13.2f}  {t_hbu2/N*1e6:>13.2f}  {t_hbu3/N*1e6:>13.2f}")
 print(f"  {'handle_book_update (ms total)':<38} {t_hbu1*1000:>13.1f}  {t_hbu2*1000:>13.1f}  {t_hbu3*1000:>13.1f}")
 
-print(f"\n  Écarts (base = Cas 1 défaut) :")
-print(f"    save_snapshot  : Cas2 vs Cas1 = {delta(t_snap1, t_snap2)}")
-print(f"    handle_book_update : Cas2 vs Cas1 = {delta(t_hbu1, t_hbu2)}")
-print(f"    handle_book_update : Cas3 vs Cas1 = {delta(t_hbu1, t_hbu3)}")
+print("\n  Deltas (base = Case 1 default):")
+print(f"    save_snapshot      : Case2 vs Case1 = {delta(t_snap1, t_snap2)}")
+print(f"    handle_book_update : Case2 vs Case1 = {delta(t_hbu1, t_hbu2)}")
+print(f"    handle_book_update : Case3 vs Case1 = {delta(t_hbu1, t_hbu3)}")
 print()

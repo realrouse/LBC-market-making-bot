@@ -77,7 +77,7 @@ se connecter.
 | `live_bot` | `bot/live_bot.py` | Bot autonome : WebSocket + signal + ordres + BD | Clé privée requise | Aucun (pas de ZMQ) |
 | `feed` | `bot/feed.py` | Relais WebSocket diffusion seule | **Aucune** | PUB bind `:5557` |
 | `account_bot` | `bot/account_bot.py` | Logique de trading par compte | Clé privée requise | SUB connect `:5557` |
-| `indicators` | `bot/indicators.py` | Étage pipeline d'indicateurs techniques | Aucune | SUB connect `:5557`, PUB bind `:5559` |
+| `indicators` | `bot/indicators.py` | Pipeline d'indicateurs partagé | Aucune | SUB connect `:5557`, PUB bind `:5559`, REP bind `:5561` |
 
 ---
 
@@ -464,6 +464,32 @@ Le hash est dérivé de `TRADINEBOTTE_FEED_ADDR` : chaque stack indépendant
 `TRADINEBOTTE_FEED_ADDR`. La clé privée `POLY_PRIVATE_KEY` du parent n'est
 jamais transmise au sous-processus feed.
 
+### `feed_auto_start = false` — feed géré par systemd
+
+Quand `feed.py` est géré par un processus externe (ex. `tradinebotte-feed.service`),
+définir `"feed_auto_start": false` dans le `config.json` du compte. Le chemin
+verrou/Popen est entièrement ignoré. `account_bot` sonde l'adresse du feed en
+boucle de tentatives (6 × 5 s = 30 s max) et quitte avec une erreur si le feed
+est inaccessible. C'est le mode recommandé pour les déploiements cross-user où
+le feed tourne en service systemd sous un autre utilisateur.
+
+```
+feed_auto_start = false :
+
+account_bot démarre
+    │
+    ├─── sonde le feed (TCP connect, réception sous 5 s) ?
+    │       OUI ──▶ connecte SUB, enregistre les indicateurs, commence le trading
+    │
+    │       NON (jusqu'à 6 tentatives)
+    │        │
+    │        ├─── toutes les tentatives épuisées ?
+    │        │       OUI ──▶ log ERROR + sys.exit(1)
+    │        │       NON ──▶ log WARNING + attente 5 s + nouvelle tentative
+    │        │
+    └─────────────────────────────────────────────────────────
+```
+
 ---
 
 ## 6. Isolation des processus
@@ -534,9 +560,9 @@ python3 bot/indicators.py &
 Pour l'Option B avec indicateurs :
 
 ```
-1. feed.py           bind  :5557   (ou démarrage automatique par le 1er account_bot)
-2. indicators.py     SUB→  :5557   / bind :5559
-3. account_bot(s)    SUB→  :5557
+1. feed.py           bind  :5557   (service systemd, ou démarrage auto si feed_auto_start=true)
+2. indicators.py     SUB→  :5557   / bind :5559 + :5561  (service systemd, optionnel)
+3. account_bot(s)    SUB→  :5557, REQ→ :5561 (enregistrement des flux d'indicateurs au démarrage)
 4. consommateurs     SUB→  :5559
 ```
 
@@ -555,8 +581,8 @@ sont re-publiés au prochain refresh de 30 secondes.
 |---|---|---|---|
 | `TRADINEBOTTE_PORT_BASE` | `5557` | feed.py, account_bot.py, indicators.py | Port de base de toute la pile. Tous les ports par défaut se décalent de `PORT_BASE − 5557`. Les variables par service restent prioritaires. |
 | `TRADINEBOTTE_FEED_ADDR` | `tcp://127.0.0.1:$PORT_BASE` | feed.py, account_bot.py, indicators.py | Adresse ZMQ exacte du socket PUB feed. Remplace `PORT_BASE` pour le feed uniquement. |
-| `TRADINEBOTTE_INDICATORS_ADDR` | `tcp://127.0.0.1:$(PORT_BASE+2)` | indicators.py | Adresse ZMQ PUB exacte du service indicators. |
-| `TRADINEBOTTE_INDICATORS_REG_ADDR` | `tcp://127.0.0.1:$(PORT_BASE+4)` | indicators.py | Adresse ZMQ REP exacte pour l'enregistrement dynamique de flux. |
+| `TRADINEBOTTE_INDICATORS_ADDR` | `tcp://127.0.0.1:$(PORT_BASE+2)` | indicators.py, account_bot.py | Adresse ZMQ PUB du service indicators. `indicators.py` la bind ; `account_bot.py` s'y abonne quand `indicators_streams` est défini. |
+| `TRADINEBOTTE_INDICATORS_REG_ADDR` | `tcp://127.0.0.1:$(PORT_BASE+4)` | indicators.py, account_bot.py | Adresse ZMQ REP pour l'enregistrement dynamique de flux. `indicators.py` la bind ; `account_bot.py` y envoie des REQ subscribe au démarrage. |
 | `TRADINEBOTTE_DIR` | `~/tradinebotte` | account_bot.py, live_bot.py | Répertoire de données par compte (BD, log, config, stratégies) |
 
 ### Faire tourner deux piles indépendantes sur la même machine
