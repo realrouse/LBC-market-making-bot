@@ -39,7 +39,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import product
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 # ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -395,7 +395,7 @@ def print_report(results: List[SimResult], flat_off: SimResult, flat_wd: SimResu
     print(_fmt_result("flat $10 — vol=off", flat_off))
     print(_fmt_result("flat $10 — vol=weekday", flat_wd))
 
-    print(f"\n  {'TOP %d BY EV/TRADE' % top_n}")
+    print(f"\n  TOP {top_n} BY EV/TRADE")
     print(f"  {'-'*88}")
     for rank, r in enumerate(top_ev, 1):
         label = f"#{rank:02d} {_fmt_params(r.params)}"
@@ -405,7 +405,7 @@ def print_report(results: List[SimResult], flat_off: SimResult, flat_wd: SimResu
         line += f"  ΔEV=${delta_ev:+.4f}  ΔPnL=${delta_pnl:+.2f}"
         print(line)
 
-    print(f"\n  {'TOP %d BY SHARPE' % min(top_n, 10)}")
+    print(f"\n  TOP {min(top_n, 10)} BY SHARPE")
     print(f"  {'-'*88}")
     for rank, r in enumerate(top_sharpe[:10], 1):
         label = f"#{rank:02d} {_fmt_params(r.params)}"
@@ -463,7 +463,7 @@ def main() -> None:
     paths = args.db if args.db else DEFAULT_DBS
 
     print(f"\n{SEP}")
-    print(f"  Phase 3 — grid search loading databases …")
+    print("  Phase 3 — grid search loading databases …")
     print(SEP)
 
     trades, vol_at_entry = load_all(paths, args.threshold)

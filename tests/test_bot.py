@@ -2684,5 +2684,173 @@ class TestLogFormatters(unittest.TestCase):
         self.assertIn("%(session)s", bot._LOG_FMT)
 
 
+class TestComputeStake(unittest.TestCase):
+    """Unit tests for compute_stake() — bid×secs dynamic sizing."""
+
+    def _cfg(self, **kw):
+        defaults = dict(
+            signal_threshold=0.95,
+            stake=10.0,
+            stake_bid_alpha=0.0,
+            stake_secs_ref=45.0,
+            stake_secs_alpha=0.0,
+            stake_max=15.0,
+            stake_max_pct_capital=0.0,
+        )
+        defaults.update(kw)
+        return bot.BotConfig(**defaults)
+
+    # ── Flat mode (both alphas == 0) ──────────────────────────────────────────
+
+    def test_flat_mode_returns_base_stake(self):
+        cfg = self._cfg()
+        self.assertEqual(bot.compute_stake(cfg, 0.97, 100.0), 10.0)
+
+    def test_flat_mode_ignores_bid(self):
+        cfg = self._cfg()
+        self.assertEqual(bot.compute_stake(cfg, 0.96, 100.0),
+                         bot.compute_stake(cfg, 0.999, 100.0))
+
+    def test_flat_mode_with_capital_cap(self):
+        cfg = self._cfg(stake_max_pct_capital=0.12, capital_start=100.0)
+        # 12% of 100 = 12, but stake=10 < 12 → returns stake
+        self.assertEqual(bot.compute_stake(cfg, 0.97, 100.0, capital=100.0), 10.0)
+
+    def test_flat_mode_capital_cap_shrinks_on_drawdown(self):
+        cfg = self._cfg(stake_max_pct_capital=0.12, capital_start=100.0)
+        # capital=50 → cap = 0.12*50 = 6.0 < stake=10 → returns 6.0
+        self.assertAlmostEqual(bot.compute_stake(cfg, 0.97, 100.0, capital=50.0), 6.0)
+
+    # ── Bid scaling ───────────────────────────────────────────────────────────
+
+    def test_bid_alpha_boosts_above_threshold(self):
+        cfg = self._cfg(stake_bid_alpha=2.0)
+        # bid=0.97, threshold=0.95 → bid_score=0.4, boost=1.8 → 18, capped at 15
+        result = bot.compute_stake(cfg, 0.97, 100.0)
+        self.assertGreater(result, 10.0)
+        self.assertLessEqual(result, 15.0)
+
+    def test_bid_at_threshold_gives_base_stake(self):
+        cfg = self._cfg(stake_bid_alpha=2.0)
+        # bid_score=0 → boost=1.0 → stake=10, but floor=3 → 10
+        self.assertAlmostEqual(bot.compute_stake(cfg, 0.95, 100.0), 10.0)
+
+    def test_bid_at_maximum_capped_by_stake_max(self):
+        cfg = self._cfg(stake_bid_alpha=2.0, stake_max=15.0)
+        # bid=1.0 → bid_score=1.0, boost=3.0 → 30, capped at 15
+        self.assertAlmostEqual(bot.compute_stake(cfg, 1.0, 100.0), 15.0)
+
+    def test_stake_max_pct_caps_bid_boost(self):
+        cfg = self._cfg(stake_bid_alpha=2.0, stake_max=15.0,
+                        stake_max_pct_capital=0.12)
+        # capital=80 → eff_max = min(15, 0.12*80) = min(15, 9.6) = 9.6
+        result = bot.compute_stake(cfg, 1.0, 100.0, capital=80.0)
+        self.assertAlmostEqual(result, 9.6, places=5)
+
+    # ── Secs scaling ──────────────────────────────────────────────────────────
+
+    def test_secs_below_ref_no_penalty(self):
+        cfg = self._cfg(stake_bid_alpha=2.0, stake_secs_alpha=1.0,
+                        stake_secs_ref=45.0)
+        r_at_ref   = bot.compute_stake(cfg, 0.97, 45.0)
+        r_below_ref = bot.compute_stake(cfg, 0.97, 20.0)
+        self.assertEqual(r_at_ref, r_below_ref)
+
+    def test_secs_above_ref_reduces_stake(self):
+        cfg = self._cfg(stake_bid_alpha=2.0, stake_secs_alpha=1.0,
+                        stake_secs_ref=45.0)
+        r_at_ref  = bot.compute_stake(cfg, 0.97, 45.0)
+        r_far_out = bot.compute_stake(cfg, 0.97, 200.0)
+        self.assertGreater(r_at_ref, r_far_out)
+
+    def test_secs_factor_floored_at_min(self):
+        cfg = self._cfg(stake_bid_alpha=1.0, stake_secs_alpha=10.0,
+                        stake_secs_ref=45.0)
+        # With extreme secs, floor = base * 0.3 = 3.0
+        result = bot.compute_stake(cfg, 0.95, 10000.0)
+        self.assertGreaterEqual(result, 10.0 * bot._STAKE_SECS_MIN_FACTOR)
+
+
+class TestWeeklyStopLoss(unittest.IsolatedAsyncioTestCase):
+    """check_signal() respects the weekly_stop_loss guard."""
+
+    def _make_state(self, cfg):
+        state = make_state()
+        state.config = cfg
+        return state
+
+    async def test_weekly_stop_blocks_entry(self):
+        cfg = bot.BotConfig(
+            signal_threshold=0.95, weekly_stop_loss=60.0,
+            daily_stop_loss=9999.0,
+        )
+        state = self._make_state(cfg)
+        state.weekly_pnl = -61.0
+        state._weekly_pnl_week = int(time.time() // (7 * 86400))
+
+        ts = make_token(best_bid=0.97, best_ask=0.975, secs_remaining=120)
+        before = state.total_trades
+        await bot.check_signal(state, ts)
+        self.assertEqual(state.total_trades, before)
+        self.assertGreater(state.rejection_stats.weekly_stop, 0)
+
+    async def test_weekly_stop_allows_entry_when_not_triggered(self):
+        cfg = bot.BotConfig(
+            signal_threshold=0.95, weekly_stop_loss=60.0,
+            daily_stop_loss=9999.0, capital_start=1000.0,
+        )
+        state = self._make_state(cfg)
+        state.weekly_pnl = -10.0
+        state._weekly_pnl_week = int(time.time() // (7 * 86400))
+        state.capital = 1000.0
+
+        ts = make_token(best_bid=0.97, best_ask=0.975, secs_remaining=120)
+        before = state.rejection_stats.weekly_stop
+        await bot.check_signal(state, ts)
+        self.assertEqual(state.rejection_stats.weekly_stop, before)
+
+    async def test_weekly_pnl_resets_on_new_period(self):
+        cfg = bot.BotConfig(weekly_stop_loss=60.0)
+        state = self._make_state(cfg)
+        state.weekly_pnl = -999.0
+        state._weekly_pnl_week = -1         # force reset on next check_signal call
+
+        ts = make_token(best_bid=0.50, best_ask=0.51, secs_remaining=120)
+        await bot.check_signal(state, ts)
+        self.assertEqual(state.weekly_pnl, 0.0)
+        self.assertNotEqual(state._weekly_pnl_week, -1)
+
+
+class TestMarketDiscoveryConfig(unittest.TestCase):
+    """market_tag_id and market_window_mins are configurable via BotConfig."""
+
+    def test_defaults(self):
+        cfg = bot.BotConfig()
+        self.assertEqual(cfg.market_tag_id, bot.MARKET_TAG_ID)
+        self.assertEqual(cfg.market_window_mins, bot.MARKET_WINDOW_MINS)
+
+    def test_override_via_botconfig(self):
+        cfg = bot.BotConfig(market_tag_id=102467, market_window_mins=16)
+        self.assertEqual(cfg.market_tag_id, 102467)
+        self.assertEqual(cfg.market_window_mins, 16)
+
+    def test_gamma_tag_constants_exported(self):
+        import api_polymarket as api_poly
+        self.assertEqual(api_poly.GAMMA_TAG_5M, 102892)
+        self.assertEqual(api_poly.GAMMA_TAG_15M, 102467)
+
+    def test_btc_updown_keywords_cover_both_timeframes(self):
+        import api_polymarket as api_poly
+        q5m  = "Bitcoin Up or Down - May 16, 4:30PM-4:35PM ET"
+        q15m = "Bitcoin Up or Down - May 16, 4:30PM-4:45PM ET"
+        match = lambda q: any(kw in q.lower() for kw in api_poly.BTC_UPDOWN_KEYWORDS)
+        self.assertTrue(match(q5m))
+        self.assertTrue(match(q15m))
+
+    def test_legacy_alias_still_works(self):
+        import api_polymarket as api_poly
+        self.assertIs(api_poly.BTC_5M_KEYWORDS, api_poly.BTC_UPDOWN_KEYWORDS)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
