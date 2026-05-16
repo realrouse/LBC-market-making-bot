@@ -48,6 +48,7 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+
 ## [0.4.2] - 2026-05-09
 
 ### Modifié
