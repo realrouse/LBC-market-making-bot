@@ -93,6 +93,10 @@ VOL_BID_MAX             = 0.07
 RANGE_BID_MAX           = 0.30
 OBI_VOL_MAX             = 0.40
 
+# ─── MARKET DISCOVERY DEFAULTS ───────────────────────────────────────────────
+MARKET_TAG_ID    = 102892   # Polymarket tag: 102892=5M, 102467=15M
+MARKET_WINDOW_MINS = 6      # ±N-minute temporal window for Gamma API queries
+
 # ─── STAKE SCALING DEFAULTS ───────────────────────────────────────────────────
 # Bid×secs dynamic sizing (Phase 3, 2026-05-16).
 # Set bid_alpha=0 AND secs_alpha=0 to disable (flat stake = STAKE).
@@ -200,6 +204,10 @@ class BotConfig:
     weekend_utc_ranges:   list = field(default_factory=list)
     us_weekly_open:       bool = US_WEEKLY_OPEN
     us_weekly_close:      bool = US_WEEKLY_CLOSE
+
+    # Market discovery
+    market_tag_id:      int = MARKET_TAG_ID
+    market_window_mins: int = MARKET_WINDOW_MINS
 
     # Timing
     snapshot_interval:  int = SNAPSHOT_INTERVAL
@@ -382,6 +390,9 @@ def make_config(simulate: bool = False, no_log: bool = False,
 
     weekly_stop_loss = float(strat.get("weekly_stop_loss", WEEKLY_STOP_LOSS))
 
+    market_tag_id      = int(strat.get("market_tag_id",      MARKET_TAG_ID))
+    market_window_mins = int(strat.get("market_window_mins", MARKET_WINDOW_MINS))
+
     _hf = strat.get("hour_filter", {})
     hour_filter_enabled = bool(_hf.get("enabled", False))
     weekday_utc_ranges  = [tuple(r) for r in _hf.get("weekday_utc_ranges", [])]
@@ -485,6 +496,8 @@ def make_config(simulate: bool = False, no_log: bool = False,
         stake_max=stake_max,
         stake_max_pct_capital=stake_max_pct_capital,
         weekly_stop_loss=weekly_stop_loss,
+        market_tag_id=market_tag_id,
+        market_window_mins=market_window_mins,
     )
 
     # Sync display config to bot_utils so its functions read the correct values.
@@ -1250,7 +1263,11 @@ async def _market_refresh_loop(state: BotState, session: aiohttp.ClientSession, 
     while True:
         await asyncio.sleep(state.config.market_refresh)
         try:
-            nm = await api.get_markets(session)
+            nm = await api.get_markets(
+                session,
+                tag_id=state.config.market_tag_id,
+                window_minutes=state.config.market_window_mins,
+            )
             ni = []
             for m in nm:
                 ni.extend(register_market(state, m))
@@ -1281,7 +1298,11 @@ async def _run_ws(state: BotState, session: aiohttp.ClientSession) -> None:
     so a recv timeout just means no market messages arrived — normal between
     5-minute candles. We only reconnect if all tracked markets have expired.
     """
-    markets = await api.get_markets(session)
+    markets = await api.get_markets(
+        session,
+        tag_id=state.config.market_tag_id,
+        window_minutes=state.config.market_window_mins,
+    )
     if not markets:
         logger.warning("No markets — waiting 30s")
         await asyncio.sleep(30)
@@ -1446,6 +1467,10 @@ async def main() -> None:
                     config.strategy_type, config.connector)
     else:
         logger.warning("  Strategy: file not found — using defaults")
+    if config.connector == "polymarket":
+        _tf = "15M" if config.market_tag_id == api.GAMMA_TAG_15M else "5M"
+        logger.info("  Markets: BTC Up/Down %s (tag=%d, window=±%dmin)",
+                    _tf, config.market_tag_id, config.market_window_mins)
     if config.hour_filter_enabled:
         _wd = " ".join(f"{s}-{e}h" for s, e in config.weekday_utc_ranges) or "all hours"
         _we = " ".join(f"{s}-{e}h" for s, e in config.weekend_utc_ranges) or "blocked"
