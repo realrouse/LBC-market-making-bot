@@ -509,6 +509,7 @@ When more than one file is processed, each file runs with capital reset to `capi
 | `--sweep-all` | — | Extended 405-combo grid search across all DBs (adds OBI and DSL axes) |
 | `--sort METRIC` | `ratio` | Sort sweep results by `ratio` (PnL/MaxDD), `pnl`, or `wr` |
 | `--top N` | 0 (all) | Show only top-N unique configs in sweep table (deduped on threshold/min_secs/obi) |
+| `--detail` | — | Print the individual simulated trade table (one row per trade) |
 
 
 ## Technical Indicator Service
@@ -867,6 +868,10 @@ Custom feed address (useful when running on different ports or hosts):
 TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash scripts/start_feed.sh
 TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
 ```
+
+**Feed flags** (`scripts/start_feed.sh` passes these through to `bot/feed.py`):
+
+- `--verbose` — enable DEBUG logging; prints every raw WebSocket message and ZMQ publish; useful for diagnosing feed connectivity or message format issues
 
 **Account bot flags** (`scripts/start_account.sh` passes these through to `bot/account_bot.py`):
 
