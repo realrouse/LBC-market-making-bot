@@ -1,11 +1,11 @@
 {
     "_name": "Polymarket BTC 5-minute Up/Down",
-    "_description": "Grid-search optimised 2026-05-05: threshold=0.96/min_secs=45/obi=-0.75 → +$187.40 PnL, 98.6% WR on paper3.db (764k snapshots). Do not modify thresholds without re-running the full backtest.",
+    "_description": "Sweep-all optimised 2026-05-16: threshold=0.95/min_secs=45/obi=-0.75/dsl=30 → best PnL/MaxDD ratio (4.21) across 6 databases, 1,016,186 snapshots, 405-combo grid search, 3397 trades, WR 98.0%, PnL +$211.72, MaxDD $50.25. Previous v1 used threshold=0.96.",
 
     "strategy_type": "threshold",
     "connector":     "polymarket",
 
-    "signal_threshold":   0.96,
+    "signal_threshold":   0.95,
     "entry_max":          0.998,
     "min_secs_remaining": 45,
     "min_ask_vol":        10.0,
