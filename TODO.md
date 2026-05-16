@@ -76,6 +76,39 @@ dependencies. They require new entries in `_VALID_INDICATOR_TYPES` and implement
 - **Walk-forward optimization** — train on N weeks, validate on the next, slide the window; reduces
   overfitting risk from the `--sweep`.
 
+### Time-scaled stake sizing (stake ∝ secs_remaining)
+
+**Hypothesis**: win rate is higher when fewer seconds remain at signal time — the price is more
+"locked in" and BTC has less time to reverse. A stake that decreases with secs_remaining should
+improve EV without increasing overall risk.
+
+The `signal_secs_remaining` column is already stored in every `trades` row (paper3.db, liveweek.db).
+
+#### Phase 1 — Validate the hypothesis (DONE: see `scripts/analyze_stake_secs.py`)
+- SQL bucketing of trades by `signal_secs_remaining` (30–45s, 45–60s, 60–90s, 90–120s, 120s+)
+- Win rate, average EV, and trade count per bucket
+- **Gate**: proceed only if win rate shows a meaningful drop (≥ 1 pp) across buckets
+
+#### Phase 2 — Define stake curve candidates
+Three families to grid-search:
+- **A. Inverse-proportional**: `stake = min(stake_max, base_stake * ref_secs / secs_remaining)`
+  — intuitive, continuous; `ref_secs` anchors the nominal stake at a chosen time.
+- **B. Step function** (3–4 thresholds): e.g. `<45s → $12`, `45–60s → $10`, `60–90s → $7`, `90s+ → $5`
+  — operationally transparent, no floating-point math on the hot path.
+- **C. Half-Kelly per bucket**: `p = WR(bucket)`, `b = avg_payout_ratio`, `kelly = (p*b-(1-p))/b`;
+  stake = `0.5 * kelly * capital` — theoretically optimal but requires fresh WR estimates per bucket.
+
+#### Phase 3 — Grid search on paper3.db / liveweek.db
+Replay all resolved trades chronologically with each curve variant.
+Report: total PnL, per-day Sharpe, max drawdown, and comparison vs flat $10.
+Key sweep params for curve A: `ref_secs ∈ {30,45,60}`, `stake_max ∈ {10,15,20}`.
+
+#### Phase 4 — Implementation
+If Phase 3 shows a clear winner:
+- Add `stake_time_scaling: bool`, `stake_ref_secs: float`, `stake_max: float` to `BotConfig`
+- Add `compute_stake(cfg, secs_remaining) → float` helper used in `enter_live_trade()`
+- Expose params in the strategy JSON; validate with 1-week paper run before going live
+
 ---
 
 ## Alternative exchanges

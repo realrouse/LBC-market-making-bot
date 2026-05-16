@@ -1,0 +1,35 @@
+{
+    "_name": "Polymarket BTC 5M — Piste 3: bid scaling + capital cap + weekly stop + OBI=-0.65",
+    "_description": "Piste 2 + obi_reject_thresh=-0.65 (calibrated via scripts/calibrate_obi.py sweep). Filters the four negative-PnL OBI buckets (OBI < -0.65, WR 92-95%) while retaining the 2357/3397 trades where OBI >= -0.65 (WR 97-100%). Calibration result on paper3+liveweek: PnL +$268 (+35% vs piste1/2), MaxDD $72 (-31%), skip=30.6%. The -0.25 threshold tested in an earlier iteration was too aggressive (88% skip, PnL -70%).",
+
+    "strategy_type": "threshold",
+    "connector":     "polymarket",
+
+    "signal_threshold":   0.95,
+    "entry_max":          0.998,
+    "min_secs_remaining": 45,
+    "min_ask_vol":        10.0,
+    "win_threshold":      0.99,
+    "loss_threshold":     0.01,
+    "obi_reject_thresh":  -0.65,
+    "daily_stop_loss":    30.0,
+    "weekly_stop_loss":   60.0,
+    "stake":              10.0,
+    "capital_start":      100.0,
+    "gas_fee_usd":        0.03,
+
+    "stake_bid_alpha":       2.0,
+    "stake_secs_ref":        45.0,
+    "stake_secs_alpha":      0.0,
+    "stake_max":             15.0,
+    "stake_max_pct_capital": 0.12,
+
+    "hour_filter": {
+        "_comment": "US weekly open = Mon 13:30 UTC. US weekly close = Fri 20:00 UTC.",
+        "enabled":            false,
+        "weekday_utc_ranges": [[0, 8], [13, 22]],
+        "weekend_utc_ranges": [],
+        "us_weekly_open":     true,
+        "us_weekly_close":    true
+    }
+}
