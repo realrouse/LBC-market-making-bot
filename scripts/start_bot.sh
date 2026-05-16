@@ -1,19 +1,19 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════
-#  POLYMARKET LIVE BOT v3 — Lancement / Launch
-#  Prérequis : TRADINEBOTTE_DIR=<dir> python3 scripts/setup.py
-#  (génère <TRADINEBOTTE_DIR>/config.json)
+#  POLYMARKET LIVE BOT v3 — Launch
+#  Prerequisite: TRADINEBOTTE_DIR=<dir> python3 scripts/setup.py
+#  (generates <TRADINEBOTTE_DIR>/config.json)
 #
-#  Répertoire d'installation (par ordre de priorité) :
-#    1. Variable d'environnement : TRADINEBOTTE_DIR=~/tradinebotte bash scripts/start_bot.sh
-#    2. Valeur par défaut : ~/tradinebotte (aucun accès root requis)
+#  Installation directory (in order of priority):
+#    1. Environment variable: TRADINEBOTTE_DIR=~/tradinebotte bash scripts/start_bot.sh
+#    2. Default value: ~/tradinebotte (no root access required)
 #
-#  Options :
-#    --reset-db          sauvegarde live.db puis le supprime avant de lancer
-#                        (le bot repart à zéro : capital, trades, historique)
-#    --simulate          mode simulation — I/O vers ~/tradinebotte-sim
-#    --snapshot-interval N  intervalle snapshots en secondes (défaut : 5)
-#    Tout autre flag est transmis tel quel à live_bot.py.
+#  Options:
+#    --reset-db          backs up live.db then removes it before launching
+#                        (the bot restarts from scratch: capital, trades, history)
+#    --simulate          simulation mode — I/O directed to ~/tradinebotte-sim
+#    --snapshot-interval N  snapshot interval in seconds (default: 5)
+#    Any other flag is passed as-is to live_bot.py.
 # ═══════════════════════════════════════════════════════════════════
 
 RESET_DB=0

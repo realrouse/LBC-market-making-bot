@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """
 Polymarket wallet setup — run ONCE before starting the bot.
-Configuration du portefeuille Polymarket — à exécuter UNE FOIS avant le bot.
 
 Press Enter without a key to create a simulation config (no real orders).
-Appuyez sur Entrée sans clé pour créer une config de simulation (aucun ordre réel).
 
 Steps performed (real key only):
   1. Read the Polygon private key securely via masked stdin (getpass),
