@@ -10,6 +10,33 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.4.5] - 2026-05-16
+
+### Fixed
+- **`scripts/backtest.py` — graceful skip of klines DBs** (`--all`, `--sweep-all`): when the data directory contains BTCUSDT klines files (no `snapshots` table), the script previously crashed with `OperationalError: no such table: snapshots`; now prints a skip notice and continues to the next DB
+- **`scripts/profile_compare.py` — `bot.DB_PATH` removed** (E1101): `DB_PATH` no longer exists as a module-level constant in `live_bot.py`; replaced with `os.path.join(PROFILE_DIR, "profile.db")`
+- **`scripts/profile_hotpath.py` — missing `config` argument** (E1120 ×2): `bot.init_db()` and `bot.is_trading_hour()` both require a `BotConfig` argument since the config-driven refactor; calls updated to `init_db(BotConfig())` and `is_trading_hour(BotConfig())`; redundant lambda on `is_trading_hour` resolved as a side effect
+- **`tests/test_api_cex.py` — unused imports** (W0611): `importlib` and `inspect` removed
+- **`tests/test_indicators.py` — unused import `math`** (W0611); reimport of `_shift_addr` inside test method replaced with module-level name (W0404); unused `spec` variable → `_` (W0612); two `NamedTemporaryFile` calls suppressed for R1732
+- **`tests/test_multibot.py` — reimport `os as _os`** (W0404/C0411/C0412): replaced with module-level `os`
+- **`tests/test_bot.py` — multiple pylint warnings**: `too-many-lines` suppressed at module top (C0302); three local `import time as _time` replaced with module-level `time` (W0404); local `import asyncio` inside method removed (W0404/W0621); three unused `ts` variables replaced with `_` (W0612); four local `from datetime import datetime, timezone` removed (W0404/W0621 ×4); unused `GridLevel`, `GridState` imports removed (W0611); late `import asyncio, unittest.mock` suppressed (C0411/C0412); `TestStrategyLoading` updated — v2 tests replaced with v1 parameter assertions after `polymarket_BTC5M_v2.json` was removed
+
+### Changed
+- **`strategies/polymarket_BTC5M.json` — `signal_threshold` 0.96 → 0.95**: sweep-all optimisation across 6 DBs (1,016,186 snapshots, 405 combos); best PnL/MaxDD ratio 4.21 at thr=0.95/secs=45/obi=−0.75/dsl=30
+- **`strategies/grid_BTCUSDT.json` — grid bounds ±10% → ±30%**: `grid_lower`/`grid_upper` updated to 70k–130k around 100k midpoint; best avg Calmar across 3 klines DBs (2026 range, 2022 bear, 2024 bull)
+
+### Removed
+- **`strategies/polymarket_BTC5M_v2.json`**: deleted — after the threshold update, v1 and v2 were functionally identical; `polymarket_BTC5M.json` is the sole active strategy file
+
+### Documentation
+- **`QUICKSTART.md` + `QUICKSTART.fr.md`**: version reference updated `v0.40` → `v0.4.4`; defunct `scripts/install_service.sh` reference replaced with link to INSTALL.md systemd section; `pkill -f live_bot.py` → `pkill -f '[l]ive_bot.py'` (bracket trick)
+- **`INSTALL.md` + `INSTALL.fr.md`**: `--detail` flag added to `backtest.py` parameter table; "Feed flags" subsection added with `--verbose` for `feed.py` (distinct from the existing `account_bot.py` entry)
+
+### Chore
+- **`.gitignore`**: `.coverage` added
+
+---
+
 ## [0.4.4] - 2026-05-16
 
 ### Added
