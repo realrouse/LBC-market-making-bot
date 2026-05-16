@@ -1,3 +1,4 @@
+# pylint: disable=too-many-lines
 """
 Automated tests for bot/live_bot.py
 
@@ -453,9 +454,8 @@ class TestCheckSignal(unittest.IsolatedAsyncioTestCase):
     async def test_blocked_daily_stop_loss(self):
         # daily_pnl is now an in-memory cache; set it directly so the
         # midnight-reset guard doesn't clear it before the check.
-        import time as _time
         self.state.daily_pnl = -35.0
-        self.state._daily_pnl_day = int(_time.time() // 86400)
+        self.state._daily_pnl_day = int(time.time() // 86400)
         await bot.check_signal(self.state, make_token())
         self.assertNotIn("mkt1", self.state.signalled)
 
@@ -775,22 +775,19 @@ class TestDailyPnlCache(unittest.TestCase):
         self.assertAlmostEqual(state.daily_pnl, total)
 
     def test_midnight_reset_clears_daily_pnl(self):
-        import time as _time
         state = make_state(conn=self.conn)
         state.daily_pnl = -25.0
         # Simulate "yesterday" by setting the day counter one behind current
-        state._daily_pnl_day = int(_time.time() // 86400) - 1
+        state._daily_pnl_day = int(time.time() // 86400) - 1
         # check_signal reads state._daily_pnl_day and resets on rollover
         state.config = bot.BotConfig(signal_threshold=0.95)
         ts = make_token(best_bid=0.90)  # below threshold — signal won't fire
-        import asyncio
         asyncio.run(bot.check_signal(state, ts))
         self.assertEqual(state.daily_pnl, 0.0,
                          "daily_pnl should reset to 0 after midnight rollover")
-        self.assertEqual(state._daily_pnl_day, int(_time.time() // 86400))
+        self.assertEqual(state._daily_pnl_day, int(time.time() // 86400))
 
     def test_restore_loads_today_pnl(self):
-        import time as _time
         today_ms = int(
             datetime.now(timezone.utc)
             .replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1243,15 +1240,15 @@ class TestSaveSnapshot(unittest.TestCase):
         self.assertIsInstance(row[1], int)
 
     def test_market_id_stored(self):
-        ts, row = self._snap(market_id="mkt_snap")
+        _, row = self._snap(market_id="mkt_snap")
         self.assertEqual(row[2], "mkt_snap")
 
     def test_token_id_stored(self):
-        ts, row = self._snap(token_id="tok_snap")
+        _, row = self._snap(token_id="tok_snap")
         self.assertEqual(row[3], "tok_snap")
 
     def test_direction_stored(self):
-        ts, row = self._snap(direction="DOWN")
+        _, row = self._snap(direction="DOWN")
         self.assertEqual(row[4], "DOWN")
 
     def test_secs_remaining_stored(self):
@@ -1496,27 +1493,23 @@ class TestUsHolidays(unittest.TestCase):
     # ── is_trading_hour integration ──────────────────────────────────────────
 
     def test_blocks_on_holiday_when_filter_enabled(self):
-        from datetime import datetime, timezone
         # Christmas 2026 (Fri Dec 25), 15:00 UTC
         cfg = bot.BotConfig(us_holiday_filter=True)
         dt = datetime(2026, 12, 25, 15, 0, 0, tzinfo=timezone.utc)
         self.assertFalse(bot.is_trading_hour(cfg, int(dt.timestamp() * 1000)))
 
     def test_allows_on_holiday_when_filter_disabled(self):
-        from datetime import datetime, timezone
         cfg = bot.BotConfig(us_holiday_filter=False)
         dt = datetime(2026, 12, 25, 15, 0, 0, tzinfo=timezone.utc)
         self.assertTrue(bot.is_trading_hour(cfg, int(dt.timestamp() * 1000)))
 
     def test_normal_weekday_not_blocked(self):
-        from datetime import datetime, timezone
         cfg = bot.BotConfig(us_holiday_filter=True)
         # Wednesday 2026-05-06, 15:00 UTC — not a holiday
         dt = datetime(2026, 5, 6, 15, 0, 0, tzinfo=timezone.utc)
         self.assertTrue(bot.is_trading_hour(cfg, int(dt.timestamp() * 1000)))
 
     def test_holiday_blocks_independently_of_hour_filter(self):
-        from datetime import datetime, timezone
         # us_holiday_filter=True blocks even when hour_filter_enabled=False
         cfg = bot.BotConfig(us_holiday_filter=True, hour_filter_enabled=False)
         dt = datetime(2026, 12, 25, 15, 0, 0, tzinfo=timezone.utc)
@@ -1587,44 +1580,35 @@ class TestSnapshotInterval(unittest.IsolatedAsyncioTestCase):
 
 
 class TestStrategyLoading(unittest.TestCase):
-    """Verify the v2 strategy JSON exists, loads correctly, and has the sweep-optimised params."""
+    """Verify the active strategy JSON loads correctly with sweep-optimised params."""
 
     _STRAT_DIR = os.path.join(os.path.dirname(__file__), "..", "strategies")
 
     def _load(self, name):
         return bot.load_strategy(os.path.join(self._STRAT_DIR, name))
 
-    def test_v2_file_exists(self):
-        path = os.path.join(self._STRAT_DIR, "polymarket_BTC5M_v2.json")
-        self.assertTrue(os.path.exists(path))
-
-    def test_v1_file_still_present(self):
+    def test_file_exists(self):
         path = os.path.join(self._STRAT_DIR, "polymarket_BTC5M.json")
         self.assertTrue(os.path.exists(path))
 
     def test_missing_file_returns_none(self):
         self.assertIsNone(bot.load_strategy("/nonexistent/strategy.json"))
 
-    def test_v2_threshold(self):
-        s = self._load("polymarket_BTC5M_v2.json")
+    def test_threshold(self):
+        s = self._load("polymarket_BTC5M.json")
         self.assertAlmostEqual(s["signal_threshold"], 0.95)
 
-    def test_v2_min_secs(self):
-        s = self._load("polymarket_BTC5M_v2.json")
+    def test_min_secs(self):
+        s = self._load("polymarket_BTC5M.json")
         self.assertEqual(s["min_secs_remaining"], 45)
 
-    def test_v2_obi(self):
-        s = self._load("polymarket_BTC5M_v2.json")
+    def test_obi(self):
+        s = self._load("polymarket_BTC5M.json")
         self.assertAlmostEqual(s["obi_reject_thresh"], -0.75)
 
-    def test_v2_dsl(self):
-        s = self._load("polymarket_BTC5M_v2.json")
+    def test_dsl(self):
+        s = self._load("polymarket_BTC5M.json")
         self.assertAlmostEqual(s["daily_stop_loss"], 30.0)
-
-    def test_v2_lower_threshold_than_v1(self):
-        v1 = self._load("polymarket_BTC5M.json")
-        v2 = self._load("polymarket_BTC5M_v2.json")
-        self.assertLess(v2["signal_threshold"], v1["signal_threshold"])
 
 
 # ── Connector factory ─────────────────────────────────────────────────────────
@@ -1684,7 +1668,7 @@ class TestConnectorFactory(unittest.TestCase):
 # ── Strategy factory ──────────────────────────────────────────────────────────
 
 import strategies as _strategies_mod
-from strategies.grid import GridStrategy, GridLevel, GridState
+from strategies.grid import GridStrategy
 
 class TestStrategyFactory(unittest.TestCase):
     """strategies.load() returns the correct strategy or None for threshold."""
@@ -1805,7 +1789,7 @@ class TestGridStrategy(unittest.TestCase):
 
 # ─── Grid strategy async behaviour ────────────────────────────────────────────
 
-import asyncio, unittest.mock
+import asyncio, unittest.mock  # pylint: disable=wrong-import-position,wrong-import-order,ungrouped-imports
 
 class _FakeTokenState:
     """Minimal TokenState substitute for grid tests."""

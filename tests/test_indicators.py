@@ -1,6 +1,6 @@
 """Tests for bot/indicators.py — pure-math functions, PriceSeries, and config types."""
 
-import sys, os, math, unittest, json, tempfile, time
+import sys, os, unittest, json, tempfile, time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bot"))
 from indicators import (
@@ -273,7 +273,8 @@ class TestStreamSpec(unittest.TestCase):
 class TestLoadConfig(unittest.TestCase):
 
     def _write_config(self, cfg: dict) -> str:
-        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+        tmp = tempfile.NamedTemporaryFile(  # pylint: disable=consider-using-with
+            mode="w", suffix=".json", delete=False)
         json.dump(cfg, tmp)
         tmp.close()
         return tmp.name
@@ -886,13 +887,12 @@ class TestPortBase(unittest.TestCase):
 
     def test_shift_addr_positive(self):
         # Simulate PORT_BASE=6557 → shift=+1000
-        from indicators import _shift_addr as sa
         import indicators as ind_mod
         orig = ind_mod._PORT_SHIFT  # pylint: disable=protected-access
         ind_mod._PORT_SHIFT = 1000
         try:
-            self.assertEqual(sa("tcp://127.0.0.1:5559"), "tcp://127.0.0.1:6559")
-            self.assertEqual(sa("tcp://127.0.0.1:5561"), "tcp://127.0.0.1:6561")
+            self.assertEqual(_shift_addr("tcp://127.0.0.1:5559"), "tcp://127.0.0.1:6559")
+            self.assertEqual(_shift_addr("tcp://127.0.0.1:5561"), "tcp://127.0.0.1:6561")
         finally:
             ind_mod._PORT_SHIFT = orig
 
@@ -939,7 +939,8 @@ class TestPortBase(unittest.TestCase):
                     "indicators": [{"type": "rsi", "period": 14}],
                 }],
             }
-            tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+            tmp = tempfile.NamedTemporaryFile(  # pylint: disable=consider-using-with
+                mode="w", suffix=".json", delete=False)
             json.dump(cfg_dict, tmp); tmp.close()
             cfg = load_config(tmp.name)
             self.assertEqual(cfg.feed_addr, "tcp://127.0.0.1:6557")
@@ -1006,7 +1007,7 @@ class TestBinanceMarketStructure(unittest.TestCase):
         self.assertEqual(spec.source, "binance_oi")
 
     def test_binance_ls_ratio_subscribe_no_asset(self):
-        stream_id, spec = parse_subscribe_request({"source": "binance_ls_ratio"})
+        stream_id, _ = parse_subscribe_request({"source": "binance_ls_ratio"})
         self.assertEqual(stream_id, "binance_ls_ratio")
 
     def test_binance_liquidations_subscribe_poll_interval(self):

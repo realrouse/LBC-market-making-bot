@@ -48,7 +48,7 @@ PARSED_LOW = {
 }
 
 def conn_default() -> sqlite3.Connection:
-    c = sqlite3.connect(bot.DB_PATH, check_same_thread=False)
+    c = sqlite3.connect(os.path.join(PROFILE_DIR, "profile.db"), check_same_thread=False)
     c.executescript(bot.SCHEMA)
     c.commit()
     return c
