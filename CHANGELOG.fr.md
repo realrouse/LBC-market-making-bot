@@ -10,6 +10,33 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.4.5] - 2026-05-16
+
+### Correction
+- **`scripts/backtest.py` — saut gracieux des BDs klines** (`--all`, `--sweep-all`) : quand le répertoire de données contient des fichiers klines BTCUSDT (sans table `snapshots`), le script plantait avec `OperationalError: no such table: snapshots` ; affiche désormais un message de saut et continue vers la BD suivante
+- **`scripts/profile_compare.py` — `bot.DB_PATH` supprimé** (E1101) : `DB_PATH` n'existe plus comme constante module-level dans `live_bot.py` ; remplacé par `os.path.join(PROFILE_DIR, "profile.db")`
+- **`scripts/profile_hotpath.py` — argument `config` manquant** (E1120 ×2) : `bot.init_db()` et `bot.is_trading_hour()` requièrent tous deux un argument `BotConfig` depuis le refactor piloté par config ; appels mis à jour en `init_db(BotConfig())` et `is_trading_hour(BotConfig())` ; lambda redondant sur `is_trading_hour` résolu en parallèle
+- **`tests/test_api_cex.py` — imports inutilisés** (W0611) : `importlib` et `inspect` supprimés
+- **`tests/test_indicators.py` — import inutilisé `math`** (W0611) ; reimport de `_shift_addr` dans une méthode remplacé par le nom module-level (W0404) ; variable `spec` inutilisée → `_` (W0612) ; deux appels `NamedTemporaryFile` supprimés pour R1732
+- **`tests/test_multibot.py` — reimport `os as _os`** (W0404/C0411/C0412) : remplacé par `os` module-level
+- **`tests/test_bot.py` — multiples avertissements pylint** : `too-many-lines` supprimé en tête de module (C0302) ; trois `import time as _time` locaux remplacés par `time` module-level (W0404) ; `import asyncio` local dans une méthode supprimé (W0404/W0621) ; trois variables `ts` inutilisées remplacées par `_` (W0612) ; quatre `from datetime import datetime, timezone` locaux supprimés (W0404/W0621 ×4) ; imports inutilisés `GridLevel`, `GridState` supprimés (W0611) ; `import asyncio, unittest.mock` tardif supprimé (C0411/C0412) ; `TestStrategyLoading` mis à jour — tests v2 remplacés par assertions sur les paramètres v1 après suppression de `polymarket_BTC5M_v2.json`
+
+### Modifié
+- **`strategies/polymarket_BTC5M.json` — `signal_threshold` 0.96 → 0.95** : optimisation sweep-all sur 6 BDs (1 016 186 snapshots, 405 combos) ; meilleur ratio PnL/MaxDD 4.21 à thr=0.95/secs=45/obi=−0.75/dsl=30
+- **`strategies/grid_BTCUSDT.json` — bornes de grille ±10% → ±30%** : `grid_lower`/`grid_upper` mis à jour à 70k–130k autour d'un midpoint 100k ; meilleur Calmar moyen sur 3 BDs klines (2026 range, 2022 bear, 2024 bull)
+
+### Supprimé
+- **`strategies/polymarket_BTC5M_v2.json`** : supprimé — après la mise à jour du seuil, v1 et v2 étaient fonctionnellement identiques ; `polymarket_BTC5M.json` est le seul fichier de stratégie actif
+
+### Documentation
+- **`QUICKSTART.md` + `QUICKSTART.fr.md`** : référence de version mise à jour `v0.40` → `v0.4.4` ; référence à `scripts/install_service.sh` obsolète remplacée par un lien vers la section systemd d'INSTALL.md ; `pkill -f live_bot.py` → `pkill -f '[l]ive_bot.py'` (bracket trick)
+- **`INSTALL.md` + `INSTALL.fr.md`** : flag `--detail` ajouté au tableau des paramètres de `backtest.py` ; sous-section "Flags du feed" ajoutée avec `--verbose` pour `feed.py` (distinct de l'entrée `account_bot.py` existante)
+
+### Divers
+- **`.gitignore`** : `.coverage` ajouté
+
+---
+
 ## [0.4.4] - 2026-05-16
 
 ### Ajout

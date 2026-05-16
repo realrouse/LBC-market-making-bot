@@ -1,14 +1,14 @@
 {
     "_name": "Grid BTC/USDT",
-    "_description": "Grid trading on Binance BTC/USDT spot. Places limit orders at evenly-spaced price levels between grid_lower and grid_upper. Profits from price oscillation within the grid. Parameters must be calibrated before live use.",
+    "_description": "Grid trading on Binance BTC/USDT spot. Sweep-optimised 2026-05-16: range=±30%, levels=20, size=$50 (STATIC mode) → best avg Calmar across 3 klines DBs. 2026 range market: +2.7% PnL, 1% MaxDD. Grid bounds relative to 100k midpoint; recalibrate lower/upper before live use.",
     "_status": "stub — order placement not yet implemented in GridStrategy.on_book_update()",
 
     "strategy_type": "grid",
     "connector":     "binance",
 
     "grid_symbol":          "BTCUSDT",
-    "grid_lower":           90000.0,
-    "grid_upper":           110000.0,
+    "grid_lower":           70000.0,
+    "grid_upper":           130000.0,
     "grid_levels":          20,
     "grid_order_size_usdt": 50.0,
 

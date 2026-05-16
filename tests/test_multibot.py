@@ -204,8 +204,7 @@ class TestAccountBotRegister(unittest.TestCase):
 
 # ── 3 & 4. Integration: ZMQ round-trip ───────────────────────────────────────
 
-import os as _os
-TEST_PORT = 15000 + (_os.getuid() % 900)  # per-uid to avoid conflicts on shared servers
+TEST_PORT = 15000 + (os.getuid() % 900)  # per-uid to avoid conflicts on shared servers
 TEST_ADDR = f"tcp://127.0.0.1:{TEST_PORT}"
 
 

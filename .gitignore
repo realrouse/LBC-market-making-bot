@@ -57,3 +57,4 @@ scripts/test_multibot.conf
 !data/calmsaturday.db
 !data/basicsunday.db
 !data/liveweek.db
+.coverage

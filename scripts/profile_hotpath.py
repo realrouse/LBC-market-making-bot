@@ -23,7 +23,7 @@ N       = 20_000   # iterations per benchmark
 SEP     = "=" * 64
 
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
-conn  = bot.init_db()
+conn  = bot.init_db(bot.BotConfig())
 state = bot.BotState(conn)
 
 token_id  = "abc123token"
@@ -58,7 +58,7 @@ print(SEP)
 
 sync_results = []
 
-t = timeit.timeit(lambda: bot.is_trading_hour(), number=N)
+t = timeit.timeit(lambda: bot.is_trading_hour(bot.BotConfig()), number=N)
 sync_results.append(("is_trading_hour()", t))
 
 t = timeit.timeit(lambda: bot.check_resolution(state, ts), number=N)
@@ -139,13 +139,13 @@ print(s.getvalue())
 
 # ─── 4. cProfile — backtest run_backtest ──────────────────────────────────────
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
-import backtest as bt
+import backtest as bt  # pylint: disable=wrong-import-position,wrong-import-order
 
 print(f"{SEP}")
 print("  cPROFILE — run_backtest (basicsunday.db — 24 870 snapshots)")
 print(SEP)
 
-import sqlite3 as _sqlite3
+import sqlite3 as _sqlite3  # pylint: disable=wrong-import-position,wrong-import-order
 rows = bt.load_rows(_sqlite3.connect("data/basicsunday.db"))
 default_params = bt.Params()
 pr2  = cProfile.Profile()

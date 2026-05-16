@@ -12,7 +12,7 @@ Coverage:
 All tests are offline — no real API calls.
 """
 
-import importlib, inspect, json, os, sys, unittest
+import json, os, sys, unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bot"))
 import api_binance  as binance
