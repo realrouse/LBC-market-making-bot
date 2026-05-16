@@ -860,8 +860,13 @@ def main():
         elif db_path == _paper3_db: tag = "(paper3)"
         else:                       tag = ""
 
-        conn        = sqlite3.connect(db_path)
-        n_snapshots = conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
+        conn = sqlite3.connect(db_path)
+        try:
+            n_snapshots = conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
+        except sqlite3.OperationalError:
+            conn.close()
+            print(f"  Skipping {os.path.basename(db_path)} (no snapshots table)")
+            continue
 
         if n_snapshots == 0:
             conn.close()
