@@ -116,7 +116,12 @@ fi
 # ─── Phase 1: Cleanup ──────────────────────────────────────────────────────────
 section "PHASE 1 — CLEANUP"
 run "
-    pkill -u \$(id -u) -f '[l]ive_bot.py' 2>/dev/null || true
+    PID_FILE=$INSTALL_DIR/live.pid
+    if [ -f \"\$PID_FILE\" ]; then
+        PID=\$(cat \"\$PID_FILE\")
+        kill -0 \"\$PID\" 2>/dev/null && kill \"\$PID\" 2>/dev/null || true
+        rm -f \"\$PID_FILE\"
+    fi
     sleep 2
     pkill -9 -u \$(id -u) -f '[l]ive_bot.py' 2>/dev/null || true
     rm -rf $INSTALL_DIR
@@ -180,7 +185,17 @@ ERROR_COUNT=$(run "grep -ciE '\[(ERROR|CRITICAL)\]' $LOG 2>/dev/null || true")
 
 # ─── Phase 5: Teardown ─────────────────────────────────────────────────────────
 section "PHASE 5 — TEARDOWN"
-run "pkill -u \$(id -u) -f '[l]ive_bot.py' 2>/dev/null || true"
+run "
+    PID_FILE=$INSTALL_DIR/live.pid
+    if [ -f \"\$PID_FILE\" ]; then
+        PID=\$(cat \"\$PID_FILE\")
+        kill -0 \"\$PID\" 2>/dev/null && kill \"\$PID\" 2>/dev/null || true
+        rm -f \"\$PID_FILE\"
+    else
+        pkill -u \$(id -u) -f '[l]ive_bot.py' 2>/dev/null || true
+    fi
+    exit 0
+"
 ok "$SA_USER: bot stopped"
 
 # ─── Final report ──────────────────────────────────────────────────────────────

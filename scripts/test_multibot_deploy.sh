@@ -195,7 +195,12 @@ info "Killing stale account_bot / indicators processes and wiping runtime dirs..
 
 # Kill shared indicators.py on the feed owner (may not be in ACCOUNT_IDXS)
 run "$FEED_IDX" "
-    pkill -u \$(id -u) -f '[i]ndicators.py' 2>/dev/null || true
+    PID_FILE=$REMOTE_INSTALL_DIR/indicators.pid
+    if [ -f \"\$PID_FILE\" ]; then
+        PID=\$(cat \"\$PID_FILE\")
+        kill -0 \"\$PID\" 2>/dev/null && kill \"\$PID\" 2>/dev/null || true
+        rm -f \"\$PID_FILE\"
+    fi
     sleep 1
     pkill -9 -u \$(id -u) -f '[i]ndicators.py' 2>/dev/null || true
     fuser -k 5559/tcp 2>/dev/null || true
@@ -206,8 +211,12 @@ run "$FEED_IDX" "
 for idx in "${ACCOUNT_IDXS[@]}"; do
     user="${ALL_USERS[$idx]}"
     run "$idx" "
-        pkill -u \$(id -u) -f '[a]ccount_bot.py' 2>/dev/null || true
-        pkill -u \$(id -u) -f '[i]ndicators.py'  2>/dev/null || true
+        PID_FILE=$REMOTE_BOT_DIR/account.pid
+        if [ -f \"\$PID_FILE\" ]; then
+            PID=\$(cat \"\$PID_FILE\")
+            kill -0 \"\$PID\" 2>/dev/null && kill \"\$PID\" 2>/dev/null || true
+            rm -f \"\$PID_FILE\"
+        fi
         sleep 2
         pkill -9 -u \$(id -u) -f '[a]ccount_bot.py' 2>/dev/null || true
         pkill -9 -u \$(id -u) -f '[i]ndicators.py'  2>/dev/null || true
@@ -348,7 +357,10 @@ if [[ -n "$IND_CFG_REL" ]]; then
         nohup $REMOTE_INSTALL_DIR/venv/bin/python3 -u bot/indicators.py \
             --config $REMOTE_INSTALL_DIR/$IND_CFG_REL \
             > $REMOTE_INSTALL_DIR/indicators.log 2>&1 < /dev/null &
-        echo \"IND_PID=\$!\"
+        IND_PID=\$!
+        disown \$IND_PID
+        echo \$IND_PID > $REMOTE_INSTALL_DIR/indicators.pid
+        echo \"IND_PID=\$IND_PID\"
     " && ok "${ALL_USERS[$FEED_IDX]}: shared indicators.py started" \
       || warn "${ALL_USERS[$FEED_IDX]}: indicators launch failed"
     wait
@@ -368,7 +380,10 @@ LAUNCH_CMD="
     TRADINEBOTTE_DIR=$REMOTE_BOT_DIR \\
     nohup $REMOTE_INSTALL_DIR/venv/bin/python3 -u bot/account_bot.py --verbose \\
         > $REMOTE_BOT_DIR/account.log 2>&1 < /dev/null &
-    echo \"PID=\$!\"
+    BOT_PID=\$!
+    disown \$BOT_PID
+    echo \$BOT_PID > $REMOTE_BOT_DIR/account.pid
+    echo \"PID=\$BOT_PID\"
 "
 
 for idx in "${ACCOUNT_IDXS[@]}"; do
@@ -502,7 +517,12 @@ info "Stopping account_bot processes (feed service left running)"
 # Stop shared indicators.py under the feed owner
 if [[ -n "${IND_CFG_REL:-}" ]]; then
     run "$FEED_IDX" "
-        pkill -u \$(id -u) -f '[i]ndicators.py' 2>/dev/null || true
+        PID_FILE=$REMOTE_INSTALL_DIR/indicators.pid
+        if [ -f \"\$PID_FILE\" ]; then
+            PID=\$(cat \"\$PID_FILE\")
+            kill -0 \"\$PID\" 2>/dev/null && kill \"\$PID\" 2>/dev/null || true
+            rm -f \"\$PID_FILE\"
+        fi
         sleep 2
         pkill -9 -u \$(id -u) -f '[i]ndicators.py' 2>/dev/null || true
         fuser -k 5559/tcp 2>/dev/null || true
@@ -514,7 +534,12 @@ fi
 for idx in "${ACCOUNT_IDXS[@]}"; do
     user="${ALL_USERS[$idx]}"
     run "$idx" "
-        pkill -u \$(id -u) -f '[a]ccount_bot.py' 2>/dev/null || true
+        PID_FILE=$REMOTE_BOT_DIR/account.pid
+        if [ -f \"\$PID_FILE\" ]; then
+            PID=\$(cat \"\$PID_FILE\")
+            kill -0 \"\$PID\" 2>/dev/null && kill \"\$PID\" 2>/dev/null || true
+            rm -f \"\$PID_FILE\"
+        fi
         sleep 2
         pkill -9 -u \$(id -u) -f '[a]ccount_bot.py' 2>/dev/null || true
         exit 0
