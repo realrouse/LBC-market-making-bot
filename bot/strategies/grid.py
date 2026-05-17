@@ -150,7 +150,7 @@ class GridStrategy:
         self._user_ws_connected: bool = False
 
         logger.info(
-            "GridStrategy: %s  %.2f–%.2f  %d niveaux  step=%.2f  taille=$%.2f",
+            "GridStrategy: %s  %.2f–%.2f  %d levels  step=%.2f  size=$%.2f",
             symbol, lower, upper, n, step, size,
         )
 
@@ -442,7 +442,7 @@ class GridStrategy:
                 self._save_state(state.conn)
                 return
         logger.debug(
-            "GridStrategy [%s] user stream: ordre %s inconnu (hors grille)",
+            "GridStrategy [%s] user stream: unknown order %s (outside grid)",
             self.grid.symbol, order_id,
         )
 
@@ -569,7 +569,7 @@ class GridStrategy:
             # Top of grid: no SELL counter-order, mark idle
             lvl.status = "idle"
             logger.info(
-                "GridStrategy [%s] BUY fill %.2f → haut de grille, idle",
+                "GridStrategy [%s] BUY fill %.2f → top of grid, idle",
                 self.grid.symbol, buy_p,
             )
             return

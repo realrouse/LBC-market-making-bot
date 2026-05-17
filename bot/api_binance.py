@@ -159,7 +159,7 @@ def parse_book_update(msg):
 
 # ─── MARKET DISCOVERY ─────────────────────────────────────────────────────────
 
-async def get_markets(session, symbol=DEFAULT_SYMBOL):
+async def get_markets(session, symbol=DEFAULT_SYMBOL, **_):
     """
     Fetch the current order book ticker for the given symbol from Binance REST.
     Returns a list with one normalized market dict.
@@ -171,7 +171,7 @@ async def get_markets(session, symbol=DEFAULT_SYMBOL):
             timeout=aiohttp.ClientTimeout(total=10),
         ) as resp:
             if resp.status != 200:
-                logger.warning("Binance API erreur : %d", resp.status)
+                logger.warning("Binance API error : %d", resp.status)
                 return []
             # content_type=None: bypass aiohttp's MIME check — some APIs omit charset
             data = await resp.json(content_type=None)
@@ -184,7 +184,7 @@ async def get_markets(session, symbol=DEFAULT_SYMBOL):
             "ask_qty":  float(data.get("askQty", 0)),
         }]
     except Exception as e:
-        logger.warning("Binance fetch erreur : %s", e)
+        logger.warning("Binance fetch error : %s", e)
         return []
 
 
@@ -224,7 +224,7 @@ async def post_order(session, symbol, price, size_usdc, *,
     _side = "SELL" if str(symbol).endswith(":SELL") else side.upper()
 
     if not _key or not _secret:
-        logger.warning("Binance — ordre simule (BINANCE_API_KEY/SECRET absents)")
+        logger.warning("Binance — simulated order (BINANCE_API_KEY/SECRET not set)")
         return f"sim_{uuid.uuid4().hex[:12]}"
 
     try:
@@ -249,12 +249,12 @@ async def post_order(session, symbol, price, size_usdc, *,
         ) as resp:
             data = await resp.json(content_type=None)  # bypass MIME check
             if resp.status != 200:
-                logger.error("Binance order erreur %d : %s", resp.status, data)
+                logger.error("Binance order error %d : %s", resp.status, data)
                 return None
             oid = str(data.get("orderId", ""))
             return oid or None
     except Exception as e:
-        logger.error("Binance post_order erreur : %s", e)
+        logger.error("Binance post_order error : %s", e)
         return None
 
 
@@ -291,11 +291,11 @@ async def get_order_status(session, symbol, order_id, *,
         ) as resp:
             data = await resp.json(content_type=None)
             if resp.status != 200:
-                logger.warning("Binance get_order_status erreur %d : %s", resp.status, data)
+                logger.warning("Binance get_order_status error %d : %s", resp.status, data)
                 return None
             return str(data.get("status", "")) or None
     except Exception as e:
-        logger.error("Binance get_order_status erreur : %s", e)
+        logger.error("Binance get_order_status error : %s", e)
         return None
 
 
@@ -331,11 +331,11 @@ async def cancel_order(session, symbol, order_id, *,
         ) as resp:
             data = await resp.json(content_type=None)
             if resp.status != 200:
-                logger.warning("Binance cancel_order erreur %d : %s", resp.status, data)
+                logger.warning("Binance cancel_order error %d : %s", resp.status, data)
                 return False
             return str(data.get("status", "")) == "CANCELED"
     except Exception as e:
-        logger.error("Binance cancel_order erreur : %s", e)
+        logger.error("Binance cancel_order error : %s", e)
         return False
 
 
@@ -370,7 +370,7 @@ async def get_open_orders(session, symbol, *, api_key=None, api_secret=None):
         ) as resp:
             data = await resp.json(content_type=None)
             if resp.status != 200:
-                logger.warning("Binance get_open_orders erreur %d : %s", resp.status, data)
+                logger.warning("Binance get_open_orders error %d : %s", resp.status, data)
                 return []
             return [
                 {
@@ -383,7 +383,7 @@ async def get_open_orders(session, symbol, *, api_key=None, api_secret=None):
                 for o in data
             ]
     except Exception as e:
-        logger.error("Binance get_open_orders erreur : %s", e)
+        logger.error("Binance get_open_orders error : %s", e)
         return []
 
 
@@ -406,12 +406,12 @@ async def get_listen_key(session, *, api_key=None, api_secret=None):
             timeout=aiohttp.ClientTimeout(total=10),
         ) as resp:
             if resp.status != 200:
-                logger.warning("Binance get_listen_key erreur %d", resp.status)
+                logger.warning("Binance get_listen_key error %d", resp.status)
                 return None
             data = await resp.json(content_type=None)
             return data.get("listenKey") or None
     except Exception as e:
-        logger.error("Binance get_listen_key erreur : %s", e)
+        logger.error("Binance get_listen_key error : %s", e)
         return None
 
 
@@ -433,7 +433,7 @@ async def keepalive_listen_key(session, listen_key, *, api_key=None, api_secret=
         ) as resp:
             return resp.status == 200
     except Exception as e:
-        logger.error("Binance keepalive_listen_key erreur : %s", e)
+        logger.error("Binance keepalive_listen_key error : %s", e)
         return False
 
 
