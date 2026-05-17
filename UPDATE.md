@@ -20,7 +20,7 @@ cd ~/src/tradinebotte
 git pull
 bash scripts/install.sh      # reuses ~/tradinebotte/venv, upgrades packages only
 
-pkill -f live_bot.py
+kill $(cat ~/tradinebotte/live.pid)
 bash scripts/start_bot.sh
 # or: sudo systemctl restart tradinebotte
 ```
@@ -38,7 +38,7 @@ cd ~/tradinebotte
 git pull
 bash scripts/install.sh
 
-pkill -f live_bot.py
+kill $(cat ~/tradinebotte/live.pid)
 bash scripts/start_bot.sh
 ```
 
@@ -57,7 +57,7 @@ rsync -az --delete \
     /path/to/tradinebotte/ user@server:~/tradinebotte/
 
 ssh user@server 'cd ~/tradinebotte && bash scripts/install.sh'
-ssh user@server 'pkill -f live_bot.py; bash ~/tradinebotte/scripts/start_bot.sh'
+ssh user@server 'kill $(cat ~/tradinebotte/live.pid); bash ~/tradinebotte/scripts/start_bot.sh'
 ```
 
 **Critical exclusions:**
@@ -71,6 +71,24 @@ re-prompt for language and regenerate the file).
 
 ---
 
+## Scenario 4 — Lightweight deploy with `update_standalone.sh`
+
+For deploying only the bot files (no full repo sync), use the dedicated script:
+
+```bash
+bash scripts/update_standalone.sh
+```
+
+This rsync-copies `bot/` contents flat to the install directory and `strategies/*.json`,
+then stops the running bot (via `live.pid`) and starts the new version in a single SSH
+session. Useful when working from a dev machine without pushing to git first.
+
+**Options:**
+- `--skip-restart` — rsync only, do not stop/start the bot
+- `--verify-only` — check that the deployed files are present and the bot is running; no file transfer
+
+---
+
 ## Option B — Multi-bot update
 
 Update the shared repo and restart. Account dirs (`~/account-a`, etc.) are not touched.
@@ -80,8 +98,9 @@ cd ~/src/tradinebotte   # or wherever the repo lives
 git pull
 bash scripts/install.sh
 
-pkill -f feed.py
-pkill -f account_bot.py
+kill $(cat ~/tradinebotte/feed.pid)
+kill $(cat ~/account-a/account.pid)
+kill $(cat ~/account-b/account.pid)
 
 TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
 TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh

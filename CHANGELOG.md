@@ -8,6 +8,27 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Added
+- **`bot/live_bot.py` + `strategies/polymarket_BTC5M_piste3.json` — dynamic stake scaling + OBI calibration (Piste 3 strategy)**: stake scales with bid price using `stake = base × (1 + bid_α × (bid − 0.96))`, capped at `stake_max` and `cap × capital`; OBI rejection filter skips trades where OBI < `obi_reject_thresh` (removes low-win-rate buckets); weekly stop-loss halts the bot when `weekly_pnl < −weekly_stop_loss`; new `BotConfig` fields: `bid_alpha`, `secs_alpha`, `stake_max`, `capital_cap`, `obi_reject_thresh`, `weekly_stop_loss`; `strategies/polymarket_BTC5M_piste3.json` ships with `bid_alpha=2.0`, `stake_max=$15`, `cap=12%`, `weekly_stop=$60`, `obi_reject_thresh=−0.65`; backtest vs original: PnL +85%, MaxDD −28%, Sharpe 3.28 vs 1.97; new analysis scripts: `scripts/analyze_stake_secs.py`, `scripts/backtest_stake_secs.py`, `scripts/calibrate_obi.py`
+- **`bot/live_bot.py` + `strategies/polymarket_BTC15M_piste3.json` — configurable market timeframe (15M BTC support)**: `BotConfig` gains `market_tag_id` (default 102892 for 5M) and `market_window_mins` (default 6); strategy JSON controls the tag and window — `"market_tag_id": 102467, "market_window_mins": 16` activates 15M markets; startup log reports the active configuration (`Markets: BTC Up/Down 15M (tag=102467, window=±16min)`); `GAMMA_TAG_5M` and `GAMMA_TAG_15M` constants exposed; legacy `GAMMA_TAG` alias kept for compatibility
+- **`bot/strategies/grid.py` + strategy JSON files — grid trail mode**: `trail_mode` parameter accepts `"bull"` (re-centers grid upward when price exceeds `grid_upper`), `"bear"` (re-centers downward when price falls below `grid_lower`), or `"static"` (default, halts in both directions); `_recenter_grid()` cancels all open orders, shifts bounds keeping the same range centered on the current price, and re-initialises; stop-loss check branches per mode; `restore_from_db` restores saved bounds so trail mode survives restarts; new config files: `strategies/grid_BTCUSDT_bull_trailing.json`, `strategies/grid_BTCUSDT_bear_trailing.json`
+- **`bot/connectors/__init__.py` + `bot/live_bot.py` — connector/strategy compatibility check**: `validate(connector_module, strategy_type)` raises `RuntimeError` at startup if the connector lacks methods required by the chosen strategy; lists all missing methods in the error message; called in `main()` for non-threshold strategies before the strategy object is created
+- **`scripts/update_standalone.sh` — lightweight deploy script**: rsync `bot/` contents flat to `$INSTALL_DIR/` (matching install.sh structure) + rsync `strategies/*.json`; single SSH session for stop + start using PID file approach; single SSH session for verify; options: `--skip-restart`, `--verify-only`
+
+### Fixed
+- **`scripts/start_bot.sh`, `scripts/start_feed.sh`, `scripts/start_account.sh`, `scripts/start_indicators.sh`, `scripts/update_standalone.sh`, `scripts/collect_db.sh` — PID file approach for all stop/start/restart**: root cause: `pkill -f 'pattern'` embedded in an SSH command string kills the remote shell itself — the shell's `/proc/PID/cmdline` contains the full script text passed via `ssh "..."`, which includes the literal process name from the `nohup` line; new pattern: start writes `_pid=$!` → `disown "$_pid"` → `echo "$_pid" > live.pid`; stop uses `kill $(cat live.pid)` — no regex, no pattern match, no self-match risk; liveness check uses `kill -0 $(cat live.pid)`; stale PID files (dead process) cleaned automatically on next start; PID files: `live.pid`, `feed.pid`, `account.pid`, `indicators.pid`
+- **`scripts/test_standalone_deploy.sh`, `scripts/test_multibot_deploy.sh` — test scripts upgraded to PID-file stop**: launch commands now write `indicators.pid` and `account.pid` immediately after nohup; cleanup and teardown use PID files for graceful stop; `pkill -9` kept as orphan fallback in kill-only sessions only
+- **`scripts/test_multibot_deploy.sh`, `scripts/test_all_accounts.sh` — `pkill` user scope hardening**: added `-u $(id -u)` to all remaining `pkill` calls to scope kills to the current user and prevent accidentally stopping other users' processes
+- **`scripts/start_bot.sh`, `scripts/start_feed.sh`, `scripts/start_account.sh`, `scripts/start_indicators.sh` — `nohup` daemonization hardening**: added `</dev/null` to all `nohup` lines so the SSH session can exit cleanly; `disown` added where missing
+- **`bot/api_binance.py`, `bot/strategies/grid.py` — English-only code**: remaining French log messages translated to English
+- **`bot/api_binance.py` — `get_markets(**_)` compatibility**: added `**kwargs` to accept Polymarket-specific keyword arguments (`tag_id`, `window_minutes`) passed by `_run_ws` regardless of connector type
+- **`scripts/collect_db.sh` — `--rotate` syntax fix**: pre-existing syntax error where `"\$(id -u)"` inside a double-quoted SSH string closed the outer string prematurely; fixed to `\$(id -u)`
+
+### Tests
+- **`tests/test_bot.py` — 19 new tests**: `TestComputeStake` (11 cases covering bid scaling, capital cap, seconds penalty, floor/ceiling), `TestWeeklyStopLoss` (3 cases), `TestMarketDiscoveryConfig` (5 cases)
+- **`tests/test_grid_trail.py` — 12 new tests**: `TestConnectorValidate` (4 cases), `TestCheckStopLoss` (3 cases), `TestRecenterGrid` (2 cases), `TestRestoreFromDb` (3 cases)
+- **Full suite: 639 tests pass**
+
 ---
 
 ## [0.4.5] - 2026-05-16
