@@ -56,7 +56,7 @@ echo "Starting account_bot.py — dir=$INSTALL_DIR feed=$TRADINEBOTTE_FEED_ADDR"
 echo "Log: $BOT_LOG"
 
 nohup "$VENV/bin/python3" "$(dirname "$0")/../bot/account_bot.py" \
-    >> "$BOT_LOG" 2>&1 &
+    </dev/null >> "$BOT_LOG" 2>&1 & disown
 echo "PID: $!"
 sleep 2
 

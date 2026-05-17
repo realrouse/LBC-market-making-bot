@@ -124,7 +124,7 @@ run_account() {
         echo "=== START $(date '+%H:%M:%S') — ${user}@${HOST} ==="
 
         echo "→ Stopping bot..."
-        _ssh "pkill -f '[l]ive_bot\.py' 2>/dev/null; true" 2>/dev/null
+        _ssh "pkill -u \$(id -u) -f '[l]ive_bot\.py' 2>/dev/null; true" 2>/dev/null
 
         echo "→ Cleaning account..."
         if _ssh "rm -rf ~/tradinebotte ~/account-sim"; then

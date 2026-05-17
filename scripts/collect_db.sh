@@ -162,7 +162,7 @@ if [ "$ROTATE" = "1" ]; then
             cp "\$DB" "\$BAK"
             echo "  Archived: \$BAK"
         fi
-        pkill -u "\$(id -u)" -f '[l]ive_bot\.py' 2>/dev/null || true
+        pkill -u \$(id -u) -f '[l]ive_bot\.py' 2>/dev/null || true
         sleep 2
         rm -f "\$DB"
         PYTHON=$INSTALL_DIR/venv/bin/python3
@@ -171,7 +171,7 @@ if [ "$ROTATE" = "1" ]; then
         cd $INSTALL_DIR/bot
         nohup "\$PYTHON" $INSTALL_DIR/bot/live_bot.py \
             --simulate --snapshot-interval 1 \
-            >> "\$LOG" 2>&1 &
+            </dev/null >> "\$LOG" 2>&1 & disown
         sleep 3
         if pgrep -u \"\$(id -u)\" -f '[l]ive_bot\.py' > /dev/null; then
             echo \"✅ Collector restarted — PID: \$(pgrep -u \$(id -u) -f '[l]ive_bot\.py')\"

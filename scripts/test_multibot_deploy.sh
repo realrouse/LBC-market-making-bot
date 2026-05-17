@@ -195,9 +195,9 @@ info "Killing stale account_bot / indicators processes and wiping runtime dirs..
 
 # Kill shared indicators.py on the feed owner (may not be in ACCOUNT_IDXS)
 run "$FEED_IDX" "
-    pkill -f '[i]ndicators.py' 2>/dev/null || true
+    pkill -u \$(id -u) -f '[i]ndicators.py' 2>/dev/null || true
     sleep 1
-    pkill -9 -f '[i]ndicators.py' 2>/dev/null || true
+    pkill -9 -u \$(id -u) -f '[i]ndicators.py' 2>/dev/null || true
     fuser -k 5559/tcp 2>/dev/null || true
     fuser -k 5561/tcp 2>/dev/null || true
     exit 0
@@ -206,11 +206,11 @@ run "$FEED_IDX" "
 for idx in "${ACCOUNT_IDXS[@]}"; do
     user="${ALL_USERS[$idx]}"
     run "$idx" "
-        pkill -f '[a]ccount_bot.py' 2>/dev/null || true
-        pkill -f '[i]ndicators.py'  2>/dev/null || true
+        pkill -u \$(id -u) -f '[a]ccount_bot.py' 2>/dev/null || true
+        pkill -u \$(id -u) -f '[i]ndicators.py'  2>/dev/null || true
         sleep 2
-        pkill -9 -f '[a]ccount_bot.py' 2>/dev/null || true
-        pkill -9 -f '[i]ndicators.py'  2>/dev/null || true
+        pkill -9 -u \$(id -u) -f '[a]ccount_bot.py' 2>/dev/null || true
+        pkill -9 -u \$(id -u) -f '[i]ndicators.py'  2>/dev/null || true
         fuser -k 5559/tcp 2>/dev/null || true
         fuser -k 5560/tcp 2>/dev/null || true
         fuser -k 5561/tcp 2>/dev/null || true
@@ -502,9 +502,9 @@ info "Stopping account_bot processes (feed service left running)"
 # Stop shared indicators.py under the feed owner
 if [[ -n "${IND_CFG_REL:-}" ]]; then
     run "$FEED_IDX" "
-        pkill -f '[i]ndicators.py' 2>/dev/null || true
+        pkill -u \$(id -u) -f '[i]ndicators.py' 2>/dev/null || true
         sleep 2
-        pkill -9 -f '[i]ndicators.py' 2>/dev/null || true
+        pkill -9 -u \$(id -u) -f '[i]ndicators.py' 2>/dev/null || true
         fuser -k 5559/tcp 2>/dev/null || true
         fuser -k 5561/tcp 2>/dev/null || true
         exit 0
@@ -514,9 +514,9 @@ fi
 for idx in "${ACCOUNT_IDXS[@]}"; do
     user="${ALL_USERS[$idx]}"
     run "$idx" "
-        pkill -f '[a]ccount_bot.py' 2>/dev/null || true
+        pkill -u \$(id -u) -f '[a]ccount_bot.py' 2>/dev/null || true
         sleep 2
-        pkill -9 -f '[a]ccount_bot.py' 2>/dev/null || true
+        pkill -9 -u \$(id -u) -f '[a]ccount_bot.py' 2>/dev/null || true
         exit 0
     " && info "$user: processes stopped" || true
 done

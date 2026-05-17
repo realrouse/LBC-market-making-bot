@@ -52,7 +52,7 @@ echo "Log: $IND_LOG"
 
 nohup "$VENV/bin/python3" "$BOT_ROOT/bot/indicators.py" \
     --config "$CONFIG" \
-    >> "$IND_LOG" 2>&1 &
+    </dev/null >> "$IND_LOG" 2>&1 & disown
 echo "PID: $!"
 sleep 2
 

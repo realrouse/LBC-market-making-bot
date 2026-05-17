@@ -37,7 +37,7 @@ echo "Starting feed.py — PUB on $TRADINEBOTTE_FEED_ADDR"
 echo "Log: $FEED_LOG"
 
 nohup "$VENV/bin/python3" "$(dirname "$0")/../bot/feed.py" \
-    >> "$FEED_LOG" 2>&1 &
+    </dev/null >> "$FEED_LOG" 2>&1 & disown
 echo "PID: $!"
 sleep 2
 
