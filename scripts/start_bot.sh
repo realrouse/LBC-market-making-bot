@@ -95,7 +95,7 @@ DISPLAY_LOG="${LOG/$HOME/\~}"
 DISPLAY_DIR="${INSTALL_DIR/$HOME/\~}"
 echo "$(_t "Starting bot from" "Lancement du bot depuis") $DISPLAY_DIR..."
 export TRADINEBOTTE_DIR="$INSTALL_DIR"
-nohup "$PYTHON" "$INSTALL_DIR/live_bot.py" "${BOT_EXTRA_ARGS[@]}" >> "$LOG" 2>&1 &
+nohup "$PYTHON" "$INSTALL_DIR/live_bot.py" "${BOT_EXTRA_ARGS[@]}" </dev/null >> "$LOG" 2>&1 & disown
 echo "PID: $!"
 sleep 3
 
