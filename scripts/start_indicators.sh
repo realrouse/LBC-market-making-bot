@@ -25,6 +25,7 @@ INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
 VENV="$INSTALL_DIR/venv"
 BOT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IND_LOG="$INSTALL_DIR/indicators.log"
+IND_PID_FILE="$INSTALL_DIR/indicators.pid"
 
 # Default: 4h config.  Override with TRADINEBOTTE_INDICATORS_CONFIG.
 CONFIG="${TRADINEBOTTE_INDICATORS_CONFIG:-$BOT_ROOT/strategies/indicators_4h_bitcoin.json}"
@@ -41,10 +42,14 @@ if [ ! -f "$CONFIG" ]; then
 fi
 
 # Refuse to start a second process with the same config file.
-if pgrep -a -f '[i]ndicators.py' 2>/dev/null | grep -qF "$CONFIG"; then
-    echo "ERROR: indicators.py already running for this config: $CONFIG"
-    echo "Stop it first: pkill -f '[i]ndicators.py'"
-    exit 1
+if [ -f "$IND_PID_FILE" ]; then
+    _pid=$(cat "$IND_PID_FILE")
+    if kill -0 "$_pid" 2>/dev/null; then
+        echo "ERROR: indicators.py already running (PID: $_pid)"
+        echo "Stop it first: kill $_pid"
+        exit 1
+    fi
+    rm -f "$IND_PID_FILE"
 fi
 
 echo "Starting indicators.py — config=$CONFIG"
@@ -52,13 +57,17 @@ echo "Log: $IND_LOG"
 
 nohup "$VENV/bin/python3" "$BOT_ROOT/bot/indicators.py" \
     --config "$CONFIG" \
-    </dev/null >> "$IND_LOG" 2>&1 & disown
-echo "PID: $!"
+    </dev/null >> "$IND_LOG" 2>&1 &
+_pid=$!
+disown "$_pid"
+echo "$_pid" > "$IND_PID_FILE"
+echo "PID: $_pid"
 sleep 2
 
-if pgrep -f '[i]ndicators.py' > /dev/null; then
-    echo "Indicators running — PID: $(pgrep -f '[i]ndicators.py' | tail -1)"
+if kill -0 "$_pid" 2>/dev/null; then
+    echo "Indicators running — PID: $_pid"
 else
+    rm -f "$IND_PID_FILE"
     echo "Failed — check: $IND_LOG"
     tail -20 "$IND_LOG"
 fi

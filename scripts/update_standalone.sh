@@ -9,7 +9,7 @@
 # Uses TEST_STANDALONE_USER_IDX from ~/.tradinebotte-test.conf (default: 2).
 #
 # Rules respected:
-#   - Maximum 3 SSH connections total (rsync + restart + verify).
+#   - Maximum 4 SSH connections total (2× rsync + restart + verify).
 #   - pkill always scoped to the target user (-u UID) — never touches other users.
 #   - Bot started with </dev/null and disown — SSH session exits cleanly.
 #   - No --simulate: absent API key is enough for simulated orders.
@@ -85,13 +85,21 @@ _ssh() {
 }
 
 _rsync() {
+    # bot/ contents → $INSTALL_DIR/ (flat, matching install.sh's cp "bot/$f" "$INSTALL_DIR/$f")
+    # This also syncs connectors/ and strategies/*.py packages which live inside bot/.
     SSHPASS="$SA_PASS" /usr/bin/sshpass -e \
         rsync -az \
-        --exclude='.git' --exclude='__pycache__' --exclude='*.pyc' \
-        --exclude='.venv' --exclude='venv/' \
+        --exclude='__pycache__' --exclude='*.pyc' \
         --exclude='config.json' --exclude='live.db' --exclude='*.log' \
         -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
-        "$LOCAL_REPO/" "$SA_USER@$SERVER:$INSTALL_DIR/" 2>&1
+        "$LOCAL_REPO/bot/" "$SA_USER@$SERVER:$INSTALL_DIR/" 2>&1
+
+    # strategies/ JSON config files → $INSTALL_DIR/strategies/
+    SSHPASS="$SA_PASS" /usr/bin/sshpass -e \
+        rsync -az \
+        --include='*.json' --exclude='*' \
+        -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
+        "$LOCAL_REPO/strategies/" "$SA_USER@$SERVER:$INSTALL_DIR/strategies/" 2>&1
 }
 
 # ─── Pre-flight ─────────────────────────────────────────────────────────────────
@@ -113,7 +121,7 @@ info "Target: $SA_USER@$SERVER:$PORT — install_dir: $INSTALL_DIR"
 
 # ─── Step 1: rsync ─────────────────────────────────────────────────────────────
 if [[ "$VERIFY_ONLY" == "false" ]]; then
-    section "STEP 1 — RSYNC"   # connection #1
+    section "STEP 1 — RSYNC"   # connections #1 and #2
     if _rsync; then
         ok "Code synced to $SA_USER"
     else
@@ -124,21 +132,32 @@ fi
 
 # ─── Step 2: stop + start (single SSH session) ─────────────────────────────────
 if [[ "$SKIP_RESTART" == "false" ]]; then
-    section "STEP 2 — RESTART"   # connection #2
+    section "STEP 2 — RESTART"   # connection #3
     info "Stopping old bot and starting updated one..."
 
-    # Everything in ONE SSH session:
-    #   - pkill scoped to this user only (-u UID prevents killing other users)
-    #   - nohup with </dev/null so SSH session can exit without keeping stdin open
-    #   - disown removes the job from the shell table before SSH exits
-    #   - no sleep after disown — SSH exits immediately, bot keeps running
+    # PID-file approach — stop and start in ONE session, safely:
+    #   - Stop: kill by PID from live.pid → no regex, no self-match risk
+    #   - Start: nohup + write live.pid so future stops are also clean
     RESTART_OUT=$(_ssh "
-        UID_SELF=\$(id -u)
-        pkill -u \"\$UID_SELF\" -f '[l]ive_bot\.py' 2>/dev/null && echo 'stopped' || echo 'no bot running'
+        PID_FILE=$INSTALL_DIR/live.pid
+        if [ -f \"\$PID_FILE\" ]; then
+            PID=\$(cat \"\$PID_FILE\")
+            if kill -0 \"\$PID\" 2>/dev/null; then
+                kill \"\$PID\" && echo \"stopped pid=\$PID\" || echo 'kill failed'
+            else
+                echo 'pid file found but process already gone'
+            fi
+            rm -f \"\$PID_FILE\"
+        else
+            echo 'no pid file — nothing to stop'
+        fi
         sleep 2
         cd $INSTALL_DIR
-        nohup venv/bin/python3 live_bot.py </dev/null >>live.log 2>&1 & disown
-        echo \"started pid=\$!\"
+        nohup venv/bin/python3 live_bot.py </dev/null >>live.log 2>&1 &
+        BOT_PID=\$!
+        disown \$BOT_PID
+        echo \$BOT_PID > \"\$PID_FILE\"
+        echo \"started pid=\$BOT_PID\"
     ")
     echo "$RESTART_OUT"
 
@@ -153,16 +172,26 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
 fi
 
 # ─── Step 3: verify ────────────────────────────────────────────────────────────
-section "STEP 3 — VERIFY"   # connection #3
+section "STEP 3 — VERIFY"   # connection #4
 VERIFY_OUT=$(_ssh "
     echo '=== process ==='
-    pgrep -u \$(id -u) -f '[l]ive_bot\.py' | xargs -I{} sh -c 'echo \"PID={} running\"' 2>/dev/null || echo 'NOT RUNNING'
+    PID_FILE=$INSTALL_DIR/live.pid
+    if [ -f \"\$PID_FILE\" ]; then
+        PID=\$(cat \"\$PID_FILE\")
+        if kill -0 \"\$PID\" 2>/dev/null; then
+            echo \"PID=\$PID running\"
+        else
+            echo \"PID=\$PID NOT running (stale pid file)\"
+        fi
+    else
+        echo 'no pid file'
+    fi
     echo '=== startup log ==='
     tail -20 $INSTALL_DIR/live.log
 ")
 echo "$VERIFY_OUT"
 
-if echo "$VERIFY_OUT" | grep -q "running"; then
+if echo "$VERIFY_OUT" | grep -q "PID=.* running"; then
     ok "$SA_USER: bot is running"
 else
     err "$SA_USER: bot is NOT running"

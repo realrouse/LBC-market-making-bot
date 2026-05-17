@@ -21,6 +21,7 @@ INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
 VENV="$INSTALL_DIR/venv"
 CONFIG="$INSTALL_DIR/config.json"
 BOT_LOG="$INSTALL_DIR/account.log"
+ACCOUNT_PID_FILE="$INSTALL_DIR/account.pid"
 
 if [ ! -f "$CONFIG" ]; then
     echo "ERROR: config.json not found in $INSTALL_DIR"
@@ -35,12 +36,13 @@ if [ ! -d "$VENV" ]; then
 fi
 
 # Detect if another account_bot.py for THIS directory is already running.
-if pgrep -f '[a]ccount_bot.py' > /dev/null; then
-    # Check if it's specifically for this INSTALL_DIR via env var.
-    if pgrep -a -f '[a]ccount_bot.py' | grep -q "$INSTALL_DIR"; then
-        echo "ERROR: account_bot.py already running for $INSTALL_DIR"
+if [ -f "$ACCOUNT_PID_FILE" ]; then
+    _pid=$(cat "$ACCOUNT_PID_FILE")
+    if kill -0 "$_pid" 2>/dev/null; then
+        echo "ERROR: account_bot.py already running for $INSTALL_DIR (PID: $_pid)"
         exit 1
     fi
+    rm -f "$ACCOUNT_PID_FILE"
 fi
 
 if ! pgrep -f '[f]eed.py' > /dev/null; then
@@ -56,13 +58,17 @@ echo "Starting account_bot.py — dir=$INSTALL_DIR feed=$TRADINEBOTTE_FEED_ADDR"
 echo "Log: $BOT_LOG"
 
 nohup "$VENV/bin/python3" "$(dirname "$0")/../bot/account_bot.py" \
-    </dev/null >> "$BOT_LOG" 2>&1 & disown
-echo "PID: $!"
+    </dev/null >> "$BOT_LOG" 2>&1 &
+_pid=$!
+disown "$_pid"
+echo "$_pid" > "$ACCOUNT_PID_FILE"
+echo "PID: $_pid"
 sleep 2
 
-if pgrep -f '[a]ccount_bot.py' > /dev/null; then
-    echo "Account bot running — PID: $(pgrep -f '[a]ccount_bot.py' | tail -1)"
+if kill -0 "$_pid" 2>/dev/null; then
+    echo "Account bot running — PID: $_pid"
 else
+    rm -f "$ACCOUNT_PID_FILE"
     echo "Failed — check: $BOT_LOG"
     tail -20 "$BOT_LOG"
 fi
