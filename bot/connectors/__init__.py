@@ -26,6 +26,18 @@ _REGISTRY: dict[str, str] = {
     "mexc":       "api_mexc",
 }
 
+_STRATEGY_REQUIREMENTS: dict[str, list[str]] = {
+    "grid": [
+        "get_open_orders",
+        "cancel_order",
+        "get_order_status",
+        "get_listen_key",
+        "keepalive_listen_key",
+        "make_user_stream_url",
+        "parse_user_stream_msg",
+    ],
+}
+
 
 def load(name: str) -> ModuleType:
     """Return the api_* module for the given connector name."""
@@ -36,6 +48,19 @@ def load(name: str) -> ModuleType:
             f"Valid connectors: {sorted(_REGISTRY)}"
         )
     return importlib.import_module(module_name)
+
+
+def validate(connector_module: ModuleType, strategy_type: str) -> None:
+    """Raise RuntimeError if connector_module is missing methods required by strategy_type."""
+    missing = [
+        m for m in _STRATEGY_REQUIREMENTS.get(strategy_type, [])
+        if not hasattr(connector_module, m)
+    ]
+    if missing:
+        raise RuntimeError(
+            f"Connector {connector_module.__name__!r} is incompatible with "
+            f"strategy_type={strategy_type!r}: missing methods: {missing}"
+        )
 
 
 def available() -> list[str]:

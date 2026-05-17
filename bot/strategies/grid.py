@@ -144,14 +144,15 @@ class GridStrategy:
 
         from connectors import load as _load_conn
         self._api = _load_conn(config.connector)
+        self._trail_mode: str = str(getattr(config, "grid_trail_mode", "static"))
 
         # User data stream state (real-time fills via WebSocket).
         self._user_stream_task: Optional[asyncio.Task] = None
         self._user_ws_connected: bool = False
 
         logger.info(
-            "GridStrategy: %s  %.2f–%.2f  %d levels  step=%.2f  size=$%.2f",
-            symbol, lower, upper, n, step, size,
+            "GridStrategy: %s  %.2f–%.2f  %d levels  step=%.2f  size=$%.2f  trail=%s",
+            symbol, lower, upper, n, step, size, self._trail_mode,
         )
 
     # ── Public helpers ─────────────────────────────────────────────────────────
@@ -248,16 +249,43 @@ class GridStrategy:
          total_cycles, total_profit, initialised, halted) = row
 
         tol = 0.01
-        if (abs(saved_lower - self.grid.grid_lower) > tol or
-                abs(saved_upper - self.grid.grid_upper) > tol or
-                abs(saved_step  - self.grid.grid_step)  > tol or
-                abs(saved_size  - self.grid.order_size_usdt) > tol):
+        bounds_changed = (
+            abs(saved_lower - self.grid.grid_lower) > tol or
+            abs(saved_upper - self.grid.grid_upper) > tol or
+            abs(saved_step  - self.grid.grid_step)  > tol
+        )
+        size_changed = abs(saved_size - self.grid.order_size_usdt) > tol
+
+        if size_changed:
             logger.warning(
-                "GridStrategy [%s] — config changed (bounds/step/size), "
+                "GridStrategy [%s] — order_size changed, "
                 "saved state discarded and grid re-initialized",
                 self.grid.symbol,
             )
             return False
+
+        if bounds_changed and self._trail_mode == "static":
+            logger.warning(
+                "GridStrategy [%s] — bounds/step changed, "
+                "saved state discarded and grid re-initialized",
+                self.grid.symbol,
+            )
+            return False
+
+        if bounds_changed:
+            # Trail mode: saved bounds reflect a previous re-center; restore them.
+            n = len(self.grid.levels)
+            self.grid.grid_lower = saved_lower
+            self.grid.grid_upper = saved_upper
+            self.grid.grid_step  = saved_step
+            self.grid.levels     = [
+                GridLevel(price=round(saved_lower + i * saved_step, 2)) for i in range(n)
+            ]
+            logger.info(
+                "GridStrategy [%s] — trail re-center detected: restoring saved bounds "
+                "[%.2f, %.2f]",
+                self.grid.symbol, saved_lower, saved_upper,
+            )
 
         self.grid.total_cycles     = total_cycles
         self.grid.total_profit_usd = total_profit
@@ -449,7 +477,11 @@ class GridStrategy:
     # ── Stop-loss ──────────────────────────────────────────────────────────────
 
     def _check_stop_loss(self, price: float) -> bool:
-        """True if price has exited the grid bounds."""
+        """True if price exited the bounds that trigger a stop for the current trail_mode."""
+        if self._trail_mode == "bull":
+            return price < self.grid.grid_lower
+        if self._trail_mode == "bear":
+            return price > self.grid.grid_upper
         return price < self.grid.grid_lower or price > self.grid.grid_upper
 
     async def _cancel_all_orders(self, state: Any) -> None:
@@ -471,11 +503,45 @@ class GridStrategy:
             self._user_stream_task = None
         self.grid.halted = True
         logger.warning(
-            "GridStrategy [%s] STOP-LOSS — prix=%.2f hors [%.2f, %.2f] "
+            "GridStrategy [%s] STOP-LOSS — price=%.2f outside [%.2f, %.2f] "
             "| %d orders cancelled | PnL=$%+.2f",
             self.grid.symbol, self.grid.last_price,
             self.grid.grid_lower, self.grid.grid_upper,
             cancelled, self.grid.total_profit_usd,
+        )
+
+    async def _recenter_grid(self, state: Any, price: float) -> None:
+        """Cancel all orders and shift grid bounds so price lands at the midpoint."""
+        half_range = (self.grid.grid_upper - self.grid.grid_lower) / 2
+        new_lower  = round(price - half_range, 2)
+        new_upper  = round(price + half_range, 2)
+        old_lower, old_upper = self.grid.grid_lower, self.grid.grid_upper
+
+        cancelled = 0
+        for lvl in self.grid.levels:
+            for oid in (lvl.buy_order_id, lvl.sell_order_id):
+                if oid:
+                    ok = await self._api.cancel_order(state.session, self.grid.symbol, oid)
+                    if ok:
+                        cancelled += 1
+            lvl.buy_order_id  = None
+            lvl.sell_order_id = None
+            lvl.buy_price     = None
+            lvl.sell_price    = None
+            lvl.status        = "idle"
+
+        n    = len(self.grid.levels)
+        step = (new_upper - new_lower) / (n - 1) if n > 1 else 0.0
+        self.grid.grid_lower  = new_lower
+        self.grid.grid_upper  = new_upper
+        self.grid.grid_step   = step
+        self.grid.levels      = [GridLevel(price=round(new_lower + i * step, 2)) for i in range(n)]
+        self.grid.initialised = False
+
+        logger.info(
+            "GridStrategy [%s] TRAIL re-center: [%.2f, %.2f] → [%.2f, %.2f] "
+            "| %d orders cancelled",
+            self.grid.symbol, old_lower, old_upper, new_lower, new_upper, cancelled,
         )
 
     # ── Initialisation ─────────────────────────────────────────────────────────
@@ -658,6 +724,16 @@ class GridStrategy:
         self.grid.last_price = price
 
         if self.grid.halted:
+            return
+
+        if self._trail_mode == "bull" and price > self.grid.grid_upper:
+            await self._recenter_grid(state, price)
+            self._save_state(state.conn)
+            return
+
+        if self._trail_mode == "bear" and price < self.grid.grid_lower:
+            await self._recenter_grid(state, price)
+            self._save_state(state.conn)
             return
 
         if self._check_stop_loss(price):

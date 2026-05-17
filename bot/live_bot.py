@@ -83,6 +83,7 @@ GRID_LOWER           = 0.0
 GRID_UPPER           = 0.0
 GRID_LEVELS          = 10
 GRID_ORDER_SIZE_USDT = 50.0
+GRID_TRAIL_MODE      = "static"   # "static" | "bull" | "bear"
 
 # ─── VOLATILITY FILTER DEFAULTS ───────────────────────────────────────────────
 VOL_FILTER_ENABLED      = True
@@ -276,6 +277,7 @@ class BotConfig:
     grid_upper:           float = GRID_UPPER
     grid_levels:          int   = GRID_LEVELS
     grid_order_size_usdt: float = GRID_ORDER_SIZE_USDT
+    grid_trail_mode:      str   = GRID_TRAIL_MODE
 
     def __post_init__(self) -> None:
         # Compute paths from TRADINEBOTTE_DIR when not explicitly provided.
@@ -367,6 +369,7 @@ def make_config(simulate: bool = False, no_log: bool = False,
     grid_upper           = float(strat.get("grid_upper",           GRID_UPPER))
     grid_levels          = int(strat.get("grid_levels",           GRID_LEVELS))
     grid_order_size_usdt = float(strat.get("grid_order_size_usdt", GRID_ORDER_SIZE_USDT))
+    grid_trail_mode      = str(strat.get("trail_mode",             GRID_TRAIL_MODE))
 
     # Strategy overrides from JSON (fall back to module-level defaults).
     capital_start      = float(strat.get("capital_start",      CAPITAL_START))
@@ -490,6 +493,7 @@ def make_config(simulate: bool = False, no_log: bool = False,
         grid_upper=grid_upper,
         grid_levels=grid_levels,
         grid_order_size_usdt=grid_order_size_usdt,
+        grid_trail_mode=grid_trail_mode,
         stake_bid_alpha=stake_bid_alpha,
         stake_secs_ref=stake_secs_ref,
         stake_secs_alpha=stake_secs_alpha,
@@ -1449,6 +1453,9 @@ async def main() -> None:
     )
     _setup_logging(config)
     _load_connector(config.connector)
+    if config.strategy_type != "threshold":
+        from connectors import validate as _validate_conn
+        _validate_conn(api, config.strategy_type)
 
     _up = int(time.time() - _BOT_START)
     _start_str = datetime.fromtimestamp(_BOT_START, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
