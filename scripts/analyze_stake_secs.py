@@ -185,7 +185,7 @@ def _print_verdict(stats: List[BucketStats]) -> None:
         print("  Proceed to Phase 2 (stake curve candidates) and Phase 3 (grid search).\n")
 
     # Check monotonicity (higher secs → lower WR?)
-    buckets_asc = [s for s in active]
+    buckets_asc = list(active)
     wr_vals     = [s.win_rate for s in buckets_asc]
     mono_ok     = all(wr_vals[i] >= wr_vals[i+1] for i in range(len(wr_vals)-1))
     if mono_ok:

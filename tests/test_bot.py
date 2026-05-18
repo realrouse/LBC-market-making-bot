@@ -2742,15 +2742,15 @@ class TestComputeStake(unittest.TestCase):
     """Unit tests for compute_stake() — bid×secs dynamic sizing."""
 
     def _cfg(self, **kw):
-        defaults = dict(
-            signal_threshold=0.95,
-            stake=10.0,
-            stake_bid_alpha=0.0,
-            stake_secs_ref=45.0,
-            stake_secs_alpha=0.0,
-            stake_max=15.0,
-            stake_max_pct_capital=0.0,
-        )
+        defaults = {
+            "signal_threshold": 0.95,
+            "stake": 10.0,
+            "stake_bid_alpha": 0.0,
+            "stake_secs_ref": 45.0,
+            "stake_secs_alpha": 0.0,
+            "stake_max": 15.0,
+            "stake_max_pct_capital": 0.0,
+        }
         defaults.update(kw)
         return bot.BotConfig(**defaults)
 
@@ -2889,20 +2889,18 @@ class TestMarketDiscoveryConfig(unittest.TestCase):
         self.assertEqual(cfg.market_window_mins, 16)
 
     def test_gamma_tag_constants_exported(self):
-        import api_polymarket as api_poly
         self.assertEqual(api_poly.GAMMA_TAG_5M, 102892)
         self.assertEqual(api_poly.GAMMA_TAG_15M, 102467)
 
     def test_btc_updown_keywords_cover_both_timeframes(self):
-        import api_polymarket as api_poly
         q5m  = "Bitcoin Up or Down - May 16, 4:30PM-4:35PM ET"
         q15m = "Bitcoin Up or Down - May 16, 4:30PM-4:45PM ET"
-        match = lambda q: any(kw in q.lower() for kw in api_poly.BTC_UPDOWN_KEYWORDS)
-        self.assertTrue(match(q5m))
-        self.assertTrue(match(q15m))
+        def match_q(q):
+            return any(kw in q.lower() for kw in api_poly.BTC_UPDOWN_KEYWORDS)
+        self.assertTrue(match_q(q5m))
+        self.assertTrue(match_q(q15m))
 
     def test_legacy_alias_still_works(self):
-        import api_polymarket as api_poly
         self.assertIs(api_poly.BTC_5M_KEYWORDS, api_poly.BTC_UPDOWN_KEYWORDS)
 
 
@@ -3056,7 +3054,6 @@ class TestMarketRefreshLoop(unittest.IsolatedAsyncioTestCase):
         self.state.conn.close()
 
     def _make_market(self, mid="mkt1", up="up1", dn="dn1", offset_min=3):
-        from datetime import datetime, timezone, timedelta
         now = datetime.now(timezone.utc)
         return {
             "conditionId":   mid,

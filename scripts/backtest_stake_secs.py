@@ -187,7 +187,7 @@ def _build_vol_at_entry(snaps: List[SnapRow], trades: List[Trade]) -> dict:
             # The key lookup will miss if market_id is unknown — fall back to
             # empty stats (filter will not apply for that trade).
             stats: dict = {"vol_bid": 0.0, "range_bid": 0.0, "vol_obi": 0.0, "n_snaps": 0}
-            for hkey, hlist in history.items():
+            for _, hlist in history.items():
                 if hlist and abs(hlist[-1].ts_ms - t.signal_ms) < 10_000:
                     bids = [s.best_bid for s in hlist]
                     obis = [s.obi      for s in hlist]

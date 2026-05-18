@@ -14,7 +14,7 @@ Usage:
 
 import argparse, math, os, sqlite3, sys
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List
 
 BASE_STAKE          = 10.0
 SECS_MIN_FACTOR     = 0.3
@@ -161,7 +161,6 @@ def simulate(trades: List[Trade], obi_thresh: float, threshold: float) -> SimRes
         sharpe = 0.0
 
     avg_stake = sum(stakes) / len(stakes) if stakes else 0.0
-    skip_pct  = (len(trades) - n_kept) / len(trades) * 100 if trades else 0.0
 
     return SimResult(
         obi_thresh=obi_thresh,
@@ -188,7 +187,10 @@ def main() -> None:
 
     results = [simulate(trades, t, args.threshold) for t in OBI_THRESHOLDS]
 
-    header = f"{'OBI_thresh':>11}  {'n_kept':>7}  {'skip%':>6}  {'losses':>7}  {'WR%':>6}  {'PnL':>8}  {'EV':>8}  {'Sharpe':>7}  {'MaxDD':>7}  {'AvgStk':>7}"
+    header = (
+        f"{'OBI_thresh':>11}  {'n_kept':>7}  {'skip%':>6}  {'losses':>7}"
+        f"  {'WR%':>6}  {'PnL':>8}  {'EV':>8}  {'Sharpe':>7}  {'MaxDD':>7}  {'AvgStk':>7}"
+    )
     print(header)
     print("─" * len(header))
     for r in results:
