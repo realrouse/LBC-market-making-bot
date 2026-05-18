@@ -15,9 +15,9 @@ TEST_PORT="22"
 
 # ─── Test accounts ─────────────────────────────────────────────────────────────
 # All arrays below must have the same length.
-# Three accounts are required: feed owner (claude1), second bot (claude2),
-# standalone (claude3).
-TEST_USERS=(claude1 claude2 claude3)
+# Three accounts are required: feed owner (user1), second bot (user2),
+# standalone (user3).
+TEST_USERS=(user1 user2 user3)
 TEST_PASSWORDS=(pass1 pass2 pass3)
 
 # ─── Role assignments (indices into TEST_USERS) ────────────────────────────────

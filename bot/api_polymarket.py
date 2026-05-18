@@ -268,8 +268,8 @@ async def post_order(session, token_id, price, size_usdc, *, private_key, instal
         oid = str(_resp.get("orderID") or _resp.get("id") or "")
         if oid:
             return oid
-        logger.warning("CLOB resp sans orderID: %s", _resp)
+        logger.warning("CLOB resp without orderID: keys=%s", list(_resp.keys()))
         return None
     except Exception as e:
-        logger.error("Erreur CLOB : %s", e)
+        logger.error("CLOB error: %s", e)
         return None

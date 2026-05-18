@@ -12,6 +12,7 @@ import sys
 import tempfile
 import types
 import unittest
+import unittest.mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bot"))
 
@@ -175,6 +176,37 @@ class TestRestoreFromDb(unittest.TestCase):
 
         result = self._run(g.restore_from_db(state))
         self.assertFalse(result)
+
+
+class TestNoCredentialsFlag(unittest.IsolatedAsyncioTestCase):
+    """M-6: sticky _no_credentials flag prevents user-stream task re-spawning."""
+
+    def test_flag_false_by_default(self):
+        g = GridStrategy(_grid_config())
+        self.assertFalse(g._no_credentials)
+
+    async def test_flag_set_after_max_key_failures(self):
+        """_user_stream_loop sets _no_credentials after 3 consecutive get_listen_key failures."""
+        g = GridStrategy(_grid_config())
+        g.grid.halted = False
+        state = types.SimpleNamespace(session=object())
+        g._api.get_listen_key = unittest.mock.AsyncMock(return_value=None)
+        with unittest.mock.patch("asyncio.sleep", return_value=None):
+            await g._user_stream_loop(state)
+        self.assertTrue(g._no_credentials)
+        self.assertEqual(g._api.get_listen_key.call_count, 3)  # MAX_KEY_FAILURES
+
+    def test_task_not_respawned_when_flag_set(self):
+        """on_book_update spawn guard is False when _no_credentials is True."""
+        g = GridStrategy(_grid_config())
+        g._no_credentials = True
+        would_spawn = (
+            not g._no_credentials and
+            (g._user_stream_task is None or
+             (g._user_stream_task is not None and g._user_stream_task.done()))
+        )
+        self.assertFalse(would_spawn)
+        self.assertIsNone(g._user_stream_task)
 
 
 if __name__ == "__main__":

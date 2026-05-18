@@ -149,6 +149,7 @@ class GridStrategy:
         # User data stream state (real-time fills via WebSocket).
         self._user_stream_task: Optional[asyncio.Task] = None
         self._user_ws_connected: bool = False
+        self._no_credentials: bool = False  # set True once; stops task re-spawn when no API key
 
         logger.info(
             "GridStrategy: %s  %.2f–%.2f  %d levels  step=%.2f  size=$%.2f  trail=%s",
@@ -392,6 +393,7 @@ class GridStrategy:
                         "failures (no credentials?)",
                         self.grid.symbol, key_failures,
                     )
+                    self._no_credentials = True
                     return
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 60.0)
@@ -748,8 +750,8 @@ class GridStrategy:
 
         # Start the user data stream on the first tick after init (non-sim mode).
         # Re-create the task if it exited unexpectedly (e.g. no credentials).
-        if (self._user_stream_task is None or
-                self._user_stream_task.done()):
+        if (not self._no_credentials and
+                (self._user_stream_task is None or self._user_stream_task.done())):
             # Only start for real orders — sim_ IDs have no matching exchange stream.
             active = [l for l in self.grid.levels if l.is_active]
             is_sim = any(

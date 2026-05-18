@@ -87,7 +87,7 @@ def setup_htaccess(html_path: str) -> None:
                 f'AuthUserFile {os.path.abspath(htpasswd_path)}\n'
                 f'Require valid-user\n'
             )
-        logger.info("htaccess cree : %s", htaccess_path)
+        logger.info("htaccess created: %s", htaccess_path)
 
 
 def _status_html_trade_rows(conn: sqlite3.Connection) -> str:
@@ -195,4 +195,4 @@ def write_web_status(state: Any) -> None:
         with open(WEBSTATUS_PATH, "w", encoding="utf-8") as f:
             f.write(generate_status_html(state))
     except Exception as e:
-        logger.warning("Erreur page web statut : %s", e)
+        logger.warning("Web status page error: %s", e)

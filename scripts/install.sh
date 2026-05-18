@@ -108,11 +108,16 @@ echo "=== $(_t "Creating directories" "Création des répertoires") ==="
 mkdir -p "$INSTALL_DIR"
 
 echo "=== $(_t "Copying bot files" "Copie du bot") ==="
-for _f in live_bot.py api_polymarket.py bot_utils.py; do
+for _f in live_bot.py api_polymarket.py api_binance.py api_mexc.py bot_utils.py; do
     cp "bot/$_f" "$INSTALL_DIR/$_f"
 done
 
+mkdir -p "$INSTALL_DIR/connectors"
+cp bot/connectors/__init__.py "$INSTALL_DIR/connectors/__init__.py"
+
 mkdir -p "$INSTALL_DIR/strategies"
+cp bot/strategies/__init__.py "$INSTALL_DIR/strategies/__init__.py"
+cp bot/strategies/grid.py     "$INSTALL_DIR/strategies/grid.py"
 _STRAT_SRC="$(cd strategies && pwd)"
 _STRAT_DST="$(cd "$INSTALL_DIR/strategies" && pwd)"
 if [ "$_STRAT_SRC" != "$_STRAT_DST" ]; then
@@ -141,7 +146,8 @@ chmod +x "$INSTALL_DIR/run.sh"
 
 # ── Syntax check ──────────────────────────────────────────────────
 echo "=== $(_t "Checking syntax" "Vérification syntaxe") ==="
-for _f in live_bot.py api_polymarket.py bot_utils.py; do
+for _f in live_bot.py api_polymarket.py api_binance.py api_mexc.py bot_utils.py \
+          connectors/__init__.py strategies/__init__.py strategies/grid.py; do
     _check_syntax "$INSTALL_DIR/$_f"
 done
 

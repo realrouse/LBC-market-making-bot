@@ -128,7 +128,7 @@ def compute_ema(prices: list[float], n: int) -> float | None:
 
 
 def compute_rsi(prices: list[float], n: int = 14) -> float | None:
-    """Wilder RSI(n). Returns 0–100 or None when insufficient data."""
+    """Cutler RSI(n): simple-mean gains/losses over the last n bars. Returns 0–100 or None."""
     if len(prices) < n + 1:
         return None
     deltas = [prices[i + 1] - prices[i] for i in range(len(prices) - 1)]

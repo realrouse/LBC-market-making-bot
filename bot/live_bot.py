@@ -69,9 +69,10 @@ US_WEEKLY_OPEN:         bool                  = True
 US_WEEKLY_CLOSE:        bool                  = True
 
 # ─── TIMING / SNAPSHOT DEFAULTS ───────────────────────────────────────────────
-SNAPSHOT_INTERVAL  = 1
-DASHBOARD_INTERVAL = 300
-MARKET_REFRESH     = 30
+SNAPSHOT_INTERVAL       = 1
+SNAPSHOT_COMMIT_SECS    = 30   # batch snapshot commits: one flush every 30 s
+DASHBOARD_INTERVAL      = 300
+MARKET_REFRESH          = 30
 
 # ─── CONNECTOR / STRATEGY DEFAULTS ────────────────────────────────────────────
 CONNECTOR      = "polymarket"   # api_* module to use; see bot/connectors/
@@ -781,6 +782,8 @@ class BotState:
         # Weekly PnL cache — same pattern; resets every 7-day period.
         self.weekly_pnl: float = 0.0
         self._weekly_pnl_week: int = -1  # 7-day period index since Unix epoch
+        # Batched snapshot commits — flushed every SNAPSHOT_COMMIT_SECS seconds.
+        self.last_snapshot_commit_ts: float = 0.0
         # Circuit-breaker: suspend new entries after 3 consecutive CLOB failures.
         self.api_fail_streak: int = 0
         self.api_cooldown_until: float = 0.0
@@ -829,6 +832,9 @@ async def handle_book_update(state: BotState, parsed: dict[str, Any]) -> None:
         ts.obi_history.append(ts.obi)
         if state.config.enable_snapshots:
             save_snapshot(state, ts)
+            if now - state.last_snapshot_commit_ts >= SNAPSHOT_COMMIT_SECS:
+                state.conn.commit()
+                state.last_snapshot_commit_ts = now
         ts.last_snapshot_ts = now
 
 
@@ -1054,9 +1060,10 @@ async def check_signal(state: BotState, ts: TokenState, _t_ws: Optional[float] =
 
 async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[float] = None) -> None:
     """
-    Record the trade in the DB, submit the CLOB order, and update bot state.
-    The DB insert happens even if the CLOB order fails so we always have an
-    audit trail and can detect orphaned positions on restart.
+    Submit the CLOB order, record the trade in the DB, and update bot state.
+    In live mode (session + private_key), returns early without inserting if
+    post_order returns None, preventing ghost rows with order_id=NULL.
+    In simulation mode (no private_key), the insert always runs with oid=None.
 
     _t_ws: monotonic timestamp from handle_book_update. When provided, latency
     metrics are computed and emitted as a [LATENCY] log line parseable by
@@ -1093,8 +1100,9 @@ async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[floa
                     "CIRCUIT-BREAKER: %d consecutive CLOB failures — entries suspended 5 min",
                     state.api_fail_streak,
                 )
-        else:
-            state.api_fail_streak = 0
+            logger.warning("post_order returned None — aborting entry to prevent ghost trade")
+            return
+        state.api_fail_streak = 0
     cur = state.conn.execute(
         "INSERT INTO trades ("
         "market_id, token_id, direction, question, "
@@ -1187,7 +1195,7 @@ def close_trade(state: BotState, ts: TokenState, trade_id: int, outcome: str) ->
     write_web_status(state)
 
 def save_snapshot(state: BotState, ts: TokenState) -> None:
-    """Persist a price snapshot to the DB for post-session analysis."""
+    """Insert a snapshot row without committing — caller batches commits via handle_book_update."""
     state.conn.execute(
         "INSERT INTO snapshots (ts_ms, market_id, token_id, direction, "
         "secs_remaining, best_bid, best_ask, spread, ask_vol, obi, has_open_trade) "
@@ -1196,7 +1204,6 @@ def save_snapshot(state: BotState, ts: TokenState) -> None:
          ts.secs_remaining, ts.best_bid, ts.best_ask, ts.spread, ts.ask_vol, ts.obi,
          1 if ts.market_id in state.open_trades else 0)
     )
-    state.conn.commit()
 
 # ─── MARKET DISCOVERY ─────────────────────────────────────────────────────────
 
@@ -1502,7 +1509,8 @@ async def main() -> None:
     restore_state_from_db(state)
 
     async with aiohttp.ClientSession(
-        connector=aiohttp.TCPConnector(limit=10)
+        connector=aiohttp.TCPConnector(limit=10),
+        timeout=aiohttp.ClientTimeout(total=30),
     ) as session:
         state.session = session   # available before ws_loop for strategy restore
         if config.strategy_type != "threshold":

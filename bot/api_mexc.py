@@ -186,7 +186,7 @@ async def get_markets(session, symbol=DEFAULT_SYMBOL):
             timeout=aiohttp.ClientTimeout(total=10),
         ) as resp:
             if resp.status != 200:
-                logger.warning("MEXC API erreur : %d", resp.status)
+                logger.warning("MEXC API error : %d", resp.status)
                 return []
             # content_type=None: bypass aiohttp's MIME check — some APIs omit charset
             data = await resp.json(content_type=None)
@@ -199,7 +199,7 @@ async def get_markets(session, symbol=DEFAULT_SYMBOL):
             "ask_qty":  float(data.get("askQty", 0)),
         }]
     except Exception as e:
-        logger.warning("MEXC fetch erreur : %s", e)
+        logger.warning("MEXC fetch error : %s", e)
         return []
 
 
@@ -265,12 +265,12 @@ async def post_order(session, symbol, price, size_usdc, *,
         ) as resp:
             data = await resp.json(content_type=None)  # bypass MIME check
             if resp.status != 200:
-                logger.error("MEXC order erreur %d : %s", resp.status, data)
+                logger.error("MEXC order error %d : %.300s", resp.status, data)
                 return None
             oid = str(data.get("orderId", ""))
             return oid or None
     except Exception as e:
-        logger.error("MEXC post_order erreur : %s", e)
+        logger.error("MEXC post_order error : %s", e)
         return None
 
 
@@ -307,11 +307,11 @@ async def get_order_status(session, symbol, order_id, *,
         ) as resp:
             data = await resp.json(content_type=None)
             if resp.status != 200:
-                logger.warning("MEXC get_order_status erreur %d : %s", resp.status, data)
+                logger.warning("MEXC get_order_status error %d : %.300s", resp.status, data)
                 return None
             return str(data.get("status", "")) or None
     except Exception as e:
-        logger.error("MEXC get_order_status erreur : %s", e)
+        logger.error("MEXC get_order_status error : %s", e)
         return None
 
 
@@ -346,11 +346,11 @@ async def cancel_order(session, symbol, order_id, *,
         ) as resp:
             data = await resp.json(content_type=None)
             if resp.status != 200:
-                logger.warning("MEXC cancel_order erreur %d : %s", resp.status, data)
+                logger.warning("MEXC cancel_order error %d : %.300s", resp.status, data)
                 return False
             return str(data.get("status", "")) == "CANCELED"
     except Exception as e:
-        logger.error("MEXC cancel_order erreur : %s", e)
+        logger.error("MEXC cancel_order error : %s", e)
         return False
 
 
@@ -382,7 +382,7 @@ async def get_open_orders(session, symbol, *, api_key=None, api_secret=None):
         ) as resp:
             data = await resp.json(content_type=None)
             if resp.status != 200:
-                logger.warning("MEXC get_open_orders erreur %d : %s", resp.status, data)
+                logger.warning("MEXC get_open_orders error %d : %.300s", resp.status, data)
                 return []
             return [
                 {
@@ -395,7 +395,7 @@ async def get_open_orders(session, symbol, *, api_key=None, api_secret=None):
                 for o in data
             ]
     except Exception as e:
-        logger.error("MEXC get_open_orders erreur : %s", e)
+        logger.error("MEXC get_open_orders error : %s", e)
         return []
 
 
@@ -417,12 +417,12 @@ async def get_listen_key(session, *, api_key=None, api_secret=None):
             timeout=aiohttp.ClientTimeout(total=10),
         ) as resp:
             if resp.status != 200:
-                logger.warning("MEXC get_listen_key erreur %d", resp.status)
+                logger.warning("MEXC get_listen_key error %d", resp.status)
                 return None
             data = await resp.json(content_type=None)
             return data.get("listenKey") or None
     except Exception as e:
-        logger.error("MEXC get_listen_key erreur : %s", e)
+        logger.error("MEXC get_listen_key error : %s", e)
         return None
 
 
@@ -443,7 +443,7 @@ async def keepalive_listen_key(session, listen_key, *, api_key=None, api_secret=
         ) as resp:
             return resp.status == 200
     except Exception as e:
-        logger.error("MEXC keepalive_listen_key erreur : %s", e)
+        logger.error("MEXC keepalive_listen_key error : %s", e)
         return False
 
 

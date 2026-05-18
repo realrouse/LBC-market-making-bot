@@ -249,7 +249,7 @@ async def post_order(session, symbol, price, size_usdc, *,
         ) as resp:
             data = await resp.json(content_type=None)  # bypass MIME check
             if resp.status != 200:
-                logger.error("Binance order error %d : %s", resp.status, data)
+                logger.error("Binance order error %d : %.300s", resp.status, data)
                 return None
             oid = str(data.get("orderId", ""))
             return oid or None
@@ -291,7 +291,7 @@ async def get_order_status(session, symbol, order_id, *,
         ) as resp:
             data = await resp.json(content_type=None)
             if resp.status != 200:
-                logger.warning("Binance get_order_status error %d : %s", resp.status, data)
+                logger.warning("Binance get_order_status error %d : %.300s", resp.status, data)
                 return None
             return str(data.get("status", "")) or None
     except Exception as e:
@@ -331,7 +331,7 @@ async def cancel_order(session, symbol, order_id, *,
         ) as resp:
             data = await resp.json(content_type=None)
             if resp.status != 200:
-                logger.warning("Binance cancel_order error %d : %s", resp.status, data)
+                logger.warning("Binance cancel_order error %d : %.300s", resp.status, data)
                 return False
             return str(data.get("status", "")) == "CANCELED"
     except Exception as e:
@@ -370,7 +370,7 @@ async def get_open_orders(session, symbol, *, api_key=None, api_secret=None):
         ) as resp:
             data = await resp.json(content_type=None)
             if resp.status != 200:
-                logger.warning("Binance get_open_orders error %d : %s", resp.status, data)
+                logger.warning("Binance get_open_orders error %d : %.300s", resp.status, data)
                 return []
             return [
                 {

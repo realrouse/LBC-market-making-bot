@@ -1306,6 +1306,12 @@ class TestSaveSnapshot(unittest.TestCase):
         ).fetchall()
         self.assertEqual([r[0] for r in rows], ["tokA", "tokB"])
 
+    def test_no_commit_after_save_snapshot(self):
+        # M-7: save_snapshot no longer commits; row is visible in the same
+        # connection but conn.in_transaction is True (uncommitted write pending).
+        bot.save_snapshot(self.state, make_token())
+        self.assertTrue(self.state.conn.in_transaction)
+
 
 # ── circuit-breaker ───────────────────────────────────────────────────────────
 
@@ -1359,6 +1365,34 @@ class TestCircuitBreaker(unittest.IsolatedAsyncioTestCase):
         self.state.config = bot.BotConfig(private_key="0xdeadbeef")
         await bot.enter_live_trade(self.state, make_token())
         self.assertEqual(self.state.api_fail_streak, 0)
+
+    async def test_no_db_insert_on_live_clob_failure(self):
+        # H-1: post_order returns None in live mode → no ghost row, no open_trade entry
+        self.state.config = bot.BotConfig(private_key="0xdeadbeef")
+        self.state.session = unittest.mock.AsyncMock()
+        with patch("live_bot.api.post_order", new=unittest.mock.AsyncMock(return_value=None)):
+            await bot.enter_live_trade(self.state, make_token(market_id="mkt_ghost"))
+        count = self.state.conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+        self.assertEqual(count, 0, "ghost row must not be inserted on CLOB failure")
+        self.assertNotIn("mkt_ghost", self.state.open_trades)
+
+    async def test_db_insert_on_live_clob_success(self):
+        # H-1 regression: post_order returns a valid order ID → row IS inserted
+        self.state.config = bot.BotConfig(private_key="0xdeadbeef")
+        self.state.session = unittest.mock.AsyncMock()
+        with patch("live_bot.api.post_order", new=unittest.mock.AsyncMock(return_value="ord_123")):
+            await bot.enter_live_trade(self.state, make_token(market_id="mkt_live"))
+        count = self.state.conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+        self.assertEqual(count, 1)
+        self.assertIn("mkt_live", self.state.open_trades)
+
+    async def test_db_insert_in_simulation_no_session(self):
+        # H-1 regression: simulation mode (no session) → row IS inserted with oid=None
+        await bot.enter_live_trade(self.state, make_token(market_id="mkt_sim"))
+        count = self.state.conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+        self.assertEqual(count, 1)
+        oid = self.state.conn.execute("SELECT clob_order_id FROM trades").fetchone()[0]
+        self.assertIsNone(oid)
 
 
 # ── schema versioning ─────────────────────────────────────────────────────────
@@ -1577,6 +1611,26 @@ class TestSnapshotInterval(unittest.IsolatedAsyncioTestCase):
         ts.last_snapshot_ts = 0.0  # never snapshotted → always elapsed
         await self._update(ts)
         self.assertEqual(self._snap_count(), 1)
+
+    async def test_batch_commit_fires_after_interval(self):
+        # M-7: commit fires when SNAPSHOT_COMMIT_SECS have elapsed.
+        ts = make_token(best_bid=0.50, best_ask=0.55)
+        self.state.tokens[ts.token_id] = ts
+        self.state.config = bot.BotConfig(snapshot_interval=1)
+        ts.last_snapshot_ts = 0.0
+        self.state.last_snapshot_commit_ts = 0.0  # force commit on first update
+        await self._update(ts)
+        self.assertFalse(self.state.conn.in_transaction)  # committed
+
+    async def test_batch_commit_deferred_within_interval(self):
+        # M-7: commit is skipped when SNAPSHOT_COMMIT_SECS have NOT elapsed.
+        ts = make_token(best_bid=0.50, best_ask=0.55)
+        self.state.tokens[ts.token_id] = ts
+        self.state.config = bot.BotConfig(snapshot_interval=1)
+        ts.last_snapshot_ts = 0.0
+        self.state.last_snapshot_commit_ts = time.time()  # just committed
+        await self._update(ts)
+        self.assertTrue(self.state.conn.in_transaction)  # not yet committed
 
 
 class TestStrategyLoading(unittest.TestCase):

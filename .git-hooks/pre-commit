@@ -18,7 +18,9 @@ if [[ -f "$CONF" ]]; then
     source "$CONF" 2>/dev/null || true
     [[ -n "${TEST_SERVER:-}" ]] && PATTERNS+=("$TEST_SERVER")
     if [[ -n "${TEST_USERS[*]:-}" ]]; then
-        for u in "${TEST_USERS[@]}"; do PATTERNS+=("$u@"); done
+        for u in "${TEST_USERS[@]}"; do
+            PATTERNS+=("$u@" "\\b${u}\\b")
+        done
     fi
 fi
 
