@@ -2,6 +2,130 @@
 
 > Code, comments, logs, and docstrings are English-only. Documentation files (README, CHANGELOG, INSTALL, QUICKSTART, UPDATE) are bilingual (EN + FR).
 
+---
+
+## Audit 2026-05-17 — Findings to fix
+> Full audit report: `audit170526.md`
+
+### CRITICAL — Done
+
+- **[C-1] DONE — Trail mode implemented in `bot/strategies/grid.py`**
+  `trail_mode` reads `"bull"` / `"bear"` / `"static"` from JSON; `_recenter_grid()` cancels all
+  orders and shifts bounds centered on current price; stop-loss check branches per mode; bounds
+  restored from DB on restart. Tests: `TestCheckStopLoss`, `TestRecenterGrid`. (branch `dev`)
+
+- **[C-2] DONE — Connector/strategy compatibility check at startup**
+  `validate(connector_module, strategy_type)` in `bot/connectors/__init__.py` raises `RuntimeError`
+  listing all missing methods if the connector does not expose the interface required by the strategy.
+  Called in `main()` before strategy instantiation. Tests: `TestConnectorValidate`. (branch `dev`)
+
+### HIGH
+
+- **[H-1] DONE — Ghost trade guard in `enter_live_trade()`**
+  In live mode (`session + private_key`), `enter_live_trade()` now returns early after incrementing
+  `api_fail_streak` when `post_order` returns `None`, preventing ghost rows with `order_id=NULL`.
+  Simulation mode (no `private_key`) still inserts with `oid=None` as before.
+  3 regression tests added: `test_no_db_insert_on_live_clob_failure`,
+  `test_db_insert_on_live_clob_success`, `test_db_insert_in_simulation_no_session`. (branch `dev`)
+  Note: crash-between-post_order-and-commit (Mode A) not yet addressed — requires `pending` status.
+
+- **[H-2] DONE — All French strings translated to English**
+  All violations of the mandatory language policy are now fixed across the codebase:
+  `bot/api_binance.py`, `bot/strategies/grid.py` (previous session) +
+  `bot/api_polymarket.py` (2 strings), `bot/feed.py` (2 strings), `bot/bot_utils.py` (2 strings),
+  `bot/api_mexc.py` (13 occurrences — `erreur` → `error` replace-all). 639 tests pass. (branch `dev`)
+  Also fixes M-4: CLOB response now logged as `keys=%s` instead of full body.
+
+### MEDIUM — Security
+
+- **[M-1] DONE — Real OS usernames removed from `scripts/test_multibot.conf.example`**
+  Real server account names replaced with generic placeholders (`user1 user2 user3`);
+  role comment updated accordingly. Pre-commit hook extended: each username now generates two
+  patterns — `$u@` (with `@`) and `\b$u\b` (bare word-boundary). (branch `dev`)
+
+- **[M-2] DONE — Symlink TOCTOU fixed on feed log file in `/tmp`**
+  `bot/account_bot.py:150` — `open(log_path, "ab")` replaced with
+  `os.open(..., O_CREAT|O_WRONLY|O_APPEND|O_NOFOLLOW, 0o644)` + `os.fdopen()`; parent closes
+  its fd after `Popen`, child keeps it open. Consistent with the lock file (line 125). (branch `dev`)
+
+- **[M-3] DONE — `bcrypt` added to `requirements.txt`**
+  `bcrypt` now in `requirements.txt` (line 6); `bot_utils.py` uses `bcrypt.hashpw` by default,
+  SHA-1 fallback logs a warning. (branch `dev`)
+
+- **[M-4] DONE — CLOB response truncated in log** *(fixed with H-2)*
+  `bot/api_polymarket.py:271` now logs `keys=%s` instead of the full response body. (branch `dev`)
+
+### MEDIUM — Architecture
+
+- **[M-5] DONE — Test coverage added for `ws_loop`, `_market_refresh_loop`, `purge_expired_markets`**
+  11 new tests in `tests/test_bot.py`: `TestPurgeExpiredMarkets` (5 tests — expired removal,
+  active retention, open-trade guard, signal cleared on purge, mixed tokens); `TestWsLoopBackoff`
+  (3 tests — doubling, cap at 60 s, reset on success); `TestMarketRefreshLoop` (3 tests — new
+  market registration + subscription, expired purge, API error resilience). Total: 659 tests.
+  (branch `dev`)
+
+- **[M-6] DONE — User stream task no longer re-spawned after credential failure**
+  `bot/strategies/grid.py` — `_no_credentials: bool = False` added to `__init__`; set to `True`
+  in `_user_stream_loop` after `MAX_KEY_FAILURES` (3) consecutive failures; `on_book_update()`
+  spawn guard now checks `not self._no_credentials` first, preventing infinite task recreation.
+  3 tests added in `TestNoCredentialsFlag`. (branch `dev`)
+
+- **[M-7] DONE — SQLite snapshot commits batched (one per 30 s)**
+  `save_snapshot()` no longer calls `conn.commit()` — it only does the fast `execute()`.
+  `handle_book_update()` flushes once every `SNAPSHOT_COMMIT_SECS = 30` seconds, keeping all
+  SQLite operations on the event loop thread (no executor, no thread-safety concerns).
+  3 tests added: `test_no_commit_after_save_snapshot`, `test_batch_commit_fires_after_interval`,
+  `test_batch_commit_deferred_within_interval`. (branch `dev`)
+
+### LOW — Deployment / Code
+
+- **[L-1] DONE — `install.sh` now copies all grid/connector packages**
+  Added to "Copying bot files" section: `api_binance.py`, `api_mexc.py` (flat copy);
+  `bot/connectors/__init__.py` → `$INSTALL_DIR/connectors/`; `bot/strategies/__init__.py`
+  and `bot/strategies/grid.py` → `$INSTALL_DIR/strategies/` (alongside JSON files).
+  Syntax check loop extended to cover all 8 Python files. (branch `dev`)
+
+- **[L-2] DONE — CLAUDE.md line count updated for `live_bot.py`**
+  `~617 lines` → `~1530 lines` (actual: 1531). (branch `dev`)
+
+- **[L-3] DONE — RSI docstring corrected in `bot/indicators.py`**
+  `compute_rsi` docstring changed from `"Wilder RSI(n)"` to `"Cutler RSI(n): simple-mean
+  gains/losses over the last n bars"` — accurately describing the `sum(...) / n` implementation.
+  (branch `dev`)
+
+- **[L-4] DONE — Binance/MEXC error responses truncated in logs**
+  8 log calls across `bot/api_binance.py` (lines 252, 294, 334, 373) and `bot/api_mexc.py`
+  (lines 268, 310, 349, 385) changed from `%s` to `%.300s` on the `data` argument.
+  (branch `dev`)
+
+- **[L-5] DONE — Session-level `ClientTimeout(total=30)` added to all three `ClientSession` calls**
+  `bot/live_bot.py:1511`, `bot/feed.py:283`, `bot/account_bot.py:377` — all three session
+  instantiations now pass `timeout=aiohttp.ClientTimeout(total=30)` as a safety net against
+  future requests omitting a per-request timeout. (branch `dev`)
+
+- **[L-6] DONE — `ssh-keyscan` already guarded in all 5 deploy scripts** *(already fixed)*
+  All scripts already have `if ! ssh-keygen -F "[$SERVER]:$PORT" &>/dev/null && ! ssh-keygen -F
+  "$SERVER" &>/dev/null; then ssh-keyscan ...` — the check was present before the audit.
+  No code change needed.
+
+- **[L-7] DONE — f-string PRAGMA SQL replaced in `scripts/profile_compare.py:58`**
+  `c.execute(f"PRAGMA mmap_size = {MMAP_MB * 1024 * 1024};")` →
+  `c.execute("PRAGMA mmap_size = ?", (MMAP_MB * 1024 * 1024,))`. (branch `dev`)
+
+### INFO — No immediate action required
+
+- **[I-1] ZMQ without CURVE/ZAP authentication** — mitigated by loopback-only binding. Required
+  before any external network exposure (see Roadmap v0.3 section below).
+
+- **[I-2] Move tracked `.db` files out of git** — `data/*.db` are simulation-only but binary blobs
+  complicate secret scanning and inflate repo size. Add `data/*.db` to `.gitignore` and distribute
+  sample databases separately.
+
+- **[I-3] Pin GitHub Actions to SHA** — `anthropics/claude-code-action@v1` is used by tag, not SHA.
+  Pin to a specific commit SHA for supply-chain integrity.
+
+---
+
 ## Logging system — deferred items (priorities 3–4)
 
 These were scoped out of the log-system refactor session (priorities 1+2 + English unification were implemented):
@@ -75,6 +199,39 @@ dependencies. They require new entries in `_VALID_INDICATOR_TYPES` and implement
   strategies on a risk-adjusted basis.
 - **Walk-forward optimization** — train on N weeks, validate on the next, slide the window; reduces
   overfitting risk from the `--sweep`.
+
+### Time-scaled stake sizing (stake ∝ secs_remaining)
+
+**Hypothesis**: win rate is higher when fewer seconds remain at signal time — the price is more
+"locked in" and BTC has less time to reverse. A stake that decreases with secs_remaining should
+improve EV without increasing overall risk.
+
+The `signal_secs_remaining` column is already stored in every `trades` row (paper3.db, liveweek.db).
+
+#### Phase 1 — Validate the hypothesis (DONE: see `scripts/analyze_stake_secs.py`)
+- SQL bucketing of trades by `signal_secs_remaining` (30–45s, 45–60s, 60–90s, 90–120s, 120s+)
+- Win rate, average EV, and trade count per bucket
+- **Gate**: proceed only if win rate shows a meaningful drop (≥ 1 pp) across buckets
+
+#### Phase 2 — Define stake curve candidates
+Three families to grid-search:
+- **A. Inverse-proportional**: `stake = min(stake_max, base_stake * ref_secs / secs_remaining)`
+  — intuitive, continuous; `ref_secs` anchors the nominal stake at a chosen time.
+- **B. Step function** (3–4 thresholds): e.g. `<45s → $12`, `45–60s → $10`, `60–90s → $7`, `90s+ → $5`
+  — operationally transparent, no floating-point math on the hot path.
+- **C. Half-Kelly per bucket**: `p = WR(bucket)`, `b = avg_payout_ratio`, `kelly = (p*b-(1-p))/b`;
+  stake = `0.5 * kelly * capital` — theoretically optimal but requires fresh WR estimates per bucket.
+
+#### Phase 3 — Grid search on paper3.db / liveweek.db
+Replay all resolved trades chronologically with each curve variant.
+Report: total PnL, per-day Sharpe, max drawdown, and comparison vs flat $10.
+Key sweep params for curve A: `ref_secs ∈ {30,45,60}`, `stake_max ∈ {10,15,20}`.
+
+#### Phase 4 — Implementation
+If Phase 3 shows a clear winner:
+- Add `stake_time_scaling: bool`, `stake_ref_secs: float`, `stake_max: float` to `BotConfig`
+- Add `compute_stake(cfg, secs_remaining) → float` helper used in `enter_live_trade()`
+- Expose params in the strategy JSON; validate with 1-week paper run before going live
 
 ---
 

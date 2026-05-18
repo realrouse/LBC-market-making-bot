@@ -1306,6 +1306,12 @@ class TestSaveSnapshot(unittest.TestCase):
         ).fetchall()
         self.assertEqual([r[0] for r in rows], ["tokA", "tokB"])
 
+    def test_no_commit_after_save_snapshot(self):
+        # M-7: save_snapshot no longer commits; row is visible in the same
+        # connection but conn.in_transaction is True (uncommitted write pending).
+        bot.save_snapshot(self.state, make_token())
+        self.assertTrue(self.state.conn.in_transaction)
+
 
 # ── circuit-breaker ───────────────────────────────────────────────────────────
 
@@ -1359,6 +1365,34 @@ class TestCircuitBreaker(unittest.IsolatedAsyncioTestCase):
         self.state.config = bot.BotConfig(private_key="0xdeadbeef")
         await bot.enter_live_trade(self.state, make_token())
         self.assertEqual(self.state.api_fail_streak, 0)
+
+    async def test_no_db_insert_on_live_clob_failure(self):
+        # H-1: post_order returns None in live mode → no ghost row, no open_trade entry
+        self.state.config = bot.BotConfig(private_key="0xdeadbeef")
+        self.state.session = unittest.mock.AsyncMock()
+        with patch("live_bot.api.post_order", new=unittest.mock.AsyncMock(return_value=None)):
+            await bot.enter_live_trade(self.state, make_token(market_id="mkt_ghost"))
+        count = self.state.conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+        self.assertEqual(count, 0, "ghost row must not be inserted on CLOB failure")
+        self.assertNotIn("mkt_ghost", self.state.open_trades)
+
+    async def test_db_insert_on_live_clob_success(self):
+        # H-1 regression: post_order returns a valid order ID → row IS inserted
+        self.state.config = bot.BotConfig(private_key="0xdeadbeef")
+        self.state.session = unittest.mock.AsyncMock()
+        with patch("live_bot.api.post_order", new=unittest.mock.AsyncMock(return_value="ord_123")):
+            await bot.enter_live_trade(self.state, make_token(market_id="mkt_live"))
+        count = self.state.conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+        self.assertEqual(count, 1)
+        self.assertIn("mkt_live", self.state.open_trades)
+
+    async def test_db_insert_in_simulation_no_session(self):
+        # H-1 regression: simulation mode (no session) → row IS inserted with oid=None
+        await bot.enter_live_trade(self.state, make_token(market_id="mkt_sim"))
+        count = self.state.conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+        self.assertEqual(count, 1)
+        oid = self.state.conn.execute("SELECT clob_order_id FROM trades").fetchone()[0]
+        self.assertIsNone(oid)
 
 
 # ── schema versioning ─────────────────────────────────────────────────────────
@@ -1577,6 +1611,26 @@ class TestSnapshotInterval(unittest.IsolatedAsyncioTestCase):
         ts.last_snapshot_ts = 0.0  # never snapshotted → always elapsed
         await self._update(ts)
         self.assertEqual(self._snap_count(), 1)
+
+    async def test_batch_commit_fires_after_interval(self):
+        # M-7: commit fires when SNAPSHOT_COMMIT_SECS have elapsed.
+        ts = make_token(best_bid=0.50, best_ask=0.55)
+        self.state.tokens[ts.token_id] = ts
+        self.state.config = bot.BotConfig(snapshot_interval=1)
+        ts.last_snapshot_ts = 0.0
+        self.state.last_snapshot_commit_ts = 0.0  # force commit on first update
+        await self._update(ts)
+        self.assertFalse(self.state.conn.in_transaction)  # committed
+
+    async def test_batch_commit_deferred_within_interval(self):
+        # M-7: commit is skipped when SNAPSHOT_COMMIT_SECS have NOT elapsed.
+        ts = make_token(best_bid=0.50, best_ask=0.55)
+        self.state.tokens[ts.token_id] = ts
+        self.state.config = bot.BotConfig(snapshot_interval=1)
+        ts.last_snapshot_ts = 0.0
+        self.state.last_snapshot_commit_ts = time.time()  # just committed
+        await self._update(ts)
+        self.assertTrue(self.state.conn.in_transaction)  # not yet committed
 
 
 class TestStrategyLoading(unittest.TestCase):
@@ -2682,6 +2736,396 @@ class TestLogFormatters(unittest.TestCase):
 
     def test_log_fmt_contains_session_placeholder(self):
         self.assertIn("%(session)s", bot._LOG_FMT)
+
+
+class TestComputeStake(unittest.TestCase):
+    """Unit tests for compute_stake() — bid×secs dynamic sizing."""
+
+    def _cfg(self, **kw):
+        defaults = {
+            "signal_threshold": 0.95,
+            "stake": 10.0,
+            "stake_bid_alpha": 0.0,
+            "stake_secs_ref": 45.0,
+            "stake_secs_alpha": 0.0,
+            "stake_max": 15.0,
+            "stake_max_pct_capital": 0.0,
+        }
+        defaults.update(kw)
+        return bot.BotConfig(**defaults)
+
+    # ── Flat mode (both alphas == 0) ──────────────────────────────────────────
+
+    def test_flat_mode_returns_base_stake(self):
+        cfg = self._cfg()
+        self.assertEqual(bot.compute_stake(cfg, 0.97, 100.0), 10.0)
+
+    def test_flat_mode_ignores_bid(self):
+        cfg = self._cfg()
+        self.assertEqual(bot.compute_stake(cfg, 0.96, 100.0),
+                         bot.compute_stake(cfg, 0.999, 100.0))
+
+    def test_flat_mode_with_capital_cap(self):
+        cfg = self._cfg(stake_max_pct_capital=0.12, capital_start=100.0)
+        # 12% of 100 = 12, but stake=10 < 12 → returns stake
+        self.assertEqual(bot.compute_stake(cfg, 0.97, 100.0, capital=100.0), 10.0)
+
+    def test_flat_mode_capital_cap_shrinks_on_drawdown(self):
+        cfg = self._cfg(stake_max_pct_capital=0.12, capital_start=100.0)
+        # capital=50 → cap = 0.12*50 = 6.0 < stake=10 → returns 6.0
+        self.assertAlmostEqual(bot.compute_stake(cfg, 0.97, 100.0, capital=50.0), 6.0)
+
+    # ── Bid scaling ───────────────────────────────────────────────────────────
+
+    def test_bid_alpha_boosts_above_threshold(self):
+        cfg = self._cfg(stake_bid_alpha=2.0)
+        # bid=0.97, threshold=0.95 → bid_score=0.4, boost=1.8 → 18, capped at 15
+        result = bot.compute_stake(cfg, 0.97, 100.0)
+        self.assertGreater(result, 10.0)
+        self.assertLessEqual(result, 15.0)
+
+    def test_bid_at_threshold_gives_base_stake(self):
+        cfg = self._cfg(stake_bid_alpha=2.0)
+        # bid_score=0 → boost=1.0 → stake=10, but floor=3 → 10
+        self.assertAlmostEqual(bot.compute_stake(cfg, 0.95, 100.0), 10.0)
+
+    def test_bid_at_maximum_capped_by_stake_max(self):
+        cfg = self._cfg(stake_bid_alpha=2.0, stake_max=15.0)
+        # bid=1.0 → bid_score=1.0, boost=3.0 → 30, capped at 15
+        self.assertAlmostEqual(bot.compute_stake(cfg, 1.0, 100.0), 15.0)
+
+    def test_stake_max_pct_caps_bid_boost(self):
+        cfg = self._cfg(stake_bid_alpha=2.0, stake_max=15.0,
+                        stake_max_pct_capital=0.12)
+        # capital=80 → eff_max = min(15, 0.12*80) = min(15, 9.6) = 9.6
+        result = bot.compute_stake(cfg, 1.0, 100.0, capital=80.0)
+        self.assertAlmostEqual(result, 9.6, places=5)
+
+    # ── Secs scaling ──────────────────────────────────────────────────────────
+
+    def test_secs_below_ref_no_penalty(self):
+        cfg = self._cfg(stake_bid_alpha=2.0, stake_secs_alpha=1.0,
+                        stake_secs_ref=45.0)
+        r_at_ref   = bot.compute_stake(cfg, 0.97, 45.0)
+        r_below_ref = bot.compute_stake(cfg, 0.97, 20.0)
+        self.assertEqual(r_at_ref, r_below_ref)
+
+    def test_secs_above_ref_reduces_stake(self):
+        cfg = self._cfg(stake_bid_alpha=2.0, stake_secs_alpha=1.0,
+                        stake_secs_ref=45.0)
+        r_at_ref  = bot.compute_stake(cfg, 0.97, 45.0)
+        r_far_out = bot.compute_stake(cfg, 0.97, 200.0)
+        self.assertGreater(r_at_ref, r_far_out)
+
+    def test_secs_factor_floored_at_min(self):
+        cfg = self._cfg(stake_bid_alpha=1.0, stake_secs_alpha=10.0,
+                        stake_secs_ref=45.0)
+        # With extreme secs, floor = base * 0.3 = 3.0
+        result = bot.compute_stake(cfg, 0.95, 10000.0)
+        self.assertGreaterEqual(result, 10.0 * bot._STAKE_SECS_MIN_FACTOR)
+
+
+class TestWeeklyStopLoss(unittest.IsolatedAsyncioTestCase):
+    """check_signal() respects the weekly_stop_loss guard."""
+
+    def _make_state(self, cfg):
+        state = make_state()
+        state.config = cfg
+        return state
+
+    async def test_weekly_stop_blocks_entry(self):
+        cfg = bot.BotConfig(
+            signal_threshold=0.95, weekly_stop_loss=60.0,
+            daily_stop_loss=9999.0,
+        )
+        state = self._make_state(cfg)
+        state.weekly_pnl = -61.0
+        state._weekly_pnl_week = int(time.time() // (7 * 86400))
+
+        ts = make_token(best_bid=0.97, best_ask=0.975, secs_remaining=120)
+        before = state.total_trades
+        await bot.check_signal(state, ts)
+        self.assertEqual(state.total_trades, before)
+        self.assertGreater(state.rejection_stats.weekly_stop, 0)
+
+    async def test_weekly_stop_allows_entry_when_not_triggered(self):
+        cfg = bot.BotConfig(
+            signal_threshold=0.95, weekly_stop_loss=60.0,
+            daily_stop_loss=9999.0, capital_start=1000.0,
+        )
+        state = self._make_state(cfg)
+        state.weekly_pnl = -10.0
+        state._weekly_pnl_week = int(time.time() // (7 * 86400))
+        state.capital = 1000.0
+
+        ts = make_token(best_bid=0.97, best_ask=0.975, secs_remaining=120)
+        before = state.rejection_stats.weekly_stop
+        await bot.check_signal(state, ts)
+        self.assertEqual(state.rejection_stats.weekly_stop, before)
+
+    async def test_weekly_pnl_resets_on_new_period(self):
+        cfg = bot.BotConfig(weekly_stop_loss=60.0)
+        state = self._make_state(cfg)
+        state.weekly_pnl = -999.0
+        state._weekly_pnl_week = -1         # force reset on next check_signal call
+
+        ts = make_token(best_bid=0.50, best_ask=0.51, secs_remaining=120)
+        await bot.check_signal(state, ts)
+        self.assertEqual(state.weekly_pnl, 0.0)
+        self.assertNotEqual(state._weekly_pnl_week, -1)
+
+
+class TestMarketDiscoveryConfig(unittest.TestCase):
+    """market_tag_id and market_window_mins are configurable via BotConfig."""
+
+    def test_defaults(self):
+        cfg = bot.BotConfig()
+        self.assertEqual(cfg.market_tag_id, bot.MARKET_TAG_ID)
+        self.assertEqual(cfg.market_window_mins, bot.MARKET_WINDOW_MINS)
+
+    def test_override_via_botconfig(self):
+        cfg = bot.BotConfig(market_tag_id=102467, market_window_mins=16)
+        self.assertEqual(cfg.market_tag_id, 102467)
+        self.assertEqual(cfg.market_window_mins, 16)
+
+    def test_gamma_tag_constants_exported(self):
+        self.assertEqual(api_poly.GAMMA_TAG_5M, 102892)
+        self.assertEqual(api_poly.GAMMA_TAG_15M, 102467)
+
+    def test_btc_updown_keywords_cover_both_timeframes(self):
+        q5m  = "Bitcoin Up or Down - May 16, 4:30PM-4:35PM ET"
+        q15m = "Bitcoin Up or Down - May 16, 4:30PM-4:45PM ET"
+        def match_q(q):
+            return any(kw in q.lower() for kw in api_poly.BTC_UPDOWN_KEYWORDS)
+        self.assertTrue(match_q(q5m))
+        self.assertTrue(match_q(q15m))
+
+    def test_legacy_alias_still_works(self):
+        self.assertIs(api_poly.BTC_5M_KEYWORDS, api_poly.BTC_UPDOWN_KEYWORDS)
+
+
+# ── purge_expired_markets ─────────────────────────────────────────────────────
+
+class TestPurgeExpiredMarkets(unittest.TestCase):
+    """M-5: purge_expired_markets removes ended tokens with no open trade."""
+
+    def setUp(self):
+        self.state = make_state()
+
+    def tearDown(self):
+        self.state.conn.close()
+
+    def _add_token(self, token_id, market_id, ended=False):
+        end_ms = int((time.time() - 10) * 1000) if ended else int((time.time() + 300) * 1000)
+        ts = bot.TokenState(token_id, market_id, "UP", "q", 0, end_ms)
+        self.state.tokens[token_id] = ts
+        self.state.market_tokens[market_id] = {"UP": token_id, "DOWN": token_id + "_dn"}
+        return ts
+
+    def test_expired_token_removed(self):
+        self._add_token("tok1", "mkt1", ended=True)
+        n = bot.purge_expired_markets(self.state)
+        self.assertEqual(n, 1)
+        self.assertNotIn("tok1", self.state.tokens)
+        self.assertNotIn("mkt1", self.state.market_tokens)
+
+    def test_active_token_kept(self):
+        self._add_token("tok1", "mkt1", ended=False)
+        n = bot.purge_expired_markets(self.state)
+        self.assertEqual(n, 0)
+        self.assertIn("tok1", self.state.tokens)
+
+    def test_expired_with_open_trade_kept(self):
+        self._add_token("tok1", "mkt1", ended=True)
+        self.state.open_trades["mkt1"] = 42  # open trade — must not purge
+        n = bot.purge_expired_markets(self.state)
+        self.assertEqual(n, 0)
+        self.assertIn("tok1", self.state.tokens)
+
+    def test_signalled_cleared_on_purge(self):
+        self._add_token("tok1", "mkt1", ended=True)
+        self.state.signalled.add("mkt1")
+        bot.purge_expired_markets(self.state)
+        self.assertNotIn("mkt1", self.state.signalled)
+
+    def test_mixed_tokens_correct_count(self):
+        self._add_token("tok_exp", "mkt_exp", ended=True)
+        self._add_token("tok_live", "mkt_live", ended=False)
+        n = bot.purge_expired_markets(self.state)
+        self.assertEqual(n, 1)
+        self.assertNotIn("tok_exp", self.state.tokens)
+        self.assertIn("tok_live", self.state.tokens)
+
+
+# ── ws_loop backoff ───────────────────────────────────────────────────────────
+
+class TestWsLoopBackoff(unittest.IsolatedAsyncioTestCase):
+    """M-5: ws_loop doubles backoff on failure, caps at 60, resets on success."""
+
+    def setUp(self):
+        self.state = make_state()
+
+    def tearDown(self):
+        self.state.conn.close()
+
+    async def test_backoff_doubles_on_failure(self):
+        sleep_calls = []
+
+        async def _fake_sleep(n):
+            sleep_calls.append(n)
+
+        call_count = 0
+
+        async def _failing_run_ws(state, session):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 4:
+                raise asyncio.CancelledError
+            raise RuntimeError("ws error")
+
+        with patch("live_bot._run_ws", _failing_run_ws), \
+             patch("asyncio.sleep", _fake_sleep):
+            with self.assertRaises(asyncio.CancelledError):
+                await bot.ws_loop(self.state, None)
+
+        self.assertEqual(sleep_calls, [1, 2, 4])
+
+    async def test_backoff_caps_at_60(self):
+        sleep_calls = []
+
+        async def _fake_sleep(n):
+            sleep_calls.append(n)
+
+        call_count = 0
+
+        async def _failing_run_ws(state, session):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 8:
+                raise asyncio.CancelledError
+            raise RuntimeError("ws error")
+
+        with patch("live_bot._run_ws", _failing_run_ws), \
+             patch("asyncio.sleep", _fake_sleep):
+            with self.assertRaises(asyncio.CancelledError):
+                await bot.ws_loop(self.state, None)
+
+        self.assertLessEqual(max(sleep_calls), 60)
+        self.assertEqual(sleep_calls[-1], 60)
+
+    async def test_backoff_resets_on_success(self):
+        sleep_calls = []
+        call_count = 0
+
+        async def _fake_sleep(n):
+            sleep_calls.append(n)
+
+        async def _mixed_run_ws(state, session):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("first failure")   # sleep(1), backoff→2
+            if call_count == 2:
+                return                                 # success → backoff reset to 1
+            if call_count == 3:
+                raise RuntimeError("second failure")  # sleep(1) — backoff was reset
+            raise asyncio.CancelledError              # terminates loop
+
+        with patch("live_bot._run_ws", _mixed_run_ws), \
+             patch("asyncio.sleep", _fake_sleep):
+            with self.assertRaises(asyncio.CancelledError):
+                await bot.ws_loop(self.state, None)
+
+        # First failure sleeps 1; after success backoff resets; second failure sleeps 1 again
+        self.assertEqual(sleep_calls[0], 1)  # sleep after first failure
+        self.assertEqual(sleep_calls[1], 1)  # backoff was reset — not 2
+
+
+# ── _market_refresh_loop ──────────────────────────────────────────────────────
+
+class TestMarketRefreshLoop(unittest.IsolatedAsyncioTestCase):
+    """M-5: _market_refresh_loop registers new markets and purges expired ones."""
+
+    def setUp(self):
+        self.state = make_state()
+        self.state.config = bot.BotConfig(market_refresh=30)
+
+    def tearDown(self):
+        self.state.conn.close()
+
+    def _make_market(self, mid="mkt1", up="up1", dn="dn1", offset_min=3):
+        now = datetime.now(timezone.utc)
+        return {
+            "conditionId":   mid,
+            "endDate":    (now + timedelta(minutes=offset_min)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "startDate":  (now - timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "clobTokenIds": [up, dn],
+            "question":      "BTC up or down?",
+        }
+
+    async def test_new_markets_registered_and_subscribed(self):
+        ws_sends = []
+
+        class _FakeWs:
+            async def send(self, msg):
+                ws_sends.append(msg)
+
+        sleep_count = 0
+
+        async def _fake_sleep(n):
+            nonlocal sleep_count
+            sleep_count += 1
+            if sleep_count >= 2:
+                raise asyncio.CancelledError
+
+        market = self._make_market()
+        with patch("live_bot.api.get_markets", unittest.mock.AsyncMock(return_value=[market])), \
+             patch("asyncio.sleep", _fake_sleep):
+            with self.assertRaises(asyncio.CancelledError):
+                await bot._market_refresh_loop(self.state, None, _FakeWs())
+
+        self.assertIn("up1", self.state.tokens)
+        self.assertIn("dn1", self.state.tokens)
+        self.assertTrue(len(ws_sends) > 0)
+
+    async def test_expired_markets_purged(self):
+        # Pre-populate an expired token with no open trade
+        end_ms = int((time.time() - 10) * 1000)
+        ts = bot.TokenState("tok_exp", "mkt_exp", "UP", "q", 0, end_ms)
+        self.state.tokens["tok_exp"] = ts
+
+        sleep_count = 0
+
+        async def _fake_sleep(n):
+            nonlocal sleep_count
+            sleep_count += 1
+            if sleep_count >= 2:
+                raise asyncio.CancelledError
+
+        with patch("live_bot.api.get_markets", unittest.mock.AsyncMock(return_value=[])), \
+             patch("asyncio.sleep", _fake_sleep):
+            with self.assertRaises(asyncio.CancelledError):
+                await bot._market_refresh_loop(self.state, None, object())
+
+        self.assertNotIn("tok_exp", self.state.tokens)
+
+    async def test_api_error_does_not_crash_loop(self):
+        sleep_count = 0
+
+        async def _fake_sleep(n):
+            nonlocal sleep_count
+            sleep_count += 1
+            if sleep_count >= 2:
+                raise asyncio.CancelledError
+
+        with patch("live_bot.api.get_markets",
+                   unittest.mock.AsyncMock(side_effect=RuntimeError("network down"))), \
+             patch("asyncio.sleep", _fake_sleep):
+            with self.assertRaises(asyncio.CancelledError):
+                await bot._market_refresh_loop(self.state, None, object())
+
+        # Loop survived the error — no tokens added, but no crash
+        self.assertEqual(len(self.state.tokens), 0)
 
 
 if __name__ == "__main__":

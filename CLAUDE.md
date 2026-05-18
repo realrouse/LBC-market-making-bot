@@ -80,7 +80,7 @@ No test suite exists yet. There is no linter configured.
 
 ## Architecture
 
-The bot is a single-file async state machine (`bot/live_bot.py`, ~617 lines) driven by WebSocket market data.
+The bot is a single-file async state machine (`bot/live_bot.py`, ~1530 lines) driven by WebSocket market data.
 
 **Core data flow:**
 1. `main()` initializes SQLite DB and `BotState`, restores unresolved trades from DB

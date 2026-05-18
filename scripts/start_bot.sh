@@ -29,6 +29,7 @@ done
 INSTALL_DIR="${TRADINEBOTTE_DIR:-$HOME/tradinebotte}"
 INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
 CONFIG="$INSTALL_DIR/config.json"
+PID_FILE="$INSTALL_DIR/live.pid"
 
 # ── Language ──────────────────────────────────────────────────────
 # Read the language preference saved by setup.py in config.json.
@@ -54,12 +55,15 @@ if [ ! -f "$CONFIG" ]; then
     exit 1
 fi
 
-# ── Check for a running instance (current user only) ──────────────
-if pgrep -u "$(id -u)" -f '[l]ive_bot\.py' > /dev/null; then
-    _pid=$(pgrep -u "$(id -u)" -f '[l]ive_bot\.py')
-    echo "$(_t "❌ ERROR: an instance is already running (PID:" "❌ ERREUR : une instance est déjà en cours (PID:") $_pid)"
-    echo "   $(_t "Stop it first:" "Arrêtez-la d'abord :") pkill -u \$(id -u) -f '[l]ive_bot\.py'"
-    exit 1
+# ── Check for a running instance (via PID file) ───────────────────
+if [ -f "$PID_FILE" ]; then
+    _pid=$(cat "$PID_FILE")
+    if kill -0 "$_pid" 2>/dev/null; then
+        echo "$(_t "❌ ERROR: an instance is already running (PID:" "❌ ERREUR : une instance est déjà en cours (PID:") $_pid)"
+        echo "   $(_t "Stop it first:" "Arrêtez-la d'abord :") kill $_pid"
+        exit 1
+    fi
+    rm -f "$PID_FILE"
 fi
 
 # ── --reset-db ────────────────────────────────────────────────────
@@ -95,14 +99,18 @@ DISPLAY_LOG="${LOG/$HOME/\~}"
 DISPLAY_DIR="${INSTALL_DIR/$HOME/\~}"
 echo "$(_t "Starting bot from" "Lancement du bot depuis") $DISPLAY_DIR..."
 export TRADINEBOTTE_DIR="$INSTALL_DIR"
-nohup "$PYTHON" "$INSTALL_DIR/live_bot.py" "${BOT_EXTRA_ARGS[@]}" >> "$LOG" 2>&1 &
-echo "PID: $!"
+nohup "$PYTHON" "$INSTALL_DIR/live_bot.py" "${BOT_EXTRA_ARGS[@]}" </dev/null >> "$LOG" 2>&1 &
+_pid=$!
+disown "$_pid"
+echo "$_pid" > "$PID_FILE"
+echo "PID: $_pid"
 sleep 3
 
-if pgrep -u "$(id -u)" -f '[l]ive_bot\.py' > /dev/null; then
-    echo "✅ $(_t "Bot running — PID:" "Bot en cours — PID:") $(pgrep -u "$(id -u)" -f '[l]ive_bot\.py')"
+if kill -0 "$_pid" 2>/dev/null; then
+    echo "✅ $(_t "Bot running — PID:" "Bot en cours — PID:") $_pid"
     echo "$(_t "Logs:" "Logs :") tail -f $DISPLAY_LOG"
 else
+    rm -f "$PID_FILE"
     echo "$(_t "❌ Bot stopped — last log lines:" "❌ Bot arrêté — dernières lignes du log :")"
     tail -20 "$LOG"
 fi

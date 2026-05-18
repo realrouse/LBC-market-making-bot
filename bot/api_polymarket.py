@@ -16,13 +16,20 @@ logger = logging.getLogger("live")
 # ─── ENDPOINTS ───────────────────────────────────────────────────────────────
 GAMMA_URL     = "https://gamma-api.polymarket.com/markets"
 GAMMA_HEADERS = {"User-Agent": "Mozilla/5.0"}
-GAMMA_PARAMS  = {"closed": "false", "limit": 100, "tag_id": 102892}  # 102892 = "5M" tag
+GAMMA_PARAMS  = {"closed": "false", "limit": 100}
 CLOB_URL      = "https://clob.polymarket.com"
 WS_URL        = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 WS_BATCH_SIZE = 50  # max token IDs per WebSocket subscribe message
 
-# BTC 5-minute market keyword filter (safety net after server-side tag filter)
-BTC_5M_KEYWORDS = ("bitcoin up or down", "btc up or down")
+# Polymarket tag IDs for timed Up/Down markets
+GAMMA_TAG_5M  = 102892   # "5M"  — Bitcoin/ETH/XRP Up or Down 5-minute markets
+GAMMA_TAG_15M = 102467   # "15M" — Bitcoin Up or Down 15-minute markets
+
+# BTC Up/Down keyword filter — safety net after server-side tag filter; works for all timeframes
+BTC_UPDOWN_KEYWORDS = ("bitcoin up or down", "btc up or down")
+
+# Legacy alias kept for callers that import it directly
+BTC_5M_KEYWORDS = BTC_UPDOWN_KEYWORDS
 
 # ─── FEE ─────────────────────────────────────────────────────────────────────
 # CRITICAL — backtested parameter (98.3% WR on 1663 trades). Do not modify
@@ -187,38 +194,39 @@ def parse_book_update(msg):
 
 # ─── MARKET DISCOVERY ─────────────────────────────────────────────────────────
 
-async def get_markets(session):
+async def get_markets(session, *, tag_id: int = GAMMA_TAG_5M, window_minutes: int = 6):
     """
-    Fetch active BTC 5-minute markets from the Polymarket Gamma API.
+    Fetch active BTC Up/Down markets from the Polymarket Gamma API.
 
-    CRITICAL: The ±6-minute temporal window filter is mandatory.
+    CRITICAL: The temporal window filter is mandatory.
     Without it, the Gamma API returns expired markets whose order books
     still show stale prices that falsely trigger the signal.
 
-    tag_id=102892 ("5M") pre-filters server-side to 5-minute markets only,
-    reducing the response from potentially thousands of markets to ~12-20.
-    A single API call suffices — pagination is not needed.
-    BTC_5M_KEYWORDS is kept as a safety net for other 5M assets.
+    tag_id pre-filters server-side by market type:
+      GAMMA_TAG_5M  (102892) — 5-minute markets, window ±6 min
+      GAMMA_TAG_15M (102467) — 15-minute markets, window ±16 min
+    BTC_UPDOWN_KEYWORDS is kept as a safety net for non-BTC assets in the same tag.
     """
     try:
         params = dict(GAMMA_PARAMS)
+        params["tag_id"] = tag_id
         now_utc = datetime.now(timezone.utc)
-        params["end_date_min"] = (now_utc - timedelta(minutes=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        params["end_date_max"] = (now_utc + timedelta(minutes=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        params["end_date_min"] = (now_utc - timedelta(minutes=window_minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        params["end_date_max"] = (now_utc + timedelta(minutes=window_minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
         async with session.get(
             GAMMA_URL, headers=GAMMA_HEADERS, params=params,
             timeout=aiohttp.ClientTimeout(total=15),
         ) as resp:
             if resp.status != 200:
-                logger.warning("Gamma API erreur : %d", resp.status)
+                logger.warning("Gamma API error: %d", resp.status)
                 return []
             data = await resp.json(content_type=None)
         batch = data if isinstance(data, list) else data.get("data", data.get("markets", []))
         results = [
             m for m in batch
-            if any(kw in m.get("question", "").lower() for kw in BTC_5M_KEYWORDS)
+            if any(kw in m.get("question", "").lower() for kw in BTC_UPDOWN_KEYWORDS)
         ]
-        logger.info("BTC 5-min markets: %d", len(results))
+        logger.info("BTC markets (tag=%d, window=±%dm): %d", tag_id, window_minutes, len(results))
         return results
     except Exception as e:
         logger.warning("Fetch error: %s", e)
@@ -260,8 +268,8 @@ async def post_order(session, token_id, price, size_usdc, *, private_key, instal
         oid = str(_resp.get("orderID") or _resp.get("id") or "")
         if oid:
             return oid
-        logger.warning("CLOB resp sans orderID: %s", _resp)
+        logger.warning("CLOB resp without orderID: keys=%s", list(_resp.keys()))
         return None
     except Exception as e:
-        logger.error("Erreur CLOB : %s", e)
+        logger.error("CLOB error: %s", e)
         return None

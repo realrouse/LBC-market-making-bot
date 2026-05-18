@@ -15,6 +15,7 @@
 
     "strategy_type": "grid",
     "connector":     "binance",
+    "trail_mode":    "bear",
 
     "grid_symbol":          "BTCUSDT",
     "grid_lower":           68599.0,

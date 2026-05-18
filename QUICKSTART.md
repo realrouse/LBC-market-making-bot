@@ -13,10 +13,10 @@
 ## Install from official release (tar.gz)
 
 ```bash
-# Download the latest release (replace v0.4.4 with the current version)
-wget https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.4.4.tar.gz
-tar -xzf v0.4.4.tar.gz
-cd tradinebotte-0.4.4
+# Download the latest release (replace v0.4.5 with the current version)
+wget https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.4.5.tar.gz
+tar -xzf v0.4.5.tar.gz
+cd tradinebotte-0.4.5
 bash scripts/install.sh        # detects missing system packages; prompts for language (E/F)
 python3 scripts/setup.py       # prompts for language (saved to config.json); Enter = simulation mode
 bash scripts/start_bot.sh
@@ -26,7 +26,7 @@ tail -f ~/tradinebotte/live.log
 Monitor: `bash scripts/monitor.sh`  
 Auto-restart on reboot: see [INSTALL.md — systemd setup](INSTALL.md#auto-start-with-systemd-recommended-for-vps)
 
-**Stop:** `pkill -f '[l]ive_bot.py'` · or `sudo systemctl stop tradinebotte` if using systemd
+**Stop:** `kill $(cat ~/tradinebotte/live.pid)` · or `sudo systemctl stop tradinebotte` if using systemd
 
 ---
 

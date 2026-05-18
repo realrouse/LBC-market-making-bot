@@ -147,8 +147,10 @@ def _ensure_feed() -> None:
         if VERBOSE:
             logger.debug("[ENSURE_FEED] starting feed.py: %s", " ".join(cmd))
             logger.debug("[ENSURE_FEED] feed log: %s", log_path)
-        with open(log_path, "ab") as log_f:
-            proc = subprocess.Popen(cmd, env=env, stdout=log_f, stderr=log_f)  # pylint: disable=consider-using-with
+        _log_fd = os.open(log_path, os.O_CREAT | os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW, 0o644)
+        log_f = os.fdopen(_log_fd, "ab")
+        proc = subprocess.Popen(cmd, env=env, stdout=log_f, stderr=log_f)  # pylint: disable=consider-using-with
+        log_f.close()
         logger.info("Feed started (PID %d) — log: %s", proc.pid, log_path)
 
         # Wait until feed publishes its first message.
@@ -372,7 +374,7 @@ async def main() -> None:
                      state.capital, len(state.open_trades))
 
     import aiohttp
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
         state.session = session
         await _run(state)
 

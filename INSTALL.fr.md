@@ -108,6 +108,16 @@ ssh user@serveur "cd ~/tradinebotte && bash scripts/install.sh"
 > Le flag `--exclude='config.json'` est critique lors des mises à jour — sans lui,
 > rsync écrase le fichier de credentials de production.
 
+Pour les mises à jour du bot uniquement (sans synchronisation complète du dépôt), utiliser `scripts/update_standalone.sh` :
+
+```bash
+bash scripts/update_standalone.sh            # rsync bot/ + strategies/*.json, puis redémarrage
+bash scripts/update_standalone.sh --skip-restart   # rsync uniquement
+bash scripts/update_standalone.sh --verify-only    # vérifie les fichiers et le processus, sans transfert
+```
+
+Ce script stoppe le bot via `live.pid`, synchronise uniquement les fichiers nécessaires et redémarre dans une seule session SSH. Voir [UPDATE.fr.md](UPDATE.fr.md) pour le scénario complet.
+
 ### Méthode 3 — Archive tar.gz de release officielle (sans git)
 
 Télécharger la dernière archive de release depuis la
@@ -445,8 +455,13 @@ pgrep -fa live_bot.py
 d'interrompre un trade ouvert). L'arrêter manuellement si besoin :
 
 ```bash
-pkill -f live_bot.py
+kill $(cat ~/tradinebotte/live.pid)
 ```
+
+Le script de démarrage écrit `live.pid` automatiquement. De même, `feed.pid`, `account.pid`
+et `indicators.pid` sont écrits par leurs scripts de démarrage respectifs. Utiliser
+`kill $(cat <chemin>.pid)` pour arrêter l'un de ces processus. Les fichiers PID périmés
+laissés par un crash sont nettoyés automatiquement au prochain démarrage.
 
 - Logs : `<TRADINEBOTTE_DIR>/live.log`
 - Trades : `<TRADINEBOTTE_DIR>/live.db` (SQLite)
@@ -892,8 +907,9 @@ TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-a bash sc
 ### Arrêt
 
 ```bash
-pkill -f feed.py
-pkill -f account_bot.py
+kill $(cat ~/tradinebotte/feed.pid)
+kill $(cat ~/account-a/account.pid)
+kill $(cat ~/account-b/account.pid)
 ```
 
 ### Protocole de messages

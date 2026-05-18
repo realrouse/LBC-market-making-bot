@@ -20,7 +20,7 @@ cd ~/src/tradinebotte
 git pull
 bash scripts/install.sh      # réutilise ~/tradinebotte/venv, upgrade packages seulement
 
-pkill -f live_bot.py
+kill $(cat ~/tradinebotte/live.pid)
 bash scripts/start_bot.sh
 # ou : sudo systemctl restart tradinebotte
 ```
@@ -38,7 +38,7 @@ cd ~/tradinebotte
 git pull
 bash scripts/install.sh
 
-pkill -f live_bot.py
+kill $(cat ~/tradinebotte/live.pid)
 bash scripts/start_bot.sh
 ```
 
@@ -57,7 +57,7 @@ rsync -az --delete \
     /chemin/vers/tradinebotte/ user@serveur:~/tradinebotte/
 
 ssh user@serveur 'cd ~/tradinebotte && bash scripts/install.sh'
-ssh user@serveur 'pkill -f live_bot.py; bash ~/tradinebotte/scripts/start_bot.sh'
+ssh user@serveur 'kill $(cat ~/tradinebotte/live.pid); bash ~/tradinebotte/scripts/start_bot.sh'
 ```
 
 **Exclusions critiques :**
@@ -71,6 +71,22 @@ re-demandera la langue et régénérera le fichier).
 
 ---
 
+## Scénario 4 — Déploiement allégé avec `update_standalone.sh`
+
+Pour déployer uniquement les fichiers du bot (sans synchronisation complète du dépôt), utiliser le script dédié :
+
+```bash
+bash scripts/update_standalone.sh
+```
+
+Ce script copie en rsync le contenu de `bot/` à plat dans le répertoire d'installation ainsi que les fichiers `strategies/*.json`, puis stoppe le bot en cours d'exécution (via `live.pid`) et relance la nouvelle version dans une seule session SSH. Pratique pour déployer depuis une machine de développement sans passer par git.
+
+**Options :**
+- `--skip-restart` — rsync uniquement, sans stop/start du bot
+- `--verify-only` — vérifie que les fichiers déployés sont présents et que le bot tourne ; aucun transfert de fichiers
+
+---
+
 ## Option B — Mise à jour multi-bot
 
 Mettre à jour le repo partagé et redémarrer. Les répertoires de comptes (`~/account-a`, etc.) ne sont pas touchés.
@@ -80,8 +96,9 @@ cd ~/src/tradinebotte   # ou l'emplacement du repo
 git pull
 bash scripts/install.sh
 
-pkill -f feed.py
-pkill -f account_bot.py
+kill $(cat ~/tradinebotte/feed.pid)
+kill $(cat ~/account-a/account.pid)
+kill $(cat ~/account-b/account.pid)
 
 TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
 TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh

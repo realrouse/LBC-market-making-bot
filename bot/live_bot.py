@@ -69,9 +69,10 @@ US_WEEKLY_OPEN:         bool                  = True
 US_WEEKLY_CLOSE:        bool                  = True
 
 # ─── TIMING / SNAPSHOT DEFAULTS ───────────────────────────────────────────────
-SNAPSHOT_INTERVAL  = 1
-DASHBOARD_INTERVAL = 300
-MARKET_REFRESH     = 30
+SNAPSHOT_INTERVAL       = 1
+SNAPSHOT_COMMIT_SECS    = 30   # batch snapshot commits: one flush every 30 s
+DASHBOARD_INTERVAL      = 300
+MARKET_REFRESH          = 30
 
 # ─── CONNECTOR / STRATEGY DEFAULTS ────────────────────────────────────────────
 CONNECTOR      = "polymarket"   # api_* module to use; see bot/connectors/
@@ -83,6 +84,7 @@ GRID_LOWER           = 0.0
 GRID_UPPER           = 0.0
 GRID_LEVELS          = 10
 GRID_ORDER_SIZE_USDT = 50.0
+GRID_TRAIL_MODE      = "static"   # "static" | "bull" | "bear"
 
 # ─── VOLATILITY FILTER DEFAULTS ───────────────────────────────────────────────
 VOL_FILTER_ENABLED      = True
@@ -92,6 +94,24 @@ VOL_MIN_SAMPLES         = 6
 VOL_BID_MAX             = 0.07
 RANGE_BID_MAX           = 0.30
 OBI_VOL_MAX             = 0.40
+
+# ─── MARKET DISCOVERY DEFAULTS ───────────────────────────────────────────────
+MARKET_TAG_ID    = 102892   # Polymarket tag: 102892=5M, 102467=15M
+MARKET_WINDOW_MINS = 6      # ±N-minute temporal window for Gamma API queries
+
+# ─── STAKE SCALING DEFAULTS ───────────────────────────────────────────────────
+# Bid×secs dynamic sizing (Phase 3, 2026-05-16).
+# Set bid_alpha=0 AND secs_alpha=0 to disable (flat stake = STAKE).
+STAKE_BID_ALPHA:       float = 0.0   # boost per unit of bid confidence above threshold
+STAKE_SECS_REF:        float = 45.0  # safe zone (s): no secs penalty below this
+STAKE_SECS_ALPHA:      float = 0.0   # penalty intensity for secs > secs_ref
+STAKE_MAX:             float = 10.0  # absolute stake cap; overridden by JSON
+STAKE_MAX_PCT_CAPITAL: float = 0.0   # 0 = off; 0.12 = cap at 12 % of current capital
+# Floor multiplier applied by compute_stake(); not exposed in JSON.
+_STAKE_SECS_MIN_FACTOR: float = 0.3
+
+# ─── WEEKLY STOP-LOSS DEFAULT ─────────────────────────────────────────────────
+WEEKLY_STOP_LOSS: float = 0.0   # 0 = disabled; e.g. 60.0 = halt after −$60/week
 
 # ─── LOGGING FORMATTERS ───────────────────────────────────────────────────────
 _SESSION_ID = uuid.uuid4().hex[:8].upper()
@@ -187,6 +207,10 @@ class BotConfig:
     us_weekly_open:       bool = US_WEEKLY_OPEN
     us_weekly_close:      bool = US_WEEKLY_CLOSE
 
+    # Market discovery
+    market_tag_id:      int = MARKET_TAG_ID
+    market_window_mins: int = MARKET_WINDOW_MINS
+
     # Timing
     snapshot_interval:  int = SNAPSHOT_INTERVAL
     enable_snapshots:   bool = True
@@ -201,6 +225,16 @@ class BotConfig:
     vol_bid_max:             float = VOL_BID_MAX
     range_bid_max:           float = RANGE_BID_MAX
     obi_vol_max:             float = OBI_VOL_MAX
+
+    # Stake scaling (bid×secs dynamic sizing)
+    stake_bid_alpha:       float = STAKE_BID_ALPHA
+    stake_secs_ref:        float = STAKE_SECS_REF
+    stake_secs_alpha:      float = STAKE_SECS_ALPHA
+    stake_max:             float = STAKE_MAX
+    stake_max_pct_capital: float = STAKE_MAX_PCT_CAPITAL
+
+    # Weekly stop-loss
+    weekly_stop_loss: float = WEEKLY_STOP_LOSS
 
     # ZeroMQ feed address (account_bot / indicators only)
     feed_addr: str = "tcp://127.0.0.1:5557"
@@ -244,6 +278,7 @@ class BotConfig:
     grid_upper:           float = GRID_UPPER
     grid_levels:          int   = GRID_LEVELS
     grid_order_size_usdt: float = GRID_ORDER_SIZE_USDT
+    grid_trail_mode:      str   = GRID_TRAIL_MODE
 
     def __post_init__(self) -> None:
         # Compute paths from TRADINEBOTTE_DIR when not explicitly provided.
@@ -335,6 +370,7 @@ def make_config(simulate: bool = False, no_log: bool = False,
     grid_upper           = float(strat.get("grid_upper",           GRID_UPPER))
     grid_levels          = int(strat.get("grid_levels",           GRID_LEVELS))
     grid_order_size_usdt = float(strat.get("grid_order_size_usdt", GRID_ORDER_SIZE_USDT))
+    grid_trail_mode      = str(strat.get("trail_mode",             GRID_TRAIL_MODE))
 
     # Strategy overrides from JSON (fall back to module-level defaults).
     capital_start      = float(strat.get("capital_start",      CAPITAL_START))
@@ -348,6 +384,18 @@ def make_config(simulate: bool = False, no_log: bool = False,
     loss_threshold     = float(strat.get("loss_threshold",      LOSS_THRESHOLD))
     obi_reject_thresh  = float(strat.get("obi_reject_thresh",   OBI_REJECT_THRESH))
     daily_stop_loss    = float(strat.get("daily_stop_loss",     DAILY_STOP_LOSS))
+
+    # Stake scaling — default stake_max to base stake so flat mode is unchanged.
+    stake_bid_alpha       = float(strat.get("stake_bid_alpha",       STAKE_BID_ALPHA))
+    stake_secs_ref        = float(strat.get("stake_secs_ref",        STAKE_SECS_REF))
+    stake_secs_alpha      = float(strat.get("stake_secs_alpha",      STAKE_SECS_ALPHA))
+    stake_max             = float(strat.get("stake_max",             stake))  # default = base
+    stake_max_pct_capital = float(strat.get("stake_max_pct_capital", STAKE_MAX_PCT_CAPITAL))
+
+    weekly_stop_loss = float(strat.get("weekly_stop_loss", WEEKLY_STOP_LOSS))
+
+    market_tag_id      = int(strat.get("market_tag_id",      MARKET_TAG_ID))
+    market_window_mins = int(strat.get("market_window_mins", MARKET_WINDOW_MINS))
 
     _hf = strat.get("hour_filter", {})
     hour_filter_enabled = bool(_hf.get("enabled", False))
@@ -446,6 +494,15 @@ def make_config(simulate: bool = False, no_log: bool = False,
         grid_upper=grid_upper,
         grid_levels=grid_levels,
         grid_order_size_usdt=grid_order_size_usdt,
+        grid_trail_mode=grid_trail_mode,
+        stake_bid_alpha=stake_bid_alpha,
+        stake_secs_ref=stake_secs_ref,
+        stake_secs_alpha=stake_secs_alpha,
+        stake_max=stake_max,
+        stake_max_pct_capital=stake_max_pct_capital,
+        weekly_stop_loss=weekly_stop_loss,
+        market_tag_id=market_tag_id,
+        market_window_mins=market_window_mins,
     )
 
     # Sync display config to bot_utils so its functions read the correct values.
@@ -692,6 +749,7 @@ class RejectionStats:
     vol_filter:    int = 0
     capital:       int = 0
     daily_stop:    int = 0
+    weekly_stop:   int = 0
     api_cooldown:  int = 0
 
 
@@ -721,6 +779,11 @@ class BotState:
         # midnight by check_signal. Eliminates the SQL SELECT on the hot path.
         self.daily_pnl: float = 0.0
         self._daily_pnl_day: int = -1   # UTC day number (days since epoch)
+        # Weekly PnL cache — same pattern; resets every 7-day period.
+        self.weekly_pnl: float = 0.0
+        self._weekly_pnl_week: int = -1  # 7-day period index since Unix epoch
+        # Batched snapshot commits — flushed every SNAPSHOT_COMMIT_SECS seconds.
+        self.last_snapshot_commit_ts: float = 0.0
         # Circuit-breaker: suspend new entries after 3 consecutive CLOB failures.
         self.api_fail_streak: int = 0
         self.api_cooldown_until: float = 0.0
@@ -769,7 +832,51 @@ async def handle_book_update(state: BotState, parsed: dict[str, Any]) -> None:
         ts.obi_history.append(ts.obi)
         if state.config.enable_snapshots:
             save_snapshot(state, ts)
+            if now - state.last_snapshot_commit_ts >= SNAPSHOT_COMMIT_SECS:
+                state.conn.commit()
+                state.last_snapshot_commit_ts = now
         ts.last_snapshot_ts = now
+
+
+# ─── STAKE SCALING ────────────────────────────────────────────────────────────
+
+def compute_stake(cfg: "BotConfig", bid: float, secs: float,
+                  capital: float = 0.0) -> float:
+    """
+    Compute the effective stake for one trade using bid-confidence and
+    time-remaining scaling.
+
+    Formula:
+      bid_score   = (bid − threshold) / (1 − threshold)          ∈ [0, 1]
+      bid_boost   = 1 + stake_bid_alpha × bid_score              ≥ 1
+      secs_excess = max(0, (secs − secs_ref) / secs_ref)
+      secs_factor = max(_STAKE_SECS_MIN_FACTOR, 1 − secs_alpha × secs_excess)
+      eff_max     = min(stake_max, stake_max_pct_capital × capital)  if pct > 0
+      stake       = clip(base × bid_boost × secs_factor, base × floor, eff_max)
+
+    When both alphas are 0 (default), returns cfg.stake unchanged (fast path).
+    capital is only used when stake_max_pct_capital > 0.
+    """
+    if cfg.stake_bid_alpha == 0.0 and cfg.stake_secs_alpha == 0.0:
+        if cfg.stake_max_pct_capital > 0 and capital > 0:
+            return min(cfg.stake, cfg.stake_max_pct_capital * capital)
+        return cfg.stake
+
+    bid_range  = 1.0 - cfg.signal_threshold
+    bid_score  = (bid - cfg.signal_threshold) / bid_range if bid_range > 0 else 0.0
+    bid_boost  = 1.0 + cfg.stake_bid_alpha * bid_score
+
+    if secs <= cfg.stake_secs_ref:
+        secs_factor = 1.0
+    else:
+        excess      = (secs - cfg.stake_secs_ref) / cfg.stake_secs_ref
+        secs_factor = max(_STAKE_SECS_MIN_FACTOR, 1.0 - cfg.stake_secs_alpha * excess)
+
+    eff_max = (min(cfg.stake_max, cfg.stake_max_pct_capital * capital)
+               if cfg.stake_max_pct_capital > 0 and capital > 0
+               else cfg.stake_max)
+    floor = cfg.stake * _STAKE_SECS_MIN_FACTOR
+    return min(eff_max, max(floor, cfg.stake * bid_boost * secs_factor))
 
 
 # ─── SIGNAL & TRADE LOGIC ─────────────────────────────────────────────────────
@@ -896,16 +1003,22 @@ async def check_signal(state: BotState, ts: TokenState, _t_ws: Optional[float] =
         state.daily_pnl = 0.0
         state._daily_pnl_day = today_day
 
+    # Weekly reset — same pattern; period boundary every 7 days.
+    today_week = int(time.time() // (7 * 86400))
+    if state._weekly_pnl_week != today_week:
+        state.weekly_pnl = 0.0
+        state._weekly_pnl_week = today_week
+
     # Periodic rejection stats — every 60 s.
     _now_t = time.time()
     if _now_t - state._last_stats_log >= 60:
         r = state.rejection_stats
         logger.info(
             "[REJECTIONS] signalled=%d ended=%d hour=%d bid=%d emax=%d"
-            " ask=%d askvol=%d secs=%d obi=%d vol=%d capital=%d dstop=%d cooldown=%d",
+            " ask=%d askvol=%d secs=%d obi=%d vol=%d capital=%d dstop=%d wstop=%d cooldown=%d",
             r.signalled, r.market_ended, r.trading_hour, r.best_bid, r.entry_max,
             r.best_ask, r.ask_vol, r.secs_remaining, r.obi, r.vol_filter,
-            r.capital, r.daily_stop, r.api_cooldown,
+            r.capital, r.daily_stop, r.weekly_stop, r.api_cooldown,
         )
         state.rejection_stats = RejectionStats()
         state._last_stats_log = _now_t
@@ -938,6 +1051,8 @@ async def check_signal(state: BotState, ts: TokenState, _t_ws: Optional[float] =
     if state.capital - len(state.open_trades) * cfg.stake < cfg.stake:
         state.rejection_stats.capital += 1; return
     if state.daily_pnl < -cfg.daily_stop_loss: state.rejection_stats.daily_stop += 1; return
+    if cfg.weekly_stop_loss > 0 and state.weekly_pnl < -cfg.weekly_stop_loss:
+        state.rejection_stats.weekly_stop += 1; return
     if time.time() < state.api_cooldown_until: state.rejection_stats.api_cooldown += 1; return
 
     state.signalled.add(ts.market_id)
@@ -945,9 +1060,10 @@ async def check_signal(state: BotState, ts: TokenState, _t_ws: Optional[float] =
 
 async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[float] = None) -> None:
     """
-    Record the trade in the DB, submit the CLOB order, and update bot state.
-    The DB insert happens even if the CLOB order fails so we always have an
-    audit trail and can detect orphaned positions on restart.
+    Submit the CLOB order, record the trade in the DB, and update bot state.
+    In live mode (session + private_key), returns early without inserting if
+    post_order returns None, preventing ghost rows with order_id=NULL.
+    In simulation mode (no private_key), the insert always runs with oid=None.
 
     _t_ws: monotonic timestamp from handle_book_update. When provided, latency
     metrics are computed and emitted as a [LATENCY] log line parseable by
@@ -955,11 +1071,12 @@ async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[floa
     """
     cfg = state.config
     now_ms = int(time.time() * 1000)
-    ep = ts.best_ask                        # entry price = best available ask
-    tb = cfg.stake / ep if ep > 0 else 0   # tokens bought at this price
-    fee = api.compute_fee(ep, tb)
-    cost = cfg.stake + fee
-    oid = None
+    ep    = ts.best_ask                                                          # entry price
+    stake = compute_stake(cfg, ts.best_bid, ts.secs_remaining, state.capital)   # dynamic or flat
+    tb    = stake / ep if ep > 0 else 0                         # tokens bought
+    fee   = api.compute_fee(ep, tb)
+    cost  = stake + fee
+    oid   = None
 
     # Latency measurement — point A: everything from WS message receipt up to
     # this point (token update, all signal guards, daily PnL query, fee calc).
@@ -970,7 +1087,7 @@ async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[floa
     t_pre_order = time.monotonic()
     if state.session:
         oid = await api.post_order(
-            state.session, ts.token_id, ep, cfg.stake,
+            state.session, ts.token_id, ep, stake,
             private_key=cfg.private_key, install_dir=cfg.install_dir,
         )
     order_rtt_ms = (time.monotonic() - t_pre_order) * 1000
@@ -983,8 +1100,9 @@ async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[floa
                     "CIRCUIT-BREAKER: %d consecutive CLOB failures — entries suspended 5 min",
                     state.api_fail_streak,
                 )
-        else:
-            state.api_fail_streak = 0
+            logger.warning("post_order returned None — aborting entry to prevent ghost trade")
+            return
+        state.api_fail_streak = 0
     cur = state.conn.execute(
         "INSERT INTO trades ("
         "market_id, token_id, direction, question, "
@@ -995,7 +1113,7 @@ async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[floa
         (ts.market_id, ts.token_id, ts.direction, ts.question,
          now_ms, ts.seconds_elapsed, ts.secs_remaining,
          ts.best_bid, ts.best_ask, ts.spread, ts.ask_vol, ts.obi,
-         now_ms, ep, oid, cfg.stake, tb, fee, cost, state.capital, 0)
+         now_ms, ep, oid, stake, tb, fee, cost, state.capital, 0)
     )
     state.conn.commit()
     tid = cur.lastrowid or 0
@@ -1003,9 +1121,9 @@ async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[floa
     state.traded_direction[ts.market_id] = ts.direction
     state.total_trades += 1
     logger.info(
-        "▶ TRADE #%d | %s %s | entry=%.4f  bid=%.4f  secs=%.0fs | order=%s",
-        tid, ts.direction, ts.market_id[:12], ep, ts.best_bid,
-        ts.secs_remaining, oid or "sim"
+        "▶ TRADE #%d | %s %s | entry=%.4f  bid=%.4f  secs=%.0fs  stake=$%.2f | order=%s",
+        tid, ts.direction, ts.market_id[:12], ep, ts.best_bid, ts.secs_remaining, stake,
+        oid or "sim"
     )
     if t_signal_ms is not None:
         # total_ms = signal latency + order RTT; these two intervals are
@@ -1060,8 +1178,9 @@ def close_trade(state: BotState, ts: TokenState, trade_id: int, outcome: str) ->
     )
     state.conn.commit()
     state.capital = ca
-    state.total_pnl += pn
-    state.daily_pnl += pn
+    state.total_pnl  += pn
+    state.daily_pnl  += pn
+    state.weekly_pnl += pn
     if won: state.wins += 1
     else: state.losses += 1
     del state.open_trades[ts.market_id]
@@ -1076,7 +1195,7 @@ def close_trade(state: BotState, ts: TokenState, trade_id: int, outcome: str) ->
     write_web_status(state)
 
 def save_snapshot(state: BotState, ts: TokenState) -> None:
-    """Persist a price snapshot to the DB for post-session analysis."""
+    """Insert a snapshot row without committing — caller batches commits via handle_book_update."""
     state.conn.execute(
         "INSERT INTO snapshots (ts_ms, market_id, token_id, direction, "
         "secs_remaining, best_bid, best_ask, spread, ask_vol, obi, has_open_trade) "
@@ -1085,7 +1204,6 @@ def save_snapshot(state: BotState, ts: TokenState) -> None:
          ts.secs_remaining, ts.best_bid, ts.best_ask, ts.spread, ts.ask_vol, ts.obi,
          1 if ts.market_id in state.open_trades else 0)
     )
-    state.conn.commit()
 
 # ─── MARKET DISCOVERY ─────────────────────────────────────────────────────────
 
@@ -1156,7 +1274,11 @@ async def _market_refresh_loop(state: BotState, session: aiohttp.ClientSession, 
     while True:
         await asyncio.sleep(state.config.market_refresh)
         try:
-            nm = await api.get_markets(session)
+            nm = await api.get_markets(
+                session,
+                tag_id=state.config.market_tag_id,
+                window_minutes=state.config.market_window_mins,
+            )
             ni = []
             for m in nm:
                 ni.extend(register_market(state, m))
@@ -1187,7 +1309,11 @@ async def _run_ws(state: BotState, session: aiohttp.ClientSession) -> None:
     so a recv timeout just means no market messages arrived — normal between
     5-minute candles. We only reconnect if all tracked markets have expired.
     """
-    markets = await api.get_markets(session)
+    markets = await api.get_markets(
+        session,
+        tag_id=state.config.market_tag_id,
+        window_minutes=state.config.market_window_mins,
+    )
     if not markets:
         logger.warning("No markets — waiting 30s")
         await asyncio.sleep(30)
@@ -1309,8 +1435,20 @@ def restore_state_from_db(state: BotState) -> None:
     state.daily_pnl = daily_row[0] or 0.0
     state._daily_pnl_day = int(time.time() // 86400)
 
-    logger.info("State : capital=$%.2f | %d trades | WR=%.1f%% | daily_pnl=$%+.2f",
-                state.capital, row[0], state.win_rate, state.daily_pnl)
+    # Weekly PnL — same pattern, 7-day window aligned on the current period.
+    week_start_ms = int(int(time.time() // (7 * 86400)) * 7 * 86400 * 1000)
+    weekly_row = state.conn.execute(
+        "SELECT COALESCE(SUM(pnl_net),0) FROM trades "
+        "WHERE resolved=1 AND signal_ts_ms>=?",
+        (week_start_ms,)
+    ).fetchone()
+    state.weekly_pnl = weekly_row[0] or 0.0
+    state._weekly_pnl_week = int(time.time() // (7 * 86400))
+
+    logger.info(
+        "State : capital=$%.2f | %d trades | WR=%.1f%% | daily_pnl=$%+.2f | weekly_pnl=$%+.2f",
+        state.capital, row[0], state.win_rate, state.daily_pnl, state.weekly_pnl,
+    )
 
 async def main() -> None:
     args   = _parse_args()
@@ -1322,6 +1460,9 @@ async def main() -> None:
     )
     _setup_logging(config)
     _load_connector(config.connector)
+    if config.strategy_type != "threshold":
+        from connectors import validate as _validate_conn
+        _validate_conn(api, config.strategy_type)
 
     _up = int(time.time() - _BOT_START)
     _start_str = datetime.fromtimestamp(_BOT_START, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -1340,12 +1481,26 @@ async def main() -> None:
                     config.strategy_type, config.connector)
     else:
         logger.warning("  Strategy: file not found — using defaults")
+    if config.connector == "polymarket":
+        _tf = "15M" if config.market_tag_id == api.GAMMA_TAG_15M else "5M"
+        logger.info("  Markets: BTC Up/Down %s (tag=%d, window=±%dmin)",
+                    _tf, config.market_tag_id, config.market_window_mins)
     if config.hour_filter_enabled:
         _wd = " ".join(f"{s}-{e}h" for s, e in config.weekday_utc_ranges) or "all hours"
         _we = " ".join(f"{s}-{e}h" for s, e in config.weekend_utc_ranges) or "blocked"
         _mo = " mon-open=13h30" if config.us_weekly_open else ""
         _fr = " fri-close=20h00" if config.us_weekly_close else ""
         logger.info("  Hour filter: weekday=%s | weekend=%s%s%s", _wd, _we, _mo, _fr)
+    if config.stake_bid_alpha != 0.0 or config.stake_secs_alpha != 0.0:
+        _pct = (f"  cap={config.stake_max_pct_capital*100:.0f}%capital"
+                if config.stake_max_pct_capital > 0 else "")
+        logger.info(
+            "  Stake scaling: bid_α=%.1f  secs_ref=%.0fs  secs_α=%.2f  max=$%.0f%s",
+            config.stake_bid_alpha, config.stake_secs_ref,
+            config.stake_secs_alpha, config.stake_max, _pct,
+        )
+    if config.weekly_stop_loss > 0:
+        logger.info("  Weekly stop-loss: $%.0f", config.weekly_stop_loss)
     if not config.private_key:
         logger.warning("  POLY_PRIVATE_KEY not set — orders SIMULATED")
     logger.info("=" * 65)
@@ -1354,7 +1509,8 @@ async def main() -> None:
     restore_state_from_db(state)
 
     async with aiohttp.ClientSession(
-        connector=aiohttp.TCPConnector(limit=10)
+        connector=aiohttp.TCPConnector(limit=10),
+        timeout=aiohttp.ClientTimeout(total=30),
     ) as session:
         state.session = session   # available before ws_loop for strategy restore
         if config.strategy_type != "threshold":

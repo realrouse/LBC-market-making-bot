@@ -55,7 +55,7 @@ def conn_default() -> sqlite3.Connection:
 
 def conn_mmap() -> sqlite3.Connection:
     c = conn_default()
-    c.execute(f"PRAGMA mmap_size = {MMAP_MB * 1024 * 1024};")
+    c.execute("PRAGMA mmap_size = ?", (MMAP_MB * 1024 * 1024,))
     c.commit()
     return c
 

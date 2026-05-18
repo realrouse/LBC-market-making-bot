@@ -256,7 +256,7 @@ async def _run_ws(sock: zmq.asyncio.Socket, session: aiohttp.ClientSession) -> N
                     if p:
                         msgs_received += 1
                         if VERBOSE and msgs_received % 50 == 0:
-                            logger.debug("[WS] %d book updates publies", msgs_received)
+                            logger.debug("[WS] %d book updates published", msgs_received)
                         _pub_json(sock, {"t": "book", **p})
         finally:
             refresh_task.cancel()
@@ -280,7 +280,7 @@ async def main() -> None:
     await asyncio.sleep(0.5)
 
     backoff = 1
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
         while True:
             try:
                 await _run_ws(sock, session)
@@ -289,7 +289,7 @@ async def main() -> None:
                 logger.warning("WS error — reconnecting in %ds", backoff, exc_info=True)
                 if VERBOSE:
                     import traceback
-                    logger.debug("[WS ERREUR] %s", traceback.format_exc())
+                    logger.debug("[WS ERROR] %s", traceback.format_exc())
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 60)
 
