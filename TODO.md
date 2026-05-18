@@ -57,10 +57,12 @@
 
 ### MEDIUM — Architecture
 
-- **[M-5] Improve test coverage on critical paths**
-  Not covered: `ws_loop`/reconnect logic, `_market_refresh_loop`/`purge_expired_markets`,
-  `grid.restore_from_db` offline reconciliation, `_user_stream_loop` retry, `bot/feed.py` (entire),
-  `bot/account_bot.py` (entire), `bot/indicators.py` (entire).
+- **[M-5] DONE — Test coverage added for `ws_loop`, `_market_refresh_loop`, `purge_expired_markets`**
+  11 new tests in `tests/test_bot.py`: `TestPurgeExpiredMarkets` (5 tests — expired removal,
+  active retention, open-trade guard, signal cleared on purge, mixed tokens); `TestWsLoopBackoff`
+  (3 tests — doubling, cap at 60 s, reset on success); `TestMarketRefreshLoop` (3 tests — new
+  market registration + subscription, expired purge, API error resilience). Total: 659 tests.
+  (branch `dev`)
 
 - **[M-6] DONE — User stream task no longer re-spawned after credential failure**
   `bot/strategies/grid.py` — `_no_credentials: bool = False` added to `__init__`; set to `True`

@@ -38,9 +38,9 @@ Toutes les modifications notables de ce projet sont documentées ici.
 - **`scripts/collect_db.sh` — correction syntaxe `--rotate`** : erreur de syntaxe préexistante où `"\$(id -u)"` dans une chaîne SSH entre guillemets doubles fermait la chaîne externe prématurément ; corrigé en `\$(id -u)`
 
 ### Tests
-- **`tests/test_bot.py` — 19 nouveaux tests** : `TestComputeStake` (11 cas couvrant la mise proportionnelle au bid, le plafond de capital, la pénalité de secondes, le plancher/plafond) ; `TestWeeklyStopLoss` (3 cas) ; `TestMarketDiscoveryConfig` (5 cas)
+- **`tests/test_bot.py` — 30 nouveaux tests** : `TestComputeStake` (11 cas couvrant la mise proportionnelle au bid, le plafond de capital, la pénalité de secondes, le plancher/plafond) ; `TestWeeklyStopLoss` (3 cas) ; `TestMarketDiscoveryConfig` (5 cas) ; `TestPurgeExpiredMarkets` (5 cas — suppression de token expiré, conservation des actifs, garde open-trade, signal effacé à la purge, tokens mixtes) ; `TestWsLoopBackoff` (3 cas — doublement, plafond à 60 s, remise à zéro après succès) ; `TestMarketRefreshLoop` (3 cas — enregistrement et abonnement de nouveaux marchés, purge des expirés, résilience aux erreurs API)
 - **`tests/test_grid_trail.py` — 12 nouveaux tests** : `TestConnectorValidate` (4 cas) ; `TestCheckStopLoss` (3 cas) ; `TestRecenterGrid` (2 cas) ; `TestRestoreFromDb` (3 cas)
-- **Suite complète : 639 tests passent**
+- **Suite complète : 659 tests passent**
 
 ---
 

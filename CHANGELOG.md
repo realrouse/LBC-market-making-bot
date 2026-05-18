@@ -38,9 +38,9 @@ All notable changes to this project are documented here.
 - **`scripts/collect_db.sh` — `--rotate` syntax fix**: pre-existing syntax error where `"\$(id -u)"` inside a double-quoted SSH string closed the outer string prematurely; fixed to `\$(id -u)`
 
 ### Tests
-- **`tests/test_bot.py` — 19 new tests**: `TestComputeStake` (11 cases covering bid scaling, capital cap, seconds penalty, floor/ceiling), `TestWeeklyStopLoss` (3 cases), `TestMarketDiscoveryConfig` (5 cases)
+- **`tests/test_bot.py` — 30 new tests**: `TestComputeStake` (11 cases covering bid scaling, capital cap, seconds penalty, floor/ceiling), `TestWeeklyStopLoss` (3 cases), `TestMarketDiscoveryConfig` (5 cases); `TestPurgeExpiredMarkets` (5 cases — expired token removed, active kept, open-trade guard, signalled cleared on purge, mixed tokens); `TestWsLoopBackoff` (3 cases — doubling, cap at 60 s, reset after success); `TestMarketRefreshLoop` (3 cases — new market registration + subscription, expired purge, API error resilience)
 - **`tests/test_grid_trail.py` — 12 new tests**: `TestConnectorValidate` (4 cases), `TestCheckStopLoss` (3 cases), `TestRecenterGrid` (2 cases), `TestRestoreFromDb` (3 cases)
-- **Full suite: 639 tests pass**
+- **Full suite: 659 tests pass**
 
 ---
 

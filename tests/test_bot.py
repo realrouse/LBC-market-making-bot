@@ -2906,5 +2906,230 @@ class TestMarketDiscoveryConfig(unittest.TestCase):
         self.assertIs(api_poly.BTC_5M_KEYWORDS, api_poly.BTC_UPDOWN_KEYWORDS)
 
 
+# ── purge_expired_markets ─────────────────────────────────────────────────────
+
+class TestPurgeExpiredMarkets(unittest.TestCase):
+    """M-5: purge_expired_markets removes ended tokens with no open trade."""
+
+    def setUp(self):
+        self.state = make_state()
+
+    def tearDown(self):
+        self.state.conn.close()
+
+    def _add_token(self, token_id, market_id, ended=False):
+        end_ms = int((time.time() - 10) * 1000) if ended else int((time.time() + 300) * 1000)
+        ts = bot.TokenState(token_id, market_id, "UP", "q", 0, end_ms)
+        self.state.tokens[token_id] = ts
+        self.state.market_tokens[market_id] = {"UP": token_id, "DOWN": token_id + "_dn"}
+        return ts
+
+    def test_expired_token_removed(self):
+        self._add_token("tok1", "mkt1", ended=True)
+        n = bot.purge_expired_markets(self.state)
+        self.assertEqual(n, 1)
+        self.assertNotIn("tok1", self.state.tokens)
+        self.assertNotIn("mkt1", self.state.market_tokens)
+
+    def test_active_token_kept(self):
+        self._add_token("tok1", "mkt1", ended=False)
+        n = bot.purge_expired_markets(self.state)
+        self.assertEqual(n, 0)
+        self.assertIn("tok1", self.state.tokens)
+
+    def test_expired_with_open_trade_kept(self):
+        self._add_token("tok1", "mkt1", ended=True)
+        self.state.open_trades["mkt1"] = 42  # open trade — must not purge
+        n = bot.purge_expired_markets(self.state)
+        self.assertEqual(n, 0)
+        self.assertIn("tok1", self.state.tokens)
+
+    def test_signalled_cleared_on_purge(self):
+        self._add_token("tok1", "mkt1", ended=True)
+        self.state.signalled.add("mkt1")
+        bot.purge_expired_markets(self.state)
+        self.assertNotIn("mkt1", self.state.signalled)
+
+    def test_mixed_tokens_correct_count(self):
+        self._add_token("tok_exp", "mkt_exp", ended=True)
+        self._add_token("tok_live", "mkt_live", ended=False)
+        n = bot.purge_expired_markets(self.state)
+        self.assertEqual(n, 1)
+        self.assertNotIn("tok_exp", self.state.tokens)
+        self.assertIn("tok_live", self.state.tokens)
+
+
+# ── ws_loop backoff ───────────────────────────────────────────────────────────
+
+class TestWsLoopBackoff(unittest.IsolatedAsyncioTestCase):
+    """M-5: ws_loop doubles backoff on failure, caps at 60, resets on success."""
+
+    def setUp(self):
+        self.state = make_state()
+
+    def tearDown(self):
+        self.state.conn.close()
+
+    async def test_backoff_doubles_on_failure(self):
+        sleep_calls = []
+
+        async def _fake_sleep(n):
+            sleep_calls.append(n)
+
+        call_count = 0
+
+        async def _failing_run_ws(state, session):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 4:
+                raise asyncio.CancelledError
+            raise RuntimeError("ws error")
+
+        with patch("live_bot._run_ws", _failing_run_ws), \
+             patch("asyncio.sleep", _fake_sleep):
+            with self.assertRaises(asyncio.CancelledError):
+                await bot.ws_loop(self.state, None)
+
+        self.assertEqual(sleep_calls, [1, 2, 4])
+
+    async def test_backoff_caps_at_60(self):
+        sleep_calls = []
+
+        async def _fake_sleep(n):
+            sleep_calls.append(n)
+
+        call_count = 0
+
+        async def _failing_run_ws(state, session):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 8:
+                raise asyncio.CancelledError
+            raise RuntimeError("ws error")
+
+        with patch("live_bot._run_ws", _failing_run_ws), \
+             patch("asyncio.sleep", _fake_sleep):
+            with self.assertRaises(asyncio.CancelledError):
+                await bot.ws_loop(self.state, None)
+
+        self.assertLessEqual(max(sleep_calls), 60)
+        self.assertEqual(sleep_calls[-1], 60)
+
+    async def test_backoff_resets_on_success(self):
+        sleep_calls = []
+        call_count = 0
+
+        async def _fake_sleep(n):
+            sleep_calls.append(n)
+
+        async def _mixed_run_ws(state, session):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("first failure")   # sleep(1), backoff→2
+            if call_count == 2:
+                return                                 # success → backoff reset to 1
+            if call_count == 3:
+                raise RuntimeError("second failure")  # sleep(1) — backoff was reset
+            raise asyncio.CancelledError              # terminates loop
+
+        with patch("live_bot._run_ws", _mixed_run_ws), \
+             patch("asyncio.sleep", _fake_sleep):
+            with self.assertRaises(asyncio.CancelledError):
+                await bot.ws_loop(self.state, None)
+
+        # First failure sleeps 1; after success backoff resets; second failure sleeps 1 again
+        self.assertEqual(sleep_calls[0], 1)  # sleep after first failure
+        self.assertEqual(sleep_calls[1], 1)  # backoff was reset — not 2
+
+
+# ── _market_refresh_loop ──────────────────────────────────────────────────────
+
+class TestMarketRefreshLoop(unittest.IsolatedAsyncioTestCase):
+    """M-5: _market_refresh_loop registers new markets and purges expired ones."""
+
+    def setUp(self):
+        self.state = make_state()
+        self.state.config = bot.BotConfig(market_refresh=30)
+
+    def tearDown(self):
+        self.state.conn.close()
+
+    def _make_market(self, mid="mkt1", up="up1", dn="dn1", offset_min=3):
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        return {
+            "conditionId":   mid,
+            "endDate":    (now + timedelta(minutes=offset_min)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "startDate":  (now - timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "clobTokenIds": [up, dn],
+            "question":      "BTC up or down?",
+        }
+
+    async def test_new_markets_registered_and_subscribed(self):
+        ws_sends = []
+
+        class _FakeWs:
+            async def send(self, msg):
+                ws_sends.append(msg)
+
+        sleep_count = 0
+
+        async def _fake_sleep(n):
+            nonlocal sleep_count
+            sleep_count += 1
+            if sleep_count >= 2:
+                raise asyncio.CancelledError
+
+        market = self._make_market()
+        with patch("live_bot.api.get_markets", unittest.mock.AsyncMock(return_value=[market])), \
+             patch("asyncio.sleep", _fake_sleep):
+            with self.assertRaises(asyncio.CancelledError):
+                await bot._market_refresh_loop(self.state, None, _FakeWs())
+
+        self.assertIn("up1", self.state.tokens)
+        self.assertIn("dn1", self.state.tokens)
+        self.assertTrue(len(ws_sends) > 0)
+
+    async def test_expired_markets_purged(self):
+        # Pre-populate an expired token with no open trade
+        end_ms = int((time.time() - 10) * 1000)
+        ts = bot.TokenState("tok_exp", "mkt_exp", "UP", "q", 0, end_ms)
+        self.state.tokens["tok_exp"] = ts
+
+        sleep_count = 0
+
+        async def _fake_sleep(n):
+            nonlocal sleep_count
+            sleep_count += 1
+            if sleep_count >= 2:
+                raise asyncio.CancelledError
+
+        with patch("live_bot.api.get_markets", unittest.mock.AsyncMock(return_value=[])), \
+             patch("asyncio.sleep", _fake_sleep):
+            with self.assertRaises(asyncio.CancelledError):
+                await bot._market_refresh_loop(self.state, None, object())
+
+        self.assertNotIn("tok_exp", self.state.tokens)
+
+    async def test_api_error_does_not_crash_loop(self):
+        sleep_count = 0
+
+        async def _fake_sleep(n):
+            nonlocal sleep_count
+            sleep_count += 1
+            if sleep_count >= 2:
+                raise asyncio.CancelledError
+
+        with patch("live_bot.api.get_markets",
+                   unittest.mock.AsyncMock(side_effect=RuntimeError("network down"))), \
+             patch("asyncio.sleep", _fake_sleep):
+            with self.assertRaises(asyncio.CancelledError):
+                await bot._market_refresh_loop(self.state, None, object())
+
+        # Loop survived the error — no tokens added, but no crash
+        self.assertEqual(len(self.state.tokens), 0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
