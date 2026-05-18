@@ -6,7 +6,7 @@ All notable changes to this project are documented here.
 
 ---
 
-## [Unreleased]
+## [0.5.0] - 2026-05-18
 
 ### Added
 - **`bot/live_bot.py` + `strategies/polymarket_BTC5M_piste3.json` — dynamic stake scaling + OBI calibration (Piste 3 strategy)**: stake scales with bid price using `stake = base × (1 + bid_α × (bid − 0.96))`, capped at `stake_max` and `cap × capital`; OBI rejection filter skips trades where OBI < `obi_reject_thresh` (removes low-win-rate buckets); weekly stop-loss halts the bot when `weekly_pnl < −weekly_stop_loss`; new `BotConfig` fields: `bid_alpha`, `secs_alpha`, `stake_max`, `capital_cap`, `obi_reject_thresh`, `weekly_stop_loss`; `strategies/polymarket_BTC5M_piste3.json` ships with `bid_alpha=2.0`, `stake_max=$15`, `cap=12%`, `weekly_stop=$60`, `obi_reject_thresh=−0.65`; backtest vs original: PnL +85%, MaxDD −28%, Sharpe 3.28 vs 1.97; new analysis scripts: `scripts/analyze_stake_secs.py`, `scripts/backtest_stake_secs.py`, `scripts/calibrate_obi.py`
