@@ -2312,6 +2312,59 @@ class TestUserDataStream(unittest.TestCase):
         import api_mexc
         self.assertIsNone(api_mexc.parse_user_stream_msg({"s": "BTCUSDT"}))
 
+    # ── api_binance public endpoint selection ─────────────────────────────────
+
+    def test_binance_no_creds_ws_url_is_public(self):
+        """WS_URL uses data-stream.binance.vision when no credentials are set."""
+        import importlib
+        import api_binance
+        # Reload without credentials to confirm public path
+        with unittest.mock.patch.dict(os.environ,
+                                      {"BINANCE_API_KEY": "", "BINANCE_API_SECRET": ""},
+                                      clear=False):
+            importlib.reload(api_binance)
+        self.assertIn("data-stream.binance.vision", api_binance.WS_URL)
+        self.assertTrue(api_binance.WS_URL.startswith("wss://"))
+
+    def test_binance_no_creds_base_url_is_public(self):
+        """BASE_URL uses data-api.binance.vision when no credentials are set."""
+        import importlib
+        import api_binance
+        with unittest.mock.patch.dict(os.environ,
+                                      {"BINANCE_API_KEY": "", "BINANCE_API_SECRET": ""},
+                                      clear=False):
+            importlib.reload(api_binance)
+        self.assertIn("data-api.binance.vision", api_binance.BASE_URL)
+
+    def test_binance_with_creds_ws_url_is_live(self):
+        """WS_URL uses stream.binance.com when credentials are present."""
+        import importlib
+        import api_binance
+        with unittest.mock.patch.dict(os.environ,
+                                      {"BINANCE_API_KEY": "key", "BINANCE_API_SECRET": "secret"},
+                                      clear=False):
+            importlib.reload(api_binance)
+        self.assertIn("stream.binance.com", api_binance.WS_URL)
+        # Restore no-creds state for subsequent tests
+        with unittest.mock.patch.dict(os.environ,
+                                      {"BINANCE_API_KEY": "", "BINANCE_API_SECRET": ""},
+                                      clear=False):
+            importlib.reload(api_binance)
+
+    def test_binance_with_creds_base_url_is_live(self):
+        """BASE_URL uses api.binance.com when credentials are present."""
+        import importlib
+        import api_binance
+        with unittest.mock.patch.dict(os.environ,
+                                      {"BINANCE_API_KEY": "key", "BINANCE_API_SECRET": "secret"},
+                                      clear=False):
+            importlib.reload(api_binance)
+        self.assertIn("api.binance.com", api_binance.BASE_URL)
+        with unittest.mock.patch.dict(os.environ,
+                                      {"BINANCE_API_KEY": "", "BINANCE_API_SECRET": ""},
+                                      clear=False):
+            importlib.reload(api_binance)
+
     def test_mexc_make_user_stream_url(self):
         import api_mexc
         url = api_mexc.make_user_stream_url("key_xyz")

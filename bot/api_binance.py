@@ -26,8 +26,19 @@ import aiohttp
 logger = logging.getLogger("live")
 
 # ─── ENDPOINTS ────────────────────────────────────────────────────────────────
-BASE_URL      = "https://api.binance.com"
-WS_URL        = "wss://stream.binance.com:9443/stream"  # combined stream endpoint
+# Public endpoints (https://data-api.binance.vision) require no API credentials
+# and are dedicated to market data — use them in simulation/no-credentials mode.
+_BASE_URL_LIVE   = "https://api.binance.com"
+_BASE_URL_PUBLIC = "https://data-api.binance.vision"
+_WS_URL_LIVE     = "wss://stream.binance.com:9443/stream"
+_WS_URL_PUBLIC   = "wss://data-stream.binance.vision/stream"
+
+_has_creds = bool(
+    os.environ.get("BINANCE_API_KEY") and os.environ.get("BINANCE_API_SECRET")
+)
+
+BASE_URL      = _BASE_URL_LIVE if _has_creds else _BASE_URL_PUBLIC
+WS_URL        = _WS_URL_LIVE   if _has_creds else _WS_URL_PUBLIC
 WS_BATCH_SIZE = 10  # max depth streams per WebSocket connection
 
 DEFAULT_SYMBOL = "BTCUSDT"
