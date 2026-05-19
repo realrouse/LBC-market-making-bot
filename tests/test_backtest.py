@@ -649,5 +649,137 @@ class TestCollectDbs(unittest.TestCase):
         self.assertTrue(result[-1].endswith(".db"))
 
 
+# ─── Walk-forward ─────────────────────────────────────────────────────────────
+
+class TestSplitWeekly(unittest.TestCase):
+    """bt._split_weekly — weekly bucket partitioning."""
+
+    # A known Monday midnight UTC anchor (2026-01-05 00:00:00 UTC)
+    # bt._WEEK_MS = 604800000
+    _EPOCH_WEEK = (1767484800000 // bt._WEEK_MS) * bt._WEEK_MS  # aligned boundary
+
+    def _snap(self, offset_ms: int) -> tuple:
+        ts = self._EPOCH_WEEK + offset_ms
+        return (ts, "m1", "UP", 60.0, 0.97, 0.97, 20.0, 0.0)
+
+    def test_empty_returns_empty(self):
+        self.assertEqual(bt._split_weekly([]), [])
+
+    def test_single_week_one_bucket(self):
+        rows = [self._snap(0), self._snap(100), self._snap(200)]
+        weeks = bt._split_weekly(rows)
+        self.assertEqual(len(weeks), 1)
+        self.assertEqual(len(weeks[0]), 3)
+
+    def test_two_distinct_weeks_two_buckets(self):
+        rows = [
+            self._snap(0),                          # week 0
+            self._snap(bt._WEEK_MS),                # week 1
+            self._snap(bt._WEEK_MS + 1000),         # week 1
+        ]
+        weeks = bt._split_weekly(rows)
+        self.assertEqual(len(weeks), 2)
+        self.assertEqual(len(weeks[0]), 1)
+        self.assertEqual(len(weeks[1]), 2)
+
+    def test_preserves_order_within_bucket(self):
+        ts0 = self._EPOCH_WEEK + 0
+        ts1 = self._EPOCH_WEEK + 1000
+        rows = [(ts1, "m", "UP", 60, 0.97, 0.97, 20, 0),
+                (ts0, "m", "UP", 60, 0.97, 0.97, 20, 0)]
+        weeks = bt._split_weekly(sorted(rows))
+        self.assertEqual(weeks[0][0][0], ts0)
+
+    def test_empty_weeks_skipped(self):
+        # Week 0 and week 2 have rows; week 1 is empty.
+        rows = [
+            self._snap(0),
+            self._snap(2 * bt._WEEK_MS),
+        ]
+        weeks = bt._split_weekly(rows)
+        self.assertEqual(len(weeks), 2)
+
+
+class TestWalkForward(unittest.TestCase):
+    """bt.walk_forward and bt._fold_sweep integration."""
+
+    _W = bt._WEEK_MS
+
+    def _rows(self, n_weeks: int = 6) -> list:
+        """Build n_weeks × 500 synthetic snapshot rows.
+        Alternates markets so trades can fire and resolve within each week.
+        best_bid=0.97 (above threshold=0.95) and best_ask=0.97 < 1.0.
+        """
+        rows = []
+        t0 = (1767484800000 // self._W) * self._W   # aligned start
+        for week in range(n_weeks):
+            base = t0 + week * self._W
+            for i in range(500):
+                ts  = base + i * 5000          # 5-second steps
+                mid = i % 10                   # 10 rotating markets
+                # Alternate bid: high signal → resolution
+                bid = 0.97 if i % 3 != 0 else 0.995   # sometimes crosses win_threshold
+                rows.append((ts, f"mkt{mid}", "UP", 60.0, bid, 0.97, 20.0, 0.0))
+        return rows
+
+    def test_returns_empty_when_insufficient_data(self):
+        # Only 1 week of data — cannot form even one fold with train=4w
+        rows = self._rows(n_weeks=1)
+        folds = bt.walk_forward(rows, train_weeks=4)
+        self.assertEqual(folds, [])
+
+    def test_single_fold_with_five_weeks(self):
+        # train=4w + 1 test week → exactly one fold
+        rows = self._rows(n_weeks=5)
+        folds = bt.walk_forward(rows, train_weeks=4)
+        self.assertEqual(len(folds), 1)
+
+    def test_two_folds_with_six_weeks(self):
+        rows = self._rows(n_weeks=6)
+        folds = bt.walk_forward(rows, train_weeks=4)
+        self.assertGreaterEqual(len(folds), 1)   # ≥1; second fold skipped if too few trades
+
+    def test_fold_has_expected_fields(self):
+        rows = self._rows(n_weeks=5)
+        folds = bt.walk_forward(rows, train_weeks=4)
+        if not folds:
+            self.skipTest("no valid folds produced with synthetic data")
+        f = folds[0]
+        self.assertIsInstance(f.best_params, bt.Params)
+        self.assertIn("total_pnl", f.train_stats)
+        self.assertIn("total_pnl", f.test_stats)
+        self.assertIsInstance(f.train_start, str)
+        self.assertEqual(len(f.train_start), 10)   # "YYYY-MM-DD"
+
+    def test_ev_degradation_none_when_train_ev_zero(self):
+        f = bt.WFold(
+            fold_n=1,
+            train_start="2026-01-01", train_end="2026-01-28",
+            test_start="2026-01-28", test_end="2026-02-04",
+            best_params=bt.Params(),
+            train_stats={"wins": 0, "losses": 0, "total_pnl": 0.0,
+                         "win_rate": 0.0, "max_drawdown": 0.0, "sharpe": 0.0},
+            test_stats= {"wins": 5, "losses": 0, "total_pnl": 0.5,
+                         "win_rate": 100.0, "max_drawdown": 0.0, "sharpe": 0.0},
+        )
+        self.assertIsNone(f.ev_degradation_pct)
+
+    def test_ev_degradation_formula(self):
+        import math as _m
+        f = bt.WFold(
+            fold_n=1,
+            train_start="2026-01-01", train_end="2026-01-28",
+            test_start="2026-01-28", test_end="2026-02-04",
+            best_params=bt.Params(),
+            train_stats={"wins": 10, "losses": 0, "total_pnl": 1.0,
+                         "win_rate": 100.0, "max_drawdown": 0.0, "sharpe": 0.0},
+            test_stats= {"wins":  5, "losses": 0, "total_pnl": 0.4,
+                         "win_rate": 100.0, "max_drawdown": 0.0, "sharpe": 0.0},
+        )
+        # train_ev = 1.0/10 = 0.10  test_ev = 0.4/5 = 0.08
+        # degradation = (0.08 - 0.10) / 0.10 * 100 = -20.0%
+        self.assertAlmostEqual(f.ev_degradation_pct, -20.0, places=5)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

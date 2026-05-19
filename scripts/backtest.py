@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# pylint: disable=too-many-lines   # walk-forward section adds ~170 lines; threshold raised intentionally
 """
 Backtest trading strategy parameters against historical snapshot data.
 
@@ -24,6 +25,7 @@ Usage:
 """
 
 import argparse, math, os, sqlite3, sys
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import product
@@ -855,6 +857,202 @@ def print_recommendations(results: list, n: int = 5) -> None:
     print("=" * 80)
 
 
+# ─── Walk-forward optimization ────────────────────────────────────────────────
+
+_WEEK_MS = 7 * 24 * 3600 * 1000   # one calendar week in milliseconds
+
+# Sweep grid used inside each walk-forward fold (min_ask fixed at 10 to limit
+# runtime; primary drivers are threshold, secs, obi).
+_WF_THRESHOLDS = [0.94, 0.95, 0.96, 0.97, 0.98]
+_WF_MIN_SECS   = [30,   45,   60]
+_WF_MIN_ASK    = 10.0
+_WF_OBI_VALS   = [-0.75, -0.50, -0.25]
+_WF_DSL_VALS   = [30,   100,  500]
+_WF_MIN_TEST_TRADES = 5   # skip folds with fewer resolved test-window trades
+
+
+@dataclass
+class WFold:
+    """Results for one walk-forward fold."""
+    fold_n:      int
+    train_start: str       # "YYYY-MM-DD" — actual first day of train data
+    train_end:   str       # actual last day of train data
+    test_start:  str       # actual first day of test data
+    test_end:    str       # actual last day of test data
+    best_params: Params
+    train_stats: dict
+    test_stats:  dict
+
+    @property
+    def train_ev(self) -> float:
+        n = self.train_stats["wins"] + self.train_stats["losses"]
+        return self.train_stats["total_pnl"] / n if n else 0.0
+
+    @property
+    def test_ev(self) -> float:
+        n = self.test_stats["wins"] + self.test_stats["losses"]
+        return self.test_stats["total_pnl"] / n if n else 0.0
+
+    @property
+    def ev_degradation_pct(self) -> Optional[float]:
+        """(test_ev − train_ev) / |train_ev| × 100. None when train_ev == 0."""
+        if not self.train_ev:
+            return None
+        return (self.test_ev - self.train_ev) / abs(self.train_ev) * 100
+
+
+def _split_weekly(rows: list) -> List[list]:
+    """Partition rows into whole-week buckets (multiples of _WEEK_MS).
+    Returns a list of per-week row lists in ascending order, empty weeks omitted.
+    Called once so walk_forward avoids O(N²) full-list scans."""
+    if not rows:
+        return []
+    t_min   = rows[0][0]
+    w_start = (t_min // _WEEK_MS) * _WEEK_MS
+
+    buckets: dict = {}
+    for r in rows:
+        key = (r[0] - w_start) // _WEEK_MS
+        if key not in buckets:
+            buckets[key] = []
+        buckets[key].append(r)
+
+    return [buckets[k] for k in sorted(buckets)]
+
+
+def _fold_sweep(rows: list, stake: float) -> Tuple[Params, dict]:
+    """Grid-search the walk-forward parameter space on train rows.
+    Selects by PnL/MaxDD ratio; falls back to default Params when no trades fire."""
+    best_p: Optional[Params] = None
+    best_s: Optional[dict]   = None
+    best_r  = -float("inf")
+
+    for thr, secs, obi, dsl in product(
+            _WF_THRESHOLDS, _WF_MIN_SECS, _WF_OBI_VALS, _WF_DSL_VALS):
+        sp = Params(signal_threshold=thr, min_secs_remaining=secs,
+                    min_ask_vol=_WF_MIN_ASK, obi_reject_thresh=obi,
+                    daily_stop_loss=dsl, stake=stake)
+        trades, cap = run_backtest(rows, sp)
+        stats = summarize(trades, sp, cap)
+        ratio = _ratio(stats["total_pnl"], stats["max_drawdown"])
+        if ratio > best_r:
+            best_r, best_p, best_s = ratio, sp, stats
+
+    return best_p or Params(stake=stake), best_s or summarize([], Params(stake=stake), 0.0)
+
+
+def walk_forward(rows: list, train_weeks: int = 4,
+                 stake: float = 10.0) -> List[WFold]:
+    """Walk-forward optimization: slide a (train_weeks + 1) window over weekly
+    buckets, sweep train → apply best OOS on test. Skips folds with fewer than
+    _WF_MIN_TEST_TRADES resolved test-window trades."""
+    weeks = _split_weekly(rows)
+    n_combos = (len(_WF_THRESHOLDS) * len(_WF_MIN_SECS)
+                * len(_WF_OBI_VALS) * len(_WF_DSL_VALS))
+    total_folds = max(0, len(weeks) - train_weeks)
+
+    if total_folds == 0:
+        return []
+
+    folds: List[WFold] = []
+    for slide in range(total_folds):
+        train_weeks_data = weeks[slide: slide + train_weeks]
+        test_week_data   = weeks[slide + train_weeks]
+
+        train_rows = [r for w in train_weeks_data for r in w]
+        test_rows  = test_week_data
+
+        print(f"  Fold {slide + 1}/{total_folds}: sweeping {n_combos} combos"
+              f"  (train={len(train_rows):,} snaps,"
+              f" test={len(test_rows):,} snaps) …", flush=True)
+
+        best_p, train_stats = _fold_sweep(train_rows, stake)
+
+        t_trades, t_cap = run_backtest(test_rows, best_p)
+        test_stats = summarize(t_trades, best_p, t_cap)
+
+        if test_stats["wins"] + test_stats["losses"] < _WF_MIN_TEST_TRADES:
+            print(f"         skipped — fewer than {_WF_MIN_TEST_TRADES} resolved test trades")
+            continue
+
+        folds.append(WFold(
+            fold_n      = len(folds) + 1,
+            train_start = _date(train_rows[0][0]),
+            train_end   = _date(train_rows[-1][0]),
+            test_start  = _date(test_rows[0][0]),
+            test_end    = _date(test_rows[-1][0]),
+            best_params = best_p,
+            train_stats = train_stats,
+            test_stats  = test_stats,
+        ))
+
+    return folds
+
+
+def print_walk_forward(folds: List[WFold], db_name: str, train_weeks: int) -> None:
+    """Print per-fold detail and aggregate summary for walk-forward results."""
+    n_combos = (len(_WF_THRESHOLDS) * len(_WF_MIN_SECS)
+                * len(_WF_OBI_VALS) * len(_WF_DSL_VALS))
+
+    print()
+    print("═" * 70)
+    print(f"  WALK-FORWARD — {db_name}"
+          f"  (train={train_weeks}w, test=1w, {n_combos} combos/fold)")
+    print("═" * 70)
+
+    if not folds:
+        print(f"  Not enough data: need ≥{train_weeks + 1} weeks of snapshots"
+              f" with ≥{_WF_MIN_TEST_TRADES} trades in the test week.")
+        print("═" * 70)
+        return
+
+    for f in folds:
+        bp  = f.best_params
+        deg = f.ev_degradation_pct
+        deg_str = f"{deg:>+.1f}%" if deg is not None else "—"
+        tr_n = f.train_stats["wins"] + f.train_stats["losses"]
+        te_n = f.test_stats["wins"]  + f.test_stats["losses"]
+        print()
+        print(f"  Fold {f.fold_n}:"
+              f"  train {f.train_start}→{f.train_end}"
+              f"  |  test {f.test_start}→{f.test_end}")
+        print(f"    Best : thr={bp.signal_threshold}  secs={bp.min_secs_remaining:.0f}"
+              f"  obi={bp.obi_reject_thresh}  dsl=${bp.daily_stop_loss:.0f}")
+        print(f"    Train: trades={tr_n:>4}  WR={f.train_stats['win_rate']:.1f}%"
+              f"  PnL=${f.train_stats['total_pnl']:>+8.2f}"
+              f"  EV=${f.train_ev:>+.4f}  Sharpe={f.train_stats.get('sharpe', 0.0):>+.2f}")
+        print(f"    Test : trades={te_n:>4}  WR={f.test_stats['win_rate']:.1f}%"
+              f"  PnL=${f.test_stats['total_pnl']:>+8.2f}"
+              f"  EV=${f.test_ev:>+.4f}  Sharpe={f.test_stats.get('sharpe', 0.0):>+.2f}")
+        print(f"    EV degradation: {deg_str}")
+
+    # ── Aggregate summary ─────────────────────────────────────────────────────
+    valid_deg = [f.ev_degradation_pct for f in folds if f.ev_degradation_pct is not None]
+    pos_folds = sum(1 for f in folds if f.test_ev > 0)
+    avg_test_pnl = sum(f.test_stats["total_pnl"] for f in folds) / len(folds)
+    avg_test_ev  = sum(f.test_ev for f in folds) / len(folds)
+    avg_deg      = sum(valid_deg) / len(valid_deg) if valid_deg else None
+
+    # Most frequently selected parameter signature across folds.
+    def _sig(p: Params) -> str:
+        return (f"thr={p.signal_threshold}  secs={p.min_secs_remaining:.0f}"
+                f"  obi={p.obi_reject_thresh}  dsl=${p.daily_stop_loss:.0f}")
+
+    freq = Counter(_sig(f.best_params) for f in folds)
+    modal_sig, modal_n = freq.most_common(1)[0]
+
+    print()
+    print("─" * 70)
+    print(f"  SUMMARY  ({len(folds)} fold(s) with ≥{_WF_MIN_TEST_TRADES} test trades)")
+    print(f"    Avg test PnL / week  : ${avg_test_pnl:>+.2f}")
+    print(f"    Avg test EV / trade  : ${avg_test_ev:>+.4f}")
+    if avg_deg is not None:
+        print(f"    Avg EV degradation   : {avg_deg:>+.1f}%")
+    print(f"    Positive test folds  : {pos_folds}/{len(folds)}")
+    print(f"    Most frequent best   : {modal_sig}  ({modal_n}/{len(folds)} folds)")
+    print("═" * 70)
+
+
 # ─── DB loading ───────────────────────────────────────────────────────────────
 
 def load_rows(conn: sqlite3.Connection) -> list:
@@ -899,8 +1097,12 @@ def main():
     parser.add_argument("--sort",       default="ratio",
                         choices=["wr", "pnl", "ratio", "sharpe"],
                         help="sweep sort order: wr=win rate, pnl=total PnL, ratio=PnL/MaxDD, sharpe=Sharpe ratio")
-    parser.add_argument("--top",        type=int, default=0, metavar="N",
+    parser.add_argument("--top",          type=int, default=0, metavar="N",
                         help="show only the top-N unique configs in sweep (deduped on thr/secs/obi); 0=all")
+    parser.add_argument("--walk-forward", nargs="?", const=4, type=int, metavar="WEEKS",
+                        dest="walk_forward",
+                        help="walk-forward: WEEKS-week train window + 1-week test (default: 4). "
+                             "Sweeps %(default)s combos/fold; runtime ~1-3 min on large datasets.")
     args = parser.parse_args()
 
     db_paths = _collect_dbs(args.db, args.all or args.sweep_all)
@@ -949,9 +1151,9 @@ def main():
         rows = load_rows(conn)
         all_db_rows.append((os.path.basename(db_path), rows))
 
-        if args.sweep_all:
+        if args.sweep_all or args.walk_forward is not None:
             conn.close()
-            continue   # rows collected; per-file output skipped for sweep-all
+            continue   # rows collected; per-file output skipped for sweep-all/walk-forward
 
         print(f"DB: {db_path} {tag}".rstrip())
 
@@ -1105,6 +1307,20 @@ def main():
 
         print_sweep_table(sweep_results, sort_by=args.sort, show_dsl=True, top_n=args.top)
         print_recommendations(sweep_results)
+        return
+
+    # ── --walk-forward: walk-forward optimization across all collected rows ────
+    if args.walk_forward is not None and all_db_rows:
+        combined = sorted(
+            (r for _, rows in all_db_rows for r in rows),
+            key=lambda x: x[0],
+        )
+        db_label = (all_db_rows[0][0] if len(all_db_rows) == 1
+                    else f"{len(all_db_rows)} DB(s)")
+        print(f"\nWALK-FORWARD — {db_label}"
+              f"  train={args.walk_forward}w  stake=${args.stake:.0f}")
+        folds = walk_forward(combined, train_weeks=args.walk_forward, stake=args.stake)
+        print_walk_forward(folds, db_label, train_weeks=args.walk_forward)
         return
 
     # Print cross-file aggregate when more than one file was replayed.
