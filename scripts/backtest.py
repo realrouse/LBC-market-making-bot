@@ -141,6 +141,43 @@ def _date(ts_ms: int) -> str:
     return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
 
 
+def _daily_ratios(resolved: List["SimTrade"]) -> Tuple[float, float]:
+    """Compute annualised daily Sharpe and Sortino from resolved SimTrades.
+
+    Groups net PnL by resolution day (exit_ts_ms). Returns (sharpe, sortino).
+    Returns (0.0, 0.0) when fewer than 2 trading days exist.
+    Sortino uses all-day denominator (not just negative days), which is the
+    standard definition: E[min(r,0)^2] under the zero-target convention.
+    """
+    daily: dict = {}
+    for t in resolved:
+        if t.exit_ts_ms is None:
+            continue
+        day = _date(t.exit_ts_ms)
+        daily[day] = daily.get(day, 0.0) + (t.pnl_net or 0.0)
+
+    vals = list(daily.values())
+    if len(vals) < 2:
+        return 0.0, 0.0
+
+    n    = len(vals)
+    mean = sum(vals) / n
+    ann  = math.sqrt(365)
+
+    variance = sum((v - mean) ** 2 for v in vals) / n
+    std      = math.sqrt(variance)
+    sharpe   = mean / std * ann if std > 0 else 0.0
+
+    downside_sq = sum(min(v, 0.0) ** 2 for v in vals) / n
+    dd_dev      = math.sqrt(downside_sq)
+    if dd_dev > 0:
+        sortino = mean / dd_dev * ann
+    else:
+        sortino = float("inf") if mean > 0 else 0.0
+
+    return sharpe, sortino
+
+
 # ─── Hour filter ──────────────────────────────────────────────────────────────
 
 def _is_trading_hour(ts_ms: int, params: Params) -> bool:
@@ -273,6 +310,8 @@ def summarize(trades: List[SimTrade], params: Params, capital_final: float) -> d
         peak = max(peak, cum)
         max_dd = max(max_dd, peak - cum)
 
+    sharpe, sortino = _daily_ratios(resolved)
+
     return {
         "total":         len(resolved) + open_t,
         "wins":          wins,
@@ -281,6 +320,8 @@ def summarize(trades: List[SimTrade], params: Params, capital_final: float) -> d
         "win_rate":      win_rate,
         "total_pnl":     total_pnl,
         "max_drawdown":  max_dd,
+        "sharpe":        sharpe,
+        "sortino":       sortino,
         "capital_final": capital_final,
         "pnl_pct":       (total_pnl / params.capital_start * 100) if params.capital_start > 0 else 0.0,
     }
@@ -446,11 +487,16 @@ def _stat_block(label: str, params: Params, stats: dict, n_snapshots: int) -> st
     if stats["open"]:
         lines.append(f"  Open     : {stats['open']}  (unresolved at end of data)")
     pnl_pct = stats.get("pnl_pct", 0.0)
+    sharpe  = stats.get("sharpe",  0.0)
+    sortino = stats.get("sortino", 0.0)
+    sortino_str = f"{sortino:+.2f}" if sortino != float("inf") else "  ∞"
     lines += [
         f"  Stake    : ${params.stake:.2f}  (capital start: ${params.capital_start:.2f})",
         f"  Win rate : {stats['win_rate']:.1f}%",
         f"  Total PnL: ${stats['total_pnl']:+.2f}  ({pnl_pct:+.1f}%)",
         f"  Max DD   : ${stats['max_drawdown']:.2f}",
+        f"  Sharpe   : {sharpe:+.2f}  (annualised daily)",
+        f"  Sortino  : {sortino_str}  (annualised daily, downside only)",
         f"  Capital  : ${stats['capital_final']:.2f}",
         "=" * 62,
     ]
@@ -489,6 +535,11 @@ def print_aggregate(results: List[dict]) -> None:
     resolved      = total_wins + total_losses
     win_rate      = (total_wins / resolved * 100) if resolved else 0.0
     worst_dd      = max((r["stats"]["max_drawdown"] for r in results), default=0.0)
+    sharpe_vals   = [r["stats"]["sharpe"]  for r in results if r["stats"].get("sharpe")]
+    sortino_vals  = [r["stats"]["sortino"] for r in results
+                     if r["stats"].get("sortino") not in (None, float("inf"))]
+    avg_sharpe    = sum(sharpe_vals)  / len(sharpe_vals)  if sharpe_vals  else 0.0
+    avg_sortino   = sum(sortino_vals) / len(sortino_vals) if sortino_vals else 0.0
 
     print("=" * 62)
     print(f"  AGGREGATE — {n_files} file(s)  {total_snaps:,} snapshots")
@@ -505,6 +556,10 @@ def print_aggregate(results: List[dict]) -> None:
     if total_capital > 0:
         print(f"  PnL%     : {total_pnl / total_capital * 100:+.1f}%  (on total capital ${total_capital:.2f})")
     print(f"  Worst DD : ${worst_dd:.2f}  (worst single session)")
+    if avg_sharpe:
+        print(f"  Sharpe   : {avg_sharpe:+.2f}  (avg across files, annualised daily)")
+    if avg_sortino:
+        print(f"  Sortino  : {avg_sortino:+.2f}  (avg across files, annualised daily)")
     print("=" * 62)
 
 
@@ -630,6 +685,20 @@ def print_comparison(
                _fmt_dd(matched_stats["max_drawdown"] if matched_stats else None),
                "—"))
 
+    def _fmt_ratio(v: Optional[float]) -> str:
+        if v is None:
+            return "—"
+        return "∞" if v == float("inf") else f"{v:+.2f}"
+
+    print(_row("Sharpe (ann.)",
+               _fmt_ratio(user_stats.get("sharpe")),
+               _fmt_ratio(matched_stats.get("sharpe") if matched_stats else None),
+               "—"))
+    print(_row("Sortino (ann.)",
+               _fmt_ratio(user_stats.get("sortino")),
+               _fmt_ratio(matched_stats.get("sortino") if matched_stats else None),
+               "—"))
+
     print("=" * (22 + W * 3 + 2))
 
     # Config-mismatch warning
@@ -678,23 +747,26 @@ def print_sweep_table(results: list, sort_by: str = "ratio", show_dsl: bool = Fa
     """
     Print a comparison table of all parameter combinations.
 
-    sort_by: 'wr'    → sort by win rate
-             'pnl'   → sort by total PnL
-             'ratio' → sort by PnL/MaxDD (risk-adjusted, recommended)
+    sort_by: 'wr'     → sort by win rate
+             'pnl'    → sort by total PnL
+             'ratio'  → sort by PnL/MaxDD (risk-adjusted, recommended)
+             'sharpe' → sort by annualised Sharpe ratio
     show_dsl: include the daily_stop_loss column (set True when sweep varies it)
     top_n:    if > 0, show only the top-N unique configs (deduped on thr/secs/obi)
     """
     header = (
         f"{'threshold':>9} | {'min_secs':>8} | {'min_ask':>7} | {'obi':>6}"
         + (f" | {'dsl':>6}" if show_dsl else "")
-        + f" | {'trades':>6} | {'wins':>5} | {'WR%':>6} | {'PnL':>9} | {'PnL%':>7} | {'MaxDD':>7} | {'PnL/DD':>7}"
+        + f" | {'trades':>6} | {'wins':>5} | {'WR%':>6} | {'PnL':>9}"
+        + f" | {'PnL%':>7} | {'MaxDD':>7} | {'Sharpe':>7} | {'PnL/DD':>7}"
     )
     sep = "-" * len(header)
 
     sort_keys = {
-        "wr":    lambda x: -x[1]["win_rate"],
-        "pnl":   lambda x: -x[1]["total_pnl"],
-        "ratio": lambda x: -(x[1].get("ratio") or _ratio(x[1]["total_pnl"], x[1]["max_drawdown"])),
+        "wr":     lambda x: -x[1]["win_rate"],
+        "pnl":    lambda x: -x[1]["total_pnl"],
+        "ratio":  lambda x: -(x[1].get("ratio") or _ratio(x[1]["total_pnl"], x[1]["max_drawdown"])),
+        "sharpe": lambda x: -(x[1].get("sharpe") or 0.0),
     }
     key_fn = sort_keys.get(sort_by, sort_keys["ratio"])
     sorted_results = sorted(results, key=key_fn)
@@ -717,9 +789,11 @@ def print_sweep_table(results: list, sort_by: str = "ratio", show_dsl: bool = Fa
     print(f"\n{header}\n{sep}{note}")
     for params, stats in rows_to_print:
         ratio = stats.get("ratio") or _ratio(stats["total_pnl"], stats["max_drawdown"])
-        ratio_str = f"{ratio:>7.2f}" if ratio != float("inf") else "    ∞"
-        dsl_part = f" {params.daily_stop_loss:>5.0f} |" if show_dsl else ""
-        pnl_pct = stats.get("pnl_pct", stats["total_pnl"] / 100.0)  # params.capital_start always 100 in sweep
+        ratio_str  = f"{ratio:>7.2f}" if ratio != float("inf") else "    ∞"
+        sharpe     = stats.get("sharpe", 0.0)
+        sharpe_str = f"{sharpe:>+7.2f}"
+        dsl_part   = f" {params.daily_stop_loss:>5.0f} |" if show_dsl else ""
+        pnl_pct    = stats.get("pnl_pct", stats["total_pnl"] / 100.0)
         pnl_pct_str = f"{pnl_pct:>+6.1f}%"
         print(
             f"  {params.signal_threshold:>7.2f} | {params.min_secs_remaining:>8.0f} |"
@@ -728,7 +802,7 @@ def print_sweep_table(results: list, sort_by: str = "ratio", show_dsl: bool = Fa
             f" {stats['total']:>6} | {stats['wins']:>5} |"
             f" {stats['win_rate']:>5.1f}% | ${stats['total_pnl']:>+8.2f} |"
             f" {pnl_pct_str} |"
-            f" ${stats['max_drawdown']:>6.2f} | {ratio_str}"
+            f" ${stats['max_drawdown']:>6.2f} | {sharpe_str} | {ratio_str}"
         )
 
 
@@ -823,8 +897,8 @@ def main():
     parser.add_argument("--sweep-all",  action="store_true",
                         help="grid search aggregated across all DB files (more robust than per-file)")
     parser.add_argument("--sort",       default="ratio",
-                        choices=["wr", "pnl", "ratio"],
-                        help="sweep sort order: wr=win rate, pnl=total PnL, ratio=PnL/MaxDD")
+                        choices=["wr", "pnl", "ratio", "sharpe"],
+                        help="sweep sort order: wr=win rate, pnl=total PnL, ratio=PnL/MaxDD, sharpe=Sharpe ratio")
     parser.add_argument("--top",        type=int, default=0, metavar="N",
                         help="show only the top-N unique configs in sweep (deduped on thr/secs/obi); 0=all")
     args = parser.parse_args()

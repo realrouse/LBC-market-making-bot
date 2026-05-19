@@ -324,6 +324,114 @@ class TestSummarize(unittest.TestCase):
         self.assertEqual(s["wins"], 0)
 
 
+class TestDailyRatios(unittest.TestCase):
+    """bt._daily_ratios — Sharpe and Sortino computation."""
+
+    # 2026-01-01 UTC = 1767225600000 ms; 2026-01-02 UTC = +86400000 ms
+    _DAY1 = 1767225600000
+    _DAY2 = _DAY1 + 86400000
+    _DAY3 = _DAY2 + 86400000
+
+    def _rt(self, pnl: float, ts_ms: int) -> bt.SimTrade:
+        t = bt.SimTrade("m", "UP", 0, 0.97, 10.0, 0.006, 0.97, 60)
+        t.outcome, t.pnl_net, t.exit_ts_ms = "WIN" if pnl > 0 else "LOSS", pnl, ts_ms
+        return t
+
+    def test_fewer_than_two_days_returns_zero(self):
+        # All trades on the same day → only 1 daily bucket → (0, 0)
+        trades = [self._rt(0.10, self._DAY1), self._rt(0.10, self._DAY1)]
+        s, r = bt._daily_ratios(trades)
+        self.assertAlmostEqual(s, 0.0)
+        self.assertAlmostEqual(r, 0.0)
+
+    def test_empty_returns_zero(self):
+        s, r = bt._daily_ratios([])
+        self.assertAlmostEqual(s, 0.0)
+        self.assertAlmostEqual(r, 0.0)
+
+    def test_all_positive_days_sortino_infinite(self):
+        trades = [self._rt(1.0, self._DAY1), self._rt(0.5, self._DAY2)]
+        _, sortino = bt._daily_ratios(trades)
+        self.assertEqual(sortino, float("inf"))
+
+    def test_known_two_day_values(self):
+        import math
+        # Day 1: +1.0, Day 2: -2.0  →  mean=-0.5, std=1.5
+        trades = [self._rt(1.0, self._DAY1), self._rt(-2.0, self._DAY2)]
+        sharpe, sortino = bt._daily_ratios(trades)
+        mean, std = -0.5, 1.5
+        expected_sharpe = mean / std * math.sqrt(365)
+        self.assertAlmostEqual(sharpe, expected_sharpe, places=5)
+        # Sortino: downside_sq = min(-2,0)^2 / 2 = 2.0, dd_dev = sqrt(2)
+        import math as m
+        dd_dev = m.sqrt(2.0)
+        expected_sortino = mean / dd_dev * m.sqrt(365)
+        self.assertAlmostEqual(sortino, expected_sortino, places=5)
+
+    def test_trades_aggregated_per_day(self):
+        # Two trades on day 1 → single daily bucket of +0.2
+        trades = [
+            self._rt(0.10, self._DAY1), self._rt(0.10, self._DAY1),
+            self._rt(-5.0, self._DAY2),
+        ]
+        sharpe, _ = bt._daily_ratios(trades)
+        # Day 1 = +0.20, Day 2 = -5.0 → should be negative Sharpe
+        self.assertLess(sharpe, 0.0)
+
+    def test_no_exit_ts_trades_ignored(self):
+        t = bt.SimTrade("m", "UP", 0, 0.97, 10.0, 0.006, 0.97, 60)
+        t.outcome, t.pnl_net = "WIN", 0.10
+        # exit_ts_ms is None — should be skipped; returns (0, 0)
+        s, r = bt._daily_ratios([t])
+        self.assertAlmostEqual(s, 0.0)
+        self.assertAlmostEqual(r, 0.0)
+
+
+class TestSummarizeSharpe(unittest.TestCase):
+    """summarize() now includes sharpe and sortino keys."""
+
+    _DAY1 = 1767225600000
+    _DAY2 = _DAY1 + 86400000
+
+    def _trade(self, outcome, pnl, ts_ms=None):
+        t = bt.SimTrade("m", "UP", 0, 0.975, 10, 0.006, 0.97, 60)
+        t.outcome, t.pnl_net = outcome, pnl
+        t.exit_ts_ms = ts_ms
+        return t
+
+    def test_summarize_includes_sharpe_key(self):
+        t = self._trade("WIN", 0.10, self._DAY1)
+        s = bt.summarize([t], bt.Params(), 100.1)
+        self.assertIn("sharpe", s)
+        self.assertIn("sortino", s)
+
+    def test_single_day_sharpe_is_zero(self):
+        trades = [self._trade("WIN", 0.10, self._DAY1)] * 3
+        s = bt.summarize(trades, bt.Params(), 100.3)
+        self.assertAlmostEqual(s["sharpe"], 0.0)
+
+    def test_two_days_sharpe_negative_on_net_loss(self):
+        trades = [
+            self._trade("WIN",  0.10, self._DAY1),
+            self._trade("LOSS", -5.0, self._DAY2),
+        ]
+        s = bt.summarize(trades, bt.Params(), 95.1)
+        self.assertLess(s["sharpe"], 0.0)
+
+    def test_all_wins_same_day_sortino_zero(self):
+        # Single day → only 1 bucket → both ratios = 0
+        trades = [self._trade("WIN", 0.10, self._DAY1)] * 5
+        s = bt.summarize(trades, bt.Params(), 100.5)
+        self.assertAlmostEqual(s["sortino"], 0.0)
+
+    def test_no_exit_ts_summarize_ratios_zero(self):
+        # Trades missing exit_ts_ms (edge case) → ratios = 0
+        trades = [self._trade("WIN", 0.10, None)] * 5
+        s = bt.summarize(trades, bt.Params(), 100.5)
+        self.assertAlmostEqual(s["sharpe"], 0.0)
+        self.assertAlmostEqual(s["sortino"], 0.0)
+
+
 class TestRatio(unittest.TestCase):
     """bt._ratio — PnL/MaxDD risk-adjusted ratio."""
 
