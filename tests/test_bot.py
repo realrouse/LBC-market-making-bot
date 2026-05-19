@@ -2903,6 +2903,64 @@ class TestComputeStake(unittest.TestCase):
                                    win_rate=0.98, n_trades=50, ask=0.0)
         self.assertEqual(result, 10.0)
 
+    # ── Step-function (Curve B) tests ─────────────────────────────────────────
+
+    def _step_cfg(self, s0=15.0, s1=12.0, s2=6.0, s3=6.0):
+        return self._cfg(stake_step_enabled=True,
+                         stake_step_s0=s0, stake_step_s1=s1,
+                         stake_step_s2=s2, stake_step_s3=s3)
+
+    def test_step_disabled_uses_flat(self):
+        cfg = self._cfg(stake_step_enabled=False)
+        self.assertEqual(bot.compute_stake(cfg, 0.97, 30.0), 10.0)
+
+    def test_step_below_45_returns_s0(self):
+        cfg = self._step_cfg()
+        self.assertEqual(bot.compute_stake(cfg, 0.97, 30.0), 15.0)
+
+    def test_step_at_45_returns_s1(self):
+        # secs=45 ≥ first break → s1 zone
+        cfg = self._step_cfg()
+        self.assertEqual(bot.compute_stake(cfg, 0.97, 45.0), 12.0)
+
+    def test_step_between_45_and_60_returns_s1(self):
+        cfg = self._step_cfg()
+        self.assertEqual(bot.compute_stake(cfg, 0.97, 52.0), 12.0)
+
+    def test_step_at_60_returns_s2(self):
+        cfg = self._step_cfg()
+        self.assertEqual(bot.compute_stake(cfg, 0.97, 60.0), 6.0)
+
+    def test_step_at_90_returns_s3(self):
+        cfg = self._step_cfg()
+        self.assertEqual(bot.compute_stake(cfg, 0.97, 90.0), 6.0)
+
+    def test_step_above_90_returns_s3(self):
+        cfg = self._step_cfg()
+        self.assertEqual(bot.compute_stake(cfg, 0.97, 120.0), 6.0)
+
+    def test_step_takes_priority_over_bidsecs(self):
+        # bid×secs alpha is set, but step_enabled=True → step wins
+        cfg = self._step_cfg()
+        cfg = self._cfg(stake_step_enabled=True, stake_step_s0=15.0,
+                        stake_step_s1=12.0, stake_step_s2=6.0, stake_step_s3=6.0,
+                        stake_bid_alpha=2.0, stake_secs_alpha=1.0)
+        self.assertEqual(bot.compute_stake(cfg, 0.97, 30.0), 15.0)
+
+    def test_step_kelly_takes_priority_over_step(self):
+        # Kelly enabled and bootstrapped → Kelly wins over step
+        cfg = self._cfg(
+            kelly_fraction=0.25, kelly_min_trades=10,
+            stake_step_enabled=True, stake_step_s0=15.0,
+            stake_step_s1=12.0, stake_step_s2=6.0, stake_step_s3=6.0,
+            stake_max=9999.0,
+        )
+        result = bot.compute_stake(cfg, 0.97, 30.0, capital=1000.0,
+                                   win_rate=0.98, n_trades=20, ask=0.97)
+        # Kelly result is not 15.0 (the step s0 value)
+        self.assertNotEqual(result, 15.0)
+        self.assertGreater(result, 0.0)
+
 
 class TestWeeklyStopLoss(unittest.IsolatedAsyncioTestCase):
     """check_signal() respects the weekly_stop_loss guard."""
