@@ -26,7 +26,7 @@ from pathlib import Path
 
 import aiohttp
 
-BASE_URL = "https://api.binance.com"
+BASE_URL = "https://data-api.binance.vision"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS klines (
@@ -120,7 +120,9 @@ async def download(symbol: str, interval: str, db_path: str,
                 continue
 
             if not rows:
-                break
+                # Gap in exchange data — advance past the empty window and continue.
+                current = batch_end + step_ms
+                continue
 
             conn.executemany(
                 "INSERT OR IGNORE INTO klines(ts_ms,open,high,low,close,volume,close_ms)"
