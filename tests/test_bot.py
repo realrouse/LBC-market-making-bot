@@ -2824,6 +2824,85 @@ class TestComputeStake(unittest.TestCase):
         result = bot.compute_stake(cfg, 0.95, 10000.0)
         self.assertGreaterEqual(result, 10.0 * bot._STAKE_SECS_MIN_FACTOR)
 
+    # ── Kelly mode ────────────────────────────────────────────────────────────
+
+    def _kelly_cfg(self, **kw):
+        defaults = {
+            "signal_threshold": 0.95,
+            "stake": 10.0,
+            "stake_bid_alpha": 0.0,
+            "stake_secs_ref": 45.0,
+            "stake_secs_alpha": 0.0,
+            "stake_max": 50.0,
+            "stake_max_pct_capital": 0.0,
+            "kelly_fraction": 0.25,
+            "kelly_min_trades": 30,
+        }
+        defaults.update(kw)
+        return bot.BotConfig(**defaults)
+
+    def test_kelly_disabled_by_default(self):
+        cfg = self._cfg()   # kelly_fraction not set → 0.0
+        self.assertEqual(cfg.kelly_fraction, 0.0)
+        result = bot.compute_stake(cfg, 0.97, 60.0, capital=1000.0,
+                                   win_rate=0.98, n_trades=100, ask=0.97)
+        self.assertEqual(result, 10.0)  # flat mode unchanged
+
+    def test_kelly_below_bootstrap_uses_flat(self):
+        cfg = self._kelly_cfg(kelly_min_trades=30)
+        # n_trades=10 < 30 → falls through to flat mode
+        result = bot.compute_stake(cfg, 0.97, 60.0, capital=1000.0,
+                                   win_rate=0.98, n_trades=10, ask=0.97)
+        self.assertEqual(result, 10.0)
+
+    def test_kelly_positive_edge_scales_with_capital(self):
+        cfg = self._kelly_cfg(kelly_fraction=0.25, kelly_min_trades=30, stake_max=9999.0)
+        # ask=0.96, WR=98%: f* ≈ 0.490; quarter-Kelly on $1000 ≈ $122
+        ask = 0.96
+        b_net = (1.0 / ask - 1.0) - bot.api.FEE_RATE * min(ask, 1.0 - ask) / ask
+        f_star = (0.98 * b_net - 0.02) / b_net
+        expected = 0.25 * f_star * 1000.0
+        result = bot.compute_stake(cfg, 0.96, 60.0, capital=1000.0,
+                                   win_rate=0.98, n_trades=50, ask=ask)
+        self.assertAlmostEqual(result, expected, places=5)
+        self.assertGreater(result, 0.0)
+
+    def test_kelly_no_edge_returns_zero(self):
+        cfg = self._kelly_cfg()
+        # WR=50%, ask=0.99 → f* is deeply negative → returns 0
+        result = bot.compute_stake(cfg, 0.96, 60.0, capital=1000.0,
+                                   win_rate=0.50, n_trades=50, ask=0.99)
+        self.assertEqual(result, 0.0)
+
+    def test_kelly_capped_at_stake_max(self):
+        cfg = self._kelly_cfg(kelly_fraction=1.0, stake_max=15.0)
+        # WR=100% → f*=1.0, full Kelly at $1000 → $1000, capped at $15
+        result = bot.compute_stake(cfg, 0.96, 60.0, capital=1000.0,
+                                   win_rate=1.0, n_trades=50, ask=0.96)
+        self.assertAlmostEqual(result, 15.0, places=5)
+
+    def test_kelly_stake_proportional_to_capital(self):
+        cfg = self._kelly_cfg(kelly_fraction=0.25, stake_max=9999.0)
+        r1 = bot.compute_stake(cfg, 0.96, 60.0, capital=500.0,
+                               win_rate=0.98, n_trades=50, ask=0.96)
+        r2 = bot.compute_stake(cfg, 0.96, 60.0, capital=1000.0,
+                               win_rate=0.98, n_trades=50, ask=0.96)
+        self.assertAlmostEqual(r2, 2 * r1, places=5)
+
+    def test_kelly_no_capital_returns_flat(self):
+        cfg = self._kelly_cfg()
+        # capital=0 → Kelly guard fails → flat path
+        result = bot.compute_stake(cfg, 0.96, 60.0, capital=0.0,
+                                   win_rate=0.98, n_trades=50, ask=0.96)
+        self.assertEqual(result, 10.0)
+
+    def test_kelly_no_ask_returns_flat(self):
+        cfg = self._kelly_cfg()
+        # ask=0 → Kelly guard fails → flat path
+        result = bot.compute_stake(cfg, 0.96, 60.0, capital=1000.0,
+                                   win_rate=0.98, n_trades=50, ask=0.0)
+        self.assertEqual(result, 10.0)
+
 
 class TestWeeklyStopLoss(unittest.IsolatedAsyncioTestCase):
     """check_signal() respects the weekly_stop_loss guard."""

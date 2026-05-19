@@ -113,6 +113,13 @@ _STAKE_SECS_MIN_FACTOR: float = 0.3
 # ─── WEEKLY STOP-LOSS DEFAULT ─────────────────────────────────────────────────
 WEEKLY_STOP_LOSS: float = 0.0   # 0 = disabled; e.g. 60.0 = halt after −$60/week
 
+# ─── KELLY CRITERION DEFAULTS ─────────────────────────────────────────────────
+# Set kelly_fraction=0 to disable (flat or bid×secs stake used instead).
+# Typical values: 0.25 (quarter-Kelly) to 0.5 (half-Kelly).
+# Bootstrap gate: flat stake is used until kelly_min_trades resolved trades exist.
+KELLY_FRACTION:   float = 0.0   # 0 = disabled
+KELLY_MIN_TRADES: int   = 30    # minimum resolved trades before Kelly activates
+
 # ─── LOGGING FORMATTERS ───────────────────────────────────────────────────────
 _SESSION_ID = uuid.uuid4().hex[:8].upper()
 
@@ -232,6 +239,10 @@ class BotConfig:
     stake_secs_alpha:      float = STAKE_SECS_ALPHA
     stake_max:             float = STAKE_MAX
     stake_max_pct_capital: float = STAKE_MAX_PCT_CAPITAL
+
+    # Kelly criterion stake sizing
+    kelly_fraction:   float = KELLY_FRACTION
+    kelly_min_trades: int   = KELLY_MIN_TRADES
 
     # Weekly stop-loss
     weekly_stop_loss: float = WEEKLY_STOP_LOSS
@@ -394,6 +405,9 @@ def make_config(simulate: bool = False, no_log: bool = False,
 
     weekly_stop_loss = float(strat.get("weekly_stop_loss", WEEKLY_STOP_LOSS))
 
+    kelly_fraction   = float(strat.get("kelly_fraction",   KELLY_FRACTION))
+    kelly_min_trades = int(strat.get("kelly_min_trades",   KELLY_MIN_TRADES))
+
     market_tag_id      = int(strat.get("market_tag_id",      MARKET_TAG_ID))
     market_window_mins = int(strat.get("market_window_mins", MARKET_WINDOW_MINS))
 
@@ -500,6 +514,8 @@ def make_config(simulate: bool = False, no_log: bool = False,
         stake_secs_alpha=stake_secs_alpha,
         stake_max=stake_max,
         stake_max_pct_capital=stake_max_pct_capital,
+        kelly_fraction=kelly_fraction,
+        kelly_min_trades=kelly_min_trades,
         weekly_stop_loss=weekly_stop_loss,
         market_tag_id=market_tag_id,
         market_window_mins=market_window_mins,
@@ -841,12 +857,18 @@ async def handle_book_update(state: BotState, parsed: dict[str, Any]) -> None:
 # ─── STAKE SCALING ────────────────────────────────────────────────────────────
 
 def compute_stake(cfg: "BotConfig", bid: float, secs: float,
-                  capital: float = 0.0) -> float:
+                  capital: float = 0.0, win_rate: float = 0.5,
+                  n_trades: int = 0, ask: float = 0.0) -> float:
     """
-    Compute the effective stake for one trade using bid-confidence and
-    time-remaining scaling.
+    Compute the effective stake for one trade.
 
-    Formula:
+    Kelly path (when kelly_fraction > 0 and n_trades >= kelly_min_trades):
+      b_net   = (1/ask − 1) − FEE_RATE × min(ask, 1−ask) / ask
+      f*      = (p × b_net − q) / b_net       (standard Kelly fraction)
+      stake   = kelly_fraction × f* × capital  capped at stake_max
+      Returns 0.0 when f* ≤ 0 (no mathematical edge at current parameters).
+
+    Bid×secs path (bid_alpha or secs_alpha > 0):
       bid_score   = (bid − threshold) / (1 − threshold)          ∈ [0, 1]
       bid_boost   = 1 + stake_bid_alpha × bid_score              ≥ 1
       secs_excess = max(0, (secs − secs_ref) / secs_ref)
@@ -854,9 +876,21 @@ def compute_stake(cfg: "BotConfig", bid: float, secs: float,
       eff_max     = min(stake_max, stake_max_pct_capital × capital)  if pct > 0
       stake       = clip(base × bid_boost × secs_factor, base × floor, eff_max)
 
-    When both alphas are 0 (default), returns cfg.stake unchanged (fast path).
-    capital is only used when stake_max_pct_capital > 0.
+    Flat path (both alphas = 0, Kelly disabled): returns cfg.stake.
+    capital is only used when stake_max_pct_capital > 0 or Kelly is active.
     """
+    if cfg.kelly_fraction > 0 and n_trades >= cfg.kelly_min_trades and capital > 0 and ask > 0:
+        b_net = (1.0 / ask - 1.0) - api.FEE_RATE * min(ask, 1.0 - ask) / ask
+        p = win_rate
+        q = 1.0 - p
+        f_star = (p * b_net - q) / b_net if b_net > 0 else 0.0
+        if f_star <= 0:
+            return 0.0
+        kelly_stake = cfg.kelly_fraction * f_star * capital
+        eff_max = (min(cfg.stake_max, cfg.stake_max_pct_capital * capital)
+                   if cfg.stake_max_pct_capital > 0 else cfg.stake_max)
+        return min(kelly_stake, eff_max)
+
     if cfg.stake_bid_alpha == 0.0 and cfg.stake_secs_alpha == 0.0:
         if cfg.stake_max_pct_capital > 0 and capital > 0:
             return min(cfg.stake, cfg.stake_max_pct_capital * capital)
@@ -1072,7 +1106,15 @@ async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[floa
     cfg = state.config
     now_ms = int(time.time() * 1000)
     ep    = ts.best_ask                                                          # entry price
-    stake = compute_stake(cfg, ts.best_bid, ts.secs_remaining, state.capital)   # dynamic or flat
+    n_trades = state.wins + state.losses
+    stake = compute_stake(
+        cfg, ts.best_bid, ts.secs_remaining, state.capital,
+        win_rate=state.win_rate / 100.0, n_trades=n_trades, ask=ep,
+    )
+    if stake <= 0:
+        logger.info("Kelly: f*≤0 — no edge at ask=%.4f wr=%.1f%% — skipping %s",
+                    ep, state.win_rate, ts.market_id[:12])
+        return
     tb    = stake / ep if ep > 0 else 0                         # tokens bought
     fee   = api.compute_fee(ep, tb)
     cost  = stake + fee
@@ -1499,6 +1541,9 @@ async def main() -> None:
             config.stake_bid_alpha, config.stake_secs_ref,
             config.stake_secs_alpha, config.stake_max, _pct,
         )
+    if config.kelly_fraction > 0:
+        logger.info("  Kelly criterion: fraction=%.2f  bootstrap=%d trades",
+                    config.kelly_fraction, config.kelly_min_trades)
     if config.weekly_stop_loss > 0:
         logger.info("  Weekly stop-loss: $%.0f", config.weekly_stop_loss)
     if not config.private_key:

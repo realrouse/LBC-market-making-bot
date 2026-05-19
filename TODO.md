@@ -173,8 +173,8 @@ These were scoped out of the log-system refactor session (priorities 1+2 + Engli
 
 ### Strategy / risk management
 
-- **Dynamic position sizing** — fractional Kelly on stake size instead of fixed $10; adapts risk to
-  signal confidence.
+- ~~**Dynamic position sizing** — fractional Kelly on stake size instead of fixed $10; adapts risk to
+  signal confidence.~~ ✓ Done (v0.5.1): `kelly_fraction` / `kelly_min_trades` in `BotConfig`; `compute_stake()` Kelly path; 8 tests added.
 - **Weekly stop-loss** — complement to the daily stop-loss to limit multi-day drawdown streaks.
 
 ### Technical indicators — indicators.py
