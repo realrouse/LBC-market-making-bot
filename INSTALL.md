@@ -56,6 +56,8 @@ into a virtualenv at `~/tradinebotte/venv/`:
 - `websockets`
 - `web3`
 - `py-clob-client`
+- `pyzmq`
+- `bcrypt`
 
 The canonical list is `requirements.txt` at the project root. CVEs in these
 packages are detected automatically on every push via `pip-audit` (GitHub Actions)
@@ -80,12 +82,12 @@ bash scripts/install.sh
 To install a specific release:
 
 ```bash
-git clone --branch v0.40 https://github.com/neofutur/tradinebotte.git
+git clone --branch v0.5.0 https://github.com/neofutur/tradinebotte.git
 cd tradinebotte
 bash scripts/install.sh
 ```
 
-### Method 2 — rsync from a local dev machine (recommended for VPS without git)
+### Method 2 — rsync from a local dev machine (recommended for servers without git)
 
 From your local machine where the repo is already cloned:
 
@@ -124,19 +126,19 @@ Download the latest release archive from the
 [Releases page](https://github.com/neofutur/tradinebotte/releases):
 
 ```bash
-# Replace v0.40 with the version you want
-wget https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.40.tar.gz
-tar -xzf v0.40.tar.gz
-cd tradinebotte-0.40
+# Replace v0.5.0 with the version you want
+wget https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.5.0.tar.gz
+tar -xzf v0.5.0.tar.gz
+cd tradinebotte-0.5.0
 bash scripts/install.sh
 ```
 
 Or with `curl`:
 
 ```bash
-curl -L https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.40.tar.gz \
+curl -L https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.5.0.tar.gz \
   | tar -xz
-cd tradinebotte-0.40
+cd tradinebotte-0.5.0
 bash scripts/install.sh
 ```
 
@@ -256,7 +258,7 @@ bash scripts/install.sh [install_dir] [--lang EN|FR] [--with-tests]
   Without this flag the script prompts at startup as before.
 - `--with-tests` — Also copy `tests/`, `scripts/backtest.py`, and
   `data/backtest_sample_btc5m_range_2026.db`, then run the
-  full test suite (163 tests) immediately after installation.
+  full test suite (659 tests) immediately after installation.
   The backtest uses `live.db` only if it contains ≥ 100 snapshots;
   otherwise it falls back to the bundled sample dataset automatically.
 
@@ -383,7 +385,7 @@ your web server is configured to serve that directory.
 TRADINEBOTTE_DIR=~/tradinebotte bash scripts/start_bot.sh
 ```
 
-### Auto-start with systemd (recommended for VPS)
+### Auto-start with systemd (recommended for dedicated servers)
 
 Run the generator script once after installation:
 
@@ -995,7 +997,7 @@ grep "order=" ~/tradinebotte/live.log | grep -v "order=sim" | tail -20
 
 ## Data collection
 
-The first VPS deployment account runs the bot in simulate mode with 1-second snapshot intervals to build a high-resolution dataset for strategy research and backtesting.
+The first deployment account runs the bot in simulate mode with 1-second snapshot intervals to build a high-resolution dataset for strategy research and backtesting.
 
 ### Collector scripts
 
@@ -1176,7 +1178,7 @@ Results are saved to `latence_api.txt` if redirected:
 python3 scripts/benchmark_api.py 2>&1 | tee latence_api.txt
 ```
 
-Reference latencies measured from an Amsterdam VPS:
+Reference latencies measured from a dedicated server in Amsterdam:
 
 | Exchange | REST mean | REST p99 | WS mean |
 |---|---|---|---|
@@ -1184,5 +1186,5 @@ Reference latencies measured from an Amsterdam VPS:
 | MEXC | ~15 ms | ~80 ms | ~905 ms |
 | Binance | ~225 ms | ~232 ms | ~990 ms |
 
-Binance latency from Europe is high due to geographic routing; from an Asian VPS
-the numbers would be reversed.
+Binance latency from Europe is high due to geographic routing; from a server
+hosted in Asia the numbers would be reversed.

@@ -256,7 +256,7 @@ d'indicateurs sont satisfaites.
 |---|---|---|
 | `token_id` | string | Token auquel les indicateurs se rapportent |
 | `ts` | int | Horodatage de publication (Unix ms) |
-| `rsi_N` | float | RSI(N) — formule de Wilder, 0–100 |
+| `rsi_N` | float | RSI(N) — formule de Cutler (sum/n sur fenêtre fixe), 0–100 |
 | `sma_N` | float | Moyenne mobile simple des N dernières valeurs `best_bid` |
 | `ema_N` | float | Moyenne mobile exponentielle (k = 2/(N+1)), amorcée avec SMA |
 | `vol_N` | float | Volatilité glissante : écart-type population des log-rendements sur N prix |
@@ -522,7 +522,7 @@ Ring-buffer par token (deque, maxlen=200)
     │
     │  push(best_bid) à chaque message "book"
     │
-    ├── RSI(N)    Wilder : gain_moyen / perte_moyenne sur N derniers deltas
+    ├── RSI(N)    Cutler : sum(gains)/n ÷ sum(losses)/n sur fenêtre fixe de N deltas
     ├── SMA(N)    moyenne(prices[-N:])
     ├── EMA(N)    itératif : ema = prix*k + ema*(1−k),  k = 2/(N+1)
     └── Vol(N)    écart-type des log-rendements sur N+1 derniers prix

@@ -251,7 +251,7 @@ Published by `indicators.py` once a per-token price history buffer reaches
 |---|---|---|
 | `token_id` | string | Token the indicators relate to |
 | `ts` | int | Publish timestamp (Unix ms) |
-| `rsi_N` | float | RSI(N) — Wilder's formula, 0–100 |
+| `rsi_N` | float | RSI(N) — Cutler's formula (sum/n over fixed window), 0–100 |
 | `sma_N` | float | Simple moving average of last N `best_bid` values |
 | `ema_N` | float | Exponential moving average (k = 2/(N+1)), seeded with SMA |
 | `vol_N` | float | Rolling volatility: population std-dev of log-returns over last N prices |
@@ -517,7 +517,7 @@ Per-token ring buffer (deque, maxlen=200)
     │
     │  push(best_bid) on every "book" message
     │
-    ├── RSI(N)       Wilder's: avg_gain / avg_loss over last N deltas
+    ├── RSI(N)       Cutler's: sum(gains)/n ÷ sum(losses)/n over fixed window of N deltas
     ├── SMA(N)       mean(prices[-N:])
     ├── EMA(N)       iterative: ema = price*k + ema*(1−k),  k = 2/(N+1)
     └── Vol(N)       std-dev of log-returns over last N+1 prices
