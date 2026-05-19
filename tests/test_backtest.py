@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 import backtest as bt
+import backtest_stake_secs as bss
 
 
 # ─── Snapshot row builder ─────────────────────────────────────────────────────
@@ -355,17 +356,16 @@ class TestDailyRatios(unittest.TestCase):
         self.assertEqual(sortino, float("inf"))
 
     def test_known_two_day_values(self):
-        import math
+        import math as _m
         # Day 1: +1.0, Day 2: -2.0  →  mean=-0.5, std=1.5
         trades = [self._rt(1.0, self._DAY1), self._rt(-2.0, self._DAY2)]
         sharpe, sortino = bt._daily_ratios(trades)
         mean, std = -0.5, 1.5
-        expected_sharpe = mean / std * math.sqrt(365)
+        expected_sharpe = mean / std * _m.sqrt(365)
         self.assertAlmostEqual(sharpe, expected_sharpe, places=5)
         # Sortino: downside_sq = min(-2,0)^2 / 2 = 2.0, dd_dev = sqrt(2)
-        import math as m
-        dd_dev = m.sqrt(2.0)
-        expected_sortino = mean / dd_dev * m.sqrt(365)
+        dd_dev = _m.sqrt(2.0)
+        expected_sortino = mean / dd_dev * _m.sqrt(365)
         self.assertAlmostEqual(sortino, expected_sortino, places=5)
 
     def test_trades_aggregated_per_day(self):
@@ -779,6 +779,250 @@ class TestWalkForward(unittest.TestCase):
         # train_ev = 1.0/10 = 0.10  test_ev = 0.4/5 = 0.08
         # degradation = (0.08 - 0.10) / 0.10 * 100 = -20.0%
         self.assertAlmostEqual(f.ev_degradation_pct, -20.0, places=5)
+
+
+# ─── backtest_stake_secs — Curve B (step function) ───────────────────────────
+
+class TestComputeStakeStep(unittest.TestCase):
+    """bss.compute_stake_step() zone dispatch."""
+
+    _STAKES = (12.0, 10.0, 8.0, 6.0)   # s0/s1/s2/s3
+
+    def test_below_first_break(self):
+        self.assertEqual(bss.compute_stake_step(30.0, self._STAKES), 12.0)
+
+    def test_at_first_break(self):
+        # 45 ≥ STEP_BREAKS[0] → falls into s1 zone
+        self.assertEqual(bss.compute_stake_step(45.0, self._STAKES), 10.0)
+
+    def test_between_first_and_second_break(self):
+        self.assertEqual(bss.compute_stake_step(52.0, self._STAKES), 10.0)
+
+    def test_at_second_break(self):
+        self.assertEqual(bss.compute_stake_step(60.0, self._STAKES), 8.0)
+
+    def test_between_second_and_third_break(self):
+        self.assertEqual(bss.compute_stake_step(75.0, self._STAKES), 8.0)
+
+    def test_at_third_break(self):
+        self.assertEqual(bss.compute_stake_step(90.0, self._STAKES), 6.0)
+
+    def test_above_third_break(self):
+        self.assertEqual(bss.compute_stake_step(120.0, self._STAKES), 6.0)
+
+
+class TestStepCombos(unittest.TestCase):
+    """bss._step_combos() non-increasing constraint and vol modes."""
+
+    def setUp(self):
+        self._combos = bss._step_combos()
+
+    def test_non_empty(self):
+        self.assertGreater(len(self._combos), 0)
+
+    def test_non_increasing_constraint(self):
+        for c in self._combos:
+            self.assertGreaterEqual(c["s0"], c["s1"])
+            self.assertGreaterEqual(c["s1"], c["s2"])
+            self.assertGreaterEqual(c["s2"], c["s3"])
+
+    def test_only_valid_vol_modes(self):
+        for c in self._combos:
+            self.assertIn(c["vol_mode"], ("off", "weekday"))
+
+    def test_curve_label(self):
+        for c in self._combos:
+            self.assertEqual(c["curve"], "B")
+
+    def test_count_reasonable(self):
+        # Worst case: all 81 combos × 2 vol modes = 162; filtered ≥ 1
+        self.assertLessEqual(len(self._combos), 162)
+
+
+# ─── backtest_stake_secs — Curve C (Kelly/bucket) ────────────────────────────
+
+class TestSecsBucket(unittest.TestCase):
+    """bss._secs_bucket() maps seconds to 0-based zone index."""
+
+    def test_below_45(self):
+        self.assertEqual(bss._secs_bucket(30.0), 0)
+
+    def test_exactly_45(self):
+        self.assertEqual(bss._secs_bucket(45.0), 1)
+
+    def test_between_45_and_60(self):
+        self.assertEqual(bss._secs_bucket(55.0), 1)
+
+    def test_between_60_and_90(self):
+        self.assertEqual(bss._secs_bucket(75.0), 2)
+
+    def test_between_90_and_120(self):
+        self.assertEqual(bss._secs_bucket(100.0), 3)
+
+    def test_at_120(self):
+        self.assertEqual(bss._secs_bucket(120.0), 4)
+
+    def test_above_120(self):
+        self.assertEqual(bss._secs_bucket(180.0), 4)
+
+
+class TestBucketKellyParams(unittest.TestCase):
+    """bss._bucket_kelly_params() (p, b) computation per secs zone."""
+
+    def _make_trade(self, secs, outcome, pnl, stake=10.0):
+        return bss.Trade(
+            trade_id=0, signal_ms=1000, bid=0.97, secs=secs,
+            obi=0.5, outcome=outcome, pnl_orig=pnl, stake_orig=stake,
+        )
+
+    def test_returns_correct_bucket_count(self):
+        # 5 buckets for 4 KELLY_BREAKS
+        trades = [self._make_trade(30.0, "WIN", 9.7)]
+        result = bss._bucket_kelly_params(trades)
+        self.assertEqual(len(result), len(bss.KELLY_BREAKS) + 1)
+
+    def test_sparse_bucket_returns_zeros(self):
+        # Only 3 trades in bucket 0 → below threshold of 5
+        trades = [self._make_trade(30.0, "WIN", 9.7) for _ in range(3)]
+        result = bss._bucket_kelly_params(trades)
+        self.assertEqual(result[0], (0.0, 0.0))
+
+    def test_populated_bucket_win_rate(self):
+        # 9 wins + 1 loss in bucket 0 (secs < 45) → p = 0.9
+        wins   = [self._make_trade(30.0, "WIN",  9.7) for _ in range(9)]
+        losses = [self._make_trade(30.0, "LOSS", -10.2)]
+        result = bss._bucket_kelly_params(wins + losses)
+        p, _b  = result[0]
+        self.assertAlmostEqual(p, 0.9, places=9)
+
+    def test_populated_bucket_avg_payout(self):
+        # All wins at pnl=9.7 on stake=10 → pnl_per_dollar=0.97
+        trades = [self._make_trade(30.0, "WIN", 9.7) for _ in range(5)]
+        result = bss._bucket_kelly_params(trades)
+        _p, b  = result[0]
+        self.assertAlmostEqual(b, 0.97, places=9)
+
+    def test_empty_bucket_is_zero(self):
+        # No trades → all buckets are (0, 0)
+        result = bss._bucket_kelly_params([])
+        self.assertTrue(all(r == (0.0, 0.0) for r in result))
+
+
+class TestKellyStake(unittest.TestCase):
+    """bss._kelly_stake() formula and edge cases."""
+
+    def test_no_edge_returns_zero(self):
+        # p=0.5, b=0.5: f* = (0.5×0.5 - 0.5) / 0.5 = -0.5 → 0
+        self.assertEqual(bss._kelly_stake(0.5, 0.5, 0.25, 1000.0), 0.0)
+
+    def test_zero_b_returns_zero(self):
+        self.assertEqual(bss._kelly_stake(0.9, 0.0, 0.25, 1000.0), 0.0)
+
+    def test_zero_p_returns_zero(self):
+        self.assertEqual(bss._kelly_stake(0.0, 0.97, 0.25, 1000.0), 0.0)
+
+    def test_positive_edge(self):
+        # p=0.98, b=0.97: f* = (0.98×0.97 − 0.02)/0.97 ≈ 0.9594; quarter-Kelly on $1000
+        stake = bss._kelly_stake(0.98, 0.97, 0.25, 1000.0)
+        self.assertGreater(stake, 0.0)
+
+    def test_capped_at_kelly_stake_cap(self):
+        # Full Kelly on huge capital should be capped at KELLY_STAKE_CAP
+        stake = bss._kelly_stake(0.99, 0.97, 1.0, 1_000_000.0)
+        self.assertAlmostEqual(stake, bss.KELLY_STAKE_CAP)
+
+    def test_quarter_kelly_below_cap(self):
+        # Quarter-Kelly on $100 at p=0.98 → ~$24, below the $30 cap
+        stake = bss._kelly_stake(0.98, 0.97, 0.25, 100.0)
+        self.assertLess(stake, bss.KELLY_STAKE_CAP)
+
+
+class TestSimulateStep(unittest.TestCase):
+    """bss._simulate_step() integration test with synthetic trades."""
+
+    _MS = 1_700_000_000_000   # arbitrary epoch inside a weekday
+
+    def _trade(self, secs, outcome, pnl=9.7, stake=10.0):
+        return bss.Trade(
+            trade_id=id(object()), signal_ms=self._MS,
+            bid=0.97, secs=secs, obi=0.5,
+            outcome=outcome, pnl_orig=pnl, stake_orig=stake,
+        )
+
+    def test_win_uses_correct_zone_stake(self):
+        # secs=30 → zone 0 → s0=15; pnl_per_dollar = 0.97
+        trades = [self._trade(30.0, "WIN")]
+        params = {"curve": "B", "s0": 15.0, "s1": 10.0, "s2": 8.0, "s3": 6.0, "vol_mode": "off"}
+        r = bss._simulate_step(trades, {}, params)
+        self.assertEqual(r.wins, 1)
+        self.assertAlmostEqual(r.total_pnl, 0.97 * 15.0, places=9)
+
+    def test_loss_uses_correct_zone_stake(self):
+        # secs=100 → zone 3 → s3=6; pnl_per_dollar = -10.2/10 = -1.02
+        trades = [self._trade(100.0, "LOSS", pnl=-10.2)]
+        params = {"curve": "B", "s0": 15.0, "s1": 10.0, "s2": 8.0, "s3": 6.0, "vol_mode": "off"}
+        r = bss._simulate_step(trades, {}, params)
+        self.assertEqual(r.losses, 1)
+        self.assertAlmostEqual(r.total_pnl, -1.02 * 6.0, places=9)
+
+    def test_win_rate(self):
+        trades = [self._trade(30.0, "WIN"), self._trade(30.0, "LOSS", pnl=-10.2)]
+        params = {"curve": "B", "s0": 10.0, "s1": 10.0, "s2": 10.0, "s3": 10.0, "vol_mode": "off"}
+        r = bss._simulate_step(trades, {}, params)
+        self.assertEqual(r.wins, 1)
+        self.assertEqual(r.losses, 1)
+        self.assertAlmostEqual(r.win_rate, 0.5)
+
+
+class TestSimulateKelly(unittest.TestCase):
+    """bss._simulate_kelly() integration tests."""
+
+    _MS = 1_700_000_000_000
+
+    def _trade(self, secs, outcome, pnl=9.7, stake=10.0):
+        return bss.Trade(
+            trade_id=id(object()), signal_ms=self._MS,
+            bid=0.97, secs=secs, obi=0.5,
+            outcome=outcome, pnl_orig=pnl, stake_orig=stake,
+        )
+
+    def _bucket_params_all_edge(self):
+        # p=0.98, b=0.97 for every bucket → positive edge
+        return [(0.98, 0.97)] * (len(bss.KELLY_BREAKS) + 1)
+
+    def _bucket_params_no_edge(self):
+        # p=0.5, b=0.5 → no edge in any bucket
+        return [(0.5, 0.5)] * (len(bss.KELLY_BREAKS) + 1)
+
+    def test_no_edge_skips_all_trades(self):
+        trades = [self._trade(30.0, "WIN") for _ in range(5)]
+        params = {"curve": "C", "kelly_fraction": 0.25, "vol_mode": "off"}
+        r = bss._simulate_kelly(trades, {}, params, self._bucket_params_no_edge())
+        self.assertEqual(r.n, 0)
+        self.assertEqual(r.skipped, 5)
+
+    def test_positive_edge_takes_trades(self):
+        trades = [self._trade(30.0, "WIN") for _ in range(5)]
+        params = {"curve": "C", "kelly_fraction": 0.25, "vol_mode": "off"}
+        r = bss._simulate_kelly(trades, {}, params, self._bucket_params_all_edge())
+        self.assertEqual(r.wins, 5)
+        self.assertEqual(r.n, 5)
+
+    def test_capital_grows_on_wins(self):
+        trades = [self._trade(30.0, "WIN") for _ in range(5)]
+        params = {"curve": "C", "kelly_fraction": 0.25, "vol_mode": "off"}
+        r = bss._simulate_kelly(trades, {}, params, self._bucket_params_all_edge())
+        self.assertGreater(r.total_pnl, 0.0)
+
+    def test_stake_capped_at_kelly_stake_cap(self):
+        # Full Kelly (fraction=1.0) on a large bucket edge should never exceed cap
+        trades = [self._trade(30.0, "WIN") for _ in range(10)]
+        params = {"curve": "C", "kelly_fraction": 1.0, "vol_mode": "off"}
+        bp = [(0.99, 0.97)] * (len(bss.KELLY_BREAKS) + 1)
+        r  = bss._simulate_kelly(trades, {}, params, bp)
+        # Per-trade PnL = pnl_per_dollar × stake; stake ≤ KELLY_STAKE_CAP
+        # So max total_pnl ≤ n × KELLY_STAKE_CAP × 0.97
+        self.assertLessEqual(r.total_pnl, r.n * bss.KELLY_STAKE_CAP * 1.0)
 
 
 if __name__ == "__main__":
