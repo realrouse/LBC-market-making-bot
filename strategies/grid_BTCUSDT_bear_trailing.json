@@ -17,8 +17,8 @@
     "trail_mode":    "bear",
 
     "grid_symbol":          "BTCUSDT",
-    "grid_lower":           53818.0,
-    "grid_upper":           99948.0,
+    "grid_lower":           60000.0,
+    "grid_upper":          100000.0,
     "grid_levels":          40,
     "grid_order_size_usdt": 50.0,
 
