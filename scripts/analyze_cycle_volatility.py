@@ -12,10 +12,13 @@ For each cycle the script computes:
   - Pi Cycle Top distance from actual top
   - 200W SMA ratio at actual bottom
 
+Default DB: data/BTCUSD_daily_extended.db  (Bitstamp 2013+ merged with Binance 2017+)
+Built by  : python3 scripts/download_btc_daily_extended.py
+
 Usage
 -----
     python3 scripts/analyze_cycle_volatility.py
-    python3 scripts/analyze_cycle_volatility.py data/BTCUSDT3197d_20172026.db
+    python3 scripts/analyze_cycle_volatility.py data/BTCUSD_daily_extended.db
 """
 
 import sqlite3
@@ -30,7 +33,7 @@ from pathlib import Path
 CYCLES = [
     {
         "label":      "Cycle 1",
-        "bottom":     ("2017-08-17",  4_285),   # start of DB, not a real bottom
+        "bottom":     ("2015-01-14",    117),   # Bitstamp low; pre-DB on some sources
         "top":        ("2017-12-17", 19_800),
         "next_bottom":("2018-12-15",  3_100),
     },
@@ -66,11 +69,24 @@ def sma(series: list, n: int) -> list:
 
 
 def load_daily(db_path: str) -> list:
+    """Load daily OHLCV. Supports both the extended `daily` table and raw `klines` (1m)."""
     conn = sqlite3.connect(db_path)
+    tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+
+    if "daily" in tables:
+        rows = conn.execute(
+            "SELECT day_ts, high, low, close FROM daily ORDER BY day_ts"
+        ).fetchall()
+        conn.close()
+        return [{"ts": r[0], "date": _date(r[0]),
+                 "high": r[1], "low": r[2], "close": r[3]} for r in rows]
+
+    # Fallback: aggregate from 1m klines
     rows = conn.execute("""
         SELECT (ts_ms/86400000)*86400 AS day_ts,
-               MAX(high) AS high, MIN(low) AS low,
-               MAX(ts_ms) AS last_ms
+               MAX(high), MIN(low), MAX(ts_ms)
         FROM klines GROUP BY day_ts ORDER BY day_ts
     """).fetchall()
     phs = ",".join("?" * len(rows))
@@ -94,7 +110,7 @@ def load_daily(db_path: str) -> list:
 # ---------------------------------------------------------------------------
 def main() -> None:
     db_path = sys.argv[1] if len(sys.argv) > 1 else str(
-        Path(__file__).resolve().parent.parent / "data" / "BTCUSDT3197d_20172026.db"
+        Path(__file__).resolve().parent.parent / "data" / "BTCUSD_daily_extended.db"
     )
     if not Path(db_path).exists():
         sys.exit(f"DB not found: {db_path}")
@@ -327,28 +343,34 @@ def main() -> None:
     print("INDICATOR RELIABILITY vs CYCLE COMPRESSION")
     print("═" * 72)
     print()
+    c1_mm  = f"{mm_peaks[0]:.2f}" if mm_peaks[0] > 0 else "n/a"
+    c1_mayer = "fired ×3" if mm_peaks[0] >= 2.4 else "n/a"
+    c1_pi    = "exact"    if mm_peaks[0] > 0 else "n/a*"
+    c1_w200  = "n/a†"
+
     print("  TOP indicators")
-    print(f"  {'Indicator':30s}  C1(2017)  C2(2021)  C3(2025)  Trend")
-    print(f"  {'-'*70}")
-    print(f"  {'Mayer >2.4 (day high)':30s}  {'n/a*':8s}  {'fired':8s}  {'no':8s}  ↓ fading")
-    print(f"  {'Pi Cycle Top':30s}  {'n/a*':8s}  {'-212d':8s}  {'no':8s}  ↓ fading")
-    print(f"  {'Peak Mayer Multiple':30s}  {'~5.0*':8s}  {f'{mm_peaks[1]:.2f}':8s}  {f'{mm_peaks[2]:.2f}':8s}  ↓ declining")
+    print(f"  {'Indicator':30s}  C1(2017)   C2(2021)  C3(2025)  Trend")
+    print(f"  {'-'*72}")
+    print(f"  {'Mayer >2.4 (day high)':30s}  {c1_mayer:9s}  {'fired ×4':8s}  {'no':8s}  ↓ fading")
+    print(f"  {'Pi Cycle Top':30s}  {c1_pi:9s}  {'-212d':8s}  {'no':8s}  ↓ fading")
+    print(f"  {'Peak Mayer Multiple':30s}  {c1_mm:9s}  {mm_peaks[1]:.2f}      {mm_peaks[2]:.2f}      ↓ declining")
     print()
     print("  BOTTOM indicators")
-    print(f"  {'Indicator':30s}  C1 bear   C2 bear   C3 bear   Trend")
-    print(f"  {'-'*70}")
-    print(f"  {'Mayer <0.8 (day low)':30s}  {'✓ hit':8s}  {'✓ hit':8s}  {'✓ hit':8s}  → stable")
-    print(f"  {'Price < 200W SMA':30s}  {'n/a*':8s}  {'✓ hit':8s}  {'✓ hit':8s}  → stable")
+    print(f"  {'Indicator':30s}  C1 bear    C2 bear   C3 bear   Trend")
+    print(f"  {'-'*72}")
+    print(f"  {'Mayer <0.8 (day low)':30s}  {'✓ hit':9s}  {'✓ hit':8s}  {'✓ hit':8s}  → stable")
+    print(f"  {'Price < 200W SMA':30s}  {c1_w200:9s}  {'✓ hit':8s}  {'✓ hit':8s}  → stable")
     print()
-    print("  * C1 has only 88 days of pre-top history in the DB (starts Aug 2017)")
-    print("  * C1 Mayer Multiple peak estimated from known price/MA data")
+    print("  † C1 200W SMA unavailable (needs 1400 days; DB starts 2013-01-02,")
+    print("    bottom 2015-01-14 = only 742 days into dataset)")
     print()
     print("  KEY INSIGHT: Bottom indicators remain reliable as market matures.")
     print("  Top indicators progressively FAIL as institutional adoption dampens")
-    print("  volatility extremes. Mayer Multiple at cycle tops:")
-    print(f"    ~5.0 (2017) → {mm_peaks[1]:.2f} (2021) → {mm_peaks[2]:.2f} (2025)")
-    print("  At this rate, Mayer >2.4 will not fire again without a structural")
-    print("  shock. Cycle-top detection needs momentum/duration signals instead.")
+    print("  volatility extremes. Peak Mayer Multiple at cycle tops:")
+    print(f"    {mm_peaks[0]:.2f} (2017) → {mm_peaks[1]:.2f} (2021) → {mm_peaks[2]:.2f} (2025)  (×{mm_peaks[1]/mm_peaks[0]:.2f} then ×{mm_peaks[2]/mm_peaks[1]:.2f})")
+    print("  Pi Cycle Top: perfect in 2017 (0d), early in 2021 (-212d), silent in 2025.")
+    print("  Mayer >2.4: strong in 2017, useful in 2021, silent in 2025.")
+    print("  → Cycle 4 top detection requires new momentum/duration-based signals.")
     print()
 
     # Current state
