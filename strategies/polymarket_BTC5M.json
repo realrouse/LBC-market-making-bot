@@ -1,6 +1,6 @@
 {
     "_name": "Polymarket BTC 5-minute Up/Down",
-    "_description": "Sweep-all optimised 2026-05-16: threshold=0.95/min_secs=45/obi=-0.75/dsl=30 → best PnL/MaxDD ratio (4.21) across 6 databases, 1,016,186 snapshots, 405-combo grid search, 3397 trades, WR 98.0%, PnL +$211.72, MaxDD $50.25. Previous v1 used threshold=0.96.",
+    "_description": "Backtest 2026-05-19: threshold=0.95/min_secs=45/obi=-0.75/dsl=30, vol=weekday, stake_step=$15/$12/$6/$6 → Sharpe +8.40, WR 97.4%, PnL +$118/$10 stake. Previous v2 (2026-05-16) sweep-all: no vol filter, flat stake.",
 
     "strategy_type": "threshold",
     "connector":     "polymarket",
@@ -16,6 +16,22 @@
     "stake":              10.0,
     "capital_start":      100.0,
     "gas_fee_usd":        0.03,
+
+    "vol_filter": {
+        "enabled":      true,
+        "weekday_only": true,
+        "vol_bid_max":  0.07,
+        "range_bid_max": 0.30,
+        "obi_vol_max":  0.40
+    },
+
+    "stake_step": {
+        "enabled": true,
+        "s0": 15.0,
+        "s1": 12.0,
+        "s2": 6.0,
+        "s3": 6.0
+    },
 
     "hour_filter": {
         "_comment": "US weekly open = Mon 13:30 UTC (NYSE open). US weekly close = Fri 20:00 UTC (NYSE close).",

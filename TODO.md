@@ -173,9 +173,25 @@ These were scoped out of the log-system refactor session (priorities 1+2 + Engli
 
 ### Strategy / risk management
 
-- **Dynamic position sizing** — fractional Kelly on stake size instead of fixed $10; adapts risk to
-  signal confidence.
+- ~~**Dynamic position sizing** — fractional Kelly on stake size instead of fixed $10; adapts risk to
+  signal confidence.~~ ✓ Done (v0.5.1): `kelly_fraction` / `kelly_min_trades` in `BotConfig`; `compute_stake()` Kelly path; 8 tests added.
+- ~~**Weekday vol filter (Priority 1)**~~ ✓ Done (2026-05-19): `vol_filter_enabled=true` /
+  `vol_filter_weekday_only=true` now explicit in `strategies/polymarket_BTC5M.json`; `make_config()`
+  reads `"vol_filter"` JSON section; startup log added. Backtest: Sharpe +2.67 → +6.76.
+- ~~**Step-function stake (Priority 2)**~~ ✓ Done (2026-05-19): `stake_step_enabled/s0/s1/s2/s3` in
+  `BotConfig`; step path added to `compute_stake()` (priority: Kelly > step > bid×secs > flat);
+  JSON: `"stake_step": {"enabled": true, "s0": 15, "s1": 12, "s2": 6, "s3": 6}`.
+  Best Sharpe config from Curve B grid: Sharpe +8.40, DD $38.57, +$118 PnL vs flat $80.
 - **Weekly stop-loss** — complement to the daily stop-loss to limit multi-day drawdown streaks.
+- **Threshold=0.98 investigation** — walk-forward consistently selects `thr=0.98` over `0.95` in
+  training folds. Validate OOS when ≥8 weeks of live data are available (current: 3 weeks,
+  walk-forward too noisy). Do not change without running `backtest.py --walk-forward 4`.
+- **Curve A (bid×secs) alternative** — `bid_α=1.0 secs_ref=45 secs_α=1.00 vol=weekday` gives
+  Sharpe +7.85 vs Curve B's +8.40 but EV is lower ($0.0344 vs $0.0509). Revisit if step-function
+  produces unexpected behaviour in live data (e.g. if secs bucketing introduces noise).
+- **Kelly live validation** — Curve C (Kelly/bucket) showed Sharpe +12.02 in-sample. Requires
+  out-of-sample walk-forward on ≥8 weeks of data before enabling live (`kelly_fraction > 0`).
+  Current 3-week dataset is insufficient for robust (p, b) estimation per bucket.
 
 ### Technical indicators — indicators.py
 

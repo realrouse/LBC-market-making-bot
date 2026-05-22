@@ -2312,6 +2312,59 @@ class TestUserDataStream(unittest.TestCase):
         import api_mexc
         self.assertIsNone(api_mexc.parse_user_stream_msg({"s": "BTCUSDT"}))
 
+    # ── api_binance public endpoint selection ─────────────────────────────────
+
+    def test_binance_no_creds_ws_url_is_public(self):
+        """WS_URL uses data-stream.binance.vision when no credentials are set."""
+        import importlib
+        import api_binance
+        # Reload without credentials to confirm public path
+        with unittest.mock.patch.dict(os.environ,
+                                      {"BINANCE_API_KEY": "", "BINANCE_API_SECRET": ""},
+                                      clear=False):
+            importlib.reload(api_binance)
+        self.assertIn("data-stream.binance.vision", api_binance.WS_URL)
+        self.assertTrue(api_binance.WS_URL.startswith("wss://"))
+
+    def test_binance_no_creds_base_url_is_public(self):
+        """BASE_URL uses data-api.binance.vision when no credentials are set."""
+        import importlib
+        import api_binance
+        with unittest.mock.patch.dict(os.environ,
+                                      {"BINANCE_API_KEY": "", "BINANCE_API_SECRET": ""},
+                                      clear=False):
+            importlib.reload(api_binance)
+        self.assertIn("data-api.binance.vision", api_binance.BASE_URL)
+
+    def test_binance_with_creds_ws_url_is_live(self):
+        """WS_URL uses stream.binance.com when credentials are present."""
+        import importlib
+        import api_binance
+        with unittest.mock.patch.dict(os.environ,
+                                      {"BINANCE_API_KEY": "key", "BINANCE_API_SECRET": "secret"},
+                                      clear=False):
+            importlib.reload(api_binance)
+        self.assertIn("stream.binance.com", api_binance.WS_URL)
+        # Restore no-creds state for subsequent tests
+        with unittest.mock.patch.dict(os.environ,
+                                      {"BINANCE_API_KEY": "", "BINANCE_API_SECRET": ""},
+                                      clear=False):
+            importlib.reload(api_binance)
+
+    def test_binance_with_creds_base_url_is_live(self):
+        """BASE_URL uses api.binance.com when credentials are present."""
+        import importlib
+        import api_binance
+        with unittest.mock.patch.dict(os.environ,
+                                      {"BINANCE_API_KEY": "key", "BINANCE_API_SECRET": "secret"},
+                                      clear=False):
+            importlib.reload(api_binance)
+        self.assertIn("api.binance.com", api_binance.BASE_URL)
+        with unittest.mock.patch.dict(os.environ,
+                                      {"BINANCE_API_KEY": "", "BINANCE_API_SECRET": ""},
+                                      clear=False):
+            importlib.reload(api_binance)
+
     def test_mexc_make_user_stream_url(self):
         import api_mexc
         url = api_mexc.make_user_stream_url("key_xyz")
@@ -2823,6 +2876,143 @@ class TestComputeStake(unittest.TestCase):
         # With extreme secs, floor = base * 0.3 = 3.0
         result = bot.compute_stake(cfg, 0.95, 10000.0)
         self.assertGreaterEqual(result, 10.0 * bot._STAKE_SECS_MIN_FACTOR)
+
+    # ── Kelly mode ────────────────────────────────────────────────────────────
+
+    def _kelly_cfg(self, **kw):
+        defaults = {
+            "signal_threshold": 0.95,
+            "stake": 10.0,
+            "stake_bid_alpha": 0.0,
+            "stake_secs_ref": 45.0,
+            "stake_secs_alpha": 0.0,
+            "stake_max": 50.0,
+            "stake_max_pct_capital": 0.0,
+            "kelly_fraction": 0.25,
+            "kelly_min_trades": 30,
+        }
+        defaults.update(kw)
+        return bot.BotConfig(**defaults)
+
+    def test_kelly_disabled_by_default(self):
+        cfg = self._cfg()   # kelly_fraction not set → 0.0
+        self.assertEqual(cfg.kelly_fraction, 0.0)
+        result = bot.compute_stake(cfg, 0.97, 60.0, capital=1000.0,
+                                   win_rate=0.98, n_trades=100, ask=0.97)
+        self.assertEqual(result, 10.0)  # flat mode unchanged
+
+    def test_kelly_below_bootstrap_uses_flat(self):
+        cfg = self._kelly_cfg(kelly_min_trades=30)
+        # n_trades=10 < 30 → falls through to flat mode
+        result = bot.compute_stake(cfg, 0.97, 60.0, capital=1000.0,
+                                   win_rate=0.98, n_trades=10, ask=0.97)
+        self.assertEqual(result, 10.0)
+
+    def test_kelly_positive_edge_scales_with_capital(self):
+        cfg = self._kelly_cfg(kelly_fraction=0.25, kelly_min_trades=30, stake_max=9999.0)
+        # ask=0.96, WR=98%: f* ≈ 0.490; quarter-Kelly on $1000 ≈ $122
+        ask = 0.96
+        b_net = (1.0 / ask - 1.0) - bot.api.FEE_RATE * min(ask, 1.0 - ask) / ask
+        f_star = (0.98 * b_net - 0.02) / b_net
+        expected = 0.25 * f_star * 1000.0
+        result = bot.compute_stake(cfg, 0.96, 60.0, capital=1000.0,
+                                   win_rate=0.98, n_trades=50, ask=ask)
+        self.assertAlmostEqual(result, expected, places=5)
+        self.assertGreater(result, 0.0)
+
+    def test_kelly_no_edge_returns_zero(self):
+        cfg = self._kelly_cfg()
+        # WR=50%, ask=0.99 → f* is deeply negative → returns 0
+        result = bot.compute_stake(cfg, 0.96, 60.0, capital=1000.0,
+                                   win_rate=0.50, n_trades=50, ask=0.99)
+        self.assertEqual(result, 0.0)
+
+    def test_kelly_capped_at_stake_max(self):
+        cfg = self._kelly_cfg(kelly_fraction=1.0, stake_max=15.0)
+        # WR=100% → f*=1.0, full Kelly at $1000 → $1000, capped at $15
+        result = bot.compute_stake(cfg, 0.96, 60.0, capital=1000.0,
+                                   win_rate=1.0, n_trades=50, ask=0.96)
+        self.assertAlmostEqual(result, 15.0, places=5)
+
+    def test_kelly_stake_proportional_to_capital(self):
+        cfg = self._kelly_cfg(kelly_fraction=0.25, stake_max=9999.0)
+        r1 = bot.compute_stake(cfg, 0.96, 60.0, capital=500.0,
+                               win_rate=0.98, n_trades=50, ask=0.96)
+        r2 = bot.compute_stake(cfg, 0.96, 60.0, capital=1000.0,
+                               win_rate=0.98, n_trades=50, ask=0.96)
+        self.assertAlmostEqual(r2, 2 * r1, places=5)
+
+    def test_kelly_no_capital_returns_flat(self):
+        cfg = self._kelly_cfg()
+        # capital=0 → Kelly guard fails → flat path
+        result = bot.compute_stake(cfg, 0.96, 60.0, capital=0.0,
+                                   win_rate=0.98, n_trades=50, ask=0.96)
+        self.assertEqual(result, 10.0)
+
+    def test_kelly_no_ask_returns_flat(self):
+        cfg = self._kelly_cfg()
+        # ask=0 → Kelly guard fails → flat path
+        result = bot.compute_stake(cfg, 0.96, 60.0, capital=1000.0,
+                                   win_rate=0.98, n_trades=50, ask=0.0)
+        self.assertEqual(result, 10.0)
+
+    # ── Step-function (Curve B) tests ─────────────────────────────────────────
+
+    def _step_cfg(self, s0=15.0, s1=12.0, s2=6.0, s3=6.0):
+        return self._cfg(stake_step_enabled=True,
+                         stake_step_s0=s0, stake_step_s1=s1,
+                         stake_step_s2=s2, stake_step_s3=s3)
+
+    def test_step_disabled_uses_flat(self):
+        cfg = self._cfg(stake_step_enabled=False)
+        self.assertEqual(bot.compute_stake(cfg, 0.97, 30.0), 10.0)
+
+    def test_step_below_45_returns_s0(self):
+        cfg = self._step_cfg()
+        self.assertEqual(bot.compute_stake(cfg, 0.97, 30.0), 15.0)
+
+    def test_step_at_45_returns_s1(self):
+        # secs=45 ≥ first break → s1 zone
+        cfg = self._step_cfg()
+        self.assertEqual(bot.compute_stake(cfg, 0.97, 45.0), 12.0)
+
+    def test_step_between_45_and_60_returns_s1(self):
+        cfg = self._step_cfg()
+        self.assertEqual(bot.compute_stake(cfg, 0.97, 52.0), 12.0)
+
+    def test_step_at_60_returns_s2(self):
+        cfg = self._step_cfg()
+        self.assertEqual(bot.compute_stake(cfg, 0.97, 60.0), 6.0)
+
+    def test_step_at_90_returns_s3(self):
+        cfg = self._step_cfg()
+        self.assertEqual(bot.compute_stake(cfg, 0.97, 90.0), 6.0)
+
+    def test_step_above_90_returns_s3(self):
+        cfg = self._step_cfg()
+        self.assertEqual(bot.compute_stake(cfg, 0.97, 120.0), 6.0)
+
+    def test_step_takes_priority_over_bidsecs(self):
+        # bid×secs alpha is set, but step_enabled=True → step wins
+        cfg = self._step_cfg()
+        cfg = self._cfg(stake_step_enabled=True, stake_step_s0=15.0,
+                        stake_step_s1=12.0, stake_step_s2=6.0, stake_step_s3=6.0,
+                        stake_bid_alpha=2.0, stake_secs_alpha=1.0)
+        self.assertEqual(bot.compute_stake(cfg, 0.97, 30.0), 15.0)
+
+    def test_step_kelly_takes_priority_over_step(self):
+        # Kelly enabled and bootstrapped → Kelly wins over step
+        cfg = self._cfg(
+            kelly_fraction=0.25, kelly_min_trades=10,
+            stake_step_enabled=True, stake_step_s0=15.0,
+            stake_step_s1=12.0, stake_step_s2=6.0, stake_step_s3=6.0,
+            stake_max=9999.0,
+        )
+        result = bot.compute_stake(cfg, 0.97, 30.0, capital=1000.0,
+                                   win_rate=0.98, n_trades=20, ask=0.97)
+        # Kelly result is not 15.0 (the step s0 value)
+        self.assertNotEqual(result, 15.0)
+        self.assertGreater(result, 0.0)
 
 
 class TestWeeklyStopLoss(unittest.IsolatedAsyncioTestCase):

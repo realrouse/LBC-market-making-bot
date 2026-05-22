@@ -1,31 +1,30 @@
 {
-    "_name": "Grid BTC/USDT — bear-adapted trailing (backtested)",
-    "_description": "Trailing grid: re-centers downward when price falls below grid_lower (trail_mode=bear). Does NOT re-center upward — if price rallies above grid_upper the grid stops with realized profit. Backtested on three regimes at ±15%/30 levels: +5.0%/90d lateral 2026, +2.0% bear 2022 LUNA crash (+5.3 points vs static -3.3%), +0.1% bull run (identical to static). Suited for bear or uncertain market with expected further downside. Recalibrate grid_lower/grid_upper to ±15% of current BTC price. Capital = grid_levels × grid_order_size_usdt.",
+    "_name": "Grid BTC/USDT — bear-adapted trailing (backtested 9yr)",
+    "_description": "Trailing grid: re-centers downward when price falls below grid_lower (trail_mode=bear). Does NOT re-center upward — if price rallies above grid_upper the grid stops with realized profit. Backtested on 9yr BTCUSDT 1m 2017-2026: ±30%/40 levels gives best Calmar (1.69) with +15% PnL and MaxDD 9%. All 15 parameter combos were positive with bear trailing. Capital = grid_levels × grid_order_size_usdt = $2,000.",
     "_backtest": {
-        "trail_mode":       "bear (re-center downward only)",
-        "range_pct":        "±15%",
-        "lateral_2026":     "+5.0% / 90d (+20% ann) — 96% time in grid — identical to static",
-        "bear_2022":        "+2.0% — 2 re-centers ($31,981 → $27,437) — exits at bounce (32% of period)",
-        "bullrun_2024":     "+0.1% — 0 re-centers — identical to static (stopped at exit_high)",
-        "key_insight":      "tight ±15% grid exits profitably when bear market bounces (price crosses re-centered grid_upper)",
-        "avoid":            "trail=both in bear markets — accumulates BTC on every bounce, -23.9% loss",
-        "calibrated_at":    "2026-05-09  BTC=$80,705"
+        "db":            "data/BTCUSDT3197d_20172026.db  (2017-08-17 → 2026-05-19, 4.6M candles 1m)",
+        "trail_mode":    "bear (re-center downward only)",
+        "sweep":         "RANGES=[10,15,20,25,30] × LEVELS=[20,30,40] — all 15 combos positive",
+        "best_calmar":   "±30% / 40 levels → +15.0% PnL / MaxDD 9% / Calmar 1.69",
+        "best_pnl":      "±25% / 40 levels → +15.7% PnL / MaxDD 11% / Calmar 1.44",
+        "current_config":"±30% / 40 levels (best Calmar)",
+        "calibrated_at": "2026-05-20  BTC≈$76,883"
     },
-    "_run_backtest": "python3 scripts/backtest_grid.py --all --trail bear --range 15 --levels 30 --compare",
+    "_run_backtest": "python3 scripts/backtest_grid.py data/BTCUSDT3197d_20172026.db --sweep --trail bear",
 
     "strategy_type": "grid",
     "connector":     "binance",
     "trail_mode":    "bear",
 
     "grid_symbol":          "BTCUSDT",
-    "grid_lower":           68599.0,
-    "grid_upper":           92811.0,
-    "grid_levels":          30,
+    "grid_lower":           60000.0,
+    "grid_upper":          100000.0,
+    "grid_levels":          40,
     "grid_order_size_usdt": 50.0,
 
-    "capital_start": 1500.0,
+    "capital_start": 2000.0,
     "stake":           50.0,
-    "daily_stop_loss": 150.0,
+    "daily_stop_loss": 200.0,
 
     "hour_filter": {
         "enabled": false

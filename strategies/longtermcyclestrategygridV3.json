@@ -1,0 +1,99 @@
+{
+    "_name": "Long-Term BTC Cycle Strategy — Grid V3 (Prudence Mode)",
+    "_description": "V3 adds halving-relative prudence tiers to V2 execution. Since top indicators (Mayer>2.4, Pi Cycle) are fading as each cycle is progressively front-run by institutional money, V3 replaces threshold-based top detection with timing-based distribution anchored to the known halving→top window (~534d average across C1-C3). During BULL, BTC target steps down 90%→75%→50% at 400d/480d post-halving. Sacrifices 13% absolute return vs V2 in exchange for -26pp max drawdown and +39% Calmar ratio. Critical for C4 where top indicators may be fully silent.",
+    "_backtest": {
+        "db":              "data/BTCUSDT3197d_20172026.db  (2017-08-17 → 2026-05-19, 4.6M candles 1m)",
+        "aggregation":     "1m → daily OHLCV (day high for top signals, day low for bottom signals)",
+        "regime_transitions": [
+            "2019-06-26  BULL→BEAR  $13,094  (Mayer high > 2.4)",
+            "2019-11-21  BEAR→BULL  $7,628   (Mayer low < 0.8)",
+            "2021-01-02  BULL→BEAR  $32,178  (Mayer high > 2.4)",
+            "2021-05-19  BEAR→BULL  $36,690  (Mayer low < 0.8)"
+        ],
+        "result":          "×20.9 return  CAGR 41.6%  MaxDD 55.1%  Calmar 0.75",
+        "vs_buy_and_hold": "×18.0 return  CAGR 39.1%  MaxDD 83.2%  Calmar 0.47  (+16.7%)",
+        "vs_V2":           "+16.7% vs +34.7% in V2  (1661 trades vs 211)  MaxDD -26pp  Calmar +39%",
+        "avg_sell_price":  35825,
+        "avg_buy_price":   28999,
+        "trades":          1661,
+        "fees_paid":       609,
+        "calibrated_at":   "2026-05-22  BTC≈$76,947",
+        "current_regime":  "BULL (since 2021-05-19)",
+        "prudence_rationale": "C3 peak Mayer Multiple was only 1.86 (vs 2.92 and 3.79). Pi Cycle Top never fired. C3 was frontrun: BTC made new ATH ($73K) BEFORE the Apr-2024 halving — unprecedented. If C4 repeats, all threshold-based top signals will be silent. The halving→top window (526d/548d/529d avg=534d) is the only reliable a priori signal remaining."
+    },
+    "_run_backtest": "python3 scripts/backtest_cycle_strategy.py --top-mm 2.4 --rebound 0.04 --drawback 0.04 --tranche 0.20 --prudence",
+    "_run_comparison": "python3 scripts/backtest_cycle_strategy.py --compare",
+    "_vs_V2": "Same regime detection. Same V2 execution in T0 (<400d post-halving). Adds progressive distribution near expected top: T1 800d→3% rebound/15% tranche/75% target, T2 >480d→2% rebound/10% tranche/50% target.",
+
+    "strategy_type": "longtermcycle",
+    "connector":     "binance",
+    "symbol":        "BTCUSDT",
+
+    "capital_start":     10000.0,
+    "btc_alloc_start":   0.50,
+
+    "regime": {
+        "initial":       "bull",
+        "target_bull":   0.90,
+        "target_bear":   0.10,
+        "min_bull_days": 180,
+        "min_bear_days": 60
+    },
+
+    "top_signals": {
+        "_comment": "Any one fires after min_bull_days in BULL → switch to BEAR. Note: both signals are fading (C3: MM peak only 1.86, Pi Cycle silent). Prudence mode provides timing-based distribution as fallback.",
+        "mayer_multiple_high_threshold": 2.4,
+        "pi_cycle_top": {
+            "enabled": true,
+            "fast_ma": 111,
+            "slow_ma": 350,
+            "slow_multiplier": 2
+        }
+    },
+
+    "bottom_signals": {
+        "_comment": "Any one fires after min_bear_days in BEAR → switch to BULL. Both signals remain reliable across all 3 cycles.",
+        "mayer_multiple_low_threshold": 0.8,
+        "price_below_200_week_sma": {
+            "enabled": true,
+            "period":  1400
+        }
+    },
+
+    "execution": {
+        "_comment": "V2 base execution. Prudence tiers override target/rebound/tranche in BULL based on days since last halving.",
+        "rebound_pct":   0.04,
+        "drawback_pct":  0.04,
+        "tranche_frac":  0.20,
+        "fee_rate":      0.001
+    },
+
+    "prudence": {
+        "_comment": "Halving→top avg: 526d/548d/529d = 534d. Tiers anchored at 75% and 90% of window. In each tier, BTC target steps down and distribution triggers tighten. Only active in BULL regime.",
+        "enabled": true,
+        "halvings": ["2012-11-28", "2016-07-09", "2020-05-11", "2024-04-20"],
+        "tier1": {
+            "days_post_halving": 400,
+            "target_btc":        0.75,
+            "rebound_pct":       0.03,
+            "tranche_frac":      0.15,
+            "_note": "Caution: start distributing toward 75% BTC target"
+        },
+        "tier2": {
+            "days_post_halving": 480,
+            "target_btc":        0.50,
+            "rebound_pct":       0.02,
+            "tranche_frac":      0.10,
+            "_note": "High-risk: accelerate distribution toward 50% BTC target"
+        }
+    },
+
+    "daily_stop_loss": 0,
+
+    "_comparison": {
+        "V1": "×24.0  CAGR 43.8%  MaxDD 81.4%  Calmar 0.54  168 trades  +33.8% vs B&H",
+        "V2": "×24.2  CAGR 43.9%  MaxDD 81.4%  Calmar 0.54  211 trades  +34.7% vs B&H",
+        "V3": "×20.9  CAGR 41.6%  MaxDD 55.1%  Calmar 0.75  1661 trades +16.7% vs B&H",
+        "tradeoff": "V3 gives up 13% absolute return vs V2 in exchange for -26pp MaxDD and +39% Calmar. Recommended when: (a) investor cannot tolerate 80%+ drawdowns, (b) top indicators are expected to fail (C4 scenario), or (c) as a live overlay until C4 top timing becomes clearer."
+    }
+}

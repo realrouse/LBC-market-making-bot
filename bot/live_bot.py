@@ -113,6 +113,23 @@ _STAKE_SECS_MIN_FACTOR: float = 0.3
 # ─── WEEKLY STOP-LOSS DEFAULT ─────────────────────────────────────────────────
 WEEKLY_STOP_LOSS: float = 0.0   # 0 = disabled; e.g. 60.0 = halt after −$60/week
 
+# ─── KELLY CRITERION DEFAULTS ─────────────────────────────────────────────────
+# Set kelly_fraction=0 to disable (flat or bid×secs stake used instead).
+# Typical values: 0.25 (quarter-Kelly) to 0.5 (half-Kelly).
+# Bootstrap gate: flat stake is used until kelly_min_trades resolved trades exist.
+KELLY_FRACTION:   float = 0.0   # 0 = disabled
+KELLY_MIN_TRADES: int   = 30    # minimum resolved trades before Kelly activates
+
+# ─── STAKE STEP-FUNCTION DEFAULTS ────────────────────────────────────────────
+# Curve B: stake by secs zone. Non-increasing: s0 ≥ s1 ≥ s2 ≥ s3.
+# Best Sharpe config (backtest 2026-05-19): $15/$12/$6/$6 with vol=weekday.
+STAKE_STEP_ENABLED: bool  = False
+STAKE_STEP_S0:      float = 15.0   # stake when secs_remaining < 45
+STAKE_STEP_S1:      float = 12.0   # stake when 45 ≤ secs_remaining < 60
+STAKE_STEP_S2:      float =  6.0   # stake when 60 ≤ secs_remaining < 90
+STAKE_STEP_S3:      float =  6.0   # stake when secs_remaining ≥ 90
+_STAKE_STEP_BREAKS: tuple = (45.0, 60.0, 90.0)
+
 # ─── LOGGING FORMATTERS ───────────────────────────────────────────────────────
 _SESSION_ID = uuid.uuid4().hex[:8].upper()
 
@@ -232,6 +249,17 @@ class BotConfig:
     stake_secs_alpha:      float = STAKE_SECS_ALPHA
     stake_max:             float = STAKE_MAX
     stake_max_pct_capital: float = STAKE_MAX_PCT_CAPITAL
+
+    # Kelly criterion stake sizing
+    kelly_fraction:   float = KELLY_FRACTION
+    kelly_min_trades: int   = KELLY_MIN_TRADES
+
+    # Step-function stake sizing (Curve B)
+    stake_step_enabled: bool  = STAKE_STEP_ENABLED
+    stake_step_s0:      float = STAKE_STEP_S0
+    stake_step_s1:      float = STAKE_STEP_S1
+    stake_step_s2:      float = STAKE_STEP_S2
+    stake_step_s3:      float = STAKE_STEP_S3
 
     # Weekly stop-loss
     weekly_stop_loss: float = WEEKLY_STOP_LOSS
@@ -394,6 +422,27 @@ def make_config(simulate: bool = False, no_log: bool = False,
 
     weekly_stop_loss = float(strat.get("weekly_stop_loss", WEEKLY_STOP_LOSS))
 
+    kelly_fraction   = float(strat.get("kelly_fraction",   KELLY_FRACTION))
+    kelly_min_trades = int(strat.get("kelly_min_trades",   KELLY_MIN_TRADES))
+
+    # Vol-filter parameters (JSON section "vol_filter": {…}).
+    _vf = strat.get("vol_filter", {})
+    vol_filter_enabled      = bool(_vf.get("enabled",      VOL_FILTER_ENABLED))
+    vol_filter_weekday_only = bool(_vf.get("weekday_only", VOL_FILTER_WEEKDAY_ONLY))
+    vol_window              = int(_vf.get("window",        VOL_WINDOW))
+    vol_min_samples         = int(_vf.get("min_samples",   VOL_MIN_SAMPLES))
+    vol_bid_max_cfg         = float(_vf.get("vol_bid_max",   VOL_BID_MAX))
+    range_bid_max_cfg       = float(_vf.get("range_bid_max", RANGE_BID_MAX))
+    obi_vol_max_cfg         = float(_vf.get("obi_vol_max",   OBI_VOL_MAX))
+
+    # Step-function stake parameters (JSON section "stake_step": {…}).
+    _ss = strat.get("stake_step", {})
+    stake_step_enabled = bool(_ss.get("enabled", STAKE_STEP_ENABLED))
+    stake_step_s0      = float(_ss.get("s0",     STAKE_STEP_S0))
+    stake_step_s1      = float(_ss.get("s1",     STAKE_STEP_S1))
+    stake_step_s2      = float(_ss.get("s2",     STAKE_STEP_S2))
+    stake_step_s3      = float(_ss.get("s3",     STAKE_STEP_S3))
+
     market_tag_id      = int(strat.get("market_tag_id",      MARKET_TAG_ID))
     market_window_mins = int(strat.get("market_window_mins", MARKET_WINDOW_MINS))
 
@@ -500,6 +549,20 @@ def make_config(simulate: bool = False, no_log: bool = False,
         stake_secs_alpha=stake_secs_alpha,
         stake_max=stake_max,
         stake_max_pct_capital=stake_max_pct_capital,
+        kelly_fraction=kelly_fraction,
+        kelly_min_trades=kelly_min_trades,
+        stake_step_enabled=stake_step_enabled,
+        stake_step_s0=stake_step_s0,
+        stake_step_s1=stake_step_s1,
+        stake_step_s2=stake_step_s2,
+        stake_step_s3=stake_step_s3,
+        vol_filter_enabled=vol_filter_enabled,
+        vol_filter_weekday_only=vol_filter_weekday_only,
+        vol_window=vol_window,
+        vol_min_samples=vol_min_samples,
+        vol_bid_max=vol_bid_max_cfg,
+        range_bid_max=range_bid_max_cfg,
+        obi_vol_max=obi_vol_max_cfg,
         weekly_stop_loss=weekly_stop_loss,
         market_tag_id=market_tag_id,
         market_window_mins=market_window_mins,
@@ -841,22 +904,53 @@ async def handle_book_update(state: BotState, parsed: dict[str, Any]) -> None:
 # ─── STAKE SCALING ────────────────────────────────────────────────────────────
 
 def compute_stake(cfg: "BotConfig", bid: float, secs: float,
-                  capital: float = 0.0) -> float:
+                  capital: float = 0.0, win_rate: float = 0.5,
+                  n_trades: int = 0, ask: float = 0.0) -> float:
     """
-    Compute the effective stake for one trade using bid-confidence and
-    time-remaining scaling.
+    Compute the effective stake for one trade.
 
-    Formula:
-      bid_score   = (bid − threshold) / (1 − threshold)          ∈ [0, 1]
-      bid_boost   = 1 + stake_bid_alpha × bid_score              ≥ 1
-      secs_excess = max(0, (secs − secs_ref) / secs_ref)
-      secs_factor = max(_STAKE_SECS_MIN_FACTOR, 1 − secs_alpha × secs_excess)
-      eff_max     = min(stake_max, stake_max_pct_capital × capital)  if pct > 0
-      stake       = clip(base × bid_boost × secs_factor, base × floor, eff_max)
+    Priority order (first matching path wins):
 
-    When both alphas are 0 (default), returns cfg.stake unchanged (fast path).
-    capital is only used when stake_max_pct_capital > 0.
+    Kelly path (kelly_fraction > 0, n_trades ≥ kelly_min_trades):
+      b_net   = (1/ask − 1) − FEE_RATE × min(ask, 1−ask) / ask
+      f*      = (p × b_net − q) / b_net
+      stake   = kelly_fraction × f* × capital, capped at stake_max.
+      Returns 0.0 when f* ≤ 0 (no mathematical edge).
+
+    Step path (stake_step_enabled=True):
+      Zones: <45s → s0, 45-60s → s1, 60-90s → s2, ≥90s → s3.
+      Returns the zone stake directly (no additional cap applied).
+
+    Bid×secs path (bid_alpha or secs_alpha > 0):
+      bid_score   = (bid − threshold) / (1 − threshold)
+      bid_boost   = 1 + stake_bid_alpha × bid_score
+      secs_factor = max(floor, 1 − secs_alpha × excess)
+      stake       = clip(base × bid_boost × secs_factor, floor, eff_max)
+
+    Flat path (all above disabled): returns cfg.stake.
     """
+    if cfg.kelly_fraction > 0 and n_trades >= cfg.kelly_min_trades and capital > 0 and ask > 0:
+        b_net = (1.0 / ask - 1.0) - api.FEE_RATE * min(ask, 1.0 - ask) / ask
+        p = win_rate
+        q = 1.0 - p
+        f_star = (p * b_net - q) / b_net if b_net > 0 else 0.0
+        if f_star <= 0:
+            return 0.0
+        kelly_stake = cfg.kelly_fraction * f_star * capital
+        eff_max = (min(cfg.stake_max, cfg.stake_max_pct_capital * capital)
+                   if cfg.stake_max_pct_capital > 0 else cfg.stake_max)
+        return min(kelly_stake, eff_max)
+
+    if cfg.stake_step_enabled:
+        secs_b = cfg.stake_step_s3
+        if secs < _STAKE_STEP_BREAKS[0]:
+            secs_b = cfg.stake_step_s0
+        elif secs < _STAKE_STEP_BREAKS[1]:
+            secs_b = cfg.stake_step_s1
+        elif secs < _STAKE_STEP_BREAKS[2]:
+            secs_b = cfg.stake_step_s2
+        return secs_b
+
     if cfg.stake_bid_alpha == 0.0 and cfg.stake_secs_alpha == 0.0:
         if cfg.stake_max_pct_capital > 0 and capital > 0:
             return min(cfg.stake, cfg.stake_max_pct_capital * capital)
@@ -1072,7 +1166,15 @@ async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[floa
     cfg = state.config
     now_ms = int(time.time() * 1000)
     ep    = ts.best_ask                                                          # entry price
-    stake = compute_stake(cfg, ts.best_bid, ts.secs_remaining, state.capital)   # dynamic or flat
+    n_trades = state.wins + state.losses
+    stake = compute_stake(
+        cfg, ts.best_bid, ts.secs_remaining, state.capital,
+        win_rate=state.win_rate / 100.0, n_trades=n_trades, ask=ep,
+    )
+    if stake <= 0:
+        logger.info("Kelly: f*≤0 — no edge at ask=%.4f wr=%.1f%% — skipping %s",
+                    ep, state.win_rate, ts.market_id[:12])
+        return
     tb    = stake / ep if ep > 0 else 0                         # tokens bought
     fee   = api.compute_fee(ep, tb)
     cost  = stake + fee
@@ -1491,6 +1593,14 @@ async def main() -> None:
         _mo = " mon-open=13h30" if config.us_weekly_open else ""
         _fr = " fri-close=20h00" if config.us_weekly_close else ""
         logger.info("  Hour filter: weekday=%s | weekend=%s%s%s", _wd, _we, _mo, _fr)
+    if config.vol_filter_enabled:
+        _wdo = " (weekday only)" if config.vol_filter_weekday_only else ""
+        logger.info("  Vol filter%s: bid_vol≤%.2f  range≤%.2f  obi_vol≤%.2f",
+                    _wdo, config.vol_bid_max, config.range_bid_max, config.obi_vol_max)
+    if config.stake_step_enabled:
+        logger.info("  Stake step: <45s=$%.0f  45-60s=$%.0f  60-90s=$%.0f  ≥90s=$%.0f",
+                    config.stake_step_s0, config.stake_step_s1,
+                    config.stake_step_s2, config.stake_step_s3)
     if config.stake_bid_alpha != 0.0 or config.stake_secs_alpha != 0.0:
         _pct = (f"  cap={config.stake_max_pct_capital*100:.0f}%capital"
                 if config.stake_max_pct_capital > 0 else "")
@@ -1499,6 +1609,9 @@ async def main() -> None:
             config.stake_bid_alpha, config.stake_secs_ref,
             config.stake_secs_alpha, config.stake_max, _pct,
         )
+    if config.kelly_fraction > 0:
+        logger.info("  Kelly criterion: fraction=%.2f  bootstrap=%d trades",
+                    config.kelly_fraction, config.kelly_min_trades)
     if config.weekly_stop_loss > 0:
         logger.info("  Weekly stop-loss: $%.0f", config.weekly_stop_loss)
     if not config.private_key:

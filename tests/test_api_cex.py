@@ -15,8 +15,9 @@ All tests are offline — no real API calls.
 import json, os, sys, unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bot"))
-import api_binance  as binance
-import api_mexc     as mexc
+import api_binance   as binance
+import api_bitstamp  as bitstamp
+import api_mexc      as mexc
 import api_polymarket as poly
 
 
@@ -51,6 +52,9 @@ class TestApiContract(unittest.TestCase):
     def test_binance_has_full_interface(self):
         self._check_module(binance)
 
+    def test_bitstamp_has_full_interface(self):
+        self._check_module(bitstamp)
+
     def test_mexc_has_full_interface(self):
         self._check_module(mexc)
 
@@ -58,14 +62,14 @@ class TestApiContract(unittest.TestCase):
         self._check_module(poly)
 
     def test_fee_rate_is_float(self):
-        for mod in (binance, mexc, poly):
+        for mod in (binance, bitstamp, mexc, poly):
             self.assertIsInstance(
                 mod.FEE_RATE, float,
                 f"{mod.__name__}.FEE_RATE must be a float",
             )
 
     def test_compute_fee_returns_float(self):
-        for mod in (binance, mexc, poly):
+        for mod in (binance, bitstamp, mexc, poly):
             result = mod.compute_fee(65000.0, 0.001)
             self.assertIsInstance(
                 result, float,
@@ -73,7 +77,7 @@ class TestApiContract(unittest.TestCase):
             )
 
     def test_parse_book_update_returns_dict_or_none(self):
-        for mod in (binance, mexc, poly):
+        for mod in (binance, bitstamp, mexc, poly):
             result = mod.parse_book_update({})
             self.assertIn(
                 result, [None] + [result] if isinstance(result, dict) else [None],
@@ -495,6 +499,211 @@ class TestMexcPostOrderSimulated(unittest.IsolatedAsyncioTestCase):
         os.environ.pop("MEXC_API_SECRET", None)
         result = await mexc.post_order(None, "BTCUSDT:SELL", 65000.0, 10.0)
         self.assertTrue(str(result).startswith("sim_"))
+
+
+# ── Bitstamp compute_fee ──────────────────────────────────────────────────────
+
+class TestBitstampComputeFee(unittest.TestCase):
+
+    def test_known_value(self):
+        # FEE_RATE = 0.001; fee = 0.001 × 65000 × 0.001 = 0.065
+        self.assertAlmostEqual(bitstamp.compute_fee(65000.0, 0.001), 0.065)
+
+    def test_zero_quantity(self):
+        self.assertAlmostEqual(bitstamp.compute_fee(65000.0, 0.0), 0.0)
+
+    def test_zero_price(self):
+        self.assertAlmostEqual(bitstamp.compute_fee(0.0, 1.0), 0.0)
+
+    def test_proportional_to_price(self):
+        f1 = bitstamp.compute_fee(65000.0, 0.001)
+        f2 = bitstamp.compute_fee(130000.0, 0.001)
+        self.assertAlmostEqual(f2, f1 * 2)
+
+    def test_fee_rate_is_01_percent(self):
+        self.assertAlmostEqual(bitstamp.FEE_RATE, 0.001)
+
+
+# ── Bitstamp market metadata ──────────────────────────────────────────────────
+
+class TestBitstampMetadata(unittest.TestCase):
+
+    def test_get_market_id(self):
+        self.assertEqual(bitstamp.get_market_id({"symbol": "BTCUSD"}), "BTCUSD")
+
+    def test_get_market_id_missing(self):
+        self.assertEqual(bitstamp.get_market_id({}), "")
+
+    def test_get_up_token_id(self):
+        self.assertEqual(bitstamp.get_up_token_id({"symbol": "BTCUSD"}), "BTCUSD")
+
+    def test_get_down_token_id_has_sell_suffix(self):
+        self.assertEqual(bitstamp.get_down_token_id({"symbol": "BTCUSD"}), "BTCUSD:SELL")
+
+    def test_get_market_end_ts_ms_is_zero(self):
+        self.assertEqual(bitstamp.get_market_end_ts_ms({"symbol": "BTCUSD"}), 0.0)
+
+    def test_get_market_start_ts_ms_is_zero(self):
+        self.assertEqual(bitstamp.get_market_start_ts_ms({"symbol": "BTCUSD"}), 0.0)
+
+    def test_get_market_question_uses_description(self):
+        m = {"symbol": "BTCUSD", "description": "BTC/USD spot"}
+        self.assertEqual(bitstamp.get_market_question(m), "BTC/USD spot")
+
+    def test_get_market_question_falls_back_to_symbol(self):
+        self.assertEqual(bitstamp.get_market_question({"symbol": "BTCUSD"}), "BTCUSD")
+
+    def test_up_and_down_tokens_differ(self):
+        m = {"symbol": "BTCUSD"}
+        self.assertNotEqual(bitstamp.get_up_token_id(m), bitstamp.get_down_token_id(m))
+
+
+# ── Bitstamp parse_book_update ────────────────────────────────────────────────
+
+class TestBitstampParseBookUpdate(unittest.TestCase):
+
+    def _msg(self, bids, asks, channel="order_book_btcusd"):
+        return {
+            "event":   "data",
+            "channel": channel,
+            "data": {
+                "timestamp":      "1700000000",
+                "microtimestamp": "1700000000000000",
+                "bids":  bids,
+                "asks":  asks,
+            },
+        }
+
+    def test_best_bid(self):
+        r = self._msg([["65000", "0.5"], ["64990", "1.0"]], [["65010", "0.3"]])
+        self.assertAlmostEqual(bitstamp.parse_book_update(r)["best_bid"], 65000.0)
+
+    def test_best_ask(self):
+        r = self._msg([["65000", "0.5"]], [["65010", "0.3"], ["65020", "0.8"]])
+        self.assertAlmostEqual(bitstamp.parse_book_update(r)["best_ask"], 65010.0)
+
+    def test_spread(self):
+        r = self._msg([["65000", "0.5"]], [["65010", "0.3"]])
+        self.assertAlmostEqual(bitstamp.parse_book_update(r)["spread"], 10.0)
+
+    def test_token_id_from_channel(self):
+        r = self._msg([["65000", "0.5"]], [["65010", "0.3"]], channel="order_book_ethusd")
+        self.assertEqual(bitstamp.parse_book_update(r)["token_id"], "ETHUSD")
+
+    def test_obi_bid_heavy(self):
+        r = self._msg([["65000", "1.5"]], [["65010", "0.3"]])
+        result = bitstamp.parse_book_update(r)
+        self.assertAlmostEqual(result["obi"], (1.5 - 0.3) / (1.5 + 0.3), places=5)
+
+    def test_obi_ask_heavy(self):
+        r = self._msg([["65000", "0.3"]], [["65010", "1.5"]])
+        self.assertLess(bitstamp.parse_book_update(r)["obi"], 0)
+
+    def test_vol_capped_at_top_5(self):
+        bids = [[str(65000 - i), "1.0"] for i in range(10)]
+        r = self._msg(bids, [["65010", "0.3"]])
+        self.assertAlmostEqual(bitstamp.parse_book_update(r)["bid_vol"], 5.0)
+
+    def test_spread_non_negative(self):
+        r = self._msg([["65000", "0.5"]], [["65010", "0.3"]])
+        self.assertGreaterEqual(bitstamp.parse_book_update(r)["spread"], 0.0)
+
+    def test_none_on_non_data_event(self):
+        self.assertIsNone(bitstamp.parse_book_update({"event": "heartbeat"}))
+
+    def test_none_on_empty_dict(self):
+        self.assertIsNone(bitstamp.parse_book_update({}))
+
+    def test_none_on_non_dict(self):
+        self.assertIsNone(bitstamp.parse_book_update("bad"))
+        self.assertIsNone(bitstamp.parse_book_update(None))
+
+    def test_none_when_bids_and_asks_empty(self):
+        r = self._msg([], [])
+        self.assertIsNone(bitstamp.parse_book_update(r))
+
+    def test_none_when_not_order_book_channel(self):
+        r = self._msg([["65000", "0.5"]], [["65010", "0.3"]], channel="trade_btcusd")
+        self.assertIsNone(bitstamp.parse_book_update(r))
+
+    def test_malformed_price_level_skipped(self):
+        r = self._msg([["bad", "0.5"], ["65000", "0.5"]], [["65010", "0.3"]])
+        result = bitstamp.parse_book_update(r)
+        self.assertIsNotNone(result)
+        self.assertAlmostEqual(result["best_bid"], 65000.0)
+
+    def test_result_has_required_keys(self):
+        r = self._msg([["65000", "0.5"]], [["65010", "0.3"]])
+        result = bitstamp.parse_book_update(r)
+        self.assertIsNotNone(result)
+        for key in ("token_id", "best_bid", "best_ask", "spread", "bid_vol", "ask_vol", "obi"):
+            self.assertIn(key, result)
+
+
+# ── Bitstamp make_subscribe_msg ───────────────────────────────────────────────
+
+class TestBitstampMakeSubscribeMsg(unittest.TestCase):
+
+    def test_single_symbol_returns_json_string(self):
+        msg = bitstamp.make_subscribe_msg(["btcusd"])
+        self.assertIsInstance(msg, str)
+        parsed = json.loads(msg)
+        self.assertIsInstance(parsed, dict)
+
+    def test_event_is_subscribe(self):
+        parsed = json.loads(bitstamp.make_subscribe_msg(["btcusd"]))
+        self.assertEqual(parsed["event"], "bts:subscribe")
+
+    def test_channel_contains_symbol(self):
+        parsed = json.loads(bitstamp.make_subscribe_msg(["btcusd"]))
+        self.assertIn("btcusd", parsed["data"]["channel"])
+
+    def test_strips_sell_suffix(self):
+        parsed = json.loads(bitstamp.make_subscribe_msg(["BTCUSD:SELL"]))
+        self.assertNotIn(":SELL", parsed["data"]["channel"])
+        self.assertNotIn(":sell", parsed["data"]["channel"])
+
+    def test_multiple_symbols_returns_list(self):
+        msgs = bitstamp.make_subscribe_msg(["btcusd", "ethusd"])
+        self.assertIsInstance(msgs, list)
+        self.assertEqual(len(msgs), 2)
+
+    def test_multiple_symbols_each_is_valid_json(self):
+        msgs = bitstamp.make_subscribe_msg(["btcusd", "ethusd"])
+        for m in msgs:
+            parsed = json.loads(m)
+            self.assertEqual(parsed["event"], "bts:subscribe")
+
+
+# ── Bitstamp post_order simulation (no network) ───────────────────────────────
+
+class TestBitstampPostOrderSimulated(unittest.IsolatedAsyncioTestCase):
+
+    def _clear_creds(self):
+        for k in ("BITSTAMP_API_KEY", "BITSTAMP_API_SECRET", "BITSTAMP_CUSTOMER_ID"):
+            os.environ.pop(k, None)
+
+    async def test_returns_dict_without_credentials(self):
+        self._clear_creds()
+        result = await bitstamp.post_order(None, "BTCUSD", "buy", 0.001, price=65000.0)
+        self.assertIsNotNone(result)
+        self.assertIsInstance(result, dict)
+
+    async def test_status_is_simulated(self):
+        self._clear_creds()
+        result = await bitstamp.post_order(None, "BTCUSD", "buy", 0.001, price=65000.0)
+        self.assertEqual(result.get("status"), "simulated")
+
+    async def test_sim_id_unique(self):
+        self._clear_creds()
+        r1 = await bitstamp.post_order(None, "BTCUSD", "buy", 0.001, price=65000.0)
+        r2 = await bitstamp.post_order(None, "BTCUSD", "buy", 0.001, price=65000.0)
+        self.assertNotEqual(r1.get("id"), r2.get("id"))
+
+    async def test_sell_suffix_accepted(self):
+        self._clear_creds()
+        result = await bitstamp.post_order(None, "BTCUSD:SELL", "sell", 0.001, price=65000.0)
+        self.assertEqual(result.get("status"), "simulated")
 
 
 if __name__ == "__main__":
