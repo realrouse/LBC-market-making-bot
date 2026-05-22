@@ -36,18 +36,21 @@ CYCLES = [
         "bottom":     ("2015-01-14",    117),   # Bitstamp low; pre-DB on some sources
         "top":        ("2017-12-17", 19_800),
         "next_bottom":("2018-12-15",  3_100),
+        "preceding_halving": "2016-07-09",      # halving whose aftermath drove this top
     },
     {
         "label":      "Cycle 2",
         "bottom":     ("2018-12-15",  3_100),
         "top":        ("2021-11-10", 69_000),
         "next_bottom":("2022-11-21", 15_500),
+        "preceding_halving": "2020-05-11",
     },
     {
         "label":      "Cycle 3",
         "bottom":     ("2022-11-21", 15_500),
         "top":        ("2025-10-01", 126_200),
         "next_bottom": None,                    # in progress
+        "preceding_halving": "2024-04-20",
     },
 ]
 
@@ -213,6 +216,24 @@ def main() -> None:
         sma200w_at_bottom = ma200w[b_i] if ma200w[b_i] is not None else None
         sma200w_ratio     = (actual_bottom / sma200w_at_bottom) if sma200w_at_bottom else None
 
+        # Rolling 730-day gain leading into cycle top (2-year momentum)
+        gain_730d = None
+        if t_i >= 730:
+            gain_730d = (actual_top / closes[t_i - 730] - 1) * 100
+
+        # 200DMA slope at cycle top (90-day window)
+        slope_200d = None
+        if t_i >= 90 and ma200d[t_i] and ma200d[t_i - 90]:
+            slope_200d = (ma200d[t_i] / ma200d[t_i - 90] - 1) * 100
+
+        # Pre-halving ATH: max price in 365d window before the preceding halving
+        halving_ts     = _ts(c["preceding_halving"])
+        halv_h_i       = nearest_idx(c["preceding_halving"])
+        halv_window_lo = max(0, halv_h_i - 365)
+        pre_halv_ath   = max(highs[halv_window_lo : halv_h_i + 1]) if halv_h_i > 0 else 0
+        # Time (days) from halving to cycle top
+        days_halv_to_top = (tss[t_i] - halving_ts) // 86400
+
         # Gain compression vs previous cycle
         compression = ""
         if prev_gain_pct is not None:
@@ -253,6 +274,24 @@ def main() -> None:
         else:
             print(f"│    Pi Cycle Top:  did not fire this cycle")
 
+        print(f"│")
+        if gain_730d is not None:
+            print(f"│  Rolling 730d gain to top : +{gain_730d:,.0f}%"
+                  f"  (${closes[t_i-730]:,.0f} → ${actual_top:,.0f})")
+        if slope_200d is not None:
+            print(f"│  200DMA slope at top (90d): {slope_200d:+.1f}%"
+                  f"  (${ma200d[t_i-90]:,.0f} → ${ma200d[t_i]:,.0f})")
+        print(f"│  Preceding halving        : {c['preceding_halving']}"
+              f"  ({days_halv_to_top}d before top)")
+        if CYCLES.index(c) > 0:
+            prev_top_p = CYCLES[CYCLES.index(c) - 1]["top"][1]
+            if pre_halv_ath > prev_top_p:
+                prev_top_note = f"  ← EXCEEDED prev cycle top ${prev_top_p:,} BEFORE halving (frontrun!)"
+            else:
+                pct_of_prev = pre_halv_ath / prev_top_p * 100
+                prev_top_note = f"  ({pct_of_prev:.0f}% of prev cycle top ${prev_top_p:,})"
+            print(f"│  Pre-halving ATH (365d)   : ${pre_halv_ath:,.0f}{prev_top_note}")
+
         if sma200w_ratio is not None:
             print(f"│  200W SMA at bottom: ${sma200w_at_bottom:,.0f}"
                   f"  price/SMA={sma200w_ratio:.3f}"
@@ -271,9 +310,10 @@ def main() -> None:
     print("VOLATILITY COMPRESSION TREND")
     print("═" * 72)
 
-    gains   = []
-    mm_peaks= []
-    dd_pcts = []
+    gains    = []
+    mm_peaks = []
+    dd_pcts  = []
+    g730s    = []
 
     for c in CYCLES:
         b_i = nearest_idx(c["bottom"][0])
@@ -295,45 +335,111 @@ def main() -> None:
         else:
             dd_pcts.append((lows[-1] / actual_top - 1) * 100)
 
+        g730 = (actual_top / closes[t_i - 730] - 1) * 100 if t_i >= 730 else None
+        g730s.append(g730)
+
     cycle_labels = [c["label"] for c in CYCLES]
     print()
-    print(f"  {'':12s}  {'Bull gain':>10s}  {'Gain ratio':>10s}  {'Peak MM':>8s}  {'Bear DD':>8s}")
-    print(f"  {'':12s}  {'(bot→top)':>10s}  {'vs prev':>10s}  {'':>8s}  {'(top→bot)':>8s}")
-    print(f"  {'-'*60}")
+    print(f"  {'':12s}  {'Bull gain':>10s}  {'730d gain':>10s}  {'Gain ratio':>10s}  {'Peak MM':>8s}  {'Bear DD':>8s}")
+    print(f"  {'':12s}  {'(bot→top)':>10s}  {'(2yr to top)':>10s}  {'vs prev':>10s}  {'':>8s}  {'(top→bot)':>8s}")
+    print(f"  {'-'*72}")
     for i, label in enumerate(cycle_labels):
         gain_ratio = f"×{gains[i]/gains[i-1]:.2f}" if i > 0 else "—"
-        dd_note    = " (in progress)" if CYCLES[i]["next_bottom"] is None else ""
-        print(f"  {label:12s}  {gains[i]:>9,.0f}%  {gain_ratio:>10s}  {mm_peaks[i]:>8.2f}  "
+        dd_note    = " (prog)" if CYCLES[i]["next_bottom"] is None else ""
+        g730_str   = f"{g730s[i]:,.0f}%" if g730s[i] is not None else "n/a"
+        print(f"  {label:12s}  {gains[i]:>9,.0f}%  {g730_str:>10s}  {gain_ratio:>10s}  {mm_peaks[i]:>8.2f}  "
               f"{dd_pcts[i]:>7.0f}%{dd_note}")
 
-    # Extrapolate cycle 4
+    # ---------------------------------------------------------------------------
+    # Frontrunning analysis
+    # ---------------------------------------------------------------------------
+    print()
+    print("═" * 72)
+    print("CYCLE FRONTRUNNING ANALYSIS — institutional front-running evidence")
+    print("═" * 72)
+    print()
+    print("  Theory: as 'big money' grows, it front-runs the expected 4-year cycle")
+    print("  by entering earlier (shallower bear lows) and exiting earlier (lower")
+    print("  Mayer multiples). This compresses amplitude while duration stays stable.")
+    print()
+
+    gain_730d_list  = []
+    slope_200d_list = []
+    pre_halv_ath_list = []
+    days_halv_top_list = []
+
+    for ci, c in enumerate(CYCLES):
+        b_i = nearest_idx(c["bottom"][0])
+        t_i = nearest_idx(c["top"][0])
+        halving_ts  = _ts(c["preceding_halving"])
+        halv_h_i    = nearest_idx(c["preceding_halving"])
+        halv_win_lo = max(0, halv_h_i - 365)
+        pre_halv    = max(highs[halv_win_lo : halv_h_i + 1]) if halv_h_i > 0 else 0
+        pre_halv_ath_list.append(pre_halv)
+        days_halv_top_list.append((tss[t_i] - halving_ts) // 86400)
+        g730 = (max(highs[max(0, t_i - 7): t_i + 8]) / closes[t_i - 730] - 1) * 100 if t_i >= 730 else None
+        gain_730d_list.append(g730)
+        s200 = (ma200d[t_i] / ma200d[t_i - 90] - 1) * 100 if (t_i >= 90 and ma200d[t_i] and ma200d[t_i - 90]) else None
+        slope_200d_list.append(s200)
+
+    cycle_labels = [c["label"] for c in CYCLES]
+
+    print(f"  {'':12s}  {'Halving':>10s}  {'Days H→top':>10s}  {'Pre-halv ATH':>13s}  {'vs prev top':>12s}")
+    print(f"  {'-'*65}")
+    for i, lbl in enumerate(cycle_labels):
+        prev_top = CYCLES[i - 1]["top"][1] if i > 0 else None
+        if prev_top:
+            vs = f"+{(pre_halv_ath_list[i]/prev_top-1)*100:.0f}%" if pre_halv_ath_list[i] > prev_top else f"{(pre_halv_ath_list[i]/prev_top-1)*100:.0f}%"
+            flag = " ← NEW ATH!" if pre_halv_ath_list[i] > prev_top else ""
+        else:
+            vs   = "—"
+            flag = ""
+        print(f"  {lbl:12s}  {CYCLES[i]['preceding_halving']:>10s}  {days_halv_top_list[i]:>10}d"
+              f"  ${pre_halv_ath_list[i]:>11,.0f}  {vs:>12s}{flag}")
+
+    print()
+    print(f"  {'':12s}  {'730d gain':>10s}  {'200DMA slope':>12s}  {'Bear DD':>8s}  {'Peak MM':>8s}")
+    print(f"  {'':12s}  {'to top':>10s}  {'(90d at top)':>12s}  {'':>8s}  {'':>8s}")
+    print(f"  {'-'*58}")
+    for i, lbl in enumerate(cycle_labels):
+        g730_str = f"+{gain_730d_list[i]:.0f}%" if gain_730d_list[i] is not None else "n/a"
+        s200_str = f"{slope_200d_list[i]:+.1f}%" if slope_200d_list[i] is not None else "n/a"
+        dd_note  = " (prog)" if CYCLES[i]["next_bottom"] is None else ""
+        print(f"  {lbl:12s}  {g730_str:>10s}  {s200_str:>12s}  "
+              f"{dd_pcts[i]:>7.0f}%{dd_note}  {mm_peaks[i]:>8.2f}")
+
+    print()
+    print("  KEY EVIDENCE OF PROGRESSIVE FRONTRUNNING:")
+    print()
+    print("  1. PRE-HALVING ATH:")
+    print("     C1 (halving Jul-2016): BTC was far below the $680 previous cycle top")
+    print("     C2 (halving May-2020): BTC was far below the $19,800 C1 top")
+    print("     C3 (halving Apr-2024): BTC hit $73K BEFORE the halving — first cycle")
+    print("     to make a new all-time high before the halving. Institutional money")
+    print("     (ETF approval Jan-2024) entered 3+ months BEFORE the halving event.")
+    print()
+    print("  2. AMPLITUDE COMPRESSION (frontrunning dampens both bottom and top):")
     if len(gains) >= 2:
-        ratio_2_1   = gains[1] / gains[0]
-        ratio_3_2   = gains[2] / gains[1]
-        est_gain4   = gains[2] * ratio_3_2          # project same compression ratio
-        # Cycle 3 bear DDs: -84% (C1), -78% (C2), ~-40% in progress.
-        # Extrapolate bear DD: assume ~-60% (midpoint compression)
-        est_dd_c3   = dd_pcts[2]                    # in-progress, ~-40%
-        est_dd_c4   = dd_pcts[1] * (dd_pcts[2] / dd_pcts[1])  # apply same compression
-        # Cycle 4 bottom estimated from cycle 3 top
-        c3_top_price = max(highs[max(0, nearest_idx("2025-10-01") - 7) :
-                                  nearest_idx("2025-10-01") + 8])
-        est_c4_bottom = c3_top_price * (1 + est_dd_c3 / 100)   # conservative: use C3 in-progress DD
-        est_c4_top    = est_c4_bottom * (1 + est_gain4 / 100)
-
-        mm_ratio   = mm_peaks[2] / mm_peaks[1] if mm_peaks[1] > 0 else 1
-        est_mm4    = mm_peaks[2] * mm_ratio
-
-        print()
-        print(f"  Extrapolation (Cycle 4, ~2026-2029)  [structural assumptions, not a forecast]:")
-        print(f"    Bear DD trend    : {dd_pcts[1]:.0f}% (C2) → {dd_pcts[2]:.0f}% so far (C3)"
-              f" → est ~{est_dd_c3:.0f}% (C4, similar to C3)")
-        print(f"    Est. C4 bottom   : ~${est_c4_bottom:,.0f}  (from ${c3_top_price:,.0f} C3 top)")
-        print(f"    Bull gain trend  : {gains[1]:.0f}% (C2) → {gains[2]:.0f}% (C3)"
-              f" → est +{est_gain4:.0f}% (C4, ×{ratio_3_2:.2f} compression)")
-        print(f"    Est. C4 top      : ~${est_c4_top:,.0f}")
-        print(f"    Est. peak MM     : ~{est_mm4:.2f}  "
-              f"({'Mayer >2.4 will not fire' if est_mm4 < 2.4 else 'Mayer >2.4 plausible'})")
+        for i in range(1, len(gains)):
+            print(f"     Bull gain: {gains[i-1]:,.0f}% → {gains[i]:,.0f}%"
+                  f"  (×{gains[i]/gains[i-1]:.2f})")
+        for i in range(1, len(dd_pcts) - 1):
+            print(f"     Bear DD  : {dd_pcts[i-1]:.0f}% → {dd_pcts[i]:.0f}%"
+                  f"  (×{dd_pcts[i]/dd_pcts[i-1]:.2f})")
+        print(f"     Peak MM  : {mm_peaks[0]:.2f} → {mm_peaks[1]:.2f} → {mm_peaks[2]:.2f}")
+    print()
+    print("  3. DURATION STABILITY (timing is anchored to the halving cycle):")
+    for i, lbl in enumerate(cycle_labels):
+        b_i = nearest_idx(CYCLES[i]["bottom"][0])
+        t_i = nearest_idx(CYCLES[i]["top"][0])
+        print(f"     {lbl}: bottom→top = {(tss[t_i]-tss[b_i])//86400}d  |"
+              f"  halving→top = {days_halv_top_list[i]}d")
+    print()
+    print("  CONCLUSION: Cycle duration (halving→top) stays remarkably stable")
+    print("  (~17-18 months post-halving). But amplitude shrinks each cycle as")
+    print("  smart money enters earlier, buying the bear and selling the early bull.")
+    print("  C3 was the most frontrun cycle ever: new ATH before the halving,")
+    print("  peak MM only 1.86 (vs 2.92 and 3.79), Pi Cycle never fired.")
 
     # ---------------------------------------------------------------------------
     # Indicator reliability summary

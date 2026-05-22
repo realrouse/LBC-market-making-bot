@@ -38,6 +38,22 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Known BTC halving timestamps (UTC, seconds)
+HALVINGS_TS = [
+    1354060800,   # 2012-11-28 H1
+    1468022400,   # 2016-07-09 H2
+    1589155200,   # 2020-05-11 H3
+    1713571200,   # 2024-04-20 H4
+]
+
+
+def days_since_last_halving(ts_sec: int) -> int:
+    """Days elapsed since the most recent halving at or before ts_sec."""
+    past = [h for h in HALVINGS_TS if h <= ts_sec]
+    if not past:
+        return 0
+    return (ts_sec - past[-1]) // 86400
+
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -55,6 +71,16 @@ DEFAULTS = dict(
     fee_rate         = 0.001,     # 0.1% per trade
     min_bull_days    = 180,       # min days in BULL before any top signal can flip to BEAR
     min_bear_days    = 60,        # min days in BEAR before any bottom signal can flip to BULL
+    # Prudence mode: halving-relative tiers for progressive distribution
+    prudence         = False,
+    prudence_t1_days   = 400,    # caution tier: days post-halving
+    prudence_t1_target = 0.75,   # caution: reduce BTC target to 75%
+    prudence_t1_rebound= 0.03,   # caution: tighter rebound trigger
+    prudence_t1_tranche= 0.15,   # caution: smaller tranche
+    prudence_t2_days   = 480,    # high-risk tier: ~90% of avg 534d halving→top window
+    prudence_t2_target = 0.50,   # high-risk: reduce BTC target to 50%
+    prudence_t2_rebound= 0.02,   # high-risk: very tight rebound trigger
+    prudence_t2_tranche= 0.10,   # high-risk: small tranche
 )
 
 
@@ -74,6 +100,18 @@ def sma(series: list, n: int) -> list:
 
 def load_daily(db_path: str) -> list:
     conn = sqlite3.connect(db_path)
+    tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+
+    if "daily" in tables:
+        rows = conn.execute(
+            "SELECT day_ts, high, low, close FROM daily ORDER BY day_ts"
+        ).fetchall()
+        conn.close()
+        return [{"ts": r[0], "date": _ts_to_date(r[0]),
+                 "high": r[1], "low": r[2], "close": r[3]} for r in rows]
+
     rows = conn.execute("""
         SELECT (ts_ms/86400000)*86400 AS day_ts,
                MAX(high) AS high, MIN(low) AS low,
@@ -219,11 +257,34 @@ def run_backtest(daily: list, p: dict) -> dict:
         elif bot_sig:
             regime      = "bull"
             recent_high = hi
+            recent_low  = lo
             days_in_regime = 0
 
         if regime != prev:
             regime_history.append({"date": date, "regime": regime, "price": px,
                                    "prev": prev})
+
+        # --- Prudence tiers (BULL only, keyed on days since last halving) ---
+        # Halving→top historically: 526d / 548d / 529d  (avg 534d)
+        # Tier 1 at 400d (~75% of avg window): caution, step BTC target down to 75%
+        # Tier 2 at 480d (~90% of avg window): high-risk, step BTC target down to 50%
+        eff_target   = p["target_bull"]
+        eff_rebound  = p["rebound_pct"]
+        eff_drawback = p["drawback_pct"]
+        eff_tranche  = p["tranche_frac"]
+        prudence_tier = 0
+        if p["prudence"] and regime == "bull":
+            d_halv = days_since_last_halving(daily[i]["ts"])
+            if d_halv >= p["prudence_t2_days"]:
+                eff_target    = p["prudence_t2_target"]
+                eff_rebound   = p["prudence_t2_rebound"]
+                eff_tranche   = p["prudence_t2_tranche"]
+                prudence_tier = 2
+            elif d_halv >= p["prudence_t1_days"]:
+                eff_target    = p["prudence_t1_target"]
+                eff_rebound   = p["prudence_t1_rebound"]
+                eff_tranche   = p["prudence_t1_tranche"]
+                prudence_tier = 1
 
         # --- Execute trades ---
         if regime == "bear":
@@ -234,9 +295,25 @@ def run_backtest(daily: list, p: dict) -> dict:
 
         elif regime == "bull":
             recent_high = max(recent_high, hi)
-            if lo <= recent_high * (1 - p["drawback_pct"]):
-                buy_tranche(px, f"drawback -{p['drawback_pct']*100:.0f}%", date)
-                recent_high = hi
+            recent_low  = min(recent_low, lo)
+            cur_frac    = btc_frac(px)
+
+            if prudence_tier > 0 and cur_frac > eff_target + 0.005:
+                # Prudence sell: BTC above stepped-down target → distribute on rebounds
+                if hi >= recent_low * (1 + eff_rebound):
+                    gap      = cur_frac - eff_target
+                    sell_btc = (gap * eff_tranche * pv(px)) / px
+                    sell(sell_btc, px,
+                         f"prudence-T{prudence_tier} rebound +{eff_rebound*100:.0f}%", date)
+                    recent_low = lo
+            else:
+                # Normal BULL: accumulate on drawbacks toward effective target
+                if lo <= recent_high * (1 - eff_drawback):
+                    gap = eff_target - cur_frac
+                    if gap >= 0.005:
+                        buy_usd = gap * eff_tranche * pv(px)
+                        buy(buy_usd, px, f"drawback -{eff_drawback*100:.0f}%", date)
+                    recent_high = hi
 
         pv_series.append(pv(px))
 
@@ -276,6 +353,86 @@ def run_backtest(daily: list, p: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Comparison helper
+# ---------------------------------------------------------------------------
+def _run_comparison(daily: list, base_p: dict) -> None:
+    """Run V1, V2, V2+prudence and print a side-by-side summary table."""
+    configs = [
+        ("V1 (5%/25%)",         {**base_p, "rebound_pct": 0.05, "drawback_pct": 0.05,
+                                  "tranche_frac": 0.25, "prudence": False}),
+        ("V2 (4%/20%)",         {**base_p, "rebound_pct": 0.04, "drawback_pct": 0.04,
+                                  "tranche_frac": 0.20, "prudence": False}),
+        ("V2+prudence",         {**base_p, "rebound_pct": 0.04, "drawback_pct": 0.04,
+                                  "tranche_frac": 0.20, "prudence": True}),
+    ]
+    results = []
+    for name, p in configs:
+        r = run_backtest(daily, p)
+        mult  = r["final_pv"] / p["capital"]
+        hold  = r["btc_hold_pv"] / p["capital"]
+        cagr  = (mult ** (1 / r["years"]) - 1) * 100
+        hcagr = (hold ** (1 / r["years"]) - 1) * 100
+        calmar = cagr / (r["max_dd"] * 100) if r["max_dd"] > 0 else 0
+        results.append({
+            "name": name, "r": r, "p": p,
+            "mult": mult, "hold": hold, "cagr": cagr, "hcagr": hcagr,
+            "calmar": calmar,
+        })
+
+    print("═" * 80)
+    print("STRATEGY COMPARISON  (V1 vs V2 vs V2+prudence)")
+    print(f"  Period: {daily[0]['date']} → {daily[-1]['date']}"
+          f"  ({results[0]['r']['years']:.1f} yr)")
+    print("═" * 80)
+    print(f"  {'Config':18s}  {'Return':>8s}  {'CAGR':>6s}  {'MaxDD':>7s}  "
+          f"{'Calmar':>7s}  {'Trades':>7s}  {'vs B&H':>8s}  {'Fees':>8s}")
+    print(f"  {'-'*76}")
+    for res in results:
+        r   = res["r"]
+        vs  = (res["mult"] / res["hold"] - 1) * 100
+        print(f"  {res['name']:18s}  ×{res['mult']:>6.1f}   {res['cagr']:>5.1f}%"
+              f"  {r['max_dd']*100:>6.1f}%  {res['calmar']:>7.2f}"
+              f"  {len(r['trades']):>7}  {vs:>+7.1f}%  ${r['fees_paid']:>7,.0f}")
+    print()
+    bh_mult = results[0]["r"]["btc_hold_pv"] / results[0]["p"]["capital"]
+    bh_cagr = results[0]["hcagr"]
+    bh_dd   = results[0]["r"]["max_dd_hold"] * 100
+    bh_cal  = bh_cagr / bh_dd if bh_dd > 0 else 0
+    print(f"  {'BTC buy&hold':18s}  ×{bh_mult:>6.1f}   {bh_cagr:>5.1f}%"
+          f"  {bh_dd:>6.1f}%  {bh_cal:>7.2f}  {'n/a':>7}  {'—':>8s}  {'$0':>8s}")
+    print()
+    print("  Prudence tiers (BULL only, halving-relative):")
+    prd = results[2]["p"]
+    print(f"    T0 (<{prd['prudence_t1_days']}d post-halving): 90% BTC target,"
+          f" {prd['drawback_pct']*100:.0f}% drawback, {prd['tranche_frac']*100:.0f}% tranche")
+    print(f"    T1 ({prd['prudence_t1_days']}-{prd['prudence_t2_days']}d): "
+          f"{prd['prudence_t1_target']*100:.0f}% BTC target,"
+          f" {prd['prudence_t1_rebound']*100:.0f}% rebound, {prd['prudence_t1_tranche']*100:.0f}% tranche")
+    print(f"    T2 (>{prd['prudence_t2_days']}d): "
+          f"{prd['prudence_t2_target']*100:.0f}% BTC target,"
+          f" {prd['prudence_t2_rebound']*100:.0f}% rebound, {prd['prudence_t2_tranche']*100:.0f}% tranche")
+    print(f"    (Halving→top avg: 534d. T1 at 75%, T2 at 90% of expected window)")
+    print()
+    for res in results:
+        r = res["r"]
+        sells = [t for t in r["trades"] if t["action"] == "SELL"]
+        buys  = [t for t in r["trades"] if t["action"] == "BUY"]
+        avg_s = sum(t["price"] for t in sells) / max(len(sells), 1)
+        avg_b = sum(t["price"] for t in buys)  / max(len(buys),  1)
+        print(f"  {res['name']:18s}  avg sell=${avg_s:>8,.0f}  avg buy=${avg_b:>8,.0f}"
+              f"  ({len(sells)} sells / {len(buys)} buys)")
+    print()
+
+    print("═" * 80)
+    print("REGIME TRANSITIONS (shared across all configs)")
+    print("═" * 80)
+    for ev in results[0]["r"]["regime_history"]:
+        arrow = "↗ → BULL" if ev["regime"] == "bull" else "↘ → BEAR"
+        print(f"  {ev['date']}  {ev['prev'].upper():4s} {arrow}  price=${ev['price']:>10,.0f}")
+    print()
+
+
+# ---------------------------------------------------------------------------
 # CLI / display
 # ---------------------------------------------------------------------------
 def main():
@@ -303,6 +460,10 @@ def main():
                         help="Min days in BULL before any top signal can fire")
     parser.add_argument("--min-bear",   type=int,   default=DEFAULTS["min_bear_days"],
                         help="Min days in BEAR before any bottom signal can fire")
+    parser.add_argument("--prudence",   action="store_true",
+                        help="Enable halving-relative prudence tiers (progressive distribution near top)")
+    parser.add_argument("--compare",    action="store_true",
+                        help="Run V1, V2, and V2+prudence side by side and print a summary table")
     args = parser.parse_args()
 
     p = dict(DEFAULTS)
@@ -315,6 +476,7 @@ def main():
     p["tranche_frac"]  = args.tranche
     p["min_bull_days"] = args.min_bull
     p["min_bear_days"] = args.min_bear
+    p["prudence"]      = args.prudence
 
     if not Path(args.db).exists():
         sys.exit(f"DB not found: {args.db}")
@@ -322,6 +484,10 @@ def main():
     print(f"Loading daily klines from {args.db} …")
     daily = load_daily(args.db)
     print(f"  {len(daily)} daily bars  ({daily[0]['date']} → {daily[-1]['date']})\n")
+
+    if args.compare:
+        _run_comparison(daily, p)
+        return
 
     r = run_backtest(daily, p)
 
