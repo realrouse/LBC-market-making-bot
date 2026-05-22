@@ -6,6 +6,25 @@ All notable changes to this project are documented here.
 
 ---
 
+## [Unreleased] - 2026-05-22
+
+### Added
+- **`bot/earn_manager.py` — Binance Simple Earn Flexible manager**: `EarnManager` class parks idle USDT after sell trades (`park_idle()`) and redeems before buys (`ensure_liquid()`); sim mode when `BINANCE_API_KEY`/`BINANCE_API_SECRET` are absent; MEXC Earn not supported (API too unstable)
+- **`bot/api_bitstamp.py` — Bitstamp spot exchange adapter**: same interface as `api_binance.py` (`get_markets`, `post_order`, `parse_book_update`, `compute_fee`); FEE_RATE = 0.1% taker; WebSocket `wss://ws.bitstamp.net`; credentials via `BITSTAMP_API_KEY`, `BITSTAMP_API_SECRET`, `BITSTAMP_CUSTOMER_ID`; sim mode when credentials absent
+- **`strategies/longtermcyclestrategygridV1.json` / `V2.json` / `V3.json` — long-term BTC cycle strategy configs**: V1 (5%/25% rebound/tranche, ×24.0, CAGR 43.8%, MaxDD 81.4%, Calmar 0.54); V2 (4%/20%, ×24.2, CAGR 43.9%, MaxDD 81.4%, Calmar 0.54); V3 adds halving-relative prudence tiers (T1 at 400d post-halving, T2 at 480d), Calmar 0.75
+- **`scripts/analyze_btc_cycles.py` — BTC halving cycle analysis**: per-cycle returns, durations, and Mayer Multiple statistics
+- **`scripts/analyze_cycle_volatility.py` — extended cycle volatility analysis**: rolling 730d gain, 200DMA slope, C3 frontrunning analysis, indicator reliability table
+- **`scripts/backtest_cycle_strategy.py` — long-term cycle strategy backtest**: flags `--top-mm`, `--rebound`, `--drawback`, `--tranche`, `--prudence`, `--compare`
+- **`scripts/download_btc_daily_extended.py` — extended BTC daily OHLCV downloader**: fetches multi-year history for cycle analysis
+- **`scripts/backtest.py` — fractional Kelly sizing, Sharpe/Sortino, walk-forward optimization, weekday volatility filter (P1), step-function stake sizing (P2)**
+
+### Changed
+- **`strategies/grid_BTCUSDT_bear_trailing.json`** — updated grid bounds to $60K–$100K with ±30%/40 levels
+
+### Fixed
+- **`bot/api_binance.py`** — public API fallback active when no credentials are set
+- **`scripts/download_btc_history.py`** — data gaps are skipped instead of aborting the download
+
 ## [0.5.0] - 2026-05-18
 
 ### Added

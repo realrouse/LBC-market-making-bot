@@ -266,7 +266,7 @@ bash scripts/install.sh [répertoire_installation] [--lang EN|FR] [--with-tests]
   Sans ce flag, le script propose le choix au démarrage comme avant.
 - `--with-tests` — Copie aussi `tests/`, `scripts/backtest.py` et
   `data/backtest_sample_btc5m_range_2026.db`, puis lance
-  la suite complète de tests (659 tests) juste après l'installation.
+  la suite complète de tests (868 tests) juste après l'installation.
   Le backtest utilise `live.db` uniquement s'il contient ≥ 100 snapshots ;
   sinon il bascule automatiquement sur le dataset embarqué.
 
@@ -1140,16 +1140,17 @@ Pour changer la langue après la configuration initiale, éditez `config.json` :
 ou relancez `python3 scripts/setup.py` et choisissez à nouveau.
 
 
-## Connecteurs CEX (Binance, MEXC)
+## Connecteurs CEX (Binance, MEXC, Bitstamp)
 
-Deux adaptateurs d'exchange supplémentaires sont inclus comme remplaçants directs de `api_polymarket.py` :
+Trois adaptateurs d'exchange supplémentaires sont inclus comme remplaçants directs de `api_polymarket.py` :
 
 | Fichier | Exchange | Frais | Flux WebSocket |
 |---|---|---|---|
 | `bot/api_binance.py` | Binance spot | 0,1 % taker | `btcusdt@depth5@100ms` |
 | `bot/api_mexc.py` | MEXC spot | 0,2 % taker | `spot@public.limit.depth.v3.api@BTCUSDT@5` |
+| `bot/api_bitstamp.py` | Bitstamp spot | 0,1 % taker | `wss://ws.bitstamp.net` carnet d'ordres live |
 
-Les deux implémentent l'interface publique identique : `get_markets`, `post_order`,
+Les trois implémentent l'interface publique identique : `get_markets`, `post_order`,
 `parse_book_update`, `compute_fee` et les helpers de métadonnées de marché.
 
 **Credentials** — via variables d'environnement ou `config.json` :
@@ -1159,6 +1160,9 @@ export BINANCE_API_KEY=...
 export BINANCE_API_SECRET=...
 export MEXC_API_KEY=...
 export MEXC_API_SECRET=...
+export BITSTAMP_API_KEY=...
+export BITSTAMP_API_SECRET=...
+export BITSTAMP_CUSTOMER_ID=...
 ```
 
 **Changer d'exchange** — modifier une seule ligne dans `live_bot.py` (ligne 62) :
@@ -1167,10 +1171,12 @@ export MEXC_API_SECRET=...
 import api_binance as api   # à la place de api_polymarket
 # ou
 import api_mexc as api
+# ou
+import api_bitstamp as api
 ```
 
 **Important** : le signal Polymarket (`best_bid >= 0.96`) opère sur une échelle 0–1 (probabilités).
-Les prix Binance/MEXC sont des valeurs USDT absolues (ex. 65000). Les seuils de stratégie dans
+Les prix Binance/MEXC/Bitstamp sont des valeurs USDT absolues (ex. 65000). Les seuils de stratégie dans
 `strategies/*.json` doivent être recalibrés avant d'utiliser un connecteur CEX.
 
 

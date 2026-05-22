@@ -6,6 +6,25 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [Unreleased] - 2026-05-22
+
+### Ajout
+- **`bot/earn_manager.py` — gestionnaire Binance Simple Earn Flexible** : la classe `EarnManager` place les USDT inactifs après une vente (`park_idle()`) et les rachète avant un achat (`ensure_liquid()`) ; mode simulation si `BINANCE_API_KEY`/`BINANCE_API_SECRET` sont absents ; MEXC Earn non pris en charge (API trop instable)
+- **`bot/api_bitstamp.py` — adaptateur d'échange spot Bitstamp** : même interface que `api_binance.py` (`get_markets`, `post_order`, `parse_book_update`, `compute_fee`) ; FEE_RATE = 0,1 % taker ; WebSocket `wss://ws.bitstamp.net` ; identifiants via `BITSTAMP_API_KEY`, `BITSTAMP_API_SECRET`, `BITSTAMP_CUSTOMER_ID` ; mode simulation si les identifiants sont absents
+- **`strategies/longtermcyclestrategygridV1.json` / `V2.json` / `V3.json` — configs de stratégie BTC cycle long terme** : V1 (rebond 5 %/tranche 25 %, ×24,0, CAGR 43,8 %, MaxDD 81,4 %, Calmar 0,54) ; V2 (4 %/20 %, ×24,2, CAGR 43,9 %, MaxDD 81,4 %, Calmar 0,54) ; V3 ajoute des paliers de prudence relatifs au halving (T1 à 400j post-halving, T2 à 480j), Calmar 0,75
+- **`scripts/analyze_btc_cycles.py` — analyse des cycles de halving BTC** : rendements, durées et statistiques Mayer Multiple par cycle
+- **`scripts/analyze_cycle_volatility.py` — analyse étendue de la volatilité par cycle** : gain glissant sur 730j, pente 200DMA, analyse frontrunning C3, table de fiabilité des indicateurs
+- **`scripts/backtest_cycle_strategy.py` — backtest de stratégie cycle long terme** : options `--top-mm`, `--rebound`, `--drawback`, `--tranche`, `--prudence`, `--compare`
+- **`scripts/download_btc_daily_extended.py` — téléchargement OHLCV journalier BTC étendu** : récupère l'historique pluriannuel pour l'analyse de cycles
+- **`scripts/backtest.py` — sizing Kelly fractionnel, ratios Sharpe/Sortino, optimisation walk-forward, filtre de volatilité par jour de semaine (P1), sizing de mise par paliers (P2)**
+
+### Modifié
+- **`strategies/grid_BTCUSDT_bear_trailing.json`** — bornes de grid mises à jour à 60 000 $–100 000 $ avec ±30 %/40 niveaux
+
+### Correction
+- **`bot/api_binance.py`** — repli sur l'API publique actif quand aucun identifiant n'est défini
+- **`scripts/download_btc_history.py`** — les lacunes de données sont ignorées au lieu d'interrompre le téléchargement
+
 ## [0.5.0] - 2026-05-18
 
 ### Ajout

@@ -258,7 +258,7 @@ bash scripts/install.sh [install_dir] [--lang EN|FR] [--with-tests]
   Without this flag the script prompts at startup as before.
 - `--with-tests` — Also copy `tests/`, `scripts/backtest.py`, and
   `data/backtest_sample_btc5m_range_2026.db`, then run the
-  full test suite (659 tests) immediately after installation.
+  full test suite (868 tests) immediately after installation.
   The backtest uses `live.db` only if it contains ≥ 100 snapshots;
   otherwise it falls back to the bundled sample dataset automatically.
 
@@ -1128,16 +1128,17 @@ To change the language after initial setup, edit `config.json`:
 or re-run `python3 scripts/setup.py` and choose again.
 
 
-## CEX connectors (Binance, MEXC)
+## CEX connectors (Binance, MEXC, Bitstamp)
 
-Two additional exchange adapters are included as drop-in replacements for `api_polymarket.py`:
+Three additional exchange adapters are included as drop-in replacements for `api_polymarket.py`:
 
 | File | Exchange | Fee | WebSocket stream |
 |---|---|---|---|
 | `bot/api_binance.py` | Binance spot | 0.1% taker | `btcusdt@depth5@100ms` |
 | `bot/api_mexc.py` | MEXC spot | 0.2% taker | `spot@public.limit.depth.v3.api@BTCUSDT@5` |
+| `bot/api_bitstamp.py` | Bitstamp spot | 0.1% taker | `wss://ws.bitstamp.net` live order book |
 
-Both implement the identical public interface: `get_markets`, `post_order`,
+All three implement the identical public interface: `get_markets`, `post_order`,
 `parse_book_update`, `compute_fee`, and market metadata helpers.
 
 **Credentials** — set via environment variables or `config.json`:
@@ -1147,6 +1148,9 @@ export BINANCE_API_KEY=...
 export BINANCE_API_SECRET=...
 export MEXC_API_KEY=...
 export MEXC_API_SECRET=...
+export BITSTAMP_API_KEY=...
+export BITSTAMP_API_SECRET=...
+export BITSTAMP_CUSTOMER_ID=...
 ```
 
 **Switch exchange** — change one line in `live_bot.py` (line 62):
@@ -1155,6 +1159,8 @@ export MEXC_API_SECRET=...
 import api_binance as api   # instead of api_polymarket
 # or
 import api_mexc as api
+# or
+import api_bitstamp as api
 ```
 
 **Important**: the Polymarket signal (`best_bid >= 0.96`) operates on a 0–1 probability
