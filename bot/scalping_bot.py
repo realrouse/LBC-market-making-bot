@@ -197,10 +197,12 @@ class ScalpingBot:
         fh = logging.handlers.RotatingFileHandler(
             log_path, maxBytes=10 * 1024 * 1024, backupCount=3)
         fh.setFormatter(fmt)
-        ch = logging.StreamHandler(sys.stdout)
-        ch.setFormatter(fmt)
         self._log.addHandler(fh)
-        self._log.addHandler(ch)
+        # Console handler only when running interactively (not in nohup/background)
+        if sys.stdout.isatty():
+            ch = logging.StreamHandler(sys.stdout)
+            ch.setFormatter(fmt)
+            self._log.addHandler(ch)
 
         # SQLite
         db_path = self._dir / f"scalping_{stype}.db"

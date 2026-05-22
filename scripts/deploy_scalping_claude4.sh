@@ -211,7 +211,7 @@ VERIFY_OUT=$(_ssh "$VERIFY_CMD")
 echo "$VERIFY_OUT"
 
 for STRAT in "${STRATEGIES[@]}"; do
-    if echo "$VERIFY_OUT" | grep -A5 "^--- ${STRAT}" | grep -q "PID=.* running"; then
+    if echo "$VERIFY_OUT" | grep -A5 "^--- ${STRAT}" | grep -qP "PID=\d+ running$"; then
         ok "$STRAT: running"
     else
         err "$STRAT: NOT running"
