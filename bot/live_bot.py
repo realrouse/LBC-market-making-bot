@@ -381,7 +381,8 @@ def make_config(simulate: bool = False, no_log: bool = False,
 
     cfg   = load_config(config_path)
     strat_path = cfg.get("strategy",
-                         os.path.join(install_dir, "strategies", "polymarket_BTC5M_v2.json"))
+                         os.path.join(install_dir, "strategies", "polymarket",
+                                      "polymarket_BTC5M_piste3.json"))
     strat_path = os.path.expanduser(strat_path)
     if not os.path.isabs(strat_path):
         strat_path = os.path.join(install_dir, strat_path)
