@@ -6,6 +6,26 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.46] — 2026-05-23
+
+### Fixed
+- **`bot/orderbook_bot.py` — Binance futures depth WebSocket key names**: Binance spot sends `"bids"`/`"asks"` but perpetual futures sends `"b"`/`"a"`; perp OBI was always 0.000 (silent bug); fixed with `msg.get("bids") or msg.get("b")` / `msg.get("asks") or msg.get("a")`
+- **`bot/live_bot.py` `make_config()` — stale default strategy path**: fallback pointed to `strategies/polymarket_BTC5M_v2.json` (deleted file); updated to `strategies/polymarket/polymarket_BTC5M_piste3.json` (current active strategy); a fresh install with no `"strategy"` key in `config.json` would silently use module-level defaults instead of calibrated piste3 parameters
+- **All stale file paths purged** after project tree reorganization: 42 files updated (bot docstrings, argparse help, JSON `_run` metadata fields, test docstrings, docs/)
+
+### Changed
+- **Project tree reorganization — 5 steps**:
+  1. `notes/` — root-level `.txt` planning files moved to `notes/`
+  2. `bot/strategy_engines/` — `bot/strategies/` renamed to `bot/strategy_engines/` to eliminate Python module naming collision with the `strategies/` JSON config directory
+  3. `scripts/systemd/` — systemd service templates (`tradinebotte*.service`) moved from `scripts/` root to `scripts/systemd/`
+  4. `analysis/` — 16 Python analysis scripts (`backtest*.py`, `analyze_*.py`, `calibrate_obi.py`, `benchmark_api.py`, `download_*.py`, `latency.py`, `profile_*.py`) moved from `scripts/` to `analysis/`
+  5. `strategies/` subdirectories — 24 JSON strategy configs organized into typed subdirectories: `strategies/polymarket/`, `strategies/grid/`, `strategies/scalping/`, `strategies/longterm/`, `strategies/indicators/`
+- **rsync strategy filter** in all three deploy scripts (`deploy_scalping_claude4.sh`, `update_standalone.sh`, `test_multibot_deploy.sh`): replaced `--include='*.json' --exclude='*'` (did not recurse into subdirectories) with `--filter='+ **/' --filter='+ *.json' --filter='- *'`
+- **Shell script headers** corrected: stale product names fixed, French text removed from code comments (English-only policy), outdated claims updated
+- **Code comments** audited across all bot modules: WHAT comments removed; WHY comments added where a hidden constraint, subtle invariant, or non-obvious workaround was present
+
+---
+
 ## [0.45] — 2026-05-23
 
 ### Fixed

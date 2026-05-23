@@ -6,6 +6,26 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.46] — 2026-05-23
+
+### Correctifs
+- **`bot/orderbook_bot.py` — noms de clés WebSocket depth Binance futures** : Binance spot envoie `"bids"`/`"asks"` mais le perpétuel envoie `"b"`/`"a"` ; l'OBI perp était toujours 0.000 (bug silencieux) ; corrigé avec `msg.get("bids") or msg.get("b")` / `msg.get("asks") or msg.get("a")`
+- **`bot/live_bot.py` `make_config()` — chemin de stratégie par défaut obsolète** : le fallback pointait vers `strategies/polymarket_BTC5M_v2.json` (fichier supprimé) ; mis à jour vers `strategies/polymarket/polymarket_BTC5M_piste3.json` (stratégie active actuelle) ; une installation fraîche sans clé `"strategy"` dans `config.json` utilisait silencieusement les defaults du module au lieu des paramètres calibrés de piste3
+- **Purge de tous les anciens chemins** après réorganisation de l'arborescence : 42 fichiers mis à jour (docstrings bot, aide argparse, champs `_run` JSON, docstrings tests, docs/)
+
+### Modifications
+- **Réorganisation de l'arborescence du projet — 5 étapes** :
+  1. `notes/` — fichiers `.txt` de planification déplacés à la racine vers `notes/`
+  2. `bot/strategy_engines/` — `bot/strategies/` renommé en `bot/strategy_engines/` pour éliminer la collision de nommage Python avec le répertoire de configs JSON `strategies/`
+  3. `scripts/systemd/` — templates de service systemd (`tradinebotte*.service`) déplacés de la racine `scripts/` vers `scripts/systemd/`
+  4. `analysis/` — 16 scripts Python d'analyse (`backtest*.py`, `analyze_*.py`, `calibrate_obi.py`, `benchmark_api.py`, `download_*.py`, `latency.py`, `profile_*.py`) déplacés de `scripts/` vers `analysis/`
+  5. Sous-répertoires `strategies/` — 24 configs JSON de stratégies organisées en sous-répertoires typés : `strategies/polymarket/`, `strategies/grid/`, `strategies/scalping/`, `strategies/longterm/`, `strategies/indicators/`
+- **Filtre rsync stratégies** dans les trois scripts de déploiement (`deploy_scalping_claude4.sh`, `update_standalone.sh`, `test_multibot_deploy.sh`) : `--include='*.json' --exclude='*'` (ne récursait pas dans les sous-répertoires) remplacé par `--filter='+ **/' --filter='+ *.json' --filter='- *'`
+- **En-têtes des scripts shell** corrigés : noms de produits obsolètes corrigés, texte français supprimé des commentaires de code (politique anglais uniquement), affirmations dépassées mises à jour
+- **Commentaires de code** audités sur tous les modules bot : commentaires QUOI supprimés ; commentaires POURQUOI ajoutés là où une contrainte cachée, un invariant subtil ou un contournement non évident était présent
+
+---
+
 ## [0.45] — 2026-05-23
 
 ### Correctifs

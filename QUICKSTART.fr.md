@@ -13,9 +13,9 @@
 ## Installer depuis une release officielle (tar.gz)
 
 ```bash
-# Télécharger la dernière release (remplacer v0.45 par la version actuelle)
-wget https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.45.tar.gz
-tar -xzf v0.45.tar.gz
+# Télécharger la dernière release (remplacer v0.46 par la version actuelle)
+wget https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.46.tar.gz
+tar -xzf v0.46.tar.gz
 cd tradinebotte-0.44
 bash scripts/install.sh        # détecte les paquets manquants ; demande la langue (E/F)
 python3 scripts/setup.py       # demande la langue (sauvegardée dans config.json) ; Entrée = mode simulation
