@@ -7,10 +7,10 @@ and trade count.  Filters to signal_best_bid >= threshold so sweep-data at lower
 does not dilute the analysis.
 
 Usage:
-    python3 scripts/analyze_stake_secs.py                         # default DB resolution
-    python3 scripts/analyze_stake_secs.py --db data/paper3.db
-    python3 scripts/analyze_stake_secs.py --db data/liveweek.db --threshold 0.95
-    python3 scripts/analyze_stake_secs.py --db data/paper3.db data/liveweek.db
+    python3 analysis/analyze_stake_secs.py                         # default DB resolution
+    python3 analysis/analyze_stake_secs.py --db data/paper3.db
+    python3 analysis/analyze_stake_secs.py --db data/liveweek.db --threshold 0.95
+    python3 analysis/analyze_stake_secs.py --db data/paper3.db data/liveweek.db
 """
 
 import argparse, os, sqlite3, sys

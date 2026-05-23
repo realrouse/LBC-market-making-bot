@@ -30,13 +30,13 @@ Vol-filter (when enabled, weekday-only by default)
 
 Usage
 ─────
-  python3 scripts/backtest_stake_secs.py                      # all curves
-  python3 scripts/backtest_stake_secs.py --curve A            # Curve A only
-  python3 scripts/backtest_stake_secs.py --curve B            # Curve B only
-  python3 scripts/backtest_stake_secs.py --curve C            # Curve C only
-  python3 scripts/backtest_stake_secs.py --db data/paper3.db
-  python3 scripts/backtest_stake_secs.py --top 20
-  python3 scripts/backtest_stake_secs.py --threshold 0.96
+  python3 analysis/backtest_stake_secs.py                      # all curves
+  python3 analysis/backtest_stake_secs.py --curve A            # Curve A only
+  python3 analysis/backtest_stake_secs.py --curve B            # Curve B only
+  python3 analysis/backtest_stake_secs.py --curve C            # Curve C only
+  python3 analysis/backtest_stake_secs.py --db data/paper3.db
+  python3 analysis/backtest_stake_secs.py --top 20
+  python3 analysis/backtest_stake_secs.py --threshold 0.96
 """
 
 import argparse, math, os, sqlite3, sys

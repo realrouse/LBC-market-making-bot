@@ -587,7 +587,7 @@ TRADINEBOTTE_DIR=~/account-a python3 bot/account_bot.py &
 
 # Stack B — all ports shifted by +1000
 TRADINEBOTTE_PORT_BASE=6557 TRADINEBOTTE_DIR=~/account-b python3 bot/account_bot.py &
-TRADINEBOTTE_PORT_BASE=6557 TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_4h_bitcoin.json \
+TRADINEBOTTE_PORT_BASE=6557 TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators/indicators_4h_bitcoin.json \
   bash scripts/start_indicators.sh &
 ```
 

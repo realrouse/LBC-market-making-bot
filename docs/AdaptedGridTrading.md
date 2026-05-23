@@ -157,7 +157,7 @@ python3 scripts/backtest_grid.py --all --trail bear --sweep     # parameter sear
 
 ### Strategy JSON
 
-`strategies/grid_BTCUSDT_bear_trailing.json` — calibrated at BTC=$80,705 (2026-05-09):
+`strategies/grid/grid_BTCUSDT_bear_trailing.json` — calibrated at BTC=$80,705 (2026-05-09):
 grid `[$68,599 – $92,811]`, step $829, 30 levels, $50/order, $1,500 capital.
 Recalibrate `grid_lower` / `grid_upper` to ±15% of current BTC price when deploying.
 
@@ -233,7 +233,7 @@ python3 scripts/backtest_grid.py --all --trail bull --sweep     # parameter sear
 
 ### Strategy JSON
 
-`strategies/grid_BTCUSDT_bull_trailing.json` — same grid bounds as bear trailing.
+`strategies/grid/grid_BTCUSDT_bull_trailing.json` — same grid bounds as bear trailing.
 Recalibrate `grid_lower` / `grid_upper` to ±15% of current BTC price.
 
 ---
@@ -333,10 +333,10 @@ python3 scripts/backtest_grid.py --all --trail bull --sweep --sort pnl
 |---|---|
 | `scripts/backtest_grid.py` | Backtest engine (static + trailing) |
 | `scripts/download_btc_history.py` | Download OHLCV data from Binance |
-| `strategies/grid_BTCUSDT_tight.json` | Static ±15% config |
-| `strategies/grid_BTCUSDT_moderate.json` | Static ±20% config |
-| `strategies/grid_BTCUSDT_bear_trailing.json` | Bear trailing config |
-| `strategies/grid_BTCUSDT_bull_trailing.json` | Bull trailing config |
+| `strategies/grid/grid_BTCUSDT_tight.json` | Static ±15% config |
+| `strategies/grid/grid_BTCUSDT_moderate.json` | Static ±20% config |
+| `strategies/grid/grid_BTCUSDT_bear_trailing.json` | Bear trailing config |
+| `strategies/grid/grid_BTCUSDT_bull_trailing.json` | Bull trailing config |
 | `bot/strategies/grid.py` | Live GridStrategy implementation |
 | `docs/GridTrading.md` | Base grid algorithm documentation |
 | `data/BTCUSDT_1m*.db` | OHLCV databases (excluded from git) |

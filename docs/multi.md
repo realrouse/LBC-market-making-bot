@@ -99,7 +99,7 @@ place duplicate orders on reconnection).
 
 The account bot is a **separate OS process**.  At startup it sets `TRADINEBOTTE_DIR`
 then imports `live_bot`, which reads all strategy parameters from that directory's
-`strategies/polymarket_BTC5M.json` at import time.  Because each process has its
+`strategies/polymarket/polymarket_BTC5M.json` at import time.  Because each process has its
 own copy of the `live_bot` module, **each account bot can run a completely
 different strategy** — different threshold, different stake, different hour filter,
 different stop-loss — while sharing the same raw WebSocket feed.
@@ -237,7 +237,7 @@ Example with indicators enabled:
 
 ### Strategy parameters — each account bot is independent
 
-Strategy parameters (`strategies/polymarket_BTC5M.json`) are read from
+Strategy parameters (`strategies/polymarket/polymarket_BTC5M.json`) are read from
 `TRADINEBOTTE_DIR/strategies/` by each account bot **at process startup**.
 Because each `account_bot.py` is a separate OS process with its own copy of the
 `live_bot` module, every account bot evaluates signals independently against
@@ -258,8 +258,8 @@ for that strategy:
 ```bash
 # Set up a conservative account with a custom threshold
 mkdir -p ~/account-conservative/strategies
-cp strategies/polymarket_BTC5M.json ~/account-conservative/strategies/
-# Edit ~/account-conservative/strategies/polymarket_BTC5M.json:
+cp strategies/polymarket/polymarket_BTC5M.json ~/account-conservative/strategies/
+# Edit ~/account-conservative/strategies/polymarket/polymarket_BTC5M.json:
 #   "signal_threshold": 0.98, "stake": 5, "daily_stop_loss": 15
 TRADINEBOTTE_DIR=~/account-conservative python3 scripts/setup.py
 ```
@@ -624,7 +624,7 @@ The indicators service is a **shared process** — one instance runs on the mach
 the REP socket; the indicators service starts the corresponding tasks dynamically.
 
 ```bash
-INDICATORS_CONFIG=~/tradinebotte/strategies/indicators_base.json \
+INDICATORS_CONFIG=~/tradinebotte/strategies/indicators/indicators_4h_bitcoin.json \
 bash scripts/install_indicators_service.sh
 
 # Follow the printed sudo commands:

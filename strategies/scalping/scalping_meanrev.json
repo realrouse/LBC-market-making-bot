@@ -4,7 +4,7 @@
     "_signal": "close < BB_lower(20, 2.0) AND close < VWAP(390min) × (1 - 0.005)",
     "_exit": "TP = VWAP re-touch; SL = entry − 1.5×ATR(14); timeout = 60 min",
     "_cost_model": "fee_rate 0.1%/side + slippage 0.05%/side = 0.31% round-trip; avg TP depends on VWAP distance at entry (typically 0.5–1.5%)",
-    "_run": "python3 scripts/backtest_scalping.py --strategy strategies/scalping_meanrev.json",
+    "_run": "python3 analysis/backtest_scalping.py --strategy strategies/scalping/scalping_meanrev.json",
 
     "strategy_type":       "meanrev",
     "symbol":              "BTCUSDT",

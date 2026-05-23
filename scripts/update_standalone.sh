@@ -10,7 +10,7 @@
 #
 # Rules respected:
 #   - Maximum 4 SSH connections total (2× rsync + restart + verify).
-#   - pkill always scoped to the target user (-u UID) — never touches other users.
+#   - Stop uses the PID file (kill $PID), never pkill — avoids hitting other users.
 #   - Bot started with </dev/null and disown — SSH session exits cleanly.
 #   - No --simulate: absent API key is enough for simulated orders.
 #
@@ -98,7 +98,7 @@ _rsync() {
     # strategies/ JSON config files → $INSTALL_DIR/strategies/
     SSHPASS="$SA_PASS" /usr/bin/sshpass -e \
         rsync -az \
-        --include='*.json' --exclude='*' \
+        --filter='+ **/' --filter='+ *.json' --filter='- *' \
         -e "ssh $ssh_opts" \
         "$LOCAL_REPO/strategies/" "$SA_USER@$SERVER:$INSTALL_DIR/strategies/" 2>&1 || return 1
 

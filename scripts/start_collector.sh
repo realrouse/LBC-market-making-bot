@@ -2,7 +2,7 @@
 # ═══════════════════════════════════════════════════════════════════
 #  start_collector.sh — Deploy and start the data-collection bot
 #
-#  Deploys tradinebotte code to the first VPS deployment account and
+#  Deploys tradinebotte code to the first deployment account and
 #  launches it in simulation mode with 1-second snapshots.
 #  No real orders are placed; only live.db + snapshots are written.
 #

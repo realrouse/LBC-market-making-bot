@@ -76,7 +76,7 @@ MARKET_REFRESH          = 30
 
 # ─── CONNECTOR / STRATEGY DEFAULTS ────────────────────────────────────────────
 CONNECTOR      = "polymarket"   # api_* module to use; see bot/connectors/
-STRATEGY_TYPE  = "threshold"    # "threshold" (built-in) or "grid" (bot/strategies/grid.py)
+STRATEGY_TYPE  = "threshold"    # "threshold" (built-in) or "grid" (bot/strategy_engines/grid.py)
 
 # Grid strategy defaults (ignored when strategy_type == "threshold")
 GRID_SYMBOL          = "BTCUSDT"
@@ -381,7 +381,8 @@ def make_config(simulate: bool = False, no_log: bool = False,
 
     cfg   = load_config(config_path)
     strat_path = cfg.get("strategy",
-                         os.path.join(install_dir, "strategies", "polymarket_BTC5M_v2.json"))
+                         os.path.join(install_dir, "strategies", "polymarket",
+                                      "polymarket_BTC5M_piste3.json"))
     strat_path = os.path.expanduser(strat_path)
     if not os.path.isabs(strat_path):
         strat_path = os.path.join(install_dir, strat_path)
@@ -1627,7 +1628,7 @@ async def main() -> None:
     ) as session:
         state.session = session   # available before ws_loop for strategy restore
         if config.strategy_type != "threshold":
-            from strategies import load as _load_strat
+            from strategy_engines import load as _load_strat
             state.strategy = _load_strat(config.strategy_type, config)
             logger.info("  Algorithm   : %s", config.strategy_type)
             await state.strategy.restore_from_db(state)

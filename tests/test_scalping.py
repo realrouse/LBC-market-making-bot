@@ -1,5 +1,5 @@
 """
-Tests for scripts/backtest_scalping.py
+Tests for analysis/backtest_scalping.py
 
 Covers:
   TestIndicators        — sma, ema, atr_series, bollinger, vwap_rolling, vol_zscore
@@ -20,7 +20,7 @@ import sqlite3
 import unittest
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "analysis"))
 import backtest_scalping as bs
 
 

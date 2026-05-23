@@ -7,16 +7,16 @@
 #
 #  Examples:
 #    # account-a (4h, port 5559):
-#    TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_4h_bitcoin.json \
+#    TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators/indicators_4h_bitcoin.json \
 #      bash scripts/start_indicators.sh
 #
 #    # account-b (daily, port 5560):
-#    TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_1d_bitcoin.json \
+#    TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators/indicators_1d_bitcoin.json \
 #      bash scripts/start_indicators.sh
 #
 #    # Custom deployment directory:
 #    TRADINEBOTTE_DIR=~/account-a \
-#    TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_4h_bitcoin.json \
+#    TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators/indicators_4h_bitcoin.json \
 #      bash scripts/start_indicators.sh
 # ═══════════════════════════════════════════════════════════════════
 
@@ -28,7 +28,7 @@ IND_LOG="$INSTALL_DIR/indicators.log"
 IND_PID_FILE="$INSTALL_DIR/indicators.pid"
 
 # Default: 4h config.  Override with TRADINEBOTTE_INDICATORS_CONFIG.
-CONFIG="${TRADINEBOTTE_INDICATORS_CONFIG:-$BOT_ROOT/strategies/indicators_4h_bitcoin.json}"
+CONFIG="${TRADINEBOTTE_INDICATORS_CONFIG:-$BOT_ROOT/strategies/indicators/indicators_4h_bitcoin.json}"
 
 if [ ! -d "$VENV" ]; then
     echo "ERROR: venv not found in $INSTALL_DIR"

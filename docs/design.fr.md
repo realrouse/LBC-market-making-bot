@@ -593,7 +593,7 @@ TRADINEBOTTE_DIR=~/compte-a python3 bot/account_bot.py &
 
 # Pile B — tous les ports décalés de +1000
 TRADINEBOTTE_PORT_BASE=6557 TRADINEBOTTE_DIR=~/compte-b python3 bot/account_bot.py &
-TRADINEBOTTE_PORT_BASE=6557 TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_4h_bitcoin.json \
+TRADINEBOTTE_PORT_BASE=6557 TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators/indicators_4h_bitcoin.json \
   bash scripts/start_indicators.sh &
 ```
 

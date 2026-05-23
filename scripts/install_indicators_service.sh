@@ -10,7 +10,7 @@
 # by the same user as the feed service.
 #
 # Usage:
-#   INDICATORS_CONFIG=~/tradinebotte/strategies/indicators_base.json \
+#   INDICATORS_CONFIG=~/tradinebotte/strategies/indicators/indicators_4h_bitcoin.json \
 #   bash scripts/install_indicators_service.sh
 #
 # Optional overrides:
@@ -28,7 +28,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-TEMPLATE="$SCRIPT_DIR/tradinebotte-indicators.service"
+TEMPLATE="$SCRIPT_DIR/systemd/tradinebotte-indicators.service"
 
 USER_NAME=$(id -un)
 BOT_DIR="$PROJECT_DIR/bot"
@@ -39,7 +39,7 @@ if [[ -z "$CONFIG_FILE" ]]; then
     echo "ERROR: INDICATORS_CONFIG must be set to the strategy JSON config file." >&2
     echo "" >&2
     echo "  Example:" >&2
-    echo "  INDICATORS_CONFIG=~/tradinebotte/strategies/indicators_base.json \\" >&2
+    echo "  INDICATORS_CONFIG=~/tradinebotte/strategies/indicators/indicators_4h_bitcoin.json \\" >&2
     echo "  bash scripts/install_indicators_service.sh" >&2
     exit 1
 fi

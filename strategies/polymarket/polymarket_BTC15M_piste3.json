@@ -1,9 +1,12 @@
 {
-    "_name": "Polymarket BTC 5M — Piste 3: bid scaling + capital cap + weekly stop + OBI=-0.65",
-    "_description": "Piste 2 + obi_reject_thresh=-0.65 (calibrated via scripts/calibrate_obi.py sweep). Filters the four negative-PnL OBI buckets (OBI < -0.65, WR 92-95%) while retaining the 2357/3397 trades where OBI >= -0.65 (WR 97-100%). Calibration result on paper3+liveweek: PnL +$268 (+35% vs piste1/2), MaxDD $72 (-31%), skip=30.6%. The -0.25 threshold tested in an earlier iteration was too aggressive (88% skip, PnL -70%).",
+    "_name": "Polymarket BTC 15M — Piste 3: bid scaling + capital cap + weekly stop + OBI",
+    "_description": "15-minute BTC Up/Down markets (tag_id=102467). Architecture mirrors polymarket_BTC5M_piste3: bid_alpha=2.0, capital cap=12%, weekly_stop=$60, obi_reject_thresh=-0.65. OBI threshold and all signal parameters are provisional — no 15M backtest data exists yet. Recalibrate with analysis/calibrate_obi.py once live 15M data is collected. The market_window_mins=16 ensures the bot subscribes to all active 15M markets throughout their full lifecycle, not only in the last 6 minutes.",
 
     "strategy_type": "threshold",
     "connector":     "polymarket",
+
+    "market_tag_id":      102467,
+    "market_window_mins": 16,
 
     "signal_threshold":   0.95,
     "entry_max":          0.998,

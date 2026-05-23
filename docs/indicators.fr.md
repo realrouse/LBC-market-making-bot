@@ -399,11 +399,11 @@ setups mono-instance multi-flux.
 
 ```bash
 # Klines 4h (compte-a)
-TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_4h_bitcoin.json \
+TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators/indicators_4h_bitcoin.json \
   bash scripts/start_indicators.sh
 
 # Open interest (processus séparé, port séparé)
-TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_oi_bitcoin.json \
+TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators/indicators_oi_bitcoin.json \
   bash scripts/start_indicators.sh
 ```
 
@@ -469,7 +469,7 @@ bash scripts/start_indicators.sh
 
 # Deuxième pile indépendante — tous les ports décalés de +1000
 TRADINEBOTTE_PORT_BASE=6557 \
-TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_4h_bitcoin.json \
+TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators/indicators_4h_bitcoin.json \
   bash scripts/start_indicators.sh
 ```
 
@@ -496,6 +496,6 @@ REST ou WebSocket requise.
 | Fichier | Rôle |
 |---|---|
 | `bot/indicators.py` | Implémentation : toutes les sources, `PriceSeries`, chargeur de config, tâches ZMQ |
-| `strategies/indicators_*.json` | Fichiers de config par flux |
+| `strategies/indicators/indicators_*.json` | Fichiers de config par flux |
 | `tests/test_indicators.py` | Tests unitaires et d'intégration (117 tests) |
 | `docs/design.fr.md` | Topologie ZeroMQ, catalogue de messages, analyse ZeroMQ vs MQTT |

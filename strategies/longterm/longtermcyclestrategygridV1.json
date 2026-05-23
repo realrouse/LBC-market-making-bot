@@ -18,8 +18,8 @@
         "calibrated_at":   "2026-05-21  BTC≈$76,947",
         "current_regime":  "BULL (since 2021-05-19)"
     },
-    "_run_backtest": "python3 scripts/backtest_cycle_strategy.py data/BTCUSDT3197d_20172026.db",
-    "_run_indicators": "python3 scripts/analyze_btc_cycles.py data/BTCUSDT3197d_20172026.db",
+    "_run_backtest": "python3 analysis/backtest_cycle_strategy.py data/BTCUSDT3197d_20172026.db",
+    "_run_indicators": "python3 analysis/analyze_btc_cycles.py data/BTCUSDT3197d_20172026.db",
 
     "strategy_type": "longtermcycle",
     "connector":     "binance",

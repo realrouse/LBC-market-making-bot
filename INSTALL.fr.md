@@ -264,7 +264,7 @@ bash scripts/install.sh [répertoire_installation] [--lang EN|FR] [--with-tests]
 **Options :**
 - `--lang EN|FR` — Définit la langue sans prompt interactif (utile pour CI ou déploiements automatisés).
   Sans ce flag, le script propose le choix au démarrage comme avant.
-- `--with-tests` — Copie aussi `tests/`, `scripts/backtest.py` et
+- `--with-tests` — Copie aussi `tests/`, `analysis/backtest.py` et
   `data/backtest_sample_btc5m_range_2026.db`, puis lance
   la suite complète de tests (868 tests) juste après l'installation.
   Le backtest utilise `live.db` uniquement s'il contient ≥ 100 snapshots ;
@@ -474,9 +474,9 @@ laissés par un crash sont nettoyés automatiquement au prochain démarrage.
 Chaque trade émet une ligne `[LATENCY]` dans `live.log`. Lancer l'outil d'analyse après une session :
 
 ```bash
-python3 scripts/latency.py                           # chemin par défaut
-python3 scripts/latency.py ~/tradinebotte/live.log   # chemin explicite
-TRADINEBOTTE_DIR=~/tradinebotte python3 scripts/latency.py
+python3 analysis/latency.py                           # chemin par défaut
+python3 analysis/latency.py ~/tradinebotte/live.log   # chemin explicite
+TRADINEBOTTE_DIR=~/tradinebotte python3 analysis/latency.py
 ```
 
 Exemple de sortie :
@@ -503,24 +503,24 @@ Lancer le moteur de backtest pour rejouer les snapshots enregistrés avec n'impo
 
 ```bash
 # Fichier unique (défaut : live.db, ou dataset embarqué si live.db a < 100 snapshots)
-python3 scripts/backtest.py
+python3 analysis/backtest.py
 
 # Un ou plusieurs fichiers explicites (glob shell supporté)
-python3 scripts/backtest.py --db ~/tradinebotte/live.db
-python3 scripts/backtest.py --db data/session1.db data/session2.db
-python3 scripts/backtest.py --db data/*.db
+python3 analysis/backtest.py --db ~/tradinebotte/live.db
+python3 analysis/backtest.py --db data/session1.db data/session2.db
+python3 analysis/backtest.py --db data/*.db
 
 # Scanner data/ automatiquement (inclut live.db s'il a ≥ 100 snapshots)
-python3 scripts/backtest.py --all
+python3 analysis/backtest.py --all
 
 # Recherche en grille sur 135 combinaisons seuil/mise
-python3 scripts/backtest.py --sweep
-python3 scripts/backtest.py --all --sweep
+python3 analysis/backtest.py --sweep
+python3 analysis/backtest.py --all --sweep
 
 # Grille étendue (405 combos) sur toutes les BDs — optimisation de stratégie
-python3 scripts/backtest.py --sweep-all
-python3 scripts/backtest.py --sweep-all --sort pnl   # trier par pnl|ratio|wr
-python3 scripts/backtest.py --sweep-all --top 10     # top-10 configs uniques (dédupliqué)
+python3 analysis/backtest.py --sweep-all
+python3 analysis/backtest.py --sweep-all --sort pnl   # trier par pnl|ratio|wr
+python3 analysis/backtest.py --sweep-all --top 10     # top-10 configs uniques (dédupliqué)
 ```
 
 Quand plusieurs fichiers sont traités, chaque fichier tourne avec le capital réinitialisé à `capital_start` (simulation indépendante), et un bloc AGGREGATE résume les wins, losses, PnL, taux de victoire et pire drawdown combinés de tous les fichiers.
@@ -616,7 +616,7 @@ Sources disponibles : `binance_ws`, `binance_funding`, `deribit_iv`, `fear_greed
 ### Service systemd (recommandé)
 
 ```bash
-INDICATORS_CONFIG=~/tradinebotte/strategies/indicators_base.json \
+INDICATORS_CONFIG=~/tradinebotte/strategies/indicators/indicators_4h_bitcoin.json \
 bash scripts/install_indicators_service.sh
 ```
 
@@ -635,7 +635,7 @@ Optionnel : définir `INDICATORS_LABEL=btc` pour nommer le service `tradinebotte
 ### Démarrage manuel
 
 ```bash
-python3 bot/indicators.py --config strategies/indicators_base.json
+python3 bot/indicators.py --config strategies/indicators/indicators_4h_bitcoin.json
 ```
 
 Fichiers de config prêts à l'emploi dans `strategies/` :
@@ -651,28 +651,28 @@ Fichiers de config prêts à l'emploi dans `strategies/` :
 
 ## Backtest grid trading
 
-Rejouer des données OHLCV BTC/USDT historiques contre une stratégie grid configurable. Modèle de remplissage : touche de prix sur l'intervalle `[low, high]` de la bougie. Nécessite des bases SQLite de bougies 1 minute dans `data/` — à télécharger avec `scripts/download_btc_history.py`.
+Rejouer des données OHLCV BTC/USDT historiques contre une stratégie grid configurable. Modèle de remplissage : touche de prix sur l'intervalle `[low, high]` de la bougie. Nécessite des bases SQLite de bougies 1 minute dans `data/` — à télécharger avec `analysis/download_btc_history.py`.
 
 ```bash
 # Grid statique (défaut) — toutes les BDs dans data/
-python3 scripts/backtest_grid.py --all
+python3 analysis/backtest_grid.py --all
 
 # Trailing bear-adapté — recentrage vers le bas à chaque exit_low
-python3 scripts/backtest_grid.py --all --trail bear
+python3 analysis/backtest_grid.py --all --trail bear
 
 # Trailing bull-adapté — recentrage vers le haut à chaque exit_high
-python3 scripts/backtest_grid.py --all --trail bull
+python3 analysis/backtest_grid.py --all --trail bull
 
 # Comparaison côte à côte : statique vs trailing
-python3 scripts/backtest_grid.py --all --trail bear --compare
-python3 scripts/backtest_grid.py --all --trail bull --compare
+python3 analysis/backtest_grid.py --all --trail bear --compare
+python3 analysis/backtest_grid.py --all --trail bull --compare
 
 # Balayage de paramètres (combos range × levels)
-python3 scripts/backtest_grid.py --all --sweep
-python3 scripts/backtest_grid.py --all --sweep --sort pnl
+python3 analysis/backtest_grid.py --all --sweep
+python3 analysis/backtest_grid.py --all --sweep --sort pnl
 
 # Fichier BD explicite
-python3 scripts/backtest_grid.py data/BTCUSDT_1m90d_range_20260208-20260509.db
+python3 analysis/backtest_grid.py data/BTCUSDT_1m90d_range_20260208-20260509.db
 ```
 
 **Flags de paramètres :**
@@ -694,16 +694,16 @@ python3 scripts/backtest_grid.py data/BTCUSDT_1m90d_range_20260208-20260509.db
 
 ```bash
 # 90 derniers jours (défaut)
-python3 scripts/download_btc_history.py
+python3 analysis/download_btc_history.py
 
 # Plage historique — bear market 2022 (crash LUNA)
-python3 scripts/download_btc_history.py --start 2022-05-01 --end 2022-08-01
+python3 analysis/download_btc_history.py --start 2022-05-01 --end 2022-08-01
 
 # Plage historique — bull run 2024
-python3 scripts/download_btc_history.py --start 2024-10-15 --end 2025-01-15
+python3 analysis/download_btc_history.py --start 2024-10-15 --end 2025-01-15
 
 # Chemin de sortie personnalisé
-python3 scripts/download_btc_history.py --out data/ma_plage.db
+python3 analysis/download_btc_history.py --out data/ma_plage.db
 ```
 
 **Flags :**
@@ -722,7 +722,7 @@ Les bases de données téléchargées sont exclues du git (`.gitignore`). Le té
 
 ## Filtre heure / jour
 
-Le bot peut restreindre les entrées en trade à des plages horaires UTC selon le type de jour. Le filtre est configuré dans le fichier de stratégie JSON (`strategies/polymarket_BTC5M.json`) et est **désactivé par défaut** — le comportement existant est préservé jusqu'à activation explicite.
+Le bot peut restreindre les entrées en trade à des plages horaires UTC selon le type de jour. Le filtre est configuré dans le fichier de stratégie JSON (`strategies/polymarket/polymarket_BTC5M.json`) et est **désactivé par défaut** — le comportement existant est préservé jusqu'à activation explicite.
 
 ### Pourquoi un filtre horaire ?
 
@@ -818,7 +818,7 @@ Le moteur de backtest applique la même logique de filtre lors de la relecture d
 
 ```bash
 # Mettre hour_filter.enabled = true dans le JSON de stratégie, puis :
-python3 scripts/backtest.py --all
+python3 analysis/backtest.py --all
 ```
 
 Comparer le taux de victoire et le nombre de trades avec et sans filtre pour valider les fenêtres choisies sur votre dataset de snapshots.
@@ -1185,15 +1185,15 @@ Les prix Binance/MEXC/Bitstamp sont des valeurs USDT absolues (ex. 65000). Les s
 Comparer la latence REST et WebSocket des trois exchanges :
 
 ```bash
-python3 scripts/benchmark_api.py             # 15 rounds, tous les exchanges
-python3 scripts/benchmark_api.py --rounds 30 # plus d'échantillons
-python3 scripts/benchmark_api.py --no-ws     # REST uniquement (plus rapide)
+python3 analysis/benchmark_api.py             # 15 rounds, tous les exchanges
+python3 analysis/benchmark_api.py --rounds 30 # plus d'échantillons
+python3 analysis/benchmark_api.py --no-ws     # REST uniquement (plus rapide)
 ```
 
 Les résultats peuvent être sauvegardés :
 
 ```bash
-python3 scripts/benchmark_api.py 2>&1 | tee latence_api.txt
+python3 analysis/benchmark_api.py 2>&1 | tee latence_api.txt
 ```
 
 Latences de référence mesurées depuis un serveur dédié à Amsterdam :

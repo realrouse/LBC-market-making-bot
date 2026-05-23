@@ -2,8 +2,8 @@
 # ═══════════════════════════════════════════════════════════════════
 #  collect_db.sh — Download the weekly live.db from the collector
 #
-#  Downloads ~/tradinebotte-collector/live.db from the first VPS
-#  deployment account and saves it locally as:
+#  Downloads ~/tradinebotte-collector/live.db from the first deployment
+#  account and saves it locally as:
 #    data/live_YYYY_WNN.db   (ISO year + week number)
 #
 #  Reads credentials from ~/.tradinebotte-test.conf.

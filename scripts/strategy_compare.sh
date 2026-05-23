@@ -36,7 +36,7 @@ else
     echo "  Create one with: uv venv .venv && uv pip install -r requirements.txt" >&2
     exit 1
 fi
-BACKTEST="$PYTHON $PROJECT_DIR/scripts/backtest.py"
+BACKTEST="$PYTHON $PROJECT_DIR/analysis/backtest.py"
 
 # ── Parse arguments ───────────────────────────────────────────────────────────
 TOP=10

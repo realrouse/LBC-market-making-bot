@@ -16,12 +16,12 @@ Capital    : n_levels × order_size  (worst-case, all levels filled).
 At stop    : remaining BTC liquidated at candle close price.
 
 Usage:
-    python scripts/backtest_grid.py --all
-    python scripts/backtest_grid.py --all --sweep
-    python scripts/backtest_grid.py --all --trail bear          # bear-adapted
-    python scripts/backtest_grid.py --all --trail bull          # bull-adapted
-    python scripts/backtest_grid.py --all --trail bear --compare   # static vs trailing
-    python scripts/backtest_grid.py --all --range 15 --levels 30 --trail bear
+    python analysis/backtest_grid.py --all
+    python analysis/backtest_grid.py --all --sweep
+    python analysis/backtest_grid.py --all --trail bear          # bear-adapted
+    python analysis/backtest_grid.py --all --trail bull          # bull-adapted
+    python analysis/backtest_grid.py --all --trail bear --compare   # static vs trailing
+    python analysis/backtest_grid.py --all --range 15 --levels 30 --trail bear
 """
 
 import argparse
@@ -417,7 +417,7 @@ def print_sweep_table(
         best = scored[0][0]
         print(f"\n  Best (avg Calmar): ±{best.range_pct:.0f}%  {best.levels} levels  "
               f"${best.size:.0f}/order  trail={best.trail_mode}")
-        print(f"  Reproduce: python scripts/backtest_grid.py --all "
+        print(f"  Reproduce: python analysis/backtest_grid.py --all "
               f"--range {best.range_pct:.0f} --levels {best.levels} "
               f"--size {best.size:.0f} --trail {best.trail_mode}")
 

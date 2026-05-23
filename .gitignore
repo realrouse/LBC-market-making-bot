@@ -58,3 +58,4 @@ scripts/test_multibot.conf
 !data/basicsunday.db
 !data/liveweek.db
 .coverage
+notes/audit170526.md

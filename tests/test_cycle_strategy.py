@@ -1,5 +1,5 @@
 """
-Tests for scripts/backtest_cycle_strategy.py
+Tests for analysis/backtest_cycle_strategy.py
 
 Covers:
   - TestSMA                  : sma() helper (same as analyze_cycle_volatility)
@@ -14,7 +14,7 @@ All tests are offline — no real DB files required.
 import os, sys, sqlite3, unittest
 from datetime import datetime, timezone
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "analysis"))
 import backtest_cycle_strategy as bcs
 
 

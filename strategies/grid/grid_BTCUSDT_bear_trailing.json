@@ -10,7 +10,7 @@
         "current_config":"±30% / 40 levels (best Calmar)",
         "calibrated_at": "2026-05-20  BTC≈$76,883"
     },
-    "_run_backtest": "python3 scripts/backtest_grid.py data/BTCUSDT3197d_20172026.db --sweep --trail bear",
+    "_run_backtest": "python3 analysis/backtest_grid.py data/BTCUSDT3197d_20172026.db --sweep --trail bear",
 
     "strategy_type": "grid",
     "connector":     "binance",

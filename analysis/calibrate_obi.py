@@ -7,9 +7,9 @@ Piste 2 base config (bid_alpha=2.0, cap=12%, weekly_stop=$60) with each threshol
 Reports: n_kept, skip_pct, WR, PnL, EV, Sharpe, MaxDD, AvgStk.
 
 Usage:
-  python3 scripts/calibrate_obi.py
-  python3 scripts/calibrate_obi.py --db data/paper3.db data/liveweek.db
-  python3 scripts/calibrate_obi.py --threshold 0.96
+  python3 analysis/calibrate_obi.py
+  python3 analysis/calibrate_obi.py --db data/paper3.db data/liveweek.db
+  python3 analysis/calibrate_obi.py --threshold 0.96
 """
 
 import argparse, math, os, sqlite3, sys

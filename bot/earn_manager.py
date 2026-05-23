@@ -89,10 +89,6 @@ class EarnManager:
         if not self._enabled:
             logger.info("EarnManager: no credentials — sim mode (no real API calls)")
 
-    # ------------------------------------------------------------------
-    # Product discovery
-    # ------------------------------------------------------------------
-
     async def _product(self) -> str | None:
         """Return USDT Flexible Earn product ID, discovering and caching it."""
         if self._product_id:
@@ -118,10 +114,6 @@ class EarnManager:
         except Exception as exc:
             logger.warning("EarnManager: product discovery error: %s", exc)
             return None
-
-    # ------------------------------------------------------------------
-    # Read
-    # ------------------------------------------------------------------
 
     async def get_position(self) -> float:
         """Return total USDT currently parked in Flexible Earn."""
@@ -164,10 +156,6 @@ class EarnManager:
         except Exception as exc:
             logger.warning("EarnManager: get_apr error: %s", exc)
             return 0.0
-
-    # ------------------------------------------------------------------
-    # Write
-    # ------------------------------------------------------------------
 
     async def subscribe(self, amount_usdt: float) -> bool:
         """

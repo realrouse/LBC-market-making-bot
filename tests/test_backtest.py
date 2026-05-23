@@ -1,5 +1,5 @@
 """
-Tests for scripts/backtest.py
+Tests for analysis/backtest.py
 
 Builds synthetic snapshot rows in memory to exercise the replay engine
 without requiring a real live.db.
@@ -9,7 +9,7 @@ import os, sys, sqlite3, time, unittest
 from unittest.mock import patch
 from datetime import datetime, timezone
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "analysis"))
 import backtest as bt
 import backtest_stake_secs as bss
 

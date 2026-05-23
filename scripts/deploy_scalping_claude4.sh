@@ -24,7 +24,7 @@ set -uo pipefail
 
 BOT_NAME="orderbook_bot"
 BOT_SCRIPT="orderbook_bot.py"
-BOT_STRATEGY="strategies/orderbook_btc.json"
+BOT_STRATEGY="strategies/scalping/orderbook_btc.json"
 
 # Legacy bots to stop if still running
 LEGACY_BOTS=("scalping_candle_momentum" "scalping_meanrev" "scalping_breakout")
@@ -99,7 +99,7 @@ _rsync() {
 
     SSHPASS="$SC_PASS" /usr/bin/sshpass -e \
         rsync -az \
-        --include='*.json' --exclude='*' \
+        --filter='+ **/' --filter='+ *.json' --filter='- *' \
         -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
         "$LOCAL_REPO/strategies/" "$SC_USER@$SERVER:$INSTALL_DIR/strategies/" 2>&1
 }

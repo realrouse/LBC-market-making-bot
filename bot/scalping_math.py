@@ -3,7 +3,7 @@
 Scalar indicator functions for scalping — one value per call (last bar).
 
 Shared between bot/scalping_bot.py (live trading) and
-scripts/backtest_scalping.py (simulation). Pure stdlib, no dependencies.
+analysis/backtest_scalping.py (simulation). Pure stdlib, no dependencies.
 """
 
 import math

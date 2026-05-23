@@ -1,12 +1,21 @@
 #!/usr/bin/env bash
-# Generates a ready-to-install systemd unit file for the current user and
-# prints the commands to enable it. Requires sudo only for the copy step.
+# install_service.sh — Generate a systemd unit file for the standalone bot (Option A).
+#
+# Fills __USER__ and __TRADINEBOTTE_DIR__ placeholders in the tradinebotte.service
+# template and writes the result to ~/tmp/tradinebotte.service, then prints the
+# exact sudo commands to install and enable it.
+#
+# Requires sudo only for the copy step (sudo cp … /etc/systemd/system/).
+#
+# Usage:
+#   bash scripts/install_service.sh
+#   TRADINEBOTTE_DIR=~/tradinebotte bash scripts/install_service.sh
 set -euo pipefail
 
 USER_NAME=$(id -un)
 TDIR="${TRADINEBOTTE_DIR:-$HOME/tradinebotte}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TEMPLATE="$SCRIPT_DIR/tradinebotte.service"
+TEMPLATE="$SCRIPT_DIR/systemd/tradinebotte.service"
 OUTPUT="${HOME}/tmp/tradinebotte.service"
 mkdir -p "${HOME}/tmp"
 

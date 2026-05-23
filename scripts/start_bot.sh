@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════
-#  POLYMARKET LIVE BOT v3 — Launch
+#  tradinebotte — Launch
 #  Prerequisite: TRADINEBOTTE_DIR=<dir> python3 scripts/setup.py
 #  (generates <TRADINEBOTTE_DIR>/config.json)
 #

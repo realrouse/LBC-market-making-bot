@@ -18,9 +18,9 @@ Reconnects automatically on WebSocket drop (exponential backoff 1 s → 60 s).
 
 Usage
 -----
-    python3 bot/scalping_bot.py --strategy strategies/scalping_candle_momentum.json
-    python3 bot/scalping_bot.py --strategy strategies/scalping_meanrev.json
-    python3 bot/scalping_bot.py --strategy strategies/scalping_breakout.json
+    python3 bot/scalping_bot.py --strategy strategies/scalping/scalping_candle_momentum.json
+    python3 bot/scalping_bot.py --strategy strategies/scalping/scalping_meanrev.json
+    python3 bot/scalping_bot.py --strategy strategies/scalping/scalping_breakout.json
 
 Parameters (strategy JSON keys)
 --------------------------------
@@ -252,21 +252,17 @@ class ScalpingBot:
         self._dir  = Path(install_dir or os.path.expanduser("~/tradinebotte"))
         self._dir.mkdir(parents=True, exist_ok=True)
 
-        # Logging
         log_path = self._dir / f"scalping_{stype}.log"
         self._log = setup_bot_logger(f"scalping.{stype}", str(log_path))
 
-        # SQLite
         db_path = self._dir / f"scalping_{stype}.db"
         self._db = sqlite3.connect(str(db_path), check_same_thread=False)
         self._db.executescript(_DDL)
         self._db.commit()
 
-        # PID file
         pid_path = self._dir / f"scalping_{stype}.pid"
         pid_path.write_text(str(os.getpid()))
 
-        # State
         self._buf: deque = deque(maxlen=BUFFER_SIZE)
         self._position   = None   # dict or None
         self._capital    = self.p["capital"]
@@ -373,7 +369,6 @@ class ScalpingBot:
         lo = candle["low"]
         cl = candle["close"]
 
-        # Check exit for open position
         if self._position is not None:
             tp = self._position["tp"]
             sl = self._position["sl"]
@@ -396,7 +391,6 @@ class ScalpingBot:
                 self._close_position(cl, "timeout", candle["ts_ms"])
                 return
 
-        # Check entry signal (only when flat)
         if self._position is None:
             self._check_entry(candle)
 
@@ -523,7 +517,7 @@ class ScalpingBot:
 def main() -> None:
     ap = argparse.ArgumentParser(description="Binance 1m scalping bot")
     ap.add_argument("--strategy", required=True, metavar="JSON",
-                    help="Strategy config JSON (e.g. strategies/scalping_meanrev.json)")
+                    help="Strategy config JSON (e.g. strategies/scalping/scalping_meanrev.json)")
     ap.add_argument("--dir", default=None,
                     help="Install dir for logs/DB/PID (default: ~/tradinebotte)")
     args = ap.parse_args()

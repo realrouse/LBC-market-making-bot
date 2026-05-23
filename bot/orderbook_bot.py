@@ -22,7 +22,7 @@ Usage
     python3 bot/orderbook_bot.py                               # paper, both streams
     python3 bot/orderbook_bot.py --spot-only
     python3 bot/orderbook_bot.py --perp-only
-    python3 bot/orderbook_bot.py --strategy strategies/orderbook_btc.json
+    python3 bot/orderbook_bot.py --strategy strategies/scalping/orderbook_btc.json
     python3 bot/orderbook_bot.py --dir ~/tradinebotte
 """
 
@@ -159,10 +159,15 @@ class StreamState:
     def __init__(self, mode: str, p: dict):
         self.mode          = mode
         self.p             = p
+        # obi_ema starts at 0.0 (neutral). The EMA needs ~1/alpha messages
+        # (~7 at alpha=0.15) to reflect real order-book imbalance; signals
+        # during warm-up are suppressed by obi_confirm_n consecutive checks.
         self.obi_ema       = 0.0
         self.pending_dir   = None   # 'long' | 'short' | None
         self.pending_count = 0
         self.position      = None
+        # Capital resets to the configured value on every restart — paper
+        # trading only; live_ob.db preserves the snapshot/trade history.
         self.capital       = p[f"capital_{mode}"]
         self.snap_counter  = 0
         self.total_trades  = 0
@@ -276,8 +281,9 @@ async def _handle_message(state: StreamState, db: sqlite3.Connection, raw: str) 
     except (json.JSONDecodeError, TypeError):
         return
 
-    bids = msg.get("bids")
-    asks = msg.get("asks")
+    # Spot uses "bids"/"asks"; futures uses "b"/"a"
+    bids = msg.get("bids") or msg.get("b")
+    asks = msg.get("asks") or msg.get("a")
     if not bids or not asks:
         return
 

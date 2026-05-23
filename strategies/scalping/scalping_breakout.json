@@ -4,7 +4,7 @@
     "_signal": "close > SMA(highs, 20)[prev] AND ATR(14)/close ≥ 0.001",
     "_exit": "TP = entry + 2×ATR; SL = entry − 1×ATR; timeout = 120 min",
     "_cost_model": "fee_rate 0.1%/side + slippage 0.05%/side = 0.31% round-trip; TP distance = 2×ATR (typically 0.2–0.8% at BTC volatility)",
-    "_run": "python3 scripts/backtest_scalping.py --strategy strategies/scalping_breakout.json",
+    "_run": "python3 analysis/backtest_scalping.py --strategy strategies/scalping/scalping_breakout.json",
 
     "strategy_type":       "breakout",
     "symbol":              "BTCUSDT",

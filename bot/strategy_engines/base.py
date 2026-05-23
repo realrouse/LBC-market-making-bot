@@ -16,7 +16,7 @@ class Strategy(Protocol):
         Single-entry threshold signal on Polymarket binary prediction markets.
         Default when strategy_type is "threshold" or absent from config.
 
-    GridStrategy       (bot/strategies/grid.py)
+    GridStrategy       (bot/strategy_engines/grid.py)
         Multi-level grid on continuous CEX markets (Binance, MEXC).
         Activated when strategy_type is "grid" in the strategy JSON.
     """
