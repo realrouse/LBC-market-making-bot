@@ -21,25 +21,141 @@ Usage
     python3 bot/scalping_bot.py --strategy strategies/scalping_candle_momentum.json
     python3 bot/scalping_bot.py --strategy strategies/scalping_meanrev.json
     python3 bot/scalping_bot.py --strategy strategies/scalping_breakout.json
+
+Parameters (strategy JSON keys)
+--------------------------------
+All parameters live in the strategy JSON file and override the DEFAULTS dict.
+Keys starting with ``_`` are documentation-only and are ignored by the bot.
+
+Global — apply to all three strategies
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+strategy_type : str
+    Which strategy logic to run. One of ``"candle_momentum"``, ``"meanrev"``,
+    or ``"breakout"``. Must match the file being loaded.
+symbol : str
+    Binance trading pair (e.g. ``"BTCUSDT"``). Drives both the REST warm-up
+    endpoint and the WebSocket ``<symbol>@kline_1m`` stream.
+capital : float
+    Starting capital in USDT. Updated in-memory after every closed trade;
+    also persisted to the ``capital`` column in the SQLite trades table.
+fee_rate : float
+    Binance taker fee per side as a decimal (``0.001`` = 0.1 %).
+    Applied on both open and close legs; round-trip cost = 2 × fee_rate.
+slippage_pct : float
+    Estimated market-order slippage per side as a decimal (``0.0005`` = 0.05 %).
+    Entry price is nudged up by this fraction; exit is nudged down.
+    Round-trip cost = 2 × slippage_pct + 2 × fee_rate ≈ 0.31 % at defaults.
+stake_frac : float
+    Fraction of current capital allocated per trade (``0.20`` = 20 %).
+    One open position at a time; position size = capital × stake_frac.
+
+candle_momentum (prefix ``cm_``)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Signal: bullish body ratio ≥ threshold  AND  volume z-score ≥ threshold
+        AND  candle range ≥ min_range_pct × close.
+Exit:   fixed TP / SL percentages from entry, or timeout.
+
+cm_body_ratio_thresh : float
+    Minimum ``(close − open) / (high − low)`` for a candle to qualify.
+    ``0.60`` means the bullish body must span ≥ 60 % of the full range —
+    filters out indecision candles and dojis.
+cm_vol_z_window : int
+    Number of past candles used to compute the volume z-score baseline
+    (mean and standard deviation). Default 20.
+cm_vol_z_thresh : float
+    Minimum volume z-score required to confirm unusual activity.
+    ``1.0`` = volume must be at least 1 standard deviation above the mean.
+cm_min_range_pct : float
+    Minimum candle range (``high − low``) as a fraction of close price.
+    ``0.0003`` = 0.03 % — discards flat / near-doji candles where the
+    body ratio calculation is unreliable.
+cm_take_profit_pct : float
+    TP distance from entry expressed as a fraction of entry price.
+    ``0.006`` = 0.6 %; net edge after round-trip costs ≈ 0.29 %.
+cm_stop_loss_pct : float
+    SL distance from entry expressed as a fraction of entry price.
+    ``0.003`` = 0.3 %; gives a gross 2:1 reward-to-risk ratio.
+cm_max_hold_minutes : int
+    Hard time limit in minutes. Position is closed at the current close
+    price if neither TP nor SL is reached within this window. Default 10.
+
+meanrev (prefix ``mr_``)
+~~~~~~~~~~~~~~~~~~~~~~~~~
+Signal: close < Bollinger lower band  AND  close < VWAP × (1 − vwap_dev_thresh).
+Exit:   TP = VWAP re-touch;  SL = entry − sl_atr_mult × ATR;  or timeout.
+
+mr_bb_period : int
+    Bollinger Band lookback in candles. Used for both the SMA mid-band and
+    the standard deviation. Default 20.
+mr_bb_std_mult : float
+    Standard-deviation multiplier for the Bollinger bands.
+    ``2.0`` produces the classic ±2σ envelope.
+mr_vwap_window : int
+    Rolling VWAP lookback in candles (``390`` ≈ one 6.5-hour US session).
+    Price and volume from the last ``mr_vwap_window`` closed 1m candles
+    are used; the VWAP re-touch level is used as take-profit.
+mr_vwap_dev_thresh : float
+    Minimum distance below VWAP required to trigger entry.
+    ``0.005`` = price must be at least 0.5 % below VWAP — avoids chasing
+    marginal dips that don't have meaningful mean-reversion potential.
+mr_atr_period : int
+    ATR lookback for stop-loss sizing. Default 14 candles.
+mr_sl_atr_mult : float
+    Stop-loss = entry − (mr_sl_atr_mult × ATR). An additional hard cap
+    prevents SL from exceeding 2 % below entry (avoids runaway SL on
+    low-ATR candles where ATR temporarily spikes).
+mr_max_hold_minutes : int
+    Hard time limit in minutes. Closed at current price if VWAP
+    re-touch has not occurred. Default 60.
+
+breakout (prefix ``bo_``)
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+Signal: close breaks above the rolling max of prior highs (excluding current candle)
+        AND  ATR / close ≥ bo_min_atr_pct (confirms the market is not flat).
+Exit:   TP = entry + tp_mult × ATR;  SL = entry − sl_mult × ATR;  or timeout.
+
+bo_range_period : int
+    Number of candles for the rolling-high calculation.
+    ``20`` means the bot watches whether the current close exceeds the
+    highest high of the prior 20 candles (classic range-breakout trigger).
+bo_atr_period : int
+    ATR lookback used to size both TP and SL. Default 14 candles.
+bo_min_atr_pct : float
+    Minimum ``ATR / close`` ratio required to validate the breakout.
+    ``0.001`` = 0.1 % — filters breakouts in flat / illiquid conditions
+    where ATR-sized targets would be too small to overcome round-trip costs.
+bo_sl_atr_mult : float
+    Stop-loss distance = bo_sl_atr_mult × ATR below entry. Default 1.0.
+bo_tp_atr_mult : float
+    Take-profit distance = bo_tp_atr_mult × ATR above entry. Default 2.0,
+    which gives a gross 2:1 reward-to-risk ratio relative to the SL.
+bo_max_hold_minutes : int
+    Hard time limit in minutes. Position closed at current price if TP/SL
+    not reached. Default 120 (breakouts need more room to develop).
 """
 
 import argparse
 import asyncio
 import json
-import logging
-import logging.handlers
-import math
 import os
 import signal
 import sqlite3
-import sys
-import time
 from collections import deque
-from datetime import datetime, timezone
 from pathlib import Path
 
 import aiohttp
 import websockets
+
+from bot_utils import setup_bot_logger
+from scalping_math import (
+    sma_last        as _sma,
+    ema_last        as _ema_last,
+    atr_last        as _atr_last,
+    bollinger_last  as _bollinger_last,
+    vwap_last       as _vwap_last,
+    vol_zscore_last as _vol_zscore_last,
+    rolling_max_last as _rolling_max_last,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -54,98 +170,46 @@ _MIN_WARM   = 25       # minimum candles before signalling
 _RECONNECT_BASE  = 1   # seconds
 _RECONNECT_MAX   = 60
 
-DEFAULTS = dict(
-    strategy_type         = "candle_momentum",
-    symbol                = "BTCUSDT",
-    capital               = 10_000.0,
-    fee_rate              = 0.001,
-    slippage_pct          = 0.0005,
-    stake_frac            = 0.20,
-    cm_body_ratio_thresh  = 0.60,
-    cm_vol_z_window       = 20,
-    cm_vol_z_thresh       = 1.0,
-    cm_min_range_pct      = 0.0003,
-    cm_take_profit_pct    = 0.006,
-    cm_stop_loss_pct      = 0.003,
-    cm_max_hold_minutes   = 10,
-    mr_bb_period          = 20,
-    mr_bb_std_mult        = 2.0,
-    mr_vwap_window        = 390,
-    mr_vwap_dev_thresh    = 0.005,
-    mr_atr_period         = 14,
-    mr_sl_atr_mult        = 1.5,
-    mr_max_hold_minutes   = 60,
-    bo_range_period       = 20,
-    bo_atr_period         = 14,
-    bo_min_atr_pct        = 0.001,
-    bo_sl_atr_mult        = 1.0,
-    bo_tp_atr_mult        = 2.0,
-    bo_max_hold_minutes   = 120,
-)
+DEFAULTS = {
+    # ── Global ────────────────────────────────────────────────────────────────
+    "strategy_type":         "candle_momentum",  # "candle_momentum" | "meanrev" | "breakout"
+    "symbol":                "BTCUSDT",          # Binance trading pair
+    "capital":               10_000.0,           # starting capital (USDT)
+    "fee_rate":              0.001,              # taker fee per side (0.1%)
+    "slippage_pct":          0.0005,             # market-order slippage per side (0.05%)
+    "stake_frac":            0.20,               # fraction of capital per trade (20%)
 
+    # ── candle_momentum ───────────────────────────────────────────────────────
+    # Entry: body_ratio >= thresh AND vol_zscore >= thresh AND range >= min_range_pct
+    "cm_body_ratio_thresh":  0.60,   # min (close−open)/(high−low); 0.60 = body ≥ 60% of range
+    "cm_vol_z_window":       20,     # candle lookback for volume z-score baseline
+    "cm_vol_z_thresh":       1.0,    # min volume z-score (σ above mean) to confirm activity
+    "cm_min_range_pct":      0.0003, # min (high−low)/close to filter doji/flat candles (0.03%)
+    "cm_take_profit_pct":    0.006,  # TP = entry × (1 + pct); 0.6% → ~0.29% net after costs
+    "cm_stop_loss_pct":      0.003,  # SL = entry × (1 − pct); 0.3% → 2:1 gross R:R
+    "cm_max_hold_minutes":   10,     # forced close at current price after N minutes
 
-# ---------------------------------------------------------------------------
-# Indicator functions (duplicated from backtest_scalping.py — pure math)
-# ---------------------------------------------------------------------------
+    # ── meanrev ───────────────────────────────────────────────────────────────
+    # Entry: close < BB_lower(period, std_mult) AND close < VWAP × (1 − vwap_dev_thresh)
+    # Exit:  TP = VWAP re-touch;  SL = entry − sl_atr_mult × ATR
+    "mr_bb_period":          20,     # Bollinger Band lookback (candles)
+    "mr_bb_std_mult":        2.0,    # BB standard-deviation multiplier (classic ±2σ)
+    "mr_vwap_window":        390,    # VWAP rolling window (candles); 390 min ≈ one US session
+    "mr_vwap_dev_thresh":    0.005,  # min % below VWAP to trigger entry (0.5%)
+    "mr_atr_period":         14,     # ATR lookback for SL sizing (candles)
+    "mr_sl_atr_mult":        1.5,    # SL = entry − mult × ATR; hard cap at 2% below entry
+    "mr_max_hold_minutes":   60,     # forced close if VWAP re-touch not reached after N minutes
 
-def _sma(series, n):
-    if len(series) < n:
-        return None
-    return sum(series[-n:]) / n
-
-
-def _ema_last(series, n):
-    if len(series) < n:
-        return None
-    k    = 2.0 / (n + 1)
-    val  = sum(series[:n]) / n
-    for x in series[n:]:
-        val = x * k + val * (1 - k)
-    return val
-
-
-def _atr_last(highs, lows, closes, n):
-    if len(closes) < n + 1:
-        return None
-    trs = []
-    for i in range(1, len(closes)):
-        trs.append(max(
-            highs[i] - lows[i],
-            abs(highs[i] - closes[i - 1]),
-            abs(lows[i]  - closes[i - 1]),
-        ))
-    return _ema_last(trs, n)
-
-
-def _bollinger_last(closes, n, k):
-    mid = _sma(closes, n)
-    if mid is None:
-        return None, None, None
-    std = math.sqrt(sum((closes[-n + j] - mid) ** 2 for j in range(n)) / n)
-    return mid + k * std, mid, mid - k * std
-
-
-def _vwap_last(closes, volumes, n):
-    if len(closes) < n:
-        return None
-    pv = sum(closes[-n + j] * volumes[-n + j] for j in range(n))
-    v  = sum(volumes[-n + j] for j in range(n))
-    return pv / v if v > 0 else closes[-1]
-
-
-def _vol_zscore_last(volumes, n):
-    if len(volumes) < n:
-        return None
-    w   = volumes[-n:]
-    mu  = sum(w) / n
-    std = math.sqrt(sum((v - mu) ** 2 for v in w) / n)
-    return (volumes[-1] - mu) / std if std > 0 else 0.0
-
-
-def _rolling_max_last(series, n):
-    if len(series) < n:
-        return None
-    return max(series[-n:])
+    # ── breakout ──────────────────────────────────────────────────────────────
+    # Entry: close > rolling_max(highs[:-1], period) AND ATR/close >= min_atr_pct
+    # Exit:  TP = entry + tp_mult × ATR;  SL = entry − sl_mult × ATR  (2:1 gross R:R)
+    "bo_range_period":       20,     # rolling-max lookback for resistance level (candles)
+    "bo_atr_period":         14,     # ATR lookback for TP/SL sizing (candles)
+    "bo_min_atr_pct":        0.001,  # min ATR/close to confirm volatility (0.1%); filters flat markets
+    "bo_sl_atr_mult":        1.0,    # SL = entry − mult × ATR
+    "bo_tp_atr_mult":        2.0,    # TP = entry + mult × ATR; 2.0 → 2:1 gross R:R vs SL
+    "bo_max_hold_minutes":   120,    # forced close after N minutes (breakouts need more time)
+}
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +244,7 @@ CREATE TABLE IF NOT EXISTS candles (
 class ScalpingBot:
 
     def __init__(self, config_path: str, install_dir: str = None):
-        raw = json.loads(Path(config_path).read_text())
+        raw = json.loads(Path(config_path).read_text(encoding="utf-8"))
         self.p = dict(DEFAULTS)
         self.p.update({k: v for k, v in raw.items() if not k.startswith("_")})
 
@@ -190,19 +254,7 @@ class ScalpingBot:
 
         # Logging
         log_path = self._dir / f"scalping_{stype}.log"
-        self._log = logging.getLogger(f"scalping.{stype}")
-        self._log.setLevel(logging.INFO)
-        fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s",
-                                datefmt="%Y-%m-%d %H:%M:%S")
-        fh = logging.handlers.RotatingFileHandler(
-            log_path, maxBytes=10 * 1024 * 1024, backupCount=3)
-        fh.setFormatter(fmt)
-        self._log.addHandler(fh)
-        # Console handler only when running interactively (not in nohup/background)
-        if sys.stdout.isatty():
-            ch = logging.StreamHandler(sys.stdout)
-            ch.setFormatter(fmt)
-            self._log.addHandler(ch)
+        self._log = setup_bot_logger(f"scalping.{stype}", str(log_path))
 
         # SQLite
         db_path = self._dir / f"scalping_{stype}.db"
@@ -337,10 +389,10 @@ class ScalpingBot:
             if lo <= sl:
                 self._close_position(sl, "stop_loss", candle["ts_ms"])
                 return
-            elif hi >= tp:
+            if hi >= tp:
                 self._close_position(tp, "take_profit", candle["ts_ms"])
                 return
-            elif hold >= max_hold:
+            if hold >= max_hold:
                 self._close_position(cl, "timeout", candle["ts_ms"])
                 return
 

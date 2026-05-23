@@ -85,21 +85,28 @@ _ssh() {
 }
 
 _rsync() {
-    # bot/ contents → $INSTALL_DIR/ (flat, matching install.sh's cp "bot/$f" "$INSTALL_DIR/$f")
-    # This also syncs connectors/ and strategies/*.py packages which live inside bot/.
+    local ssh_opts="-p $PORT -o StrictHostKeyChecking=yes"
+
+    # bot/ contents → $INSTALL_DIR/ (flat, matching install.sh layout)
     SSHPASS="$SA_PASS" /usr/bin/sshpass -e \
         rsync -az \
         --exclude='__pycache__' --exclude='*.pyc' \
         --exclude='config.json' --exclude='live.db' --exclude='*.log' \
-        -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
-        "$LOCAL_REPO/bot/" "$SA_USER@$SERVER:$INSTALL_DIR/" 2>&1
+        -e "ssh $ssh_opts" \
+        "$LOCAL_REPO/bot/" "$SA_USER@$SERVER:$INSTALL_DIR/" 2>&1 || return 1
 
     # strategies/ JSON config files → $INSTALL_DIR/strategies/
     SSHPASS="$SA_PASS" /usr/bin/sshpass -e \
         rsync -az \
         --include='*.json' --exclude='*' \
-        -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
-        "$LOCAL_REPO/strategies/" "$SA_USER@$SERVER:$INSTALL_DIR/strategies/" 2>&1
+        -e "ssh $ssh_opts" \
+        "$LOCAL_REPO/strategies/" "$SA_USER@$SERVER:$INSTALL_DIR/strategies/" 2>&1 || return 1
+
+    # requirements.txt — needed for pip update check on restart
+    SSHPASS="$SA_PASS" /usr/bin/sshpass -e \
+        rsync -az \
+        -e "ssh $ssh_opts" \
+        "$LOCAL_REPO/requirements.txt" "$SA_USER@$SERVER:$INSTALL_DIR/" 2>&1 || return 1
 }
 
 # ─── Pre-flight ─────────────────────────────────────────────────────────────────
@@ -153,6 +160,9 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
         fi
         sleep 2
         cd $INSTALL_DIR
+        echo 'updating dependencies...'
+        venv/bin/pip install --quiet -r $INSTALL_DIR/requirements.txt \
+            && echo 'deps ok' || echo 'pip warning (non-fatal)'
         nohup venv/bin/python3 live_bot.py </dev/null >>live.log 2>&1 &
         BOT_PID=\$!
         disown \$BOT_PID

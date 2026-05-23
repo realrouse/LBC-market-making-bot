@@ -55,9 +55,7 @@ def _flat_buf(n: int, price: float = 50_000.0, volume: float = 5.0,
 def _make_bot(tmpdir: str, **cfg_overrides) -> ScalpingBot:
     """Create a ScalpingBot with a temp dir, suppressing all logging output."""
     cfg_path = _make_config(tmpdir, **cfg_overrides)
-    # Patch getLogger so __init__ binds a silent MagicMock as self._log.
-    # The mock persists on the instance after the context exits.
-    with patch("scalping_bot.logging.getLogger", return_value=MagicMock()):
+    with patch("scalping_bot.setup_bot_logger", return_value=MagicMock()):
         bot = ScalpingBot(cfg_path, install_dir=tmpdir)
     return bot
 

@@ -30,18 +30,11 @@ import aiohttp, websockets, zmq, zmq.asyncio
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import api_polymarket as api
+from bot_utils import warn_if_external_bind
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────
 _PORT_BASE      = int(os.environ.get("TRADINEBOTTE_PORT_BASE", "5557"))
 FEED_ADDR       = os.environ.get("TRADINEBOTTE_FEED_ADDR", f"tcp://127.0.0.1:{_PORT_BASE}")
-
-def _warn_if_external_bind(addr: str, name: str) -> None:
-    """Log a security warning if a ZMQ bind address is not loopback."""
-    if addr.startswith("tcp://") and "127.0.0.1" not in addr and "localhost" not in addr:
-        logging.getLogger("feed").warning(
-            "SECURITY: %s (%s) is bound to a non-loopback address — "
-            "ensure ZMQ CURVE auth is active before exposing to the network.", name, addr
-        )
 MARKET_REFRESH  = 30   # seconds between Gamma API polls
 PING_INTERVAL   = 10   # seconds between keepalive pings to subscribers
 LOG_FORMAT      = "%(asctime)s [%(levelname)s] %(message)s"
@@ -269,7 +262,7 @@ async def _run_ws(sock: zmq.asyncio.Socket, session: aiohttp.ClientSession) -> N
 
 
 async def main() -> None:
-    _warn_if_external_bind(FEED_ADDR, "FEED_ADDR")
+    warn_if_external_bind(FEED_ADDR, "FEED_ADDR")
     ctx  = zmq.asyncio.Context()
     sock = ctx.socket(zmq.PUB)
     sock.bind(FEED_ADDR)

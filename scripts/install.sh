@@ -135,12 +135,12 @@ else
     _pip_install
 fi
 
-# Convenience wrapper that exports TRADINEBOTTE_DIR and activates the venv
+# Convenience wrapper — delegates to start_bot.sh for PID-file management.
+# Launching live_bot.py directly (without a PID file) allows two instances to
+# coexist silently, which corrupts the SQLite database.
 cat > "$INSTALL_DIR/run.sh" << EOF
 #!/bin/bash
-export TRADINEBOTTE_DIR="$INSTALL_DIR"
-source "$INSTALL_DIR/venv/bin/activate"
-python3 "$INSTALL_DIR/live_bot.py"
+exec bash "$REPO_DIR/scripts/start_bot.sh" "\$@"
 EOF
 chmod +x "$INSTALL_DIR/run.sh"
 

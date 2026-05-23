@@ -124,20 +124,29 @@ run_bg() {
 }
 
 deploy_code() {
+    # Flat rsync: bot/ → $REMOTE_INSTALL_DIR/ (same layout as install.sh and update_standalone.sh).
+    # Never use --delete on the full repo: it wipes flat live_bot.py on standalone accounts.
     local idx="$1"
+    local user="${ALL_USERS[$idx]}"
+    local ssh_opts="-p $PORT -o StrictHostKeyChecking=yes"
+
     SSHPASS="${ALL_PASSWORDS[$idx]}" /usr/bin/sshpass -e \
-        rsync -az --delete \
-        --exclude='.git' \
-        --exclude='__pycache__' \
-        --exclude='*.pyc' \
-        --exclude='.venv' \
-        --exclude='venv/' \
-        --exclude='*.db' \
-        --exclude='config.json' \
-        --exclude='credentials' \
-        --exclude='*.log' \
-        -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
-        "$LOCAL_REPO/" "${ALL_USERS[$idx]}@$SERVER:$REMOTE_INSTALL_DIR/" 2>&1
+        rsync -az \
+        --exclude='__pycache__' --exclude='*.pyc' \
+        --exclude='config.json' --exclude='*.db' --exclude='*.log' \
+        -e "ssh $ssh_opts" \
+        "$LOCAL_REPO/bot/" "$user@$SERVER:$REMOTE_INSTALL_DIR/" 2>&1 || return 1
+
+    SSHPASS="${ALL_PASSWORDS[$idx]}" /usr/bin/sshpass -e \
+        rsync -az \
+        --include='*.json' --exclude='*' \
+        -e "ssh $ssh_opts" \
+        "$LOCAL_REPO/strategies/" "$user@$SERVER:$REMOTE_INSTALL_DIR/strategies/" 2>&1 || return 1
+
+    SSHPASS="${ALL_PASSWORDS[$idx]}" /usr/bin/sshpass -e \
+        rsync -az \
+        -e "ssh $ssh_opts" \
+        "$LOCAL_REPO/requirements.txt" "$user@$SERVER:$REMOTE_INSTALL_DIR/" 2>&1 || return 1
 }
 
 # ─── Phase 1: Pre-flight ────────────────────────────────────────────────────────

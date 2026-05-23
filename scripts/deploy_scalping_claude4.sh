@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# deploy_scalping_claude4.sh — Deploy and (re)start three scalping bots on the
+# deploy_scalping_claude4.sh — Deploy and (re)start the OBI orderbook bot on the
 #                              dedicated scalping test account (index 3 in TEST_USERS).
 #
-# Each bot runs a different scalping strategy:
-#   1. candle_momentum  → scalping_candle_momentum.pid/log/db
-#   2. meanrev          → scalping_meanrev.pid/log/db
-#   3. breakout         → scalping_breakout.pid/log/db
+# Runs a single orderbook_bot.py instance monitoring BTCUSDT spot + perp streams:
+#   orderbook_bot  → orderbook_bot.pid / orderbook_bot.log / live_ob.db
+#
+# Also stops legacy candle_momentum / meanrev / breakout bots if still running.
 #
 # Reads credentials from ~/.tradinebotte-test.conf
 #   TEST_USERS[3] / TEST_PASSWORDS[3]  (or TEST_SCALPING_USER_IDX to override index)
@@ -13,7 +13,7 @@
 # Rules:
 #   - ≤ 4 SSH connections total (rsync ×2 + restart + verify).
 #   - PID-file stop/start — never pkill by name (would hit other users' processes).
-#   - No API key needed — orders are simulated automatically.
+#   - Paper trading mode — no API key needed.
 #
 # Usage:
 #   bash scripts/deploy_scalping_claude4.sh
@@ -22,11 +22,12 @@
 
 set -uo pipefail
 
-STRATEGIES=(
-    "scalping_candle_momentum"
-    "scalping_meanrev"
-    "scalping_breakout"
-)
+BOT_NAME="orderbook_bot"
+BOT_SCRIPT="orderbook_bot.py"
+BOT_STRATEGY="strategies/orderbook_btc.json"
+
+# Legacy bots to stop if still running
+LEGACY_BOTS=("scalping_candle_momentum" "scalping_meanrev" "scalping_breakout")
 
 SKIP_RESTART=false
 VERIFY_ONLY=false
@@ -135,64 +136,77 @@ fi
 # ─── Step 2: stop + start all three bots (single SSH session) ──────────────────
 if [[ "$SKIP_RESTART" == "false" ]]; then
     section "STEP 2 — RESTART (3 bots)"
-    info "Stopping old bots and starting updated ones..."
+    info "Stopping legacy and current bots, starting orderbook_bot..."
 
-    # Build the remote command dynamically for all strategies
     REMOTE_CMD="set -e; cd $INSTALL_DIR; mkdir -p strategies"$'\n'
-    for STRAT in "${STRATEGIES[@]}"; do
+    REMOTE_CMD+="
+if [ ! -x venv/bin/python3 ]; then
+    echo 'Creating venv...'
+    python3 -m venv venv
+    venv/bin/pip install -q websockets
+    echo 'Venv ready'
+fi
+"
+    # Stop legacy candle/meanrev/breakout bots if still running
+    for LEGACY in scalping_candle_momentum scalping_meanrev scalping_breakout; do
         REMOTE_CMD+="
-PF=$INSTALL_DIR/${STRAT}.pid
+PF=$INSTALL_DIR/${LEGACY}.pid
 if [ -f \"\$PF\" ]; then
     PID=\$(cat \"\$PF\")
     if kill -0 \"\$PID\" 2>/dev/null; then
-        kill \"\$PID\" && echo \"stopped ${STRAT} pid=\$PID\" || echo 'kill failed ${STRAT}'
-    else
-        echo \"${STRAT}: stale pid file (was \$PID)\"
+        kill \"\$PID\" && echo \"stopped legacy ${LEGACY} pid=\$PID\"
     fi
     rm -f \"\$PF\"
-else
-    echo \"${STRAT}: not running (no pid file)\"
 fi
 "
     done
 
-    REMOTE_CMD+="sleep 2"$'\n'
+    # Stop current orderbook_bot if running
+    REMOTE_CMD+="
+PF=$INSTALL_DIR/${BOT_NAME}.pid
+if [ -f \"\$PF\" ]; then
+    PID=\$(cat \"\$PF\")
+    if kill -0 \"\$PID\" 2>/dev/null; then
+        kill \"\$PID\" && echo \"stopped ${BOT_NAME} pid=\$PID\" || echo 'kill failed ${BOT_NAME}'
+    else
+        echo \"${BOT_NAME}: stale pid file (was \$PID)\"
+    fi
+    rm -f \"\$PF\"
+else
+    echo \"${BOT_NAME}: not running (no pid file)\"
+fi
+sleep 2
 
-    for STRAT in "${STRATEGIES[@]}"; do
-        REMOTE_CMD+="
-nohup venv/bin/python3 scalping_bot.py \
-    --strategy $INSTALL_DIR/strategies/${STRAT}.json \
+nohup venv/bin/python3 ${BOT_SCRIPT} \
+    --strategy $INSTALL_DIR/${BOT_STRATEGY} \
     --dir $INSTALL_DIR \
-    </dev/null >>$INSTALL_DIR/${STRAT}.log 2>&1 &
+    </dev/null >>$INSTALL_DIR/${BOT_NAME}.log 2>&1 &
 BOT_PID=\$!
 disown \$BOT_PID
-echo \$BOT_PID > $INSTALL_DIR/${STRAT}.pid
-echo \"started ${STRAT} pid=\$BOT_PID\"
+echo \$BOT_PID > $INSTALL_DIR/${BOT_NAME}.pid
+echo \"started ${BOT_NAME} pid=\$BOT_PID\"
 "
-    done
 
     RESTART_OUT=$(_ssh "$REMOTE_CMD")
     echo "$RESTART_OUT"
 
     STARTED=$(echo "$RESTART_OUT" | grep -c "^started" || true)
-    if [[ "$STARTED" -eq "${#STRATEGIES[@]}" ]]; then
-        ok "All ${#STRATEGIES[@]} bots started"
+    if [[ "$STARTED" -eq 1 ]]; then
+        ok "${BOT_NAME} started"
     else
-        err "Only $STARTED / ${#STRATEGIES[@]} bots confirmed started"
+        err "${BOT_NAME} did not start (check log above)"
     fi
 
-    info "Waiting 8s for startup + Binance history warm-up..."
+    info "Waiting 8s for startup and WebSocket connection..."
     sleep 8
 fi
 
 # ─── Step 3: verify ────────────────────────────────────────────────────────────
 section "STEP 3 — VERIFY"
 
-VERIFY_CMD=""
-for STRAT in "${STRATEGIES[@]}"; do
-    VERIFY_CMD+="
-echo '--- ${STRAT} ---'
-PF=$INSTALL_DIR/${STRAT}.pid
+VERIFY_CMD="
+echo '--- ${BOT_NAME} ---'
+PF=$INSTALL_DIR/${BOT_NAME}.pid
 if [ -f \"\$PF\" ]; then
     PID=\$(cat \"\$PF\")
     if kill -0 \"\$PID\" 2>/dev/null; then
@@ -203,32 +217,30 @@ if [ -f \"\$PF\" ]; then
 else
     echo '  no pid file'
 fi
-tail -5 $INSTALL_DIR/${STRAT}.log 2>/dev/null || echo '  (no log yet)'
+tail -8 $INSTALL_DIR/${BOT_NAME}.log 2>/dev/null || echo '  (no log yet)'
 "
-done
 
 VERIFY_OUT=$(_ssh "$VERIFY_CMD")
 echo "$VERIFY_OUT"
 
-for STRAT in "${STRATEGIES[@]}"; do
-    if echo "$VERIFY_OUT" | grep -A5 "^--- ${STRAT}" | grep -qP "PID=\d+ running$"; then
-        ok "$STRAT: running"
-    else
-        err "$STRAT: NOT running"
-    fi
-    if echo "$VERIFY_OUT" | grep -A10 "^--- ${STRAT}" | grep -qE "History loaded|WebSocket connected|ScalpingBot started"; then
-        ok "$STRAT: startup OK"
-    else
-        warn "$STRAT: startup message not yet in log"
-    fi
-done
+if echo "$VERIFY_OUT" | grep -qP "PID=\d+ running"; then
+    ok "${BOT_NAME}: running"
+else
+    err "${BOT_NAME}: NOT running"
+fi
+if echo "$VERIFY_OUT" | grep -qE "connected|started|OrderBook bot"; then
+    ok "${BOT_NAME}: startup OK"
+else
+    warn "${BOT_NAME}: startup message not yet in log"
+fi
 
 # ─── Report ────────────────────────────────────────────────────────────────────
 section "RESULT"
 if [[ $FAILURES -eq 0 ]]; then
-    echo -e "${BOLD}${GREEN}  SUCCESS — $SC_USER: all scalping bots running${NC}"
-    echo -e "  Logs : $INSTALL_DIR/scalping_<strategy>.log"
-    echo -e "  DBs  : $INSTALL_DIR/scalping_<strategy>.db"
+    echo -e "${BOLD}${GREEN}  SUCCESS — $SC_USER: orderbook_bot running${NC}"
+    echo -e "  Log  : $INSTALL_DIR/orderbook_bot.log"
+    echo -e "  DB   : $INSTALL_DIR/live_ob.db"
+    echo -e "  PID  : $INSTALL_DIR/orderbook_bot.pid"
     exit 0
 else
     echo -e "${BOLD}${RED}  FAILURE — $FAILURES issue(s) — check logs above${NC}"

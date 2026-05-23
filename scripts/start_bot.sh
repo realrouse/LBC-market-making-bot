@@ -85,11 +85,24 @@ if [ "$RESET_DB" = "1" ]; then
     fi
 fi
 
-# ── Check venv ────────────────────────────────────────────────────
-PYTHON="$INSTALL_DIR/venv/bin/python3"
-if [ ! -x "$PYTHON" ]; then
-    echo "$(_t "❌ ERROR: virtualenv not found in" "❌ ERREUR : virtualenv introuvable dans") $INSTALL_DIR/venv"
+# ── Check venv (prefer .venv over venv) ──────────────────────────
+if [ -x "$INSTALL_DIR/.venv/bin/python3" ]; then
+    PYTHON="$INSTALL_DIR/.venv/bin/python3"
+elif [ -x "$INSTALL_DIR/venv/bin/python3" ]; then
+    PYTHON="$INSTALL_DIR/venv/bin/python3"
+else
+    echo "$(_t "❌ ERROR: virtualenv not found in" "❌ ERREUR : virtualenv introuvable dans") $INSTALL_DIR/{.venv,venv}"
     echo "   $(_t "Run first:" "Lance d'abord :") bash scripts/install.sh"
+    exit 1
+fi
+
+# ── Locate live_bot.py (prefer bot/ subdirectory) ─────────────────
+if [ -f "$INSTALL_DIR/bot/live_bot.py" ]; then
+    BOT_SCRIPT="$INSTALL_DIR/bot/live_bot.py"
+elif [ -f "$INSTALL_DIR/live_bot.py" ]; then
+    BOT_SCRIPT="$INSTALL_DIR/live_bot.py"
+else
+    echo "$(_t "❌ ERROR: live_bot.py not found in" "❌ ERREUR : live_bot.py introuvable dans") $INSTALL_DIR/{bot/,}"
     exit 1
 fi
 
@@ -99,7 +112,7 @@ DISPLAY_LOG="${LOG/$HOME/\~}"
 DISPLAY_DIR="${INSTALL_DIR/$HOME/\~}"
 echo "$(_t "Starting bot from" "Lancement du bot depuis") $DISPLAY_DIR..."
 export TRADINEBOTTE_DIR="$INSTALL_DIR"
-nohup "$PYTHON" "$INSTALL_DIR/live_bot.py" "${BOT_EXTRA_ARGS[@]}" </dev/null >> "$LOG" 2>&1 &
+nohup "$PYTHON" "$BOT_SCRIPT" "${BOT_EXTRA_ARGS[@]}" </dev/null >> "$LOG" 2>&1 &
 _pid=$!
 disown "$_pid"
 echo "$_pid" > "$PID_FILE"

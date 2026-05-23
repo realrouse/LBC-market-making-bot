@@ -5,6 +5,7 @@ import sys, os, unittest, json, tempfile, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bot"))
 from indicators import (
     compute_sma, compute_ema, compute_rsi, compute_volatility, PriceSeries,
+    OHLCVSeries, _OHLCV_INDICATOR_TYPES,
     IndicatorSpec, StreamSpec, IndicatorsConfig, load_config,
     derive_stream_id, parse_subscribe_request, _handle_subscribe,
     _SOURCES_WITHOUT_INDICATORS, _DEFAULT_POLL_INTERVALS, _VALID_SOURCES,
@@ -1055,6 +1056,189 @@ class TestBinanceMarketStructure(unittest.TestCase):
         cfg_liq = self._load("indicators_liquidations_bitcoin.json")
         ports = {cfg_oi.out_addr, cfg_ls.out_addr, cfg_liq.out_addr}
         self.assertEqual(len(ports), 3, f"PUB port collision: {ports}")
+
+
+# ─── OHLCVSeries ─────────────────────────────────────────────────────────────
+
+def _ohlcv_series(n: int, base: float = 50_000.0) -> OHLCVSeries:
+    """Build an OHLCVSeries with n synthetic candles (ascending close prices)."""
+    s = OHLCVSeries(maxlen=n + 10)
+    for i in range(n):
+        c = base + i * 10
+        s.push(c + 200, c - 200, c, float(100 + i))
+    return s
+
+
+class TestOHLCVSeriesBasic(unittest.TestCase):
+
+    def test_len_increases(self):
+        s = OHLCVSeries()
+        self.assertEqual(len(s), 0)
+        s.push(100.0, 90.0, 95.0, 10.0)
+        self.assertEqual(len(s), 1)
+
+    def test_maxlen_respected(self):
+        s = OHLCVSeries(maxlen=5)
+        for i in range(10):
+            s.push(float(i), float(i - 1), float(i), 1.0)
+        self.assertEqual(len(s), 5)
+
+    def test_close_only_indicators_via_ohlcv(self):
+        s = _ohlcv_series(30)
+        specs = [IndicatorSpec(type="sma", period=5),
+                 IndicatorSpec(type="rsi", period=14)]
+        ind = s.compute_indicators(specs)
+        self.assertIn("sma_5", ind)
+        self.assertIn("rsi_14", ind)
+        self.assertIsNotNone(ind["sma_5"])
+        self.assertIsNotNone(ind["rsi_14"])
+
+    def test_too_short_returns_none(self):
+        s = _ohlcv_series(5)
+        specs = [IndicatorSpec(type="atr", period=14)]
+        ind = s.compute_indicators(specs)
+        self.assertIsNone(ind["atr_14"])
+
+
+class TestOHLCVSeriesATR(unittest.TestCase):
+
+    def test_atr_positive(self):
+        s = _ohlcv_series(25)
+        ind = s.compute_indicators([IndicatorSpec(type="atr", period=14)])
+        self.assertIsNotNone(ind["atr_14"])
+        self.assertGreater(ind["atr_14"], 0)
+
+    def test_atr_flat_series_is_zero(self):
+        s = OHLCVSeries()
+        for _ in range(25):
+            s.push(100.0, 100.0, 100.0, 1.0)
+        ind = s.compute_indicators([IndicatorSpec(type="atr", period=14)])
+        self.assertAlmostEqual(ind["atr_14"], 0.0, places=6)
+
+
+class TestOHLCVSeriesBollinger(unittest.TestCase):
+
+    def test_bands_ordering(self):
+        s = _ohlcv_series(30)
+        specs = [
+            IndicatorSpec(type="bollinger_upper", period=20),
+            IndicatorSpec(type="bollinger_mid",   period=20),
+            IndicatorSpec(type="bollinger_lower",  period=20),
+        ]
+        ind = s.compute_indicators(specs)
+        self.assertGreater(ind["bb_upper_20"], ind["bb_mid_20"])
+        self.assertGreater(ind["bb_mid_20"],   ind["bb_lower_20"])
+
+    def test_flat_series_zero_width(self):
+        s = OHLCVSeries()
+        for _ in range(25):
+            s.push(100.0, 100.0, 100.0, 1.0)
+        specs = [
+            IndicatorSpec(type="bollinger_upper", period=20),
+            IndicatorSpec(type="bollinger_lower",  period=20),
+        ]
+        ind = s.compute_indicators(specs)
+        self.assertAlmostEqual(ind["bb_upper_20"], ind["bb_lower_20"], places=6)
+
+    def test_bb_cache_consistent(self):
+        s = _ohlcv_series(30)
+        specs = [
+            IndicatorSpec(type="bollinger_upper", period=20),
+            IndicatorSpec(type="bollinger_mid",   period=20),
+            IndicatorSpec(type="bollinger_lower",  period=20),
+        ]
+        ind1 = s.compute_indicators(specs)
+        ind2 = s.compute_indicators(specs)
+        for k in ind1:
+            self.assertAlmostEqual(ind1[k], ind2[k])
+
+
+class TestOHLCVSeriesVWAP(unittest.TestCase):
+
+    def test_vwap_between_low_and_high(self):
+        s = _ohlcv_series(30)
+        ind = s.compute_indicators([IndicatorSpec(type="vwap", period=20)])
+        self.assertIsNotNone(ind["vwap_20"])
+        self.assertGreater(ind["vwap_20"], 0)
+
+    def test_vwap_zero_volume_returns_last_close(self):
+        s = OHLCVSeries()
+        for i in range(25):
+            s.push(100.0, 90.0, float(95 + i), 0.0)
+        ind = s.compute_indicators([IndicatorSpec(type="vwap", period=20)])
+        self.assertAlmostEqual(ind["vwap_20"], s._closes[-1])
+
+
+class TestOHLCVSeriesVolZscore(unittest.TestCase):
+
+    def test_zscore_high_volume_spike(self):
+        s = OHLCVSeries()
+        for _ in range(20):
+            s.push(100.0, 90.0, 95.0, 1.0)
+        s.push(100.0, 90.0, 95.0, 100.0)  # huge volume spike
+        ind = s.compute_indicators([IndicatorSpec(type="vol_zscore", period=20)])
+        # z-score of a single spike against n-1 constant values → sqrt(n-1) = sqrt(19) ≈ 4.36
+        # The spike magnitude does not affect the limit; 5.0 is unreachable with n=20.
+        self.assertGreater(ind["vol_z_20"], 4.3)
+
+    def test_zscore_flat_volume_zero(self):
+        s = OHLCVSeries()
+        for _ in range(25):
+            s.push(100.0, 90.0, 95.0, 5.0)
+        ind = s.compute_indicators([IndicatorSpec(type="vol_zscore", period=20)])
+        self.assertAlmostEqual(ind["vol_z_20"], 0.0)
+
+
+class TestOHLCVSeriesRollingMax(unittest.TestCase):
+
+    def test_rolling_max_is_max_of_highs(self):
+        s = _ohlcv_series(30)
+        ind = s.compute_indicators([IndicatorSpec(type="rolling_max", period=10)])
+        highs = [50_000 + i * 10 + 200 for i in range(20, 30)]
+        self.assertAlmostEqual(ind["rmax_10"], max(highs))
+
+    def test_rolling_max_too_short(self):
+        s = _ohlcv_series(5)
+        ind = s.compute_indicators([IndicatorSpec(type="rolling_max", period=10)])
+        self.assertIsNone(ind["rmax_10"])
+
+
+class TestOHLCVIndicatorTypesValidation(unittest.TestCase):
+
+    def test_ohlcv_types_in_valid_indicator_types(self):
+        from indicators import _VALID_INDICATOR_TYPES
+        for t in _OHLCV_INDICATOR_TYPES:
+            self.assertIn(t, _VALID_INDICATOR_TYPES)
+
+    def test_ohlcv_type_rejected_for_feed_source(self):
+        with self.assertRaises(ValueError) as ctx:
+            StreamSpec.from_dict({
+                "id": "test",
+                "source": "feed",
+                "timeframe": "tick",
+                "asset": "BTCUSDT",
+                "indicators": [{"type": "atr", "period": 14}],
+            })
+        self.assertIn("binance_ws", str(ctx.exception))
+
+    def test_ohlcv_type_accepted_for_binance_ws_source(self):
+        spec = StreamSpec.from_dict({
+            "id": "btc_1m",
+            "source": "binance_ws",
+            "timeframe": "1m",
+            "asset": "BTCUSDT",
+            "indicators": [
+                {"type": "atr",            "period": 14},
+                {"type": "bollinger_upper", "period": 20},
+                {"type": "vwap",            "period": 20},
+            ],
+        })
+        self.assertEqual(len(spec.indicators), 3)
+
+    def test_indicator_spec_accepts_all_ohlcv_types(self):
+        for t in sorted(_OHLCV_INDICATOR_TYPES):
+            spec = IndicatorSpec.from_dict({"type": t, "period": 14})
+            self.assertEqual(spec.type, t)
 
 
 if __name__ == "__main__":

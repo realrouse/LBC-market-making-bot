@@ -1,0 +1,27 @@
+{
+    "_comment": "Binance OBI scalping — paper trading, BTCUSDT spot + perp",
+    "_version": "1.0",
+
+    "symbol":             "BTCUSDT",
+    "modes":              ["spot", "perp"],
+
+    "capital_spot":       1000.0,
+    "capital_perp":       1000.0,
+    "stake_frac":         0.10,
+
+    "obi_levels":         10,
+    "obi_ema_alpha":      0.15,
+    "obi_entry_thresh":   0.30,
+    "obi_exit_thresh":    0.05,
+    "obi_confirm_n":      3,
+
+    "tp_pct":             0.005,
+    "sl_pct":             0.003,
+    "max_hold_minutes":   30,
+
+    "fee_spot":           0.001,
+    "fee_perp":           0.0005,
+    "slippage":           0.0005,
+
+    "snapshot_every_n":   10
+}
