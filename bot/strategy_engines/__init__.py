@@ -2,7 +2,7 @@
 Strategy factory — maps strategy names to their implementation classes.
 
 Usage from live_bot.py:
-    from strategies import load as load_strategy
+    from strategy_engines import load as load_strategy
     state.strategy = load_strategy(config.strategy_type, config)
     # Returns None for "threshold" (live_bot uses its built-in logic).
     # Returns a GridStrategy instance for "grid".

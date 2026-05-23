@@ -1721,8 +1721,8 @@ class TestConnectorFactory(unittest.TestCase):
 
 # ── Strategy factory ──────────────────────────────────────────────────────────
 
-import strategies as _strategies_mod
-from strategies.grid import GridStrategy
+import strategy_engines as _strategies_mod
+from strategy_engines.grid import GridStrategy
 
 class TestStrategyFactory(unittest.TestCase):
     """strategies.load() returns the correct strategy or None for threshold."""

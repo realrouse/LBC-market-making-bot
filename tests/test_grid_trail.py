@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bot"))
 import connectors
 import api_polymarket
 import api_binance
-from strategies.grid import GridStrategy
+from strategy_engines.grid import GridStrategy
 
 
 def _grid_config(trail_mode: str = "static") -> types.SimpleNamespace:

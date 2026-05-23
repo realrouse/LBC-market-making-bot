@@ -1627,7 +1627,7 @@ async def main() -> None:
     ) as session:
         state.session = session   # available before ws_loop for strategy restore
         if config.strategy_type != "threshold":
-            from strategies import load as _load_strat
+            from strategy_engines import load as _load_strat
             state.strategy = _load_strat(config.strategy_type, config)
             logger.info("  Algorithm   : %s", config.strategy_type)
             await state.strategy.restore_from_db(state)
