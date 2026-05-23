@@ -1,6 +1,6 @@
 {
-    "_comment": "Binance OBI scalping — paper trading, BTCUSDT spot + perp",
-    "_version": "1.0",
+    "_comment": "Binance OBI scalping v2 — contrarian signal + limit-order simulation",
+    "_version": "2.0",
 
     "symbol":             "BTCUSDT",
     "modes":              ["spot", "perp"],
@@ -10,17 +10,20 @@
     "stake_frac":         0.10,
 
     "obi_levels":         10,
-    "obi_ema_alpha":      0.15,
-    "obi_entry_thresh":   0.30,
-    "obi_exit_thresh":    0.05,
-    "obi_confirm_n":      3,
+    "obi_ema_alpha":      0.05,
+    "obi_entry_thresh":   0.60,
+    "obi_exit_thresh":    0.30,
+    "obi_confirm_n":      15,
 
-    "tp_pct":             0.005,
-    "sl_pct":             0.003,
-    "max_hold_minutes":   30,
+    "tp_pct":             0.0006,
+    "sl_pct":             0.0004,
+    "max_hold_minutes":   1,
 
+    "use_limit_orders":   true,
     "fee_spot":           0.001,
     "fee_perp":           0.0005,
+    "maker_fee_spot":     0.0002,
+    "maker_fee_perp":     0.0002,
     "slippage":           0.0005,
 
     "snapshot_every_n":   10
