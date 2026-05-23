@@ -281,8 +281,9 @@ async def _handle_message(state: StreamState, db: sqlite3.Connection, raw: str) 
     except (json.JSONDecodeError, TypeError):
         return
 
-    bids = msg.get("bids")
-    asks = msg.get("asks")
+    # Spot uses "bids"/"asks"; futures uses "b"/"a"
+    bids = msg.get("bids") or msg.get("b")
+    asks = msg.get("asks") or msg.get("a")
     if not bids or not asks:
         return
 
