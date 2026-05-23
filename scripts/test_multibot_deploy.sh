@@ -139,7 +139,7 @@ deploy_code() {
 
     SSHPASS="${ALL_PASSWORDS[$idx]}" /usr/bin/sshpass -e \
         rsync -az \
-        --include='*.json' --exclude='*' \
+        --filter='+ **/' --filter='+ *.json' --filter='- *' \
         -e "ssh $ssh_opts" \
         "$LOCAL_REPO/strategies/" "$user@$SERVER:$REMOTE_INSTALL_DIR/strategies/" 2>&1 || return 1
 

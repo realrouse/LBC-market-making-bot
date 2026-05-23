@@ -98,7 +98,7 @@ _rsync() {
     # strategies/ JSON config files → $INSTALL_DIR/strategies/
     SSHPASS="$SA_PASS" /usr/bin/sshpass -e \
         rsync -az \
-        --include='*.json' --exclude='*' \
+        --filter='+ **/' --filter='+ *.json' --filter='- *' \
         -e "ssh $ssh_opts" \
         "$LOCAL_REPO/strategies/" "$SA_USER@$SERVER:$INSTALL_DIR/strategies/" 2>&1 || return 1
 

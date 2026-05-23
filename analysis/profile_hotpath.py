@@ -13,8 +13,10 @@ PROFILE_DIR = os.path.join(os.path.expanduser("~"), "tmp", "profile-bot")
 os.makedirs(f"{PROFILE_DIR}/strategies", exist_ok=True)
 os.environ["TRADINEBOTTE_DIR"] = PROFILE_DIR
 
-for f in glob.glob("strategies/*.json"):
-    shutil.copy(f, f"{PROFILE_DIR}/strategies/")
+for f in glob.glob("strategies/**/*.json", recursive=True):
+    dest = os.path.join(PROFILE_DIR, "strategies", os.path.relpath(f, "strategies"))
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    shutil.copy(f, dest)
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import bot.live_bot as bot

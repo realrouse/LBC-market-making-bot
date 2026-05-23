@@ -616,7 +616,7 @@ Sources disponibles : `binance_ws`, `binance_funding`, `deribit_iv`, `fear_greed
 ### Service systemd (recommandé)
 
 ```bash
-INDICATORS_CONFIG=~/tradinebotte/strategies/indicators_base.json \
+INDICATORS_CONFIG=~/tradinebotte/strategies/indicators/indicators_4h_bitcoin.json \
 bash scripts/install_indicators_service.sh
 ```
 
@@ -635,7 +635,7 @@ Optionnel : définir `INDICATORS_LABEL=btc` pour nommer le service `tradinebotte
 ### Démarrage manuel
 
 ```bash
-python3 bot/indicators.py --config strategies/indicators_base.json
+python3 bot/indicators.py --config strategies/indicators/indicators_4h_bitcoin.json
 ```
 
 Fichiers de config prêts à l'emploi dans `strategies/` :
@@ -722,7 +722,7 @@ Les bases de données téléchargées sont exclues du git (`.gitignore`). Le té
 
 ## Filtre heure / jour
 
-Le bot peut restreindre les entrées en trade à des plages horaires UTC selon le type de jour. Le filtre est configuré dans le fichier de stratégie JSON (`strategies/polymarket_BTC5M.json`) et est **désactivé par défaut** — le comportement existant est préservé jusqu'à activation explicite.
+Le bot peut restreindre les entrées en trade à des plages horaires UTC selon le type de jour. Le filtre est configuré dans le fichier de stratégie JSON (`strategies/polymarket/polymarket_BTC5M.json`) et est **désactivé par défaut** — le comportement existant est préservé jusqu'à activation explicite.
 
 ### Pourquoi un filtre horaire ?
 

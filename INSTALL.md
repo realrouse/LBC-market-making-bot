@@ -606,7 +606,7 @@ Available sources: `binance_ws`, `binance_funding`, `deribit_iv`, `fear_greed`, 
 ### Systemd service (recommended)
 
 ```bash
-INDICATORS_CONFIG=~/tradinebotte/strategies/indicators_base.json \
+INDICATORS_CONFIG=~/tradinebotte/strategies/indicators/indicators_4h_bitcoin.json \
 bash scripts/install_indicators_service.sh
 ```
 
@@ -625,7 +625,7 @@ Optional: set `INDICATORS_LABEL=btc` to name the service `tradinebotte-indicator
 ### Manual start
 
 ```bash
-python3 bot/indicators.py --config strategies/indicators_base.json
+python3 bot/indicators.py --config strategies/indicators/indicators_4h_bitcoin.json
 ```
 
 Ready-to-use config files in `strategies/`:
@@ -712,7 +712,7 @@ Output databases are excluded from git (`.gitignore`). The download resumes from
 
 ## Hour / Day Filter
 
-The bot can restrict trade entries to specific UTC hour ranges depending on the day of the week. The filter is configured in the strategy JSON file (`strategies/polymarket_BTC5M.json`) and is **disabled by default** — existing behaviour is preserved until you explicitly enable it.
+The bot can restrict trade entries to specific UTC hour ranges depending on the day of the week. The filter is configured in the strategy JSON file (`strategies/polymarket/polymarket_BTC5M.json`) and is **disabled by default** — existing behaviour is preserved until you explicitly enable it.
 
 ### Rationale
 

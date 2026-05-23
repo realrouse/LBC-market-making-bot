@@ -18,9 +18,9 @@ All strategies:
 
 Usage
 -----
-    python3 scripts/backtest_scalping.py --strategy strategies/scalping_candle_momentum.json
-    python3 scripts/backtest_scalping.py --strategy strategies/scalping_meanrev.json
-    python3 scripts/backtest_scalping.py --strategy strategies/scalping_breakout.json
+    python3 analysis/backtest_scalping.py --strategy strategies/scalping/scalping_candle_momentum.json
+    python3 analysis/backtest_scalping.py --strategy strategies/scalping/scalping_meanrev.json
+    python3 analysis/backtest_scalping.py --strategy strategies/scalping/scalping_breakout.json
     python3 scripts/backtest_scalping.py --compare              # all three side-by-side
     python3 scripts/backtest_scalping.py --strategy <file> <db_path>
 """
