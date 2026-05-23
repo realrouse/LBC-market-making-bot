@@ -159,10 +159,15 @@ class StreamState:
     def __init__(self, mode: str, p: dict):
         self.mode          = mode
         self.p             = p
+        # obi_ema starts at 0.0 (neutral). The EMA needs ~1/alpha messages
+        # (~7 at alpha=0.15) to reflect real order-book imbalance; signals
+        # during warm-up are suppressed by obi_confirm_n consecutive checks.
         self.obi_ema       = 0.0
         self.pending_dir   = None   # 'long' | 'short' | None
         self.pending_count = 0
         self.position      = None
+        # Capital resets to the configured value on every restart — paper
+        # trading only; live_ob.db preserves the snapshot/trade history.
         self.capital       = p[f"capital_{mode}"]
         self.snap_counter  = 0
         self.total_trades  = 0
