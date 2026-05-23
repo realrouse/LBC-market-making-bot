@@ -6,7 +6,7 @@
 #  automatically every week (Sunday 03:00 UTC by default).
 #
 #  The cron job:
-#    1. Downloads live.db from the collector VPS → data/live_YYYY_WNN.db
+#    1. Downloads live.db from the collector server → data/live_YYYY_WNN.db
 #    2. Archives the remote DB and restarts the collector (--rotate)
 #    3. Appends output to ~/tradinebotte/collect.log
 #

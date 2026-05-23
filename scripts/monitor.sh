@@ -1,7 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════
-#  POLYMARKET LIVE BOT v3 — Monitoring / Surveillance
-#  Affiche le statut du bot, les derniers logs et les stats SQLite.
+#  tradinebotte — Monitoring
 #  Shows bot status, recent logs, and SQLite stats.
 #
 #  Usage :

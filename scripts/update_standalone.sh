@@ -10,7 +10,7 @@
 #
 # Rules respected:
 #   - Maximum 4 SSH connections total (2× rsync + restart + verify).
-#   - pkill always scoped to the target user (-u UID) — never touches other users.
+#   - Stop uses the PID file (kill $PID), never pkill — avoids hitting other users.
 #   - Bot started with </dev/null and disown — SSH session exits cleanly.
 #   - No --simulate: absent API key is enough for simulated orders.
 #

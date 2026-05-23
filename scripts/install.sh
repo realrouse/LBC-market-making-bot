@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════
-#  POLYMARKET LIVE BOT v3 — Installation (Linux/Mac)
+#  tradinebotte — Installation (Linux/Mac)
 #
 #  Root prerequisites (once per machine, if missing):
 #    sudo apt-get install -y python3 python3-venv python3.X-venv sqlite3
