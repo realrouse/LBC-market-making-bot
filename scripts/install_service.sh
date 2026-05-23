@@ -15,7 +15,7 @@ set -euo pipefail
 USER_NAME=$(id -un)
 TDIR="${TRADINEBOTTE_DIR:-$HOME/tradinebotte}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TEMPLATE="$SCRIPT_DIR/tradinebotte.service"
+TEMPLATE="$SCRIPT_DIR/systemd/tradinebotte.service"
 OUTPUT="${HOME}/tmp/tradinebotte.service"
 mkdir -p "${HOME}/tmp"
 

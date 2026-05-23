@@ -13,7 +13,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-TEMPLATE="$SCRIPT_DIR/tradinebotte-feed.service"
+TEMPLATE="$SCRIPT_DIR/systemd/tradinebotte-feed.service"
 OUTPUT="${HOME}/tmp/tradinebotte-feed.service"
 mkdir -p "${HOME}/tmp"
 

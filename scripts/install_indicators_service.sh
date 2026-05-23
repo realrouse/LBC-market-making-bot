@@ -28,7 +28,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-TEMPLATE="$SCRIPT_DIR/tradinebotte-indicators.service"
+TEMPLATE="$SCRIPT_DIR/systemd/tradinebotte-indicators.service"
 
 USER_NAME=$(id -un)
 BOT_DIR="$PROJECT_DIR/bot"
