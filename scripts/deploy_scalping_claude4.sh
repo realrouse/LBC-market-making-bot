@@ -93,7 +93,7 @@ _rsync() {
     SSHPASS="$SC_PASS" /usr/bin/sshpass -e \
         rsync -az \
         --exclude='__pycache__' --exclude='*.pyc' \
-        --exclude='config.json' --exclude='live.db' --exclude='*.log' \
+        --exclude='config.json' --exclude='live.db' --exclude='live_ob.db' --exclude='*.log' \
         -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
         "$LOCAL_REPO/bot/" "$SC_USER@$SERVER:$INSTALL_DIR/" 2>&1
 
@@ -120,7 +120,7 @@ if ! ssh-keygen -F "[$SERVER]:$PORT" &>/dev/null && \
     ssh-keyscan -p "$PORT" -H "$SERVER" >> ~/.ssh/known_hosts 2>/dev/null
 fi
 info "Target: $SC_USER@$SERVER:$PORT  install_dir: $INSTALL_DIR"
-info "Strategies: ${STRATEGIES[*]}"
+info "Strategy: $BOT_STRATEGY"
 
 # ─── Step 1: rsync ─────────────────────────────────────────────────────────────
 if [[ "$VERIFY_ONLY" == "false" ]]; then
