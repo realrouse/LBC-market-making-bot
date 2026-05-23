@@ -9,7 +9,7 @@ import os, sys, sqlite3, time, unittest
 from unittest.mock import patch
 from datetime import datetime, timezone
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "analysis"))
 import backtest as bt
 import backtest_stake_secs as bss
 

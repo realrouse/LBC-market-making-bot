@@ -13,7 +13,7 @@ Bot de trading automatisé pour les marchés de prédiction [Polymarket](https:/
 - **Stop-loss journalier** — suspend le trading dès 30 $ de perte nette sur la journée ; reprend à la session suivante
 - **Persistance SQLite** (mode WAL) — tous les trades et les snapshots de prix toutes les 5 s sont stockés ; l'état survit aux crashs et redémarrages
 - **Reprise après crash** — restaure les trades non résolus depuis la base de données au démarrage ; reconstruit le capital à partir du PnL historique
-- **Moteur de backtest** — rejoue les données `snapshots` avec n'importe quel jeu de paramètres ; supporte la recherche en grille sur 135 combinaisons ; `--db file1.db file2.db` ou `--db data/*.db` exécute des simulations de capital indépendantes sur plusieurs fichiers de snapshots ; `--all` scanne automatiquement `data/` et ajoute `live.db` en tête si utilisable ; taux de victoire et PnL agrégés affichés sur tous les fichiers ; utilise le jeu de données embarqué (`data/backtest_sample_btc5m_range_2026.db`) si aucune base de données live n'est présente ; `scripts/backtest.py` supporte désormais le sizing Kelly fractionnel, les ratios Sharpe et Sortino, l'optimisation walk-forward, le filtre de volatilité par jour de semaine (P1) et le sizing de mise par paliers (P2)
+- **Moteur de backtest** — rejoue les données `snapshots` avec n'importe quel jeu de paramètres ; supporte la recherche en grille sur 135 combinaisons ; `--db file1.db file2.db` ou `--db data/*.db` exécute des simulations de capital indépendantes sur plusieurs fichiers de snapshots ; `--all` scanne automatiquement `data/` et ajoute `live.db` en tête si utilisable ; taux de victoire et PnL agrégés affichés sur tous les fichiers ; utilise le jeu de données embarqué (`data/backtest_sample_btc5m_range_2026.db`) si aucune base de données live n'est présente ; `analysis/backtest.py` supporte désormais le sizing Kelly fractionnel, les ratios Sharpe et Sortino, l'optimisation walk-forward, le filtre de volatilité par jour de semaine (P1) et le sizing de mise par paliers (P2)
 - **Page de statut HTML optionnelle** — le bot écrit une page auto-rafraîchissante (chemin configurable, authentification HTTP Basic Auth optionnelle) — [aperçu visuel](docs/status_example.html)
 - **Partage WebSocket multi-bot** — `bot/feed.py` maintient une seule connexion WebSocket et diffuse chaque mise à jour via ZeroMQ PUB ; un ou plusieurs processus `bot/account_bot.py` souscrivent et tradent avec des bases SQLite, logs et configs totalement isolés ; chaque bot évalue les signaux avec **ses propres** paramètres de stratégie (seuils, mises ou filtres horaires différents) ; fonctionne entre utilisateurs Linux différents (`/home/user1`, `/home/user2`) ; **feed auto-démarré** — le premier account_bot à se lancer démarre feed.py automatiquement via un verrou fichier sans race condition, aucune gestion manuelle du feed requise — voir [docs/multi.fr.md](docs/multi.fr.md) pour le guide de décision et la référence d'architecture complète
 - **API exchange modulaire** — tout le code spécifique Polymarket est dans `bot/api_polymarket.py` ; changer d'exchange ne nécessite qu'un nouveau fichier adaptateur et une seule ligne d'import dans `live_bot.py` ; les connecteurs Binance spot (`bot/api_binance.py`), MEXC spot (`bot/api_mexc.py`) et Bitstamp spot (`bot/api_bitstamp.py`) sont inclus, implémentant l'interface identique avec signature HMAC-SHA256, calcul de l'OBI et mode simulation
@@ -21,12 +21,12 @@ Bot de trading automatisé pour les marchés de prédiction [Polymarket](https:/
 - **Service d'indicateurs techniques** (`bot/indicators.py`) — étage pipeline ZeroMQ : souscrit au PUB de feed.py (port 5557), calcule RSI, SMA, EMA et volatilité glissante sur la série `best_bid` de chaque token, republie des messages `{"t":"indicators"}` enrichis sur un second socket PUB (port 5559) ; maths en stdlib pur (sans numpy) ; les consommateurs souscrivent au port 5559 pour recevoir les indicateurs en temps réel en parallèle des données de carnet
 - **Grid trading** — stratégie grid spot BTC/USDT pour Binance/MEXC : place des ordres d'achat sur N niveaux équidistants, collecte le profit sur chaque cycle BUY→SELL ; trois modes : `static` (arrêt quand le prix sort de la plage), `trail=bear` (recentrage vers le bas — sortie rentable sur rebond ; −3,3 % → +2,0 % sur le crash LUNA 2022), `trail=bull` (recentrage vers le haut — capture la hausse complète ; +0,1 % → +3,7 % sur la bull run 2024) ; `trail_mode` peut être défini directement dans le JSON de stratégie pour survivre aux redémarrages ; backtesté sur trois régimes BTC de 90 jours (latéral 2026, bear 2022, bull 2024) ; voir [`docs/AdaptedGridTrading.fr.md`](docs/AdaptedGridTrading.fr.md)
 - **Bot de scalping OBI Binance** (`bot/orderbook_bot.py`) — connexion aux streams WebSocket depth20 spot et perpétuel de Binance (100 ms), calcul de l'OBI sur les N meilleurs niveaux bid/ask avec lissage EMA, ouverture de paper trades quand l'OBI dépasse un seuil configurable pendant N snapshots consécutifs ; sortie sur inversion de l'OBI, TP/SL ou dépassement de la durée maximale ; snapshots et trades enregistrés dans `live_ob.db` ; configuré via `strategies/orderbook_btc.json` (`entry_thresh`, `confirm_n`, `tp`, `sl`, `n_levels`)
-- **Bot de scalping live Binance** (`bot/scalping_bot.py`) — trois stratégies indépendantes (`candle_momentum`, `meanrev`, `breakout`) sur données OHLCV 1 minute ; les 27 paramètres de `DEFAULTS` sont documentés dans la docstring du module ; backtestable avec `scripts/backtest_scalping.py`
+- **Bot de scalping live Binance** (`bot/scalping_bot.py`) — trois stratégies indépendantes (`candle_momentum`, `meanrev`, `breakout`) sur données OHLCV 1 minute ; les 27 paramètres de `DEFAULTS` sont documentés dans la docstring du module ; backtestable avec `analysis/backtest_scalping.py`
 - **Helpers mathématiques de scalping** (`bot/scalping_math.py`) — ATR, bandes de Bollinger, VWAP, z-score de volume et maximum glissant, partagés entre `scalping_bot.py` et `indicators.py`
-- **Benchmark de latence API** — `scripts/benchmark_api.py` mesure le temps aller-retour REST et le temps jusqu'au premier message WebSocket sur les trois exchanges ; rapporte min/mean/p50/p90/p99/max/σ ; options `--rounds N` et `--no-ws`
+- **Benchmark de latence API** — `analysis/benchmark_api.py` mesure le temps aller-retour REST et le temps jusqu'au premier message WebSocket sur les trois exchanges ; rapporte min/mean/p50/p90/p99/max/σ ; options `--rounds N` et `--no-ws`
 - **Interface bilingue** — `scripts/setup.py`, `install.sh`, `start_bot.sh` et `monitor.sh` proposent `[E] English / [F] Français` au démarrage ; le choix est persisté sous la clé `"lang"` dans `config.json` et hérité automatiquement par les scripts suivants
 - **Fichiers de stratégie JSON** — les paramètres de signal et de capital sont dans `strategies/polymarket_BTC5M.json` ; changer de stratégie se fait en pointant `"strategy"` dans `config.json` vers n'importe quel fichier ; `strategies/polymarket_BTC5M_piste3.json` ajoute la mise proportionnelle (`bid_alpha`), le rejet OBI (`obi_reject_thresh`) et le stop-loss hebdomadaire (`weekly_stop_loss`) ; backtest comparé à l'original : PnL +85 %, MaxDD −28 %, Sharpe 3,28 vs 1,97
-- **Stratégie BTC cycle long terme** — trois configs prêtes pour la production : `strategies/longtermcyclestrategygridV1.json` (rebond 5 %/tranche 25 %, ×24,0, Calmar 0,54), `V2.json` (4 %/20 %, ×24,2, Calmar 0,54), `V3.json` (paliers de prudence relatifs au halving T1/T2, Calmar 0,75) ; backtest via `scripts/backtest_cycle_strategy.py` avec les options `--top-mm`, `--rebound`, `--drawback`, `--tranche`, `--prudence`, `--compare` ; analyse de cycles via `scripts/analyze_btc_cycles.py` et `scripts/analyze_cycle_volatility.py`
+- **Stratégie BTC cycle long terme** — trois configs prêtes pour la production : `strategies/longtermcyclestrategygridV1.json` (rebond 5 %/tranche 25 %, ×24,0, Calmar 0,54), `V2.json` (4 %/20 %, ×24,2, Calmar 0,54), `V3.json` (paliers de prudence relatifs au halving T1/T2, Calmar 0,75) ; backtest via `analysis/backtest_cycle_strategy.py` avec les options `--top-mm`, `--rebound`, `--drawback`, `--tranche`, `--prudence`, `--compare` ; analyse de cycles via `analysis/analyze_btc_cycles.py` et `analysis/analyze_cycle_volatility.py`
 - **Intervalle de marché configurable** — `market_tag_id` et `market_window_mins` dans le JSON de stratégie permettent de basculer entre les marchés BTC Hausse/Baisse 5 minutes et 15 minutes ; `strategies/polymarket_BTC15M_piste3.json` est livré prêt à l'emploi ; le log de démarrage confirme le tag actif et la fenêtre
 - **Vérification de compatibilité connecteur/stratégie** — `validate()` dans `bot/connectors/__init__.py` lève une `RuntimeError` au démarrage si le connecteur manque des méthodes requises par la stratégie choisie, en listant toutes les méthodes manquantes ; évite les erreurs silencieuses lors du changement de connecteur
 - **Mode simulation** — le flag `--simulate` isole tous les fichiers dans `~/tradinebotte-sim` par défaut, affiche les logs dans le terminal, et ne place aucun ordre réel ; définir `TRADINEBOTTE_DIR` avant le lancement pour utiliser un répertoire personnalisé — plusieurs bots peuvent ainsi tourner en parallèle sans conflit de répertoire
@@ -37,7 +37,7 @@ Bot de trading automatisé pour les marchés de prédiction [Polymarket](https:/
 - **Vérification de types mypy** — `mypy bot/ --ignore-missing-imports` retourne 0 erreur ; workflow CI exécuté à chaque push et pull request
 - **Script de test d'intégration** — `scripts/test_multibot_deploy.sh` automatise un test complet d'install propre et de bout en bout sur un ensemble configurable de comptes Linux de test : nettoyage, déploiement rsync, création du venv, lancement simultané des N bots en mode `--verbose` (stress-test du démarrage automatique du feed avec verrou sans race condition), monitoring par heartbeats toutes les 30s, analyse des logs (WebSocket, nombre de book updates, lignes d'erreur), teardown ; serveur, port, utilisateurs et mots de passe lus depuis `~/.tradinebotte-test.conf` (template : `scripts/test_multibot.conf.example`) ; `--skip-deploy` réutilise une install existante ; `--duration N` ajuste la fenêtre de test ; sort 0 en cas de succès total
 - **Audit de sécurité continu** — `pip-audit` s'exécute à chaque push et chaque semaine pour détecter les CVE dans les dépendances runtime (`aiohttp`, `websockets`, `web3`, `py-clob-client`) ; Dependabot ouvre des PRs automatiques quand de nouvelles versions sont disponibles
-- **Logging asynchrone + mesure de latence** — les écritures de logs ne bloquent jamais le event loop ; chaque trade émet une ligne `[LATENCY]` avec `signal_ms` (message WS → décision d'ordre) et `order_rtt_ms` (round-trip API CLOB) ; `scripts/latency.py` parse le log et affiche min/mean/p50/p90/p99/max pour chaque métrique ; un thread daemon `QueueListener` vide la queue de logs sur disque en arrière-plan ; ajouter `--no-log` pour supprimer entièrement le fichier log (la DB SQLite n'est pas affectée) pour un I/O disque minimal en production ; ajouter `--no-snapshots` pour ne pas écrire les snapshots de prix toutes les 5 s dans la DB (les trades continuent d'être enregistrés) — réduit la pression d'écriture sur les longues sessions ; ajouter `--snapshot-interval SECS` pour remplacer l'intervalle d'écriture des snapshots en secondes (défaut : 5 ; utiliser 1 pour le mode collecte de données) ; ajouter `--reset-db` pour sauvegarder `live.db` dans un fichier horodaté puis le supprimer avant le lancement, de sorte que le bot repart de zéro (capital et historique de trades) après confirmation interactive (sans effet si la DB est absente)
+- **Logging asynchrone + mesure de latence** — les écritures de logs ne bloquent jamais le event loop ; chaque trade émet une ligne `[LATENCY]` avec `signal_ms` (message WS → décision d'ordre) et `order_rtt_ms` (round-trip API CLOB) ; `analysis/latency.py` parse le log et affiche min/mean/p50/p90/p99/max pour chaque métrique ; un thread daemon `QueueListener` vide la queue de logs sur disque en arrière-plan ; ajouter `--no-log` pour supprimer entièrement le fichier log (la DB SQLite n'est pas affectée) pour un I/O disque minimal en production ; ajouter `--no-snapshots` pour ne pas écrire les snapshots de prix toutes les 5 s dans la DB (les trades continuent d'être enregistrés) — réduit la pression d'écriture sur les longues sessions ; ajouter `--snapshot-interval SECS` pour remplacer l'intervalle d'écriture des snapshots en secondes (défaut : 5 ; utiliser 1 pour le mode collecte de données) ; ajouter `--reset-db` pour sauvegarder `live.db` dans un fichier horodaté puis le supprimer avant le lancement, de sorte que le bot repart de zéro (capital et historique de trades) après confirmation interactive (sans effet si la DB est absente)
 - **Collecte de données** (premier compte de déploiement — mode simulation, snapshots à 1 seconde) :
   - Déployer et lancer le collecteur :
     `bash scripts/start_collector.sh`           # déploiement + lancement
@@ -187,37 +187,37 @@ Trois jeux de données de sessions réelles sont inclus dans `data/` :
 Lancer les trois en une commande avec `--all` (agrégat : 52 trades, 51 victoires, **98,1 % de taux de victoire**).
 
 ```bash
-python3 scripts/backtest.py                        # paramètres par défaut
-python3 scripts/backtest.py --threshold 0.95       # seuil personnalisé
-python3 scripts/backtest.py --detail               # tableau trade par trade
-python3 scripts/backtest.py --compare              # comparaison avec les trades réels
-python3 scripts/backtest.py --sweep                # recherche en grille (135 combinaisons)
-python3 scripts/backtest.py --sweep-all            # grille étendue (405 combos, toutes les BDs)
-python3 scripts/backtest.py --sweep-all --sort pnl # trier par pnl|ratio|wr
-python3 scripts/backtest.py --sweep-all --top 10   # top-10 configs uniques (dédupliqué)
-python3 scripts/backtest.py --db data/s1.db data/s2.db  # fichiers explicites
-python3 scripts/backtest.py --db data/*.db         # glob shell (capital indépendant par fichier)
-python3 scripts/backtest.py --all                  # scanne data/ + live.db si ≥ 100 snapshots
-TRADINEBOTTE_DIR=~/mybot python3 scripts/backtest.py # chemin de base de données personnalisé
+python3 analysis/backtest.py                        # paramètres par défaut
+python3 analysis/backtest.py --threshold 0.95       # seuil personnalisé
+python3 analysis/backtest.py --detail               # tableau trade par trade
+python3 analysis/backtest.py --compare              # comparaison avec les trades réels
+python3 analysis/backtest.py --sweep                # recherche en grille (135 combinaisons)
+python3 analysis/backtest.py --sweep-all            # grille étendue (405 combos, toutes les BDs)
+python3 analysis/backtest.py --sweep-all --sort pnl # trier par pnl|ratio|wr
+python3 analysis/backtest.py --sweep-all --top 10   # top-10 configs uniques (dédupliqué)
+python3 analysis/backtest.py --db data/s1.db data/s2.db  # fichiers explicites
+python3 analysis/backtest.py --db data/*.db         # glob shell (capital indépendant par fichier)
+python3 analysis/backtest.py --all                  # scanne data/ + live.db si ≥ 100 snapshots
+TRADINEBOTTE_DIR=~/mybot python3 analysis/backtest.py # chemin de base de données personnalisé
 ```
 
 ## Backtest grid trading
 
-Rejouer des données OHLCV BTC/USDT historiques contre une stratégie grid configurable. Modèle de remplissage : touche de prix sur l'intervalle `[low, high]` de la bougie. Nécessite des bases SQLite de bougies 1 minute dans `data/` — à télécharger avec `scripts/download_btc_history.py`.
+Rejouer des données OHLCV BTC/USDT historiques contre une stratégie grid configurable. Modèle de remplissage : touche de prix sur l'intervalle `[low, high]` de la bougie. Nécessite des bases SQLite de bougies 1 minute dans `data/` — à télécharger avec `analysis/download_btc_history.py`.
 
 ```bash
-python3 scripts/backtest_grid.py --all                           # grid statique, toutes les BDs
-python3 scripts/backtest_grid.py --all --trail bear              # trailing bear-adapté
-python3 scripts/backtest_grid.py --all --trail bull --compare    # trailing bull vs statique
-python3 scripts/backtest_grid.py --all --sweep --sort pnl        # balayage de paramètres
+python3 analysis/backtest_grid.py --all                           # grid statique, toutes les BDs
+python3 analysis/backtest_grid.py --all --trail bear              # trailing bear-adapté
+python3 analysis/backtest_grid.py --all --trail bull --compare    # trailing bull vs statique
+python3 analysis/backtest_grid.py --all --sweep --sort pnl        # balayage de paramètres
 ```
 
 Télécharger les données OHLCV historiques depuis Binance :
 
 ```bash
-python3 scripts/download_btc_history.py                                          # 90 derniers jours
-python3 scripts/download_btc_history.py --start 2022-05-01 --end 2022-08-01     # bear market
-python3 scripts/download_btc_history.py --start 2024-10-15 --end 2025-01-15     # bull run 2024
+python3 analysis/download_btc_history.py                                          # 90 derniers jours
+python3 analysis/download_btc_history.py --start 2022-05-01 --end 2022-08-01     # bear market
+python3 analysis/download_btc_history.py --start 2024-10-15 --end 2025-01-15     # bull run 2024
 ```
 
 Voir [`docs/AdaptedGridTrading.fr.md`](docs/AdaptedGridTrading.fr.md) pour la documentation complète des stratégies, les résultats de backtest et le guide de sélection.

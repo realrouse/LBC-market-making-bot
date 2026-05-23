@@ -13,7 +13,7 @@
 #
 #  Options:
 #    --lang EN|FR   language (default: interactive prompt)
-#    --with-tests   also copies tests/ and scripts/backtest.py
+#    --with-tests   also copies tests/ and analysis/backtest.py
 # ═══════════════════════════════════════════════════════════════════
 set -eo pipefail
 
@@ -115,13 +115,13 @@ done
 mkdir -p "$INSTALL_DIR/connectors"
 cp bot/connectors/__init__.py "$INSTALL_DIR/connectors/__init__.py"
 
-mkdir -p "$INSTALL_DIR/strategies"
-cp bot/strategies/__init__.py "$INSTALL_DIR/strategies/__init__.py"
-cp bot/strategies/grid.py     "$INSTALL_DIR/strategies/grid.py"
+mkdir -p "$INSTALL_DIR/strategy_engines" "$INSTALL_DIR/strategies"
+cp bot/strategy_engines/__init__.py "$INSTALL_DIR/strategy_engines/__init__.py"
+cp bot/strategy_engines/grid.py     "$INSTALL_DIR/strategy_engines/grid.py"
 _STRAT_SRC="$(cd strategies && pwd)"
 _STRAT_DST="$(cd "$INSTALL_DIR/strategies" && pwd)"
 if [ "$_STRAT_SRC" != "$_STRAT_DST" ]; then
-    cp strategies/*.json "$INSTALL_DIR/strategies/"
+    cp -r strategies/. "$INSTALL_DIR/strategies/"
 fi
 
 # ── Python virtual environment ────────────────────────────────────
@@ -147,18 +147,18 @@ chmod +x "$INSTALL_DIR/run.sh"
 # ── Syntax check ──────────────────────────────────────────────────
 echo "=== $(_t "Checking syntax" "Vérification syntaxe") ==="
 for _f in live_bot.py api_polymarket.py api_binance.py api_mexc.py bot_utils.py \
-          connectors/__init__.py strategies/__init__.py strategies/grid.py; do
+          connectors/__init__.py strategy_engines/__init__.py strategy_engines/grid.py; do
     _check_syntax "$INSTALL_DIR/$_f"
 done
 
 # ── Optional: tests ───────────────────────────────────────────────
 if [ "$WITH_TESTS" = "1" ]; then
     echo "=== $(_t "Copying test files" "Copie des fichiers de test") ==="
-    mkdir -p "$INSTALL_DIR/tests" "$INSTALL_DIR/scripts" "$INSTALL_DIR/data"
+    mkdir -p "$INSTALL_DIR/tests" "$INSTALL_DIR/analysis" "$INSTALL_DIR/scripts" "$INSTALL_DIR/data"
     if [ "$REPO_DIR" != "$INSTALL_DIR" ]; then
         cp tests/test_bot.py      "$INSTALL_DIR/tests/test_bot.py"
         cp tests/test_backtest.py "$INSTALL_DIR/tests/test_backtest.py"
-        cp scripts/backtest.py    "$INSTALL_DIR/scripts/backtest.py"
+        cp analysis/backtest.py    "$INSTALL_DIR/analysis/backtest.py"
         cp scripts/run_tests.sh   "$INSTALL_DIR/scripts/run_tests.sh"
         cp data/backtest_sample_btc5m_range_2026.db \
            "$INSTALL_DIR/data/backtest_sample_btc5m_range_2026.db"
@@ -186,5 +186,5 @@ echo "2. $(_t "Start the bot:" "Lancer le bot    :") ${_TD}bash \"$REPO_DIR/scri
 if [ "$WITH_TESTS" = "1" ]; then
     echo ""
     echo "$(_t "Tests   " "Tests   ") : cd \"$INSTALL_DIR\" && ${_TD}venv/bin/python3 -W ignore::ResourceWarning -m unittest discover tests/ -v"
-    echo "Backtest: cd \"$INSTALL_DIR\" && ${_TD}venv/bin/python3 \"$REPO_DIR/scripts/backtest.py\""
+    echo "Backtest: cd \"$INSTALL_DIR\" && ${_TD}venv/bin/python3 \"$REPO_DIR/analysis/backtest.py\""
 fi

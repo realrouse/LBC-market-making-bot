@@ -256,7 +256,7 @@ bash scripts/install.sh [install_dir] [--lang EN|FR] [--with-tests]
 **Options:**
 - `--lang EN|FR` — Set language non-interactively (useful for CI or automated deploys).
   Without this flag the script prompts at startup as before.
-- `--with-tests` — Also copy `tests/`, `scripts/backtest.py`, and
+- `--with-tests` — Also copy `tests/`, `analysis/backtest.py`, and
   `data/backtest_sample_btc5m_range_2026.db`, then run the
   full test suite (868 tests) immediately after installation.
   The backtest uses `live.db` only if it contains ≥ 100 snapshots;
@@ -464,9 +464,9 @@ crashed process are cleaned automatically on the next start.
 Each trade emits one `[LATENCY]` line in `live.log`. Run the analysis tool after a trading session:
 
 ```bash
-python3 scripts/latency.py                           # default path
-python3 scripts/latency.py ~/tradinebotte/live.log   # explicit path
-TRADINEBOTTE_DIR=~/tradinebotte python3 scripts/latency.py
+python3 analysis/latency.py                           # default path
+python3 analysis/latency.py ~/tradinebotte/live.log   # explicit path
+TRADINEBOTTE_DIR=~/tradinebotte python3 analysis/latency.py
 ```
 
 Example output:
@@ -493,24 +493,24 @@ Run the backtest engine to replay recorded snapshots against any parameter set:
 
 ```bash
 # Single file (default: live.db, or bundled sample if live.db has < 100 snapshots)
-python3 scripts/backtest.py
+python3 analysis/backtest.py
 
 # One or more explicit files (shell glob supported)
-python3 scripts/backtest.py --db ~/tradinebotte/live.db
-python3 scripts/backtest.py --db data/session1.db data/session2.db
-python3 scripts/backtest.py --db data/*.db
+python3 analysis/backtest.py --db ~/tradinebotte/live.db
+python3 analysis/backtest.py --db data/session1.db data/session2.db
+python3 analysis/backtest.py --db data/*.db
 
 # Scan data/ automatically (includes live.db if it has ≥ 100 snapshots)
-python3 scripts/backtest.py --all
+python3 analysis/backtest.py --all
 
 # Grid search across 135 threshold/stake combinations
-python3 scripts/backtest.py --sweep
-python3 scripts/backtest.py --all --sweep
+python3 analysis/backtest.py --sweep
+python3 analysis/backtest.py --all --sweep
 
 # Extended grid search (405 combos) across all DBs — strategy optimisation
-python3 scripts/backtest.py --sweep-all
-python3 scripts/backtest.py --sweep-all --sort pnl   # sort by pnl|ratio|wr
-python3 scripts/backtest.py --sweep-all --top 10     # top-10 unique configs (deduped)
+python3 analysis/backtest.py --sweep-all
+python3 analysis/backtest.py --sweep-all --sort pnl   # sort by pnl|ratio|wr
+python3 analysis/backtest.py --sweep-all --top 10     # top-10 unique configs (deduped)
 ```
 
 When more than one file is processed, each file runs with capital reset to `capital_start` (independent simulation), and an AGGREGATE block summarises combined wins, losses, PnL, win rate, and worst drawdown across all files.
@@ -641,28 +641,28 @@ Ready-to-use config files in `strategies/`:
 
 ## Grid Trading Backtest
 
-Replay historical BTC/USDT OHLCV data against a configurable grid strategy. Fill model: price-touch on the candle `[low, high]` range. Requires 1-minute SQLite databases in `data/` — download with `scripts/download_btc_history.py`.
+Replay historical BTC/USDT OHLCV data against a configurable grid strategy. Fill model: price-touch on the candle `[low, high]` range. Requires 1-minute SQLite databases in `data/` — download with `analysis/download_btc_history.py`.
 
 ```bash
 # Static grid (default) — all DBs in data/
-python3 scripts/backtest_grid.py --all
+python3 analysis/backtest_grid.py --all
 
 # Bear-adapted trailing — re-center grid downward on each exit_low
-python3 scripts/backtest_grid.py --all --trail bear
+python3 analysis/backtest_grid.py --all --trail bear
 
 # Bull-adapted trailing — re-center grid upward on each exit_high
-python3 scripts/backtest_grid.py --all --trail bull
+python3 analysis/backtest_grid.py --all --trail bull
 
 # Side-by-side comparison: static vs trailing
-python3 scripts/backtest_grid.py --all --trail bear --compare
-python3 scripts/backtest_grid.py --all --trail bull --compare
+python3 analysis/backtest_grid.py --all --trail bear --compare
+python3 analysis/backtest_grid.py --all --trail bull --compare
 
 # Parameter sweep (range × levels combos)
-python3 scripts/backtest_grid.py --all --sweep
-python3 scripts/backtest_grid.py --all --sweep --sort pnl
+python3 analysis/backtest_grid.py --all --sweep
+python3 analysis/backtest_grid.py --all --sweep --sort pnl
 
 # Explicit DB file
-python3 scripts/backtest_grid.py data/BTCUSDT_1m90d_range_20260208-20260509.db
+python3 analysis/backtest_grid.py data/BTCUSDT_1m90d_range_20260208-20260509.db
 ```
 
 **Parameter flags:**
@@ -684,16 +684,16 @@ python3 scripts/backtest_grid.py data/BTCUSDT_1m90d_range_20260208-20260509.db
 
 ```bash
 # Last 90 days (default)
-python3 scripts/download_btc_history.py
+python3 analysis/download_btc_history.py
 
 # Historical range — 2022 bear market (LUNA crash)
-python3 scripts/download_btc_history.py --start 2022-05-01 --end 2022-08-01
+python3 analysis/download_btc_history.py --start 2022-05-01 --end 2022-08-01
 
 # Historical range — 2024 bull run
-python3 scripts/download_btc_history.py --start 2024-10-15 --end 2025-01-15
+python3 analysis/download_btc_history.py --start 2024-10-15 --end 2025-01-15
 
 # Custom output path
-python3 scripts/download_btc_history.py --out data/my_range.db
+python3 analysis/download_btc_history.py --out data/my_range.db
 ```
 
 **Flags:**
@@ -808,7 +808,7 @@ The backtest engine applies the same filter logic when replaying snapshots, so y
 
 ```bash
 # Edit hour_filter.enabled = true in the strategy JSON, then:
-python3 scripts/backtest.py --all
+python3 analysis/backtest.py --all
 ```
 
 Compare win rate and trade count with and without the filter to validate your chosen windows against your snapshot dataset.
@@ -1173,15 +1173,15 @@ scale. Binance/MEXC prices are absolute USDT values (e.g. 65000). Strategy thres
 Compare REST and WebSocket latency across all three exchanges:
 
 ```bash
-python3 scripts/benchmark_api.py             # 15 rounds, all exchanges
-python3 scripts/benchmark_api.py --rounds 30 # more samples
-python3 scripts/benchmark_api.py --no-ws     # REST only (faster)
+python3 analysis/benchmark_api.py             # 15 rounds, all exchanges
+python3 analysis/benchmark_api.py --rounds 30 # more samples
+python3 analysis/benchmark_api.py --no-ws     # REST only (faster)
 ```
 
 Results are saved to `latence_api.txt` if redirected:
 
 ```bash
-python3 scripts/benchmark_api.py 2>&1 | tee latence_api.txt
+python3 analysis/benchmark_api.py 2>&1 | tee latence_api.txt
 ```
 
 Reference latencies measured from a dedicated server in Amsterdam:

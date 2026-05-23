@@ -35,7 +35,7 @@ echo ""
 if ls "$PROJECT_DIR"/data/*.db >/dev/null 2>&1; then
     echo ""
     echo "=== Backtest multi-DB (data/*.db) ==="
-    "$PYTHON" scripts/backtest.py --all \
+    "$PYTHON" analysis/backtest.py --all \
         || { echo "⚠️  Backtest --all non-blocking — check manually"; true; }
 else
     echo ""
