@@ -6,6 +6,13 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.45] — 2026-05-23
+
+### Correctifs
+- **`scripts/deploy_scalping_claude4.sh`** — ajout de `--exclude='live_ob.db'` au rsync pour protéger explicitement la base de collecte OBI ; remplacement de la variable indéfinie `${STRATEGIES[*]}` (plantait le pre-flight avec `set -u`) par `$BOT_STRATEGY`
+
+---
+
 ## [0.44] — 2026-05-23
 
 ### Ajout
