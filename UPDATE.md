@@ -79,9 +79,10 @@ For deploying only the bot files (no full repo sync), use the dedicated script:
 bash scripts/update_standalone.sh
 ```
 
-This rsync-copies `bot/` contents flat to the install directory and `strategies/*.json`,
-then stops the running bot (via `live.pid`) and starts the new version in a single SSH
-session. Useful when working from a dev machine without pushing to git first.
+This rsync-copies `bot/` contents flat to the install directory, `strategies/*.json`, and
+`requirements.txt`, then runs `pip install -r requirements.txt` to update Python
+dependencies before stopping the running bot (via `live.pid`) and starting the new version
+in a single SSH session. Useful when working from a dev machine without pushing to git first.
 
 **Options:**
 - `--skip-restart` — rsync only, do not stop/start the bot

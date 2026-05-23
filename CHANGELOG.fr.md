@@ -6,6 +6,32 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.44] — 2026-05-23
+
+### Ajout
+- **`bot/orderbook_bot.py`** — nouveau bot de scalping OBI sur Binance : connexion aux streams WebSocket depth20 spot et perpétuel de Binance (100 ms), calcul de l'OBI sur les N meilleurs niveaux bid/ask avec lissage EMA, ouverture de paper trades (long spot, long ou short perp) quand l'OBI dépasse un seuil configurable pendant N snapshots consécutifs ; sortie sur inversion de l'OBI, TP/SL ou dépassement de la durée maximale ; snapshots et trades enregistrés dans `live_ob.db`
+- **`strategies/orderbook_btc.json`** — configuration initiale du bot de scalping OBI : `entry_thresh=0.30`, `confirm_n=3`, `tp=0.5%`, `sl=0.3%`, 10 niveaux OBI, mode spot + perp
+- **`bot/scalping_math.py`** — helpers mathématiques extraits (ATR, bandes de Bollinger, VWAP, z-score de volume, maximum glissant) partagés entre `bot/scalping_bot.py` et `bot/indicators.py`
+- **`bot/scalping_bot.py`** — bot de scalping live Binance avec trois stratégies (`candle_momentum`, `meanrev`, `breakout`) ; docstring de paramètres complète couvrant les 27 clés de `DEFAULTS`
+- **`scripts/backtest_scalping.py`** — moteur de backtest pour les trois stratégies de scalping (`candle_momentum`, `meanrev`, `breakout`)
+- **`bot/bot_utils.py`** — ajout de `setup_bot_logger()` et `warn_if_external_bind()`
+- **`bot/indicators.py`** — ajout du ring-buffer `OHLCVSeries` (ATR, bandes de Bollinger, VWAP, z-score de volume, maximum glissant) ; imports des helpers partagés depuis `scalping_math`
+- **Scripts de mise à jour par compte** — deux scripts fins ciblant les deux premiers comptes de déploiement de test ; chacun accepte les mêmes options que `update_standalone.sh` et lui délègue l'exécution
+- **`.pylintrc`** — `zmq` et `py_clob_client` ajoutés à `ignored-modules`
+
+### Correction
+- **`scripts/test_multibot_deploy.sh`** — remplacement du `rsync --delete` sur le dépôt complet par un rsync `bot/` à plat + rsync `strategies/` séparé + `requirements.txt` ; l'ancien flag `--delete` effaçait `live_bot.py` sur les comptes autonomes qui utilisent la structure d'installation à plat
+- **`scripts/install.sh`** — `run.sh` délègue désormais à `start_bot.sh` via `exec` au lieu de lancer `live_bot.py` directement ; le lancement direct contournait le fichier PID, permettant des instances dupliquées silencieuses qui corrompaient `live.db`
+- **`scripts/update_standalone.sh`** — ajout du rsync de `requirements.txt` et de `pip install -r requirements.txt` avant le redémarrage ; les dépendances n'étaient jamais mises à jour lors des déploiements de code uniquement
+- **`scripts/start_bot.sh`** — préfère `.venv` à `venv` ; préfère `bot/live_bot.py` à un `live_bot.py` à plat
+- **Déploiement scalping OBI** — remplacement des trois bots de scalping OHLCV défaillants (`candle_momentum`, `meanrev`, `breakout`, tous <20 % de taux de victoire sur tous les régimes de marché) par une instance unique de `orderbook_bot.py` ; l'ancien script de déploiement est remplacé
+
+### Tests
+- **`tests/test_indicators.py`** — seuil du pic z-score corrigé de 5,0 à 4,3 (limite mathématique √(n−1) = √19 ≈ 4,36 avec n=20)
+- **`tests/test_scalping_bot.py`** — cible du patch modifiée de `logging.getLogger` à `setup_bot_logger`
+
+---
+
 ## [Unreleased] - 2026-05-22
 
 ### Ajout
