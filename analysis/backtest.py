@@ -13,14 +13,14 @@ Database resolution when no --db / --all flag is given (first match wins):
     3. data/backtest_sample_btc5m_range_2026.db  (bundled sample dataset)
 
 Usage:
-    python3 scripts/backtest.py                              # default DB
-    python3 scripts/backtest.py --db ~/tradinebotte/live.db  # explicit file
-    python3 scripts/backtest.py --db data/session_a.db data/session_b.db
-    python3 scripts/backtest.py --db data/*.db               # shell glob
-    python3 scripts/backtest.py --all                        # all data/*.db + live.db
-    python3 scripts/backtest.py --all --threshold 0.95 --detail
-    python3 scripts/backtest.py --sweep                      # grid search
-    python3 scripts/backtest.py --db data/paper3.db --compare
+    python3 analysis/backtest.py                              # default DB
+    python3 analysis/backtest.py --db ~/tradinebotte/live.db  # explicit file
+    python3 analysis/backtest.py --db data/session_a.db data/session_b.db
+    python3 analysis/backtest.py --db data/*.db               # shell glob
+    python3 analysis/backtest.py --all                        # all data/*.db + live.db
+    python3 analysis/backtest.py --all --threshold 0.95 --detail
+    python3 analysis/backtest.py --sweep                      # grid search
+    python3 analysis/backtest.py --db data/paper3.db --compare
         → three-way table: backtest(user) | backtest(aligned to actual) | actual bot
 """
 
@@ -733,7 +733,7 @@ def print_comparison(
             if detected["min_secs"]:
                 parts.append(f"--min-secs {detected['min_secs']:.0f}")
             print("\n     For an exact comparison (aligned column):")
-            print(f"     python3 scripts/backtest.py --db <file> --compare {' '.join(parts)}")
+            print(f"     python3 analysis/backtest.py --db <file> --compare {' '.join(parts)}")
             print()
 
 
@@ -849,7 +849,7 @@ def print_recommendations(results: list, n: int = 5) -> None:
     if filtered:
         best_p, _ = sorted(filtered, key=lambda x: -_r(x))[0]
         print("\n  ★  BEST OVERALL CONFIG (PnL/DD ratio):")
-        print(f"     python3 scripts/backtest.py --threshold {best_p.signal_threshold}"
+        print(f"     python3 analysis/backtest.py --threshold {best_p.signal_threshold}"
               f" --min-secs {best_p.min_secs_remaining:.0f}"
               f" --min-ask {best_p.min_ask_vol:.0f}"
               f" --obi {best_p.obi_reject_thresh}"

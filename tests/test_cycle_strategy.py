@@ -1,5 +1,5 @@
 """
-Tests for scripts/backtest_cycle_strategy.py
+Tests for analysis/backtest_cycle_strategy.py
 
 Covers:
   - TestSMA                  : sma() helper (same as analyze_cycle_volatility)

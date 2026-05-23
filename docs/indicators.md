@@ -395,11 +395,11 @@ single-instance multi-stream setups.
 
 ```bash
 # 4h klines (account-a)
-TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_4h_bitcoin.json \
+TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators/indicators_4h_bitcoin.json \
   bash scripts/start_indicators.sh
 
 # Open interest (separate process, separate port)
-TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_oi_bitcoin.json \
+TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators/indicators_oi_bitcoin.json \
   bash scripts/start_indicators.sh
 ```
 
@@ -464,7 +464,7 @@ bash scripts/start_indicators.sh
 
 # Second independent stack — all ports shifted by +1000
 TRADINEBOTTE_PORT_BASE=6557 \
-TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators_4h_bitcoin.json \
+TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators/indicators_4h_bitcoin.json \
   bash scripts/start_indicators.sh
 ```
 
@@ -490,6 +490,6 @@ kline data — no new REST or WebSocket source needed.
 | File | Role |
 |---|---|
 | `bot/indicators.py` | Implementation: all sources, `PriceSeries`, config loader, ZMQ tasks |
-| `strategies/indicators_*.json` | Per-stream config files |
+| `strategies/indicators/indicators_*.json` | Per-stream config files |
 | `tests/test_indicators.py` | Unit and integration tests (117 tests) |
 | `docs/design.md` | ZeroMQ topology, message catalog, ZeroMQ vs MQTT analysis |

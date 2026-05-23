@@ -10,9 +10,9 @@ Calibration mode (--sweep):
     the best configuration. Results saved to volstop.txt.
 
 Usage:
-    python3 scripts/backtest_volfilter.py
-    python3 scripts/backtest_volfilter.py --db data/liveweek.db data/basicsunday.db
-    python3 scripts/backtest_volfilter.py --sweep [--db PATH]
+    python3 analysis/backtest_volfilter.py
+    python3 analysis/backtest_volfilter.py --db data/liveweek.db data/basicsunday.db
+    python3 analysis/backtest_volfilter.py --sweep [--db PATH]
 """
 import sqlite3, sys, os, math
 from collections import defaultdict

@@ -76,7 +76,7 @@ MARKET_REFRESH          = 30
 
 # ─── CONNECTOR / STRATEGY DEFAULTS ────────────────────────────────────────────
 CONNECTOR      = "polymarket"   # api_* module to use; see bot/connectors/
-STRATEGY_TYPE  = "threshold"    # "threshold" (built-in) or "grid" (bot/strategies/grid.py)
+STRATEGY_TYPE  = "threshold"    # "threshold" (built-in) or "grid" (bot/strategy_engines/grid.py)
 
 # Grid strategy defaults (ignored when strategy_type == "threshold")
 GRID_SYMBOL          = "BTCUSDT"

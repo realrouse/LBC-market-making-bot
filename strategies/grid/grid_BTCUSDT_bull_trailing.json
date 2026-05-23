@@ -11,7 +11,7 @@
         "comparison":       "bull run: static +$2 / trailing +$55 — 26x more profit",
         "calibrated_at":    "2026-05-09  BTC=$80,705"
     },
-    "_run_backtest": "python3 scripts/backtest_grid.py --all --trail bull --range 15 --levels 30 --compare",
+    "_run_backtest": "python3 analysis/backtest_grid.py --all --trail bull --range 15 --levels 30 --compare",
 
     "strategy_type": "grid",
     "connector":     "binance",

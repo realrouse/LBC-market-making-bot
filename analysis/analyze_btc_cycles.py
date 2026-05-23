@@ -10,8 +10,8 @@ Indicators
 
 Usage
 -----
-    python3 scripts/analyze_btc_cycles.py
-    python3 scripts/analyze_btc_cycles.py data/BTCUSDT3197d_20172026.db
+    python3 analysis/analyze_btc_cycles.py
+    python3 analysis/analyze_btc_cycles.py data/BTCUSDT3197d_20172026.db
 """
 
 import sqlite3

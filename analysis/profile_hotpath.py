@@ -5,7 +5,7 @@ Performance profile of the bot's critical path.
 Hot path (per WebSocket message):
   handle_book_update → check_signal → [check_resolution] → [save_snapshot]
 
-Usage: python3 scripts/profile_hotpath.py
+Usage: python3 analysis/profile_hotpath.py
 """
 import asyncio, cProfile, pstats, io, time, sys, os, timeit, shutil, glob
 

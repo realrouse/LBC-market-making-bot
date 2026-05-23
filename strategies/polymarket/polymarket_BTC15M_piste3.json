@@ -1,6 +1,6 @@
 {
     "_name": "Polymarket BTC 15M — Piste 3: bid scaling + capital cap + weekly stop + OBI",
-    "_description": "15-minute BTC Up/Down markets (tag_id=102467). Architecture mirrors polymarket_BTC5M_piste3: bid_alpha=2.0, capital cap=12%, weekly_stop=$60, obi_reject_thresh=-0.65. OBI threshold and all signal parameters are provisional — no 15M backtest data exists yet. Recalibrate with scripts/calibrate_obi.py once live 15M data is collected. The market_window_mins=16 ensures the bot subscribes to all active 15M markets throughout their full lifecycle, not only in the last 6 minutes.",
+    "_description": "15-minute BTC Up/Down markets (tag_id=102467). Architecture mirrors polymarket_BTC5M_piste3: bid_alpha=2.0, capital cap=12%, weekly_stop=$60, obi_reject_thresh=-0.65. OBI threshold and all signal parameters are provisional — no 15M backtest data exists yet. Recalibrate with analysis/calibrate_obi.py once live 15M data is collected. The market_window_mins=16 ensures the bot subscribes to all active 15M markets throughout their full lifecycle, not only in the last 6 minutes.",
 
     "strategy_type": "threshold",
     "connector":     "polymarket",

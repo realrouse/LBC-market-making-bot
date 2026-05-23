@@ -20,8 +20,8 @@
         "calibrated_at":   "2026-05-21  BTC≈$76,947",
         "current_regime":  "BULL (since 2021-05-19)"
     },
-    "_run_backtest": "python3 scripts/backtest_cycle_strategy.py --top-mm 2.4 --rebound 0.04 --drawback 0.04 --tranche 0.20",
-    "_run_indicators": "python3 scripts/analyze_btc_cycles.py data/BTCUSDT3197d_20172026.db",
+    "_run_backtest": "python3 analysis/backtest_cycle_strategy.py --top-mm 2.4 --rebound 0.04 --drawback 0.04 --tranche 0.20",
+    "_run_indicators": "python3 analysis/analyze_btc_cycles.py data/BTCUSDT3197d_20172026.db",
     "_vs_V1": "Identical top/bottom signals and regime logic. Only execution differs: rebound 4% vs 5%, drawback 4% vs 5%, tranche 20% vs 25%.",
 
     "strategy_type": "longtermcycle",

@@ -5,7 +5,7 @@ Performance comparison across three configurations:
   CASE 2 — mmap 256 MB  : snapshots enabled, SQLite mmap
   CASE 3 — no-snapshots : snapshots disabled (no SQLite I/O)
 
-Usage: python3 scripts/profile_compare.py
+Usage: python3 analysis/profile_compare.py
 """
 import asyncio, time, timeit, sys, os, shutil, glob, sqlite3
 

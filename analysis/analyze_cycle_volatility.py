@@ -17,8 +17,8 @@ Built by  : python3 scripts/download_btc_daily_extended.py
 
 Usage
 -----
-    python3 scripts/analyze_cycle_volatility.py
-    python3 scripts/analyze_cycle_volatility.py data/BTCUSD_daily_extended.db
+    python3 analysis/analyze_cycle_volatility.py
+    python3 analysis/analyze_cycle_volatility.py data/BTCUSD_daily_extended.db
 """
 
 import sqlite3

@@ -26,10 +26,10 @@ Trade execution
 
 Usage
 -----
-    python3 scripts/backtest_cycle_strategy.py
-    python3 scripts/backtest_cycle_strategy.py data/BTCUSDT3197d_20172026.db
-    python3 scripts/backtest_cycle_strategy.py --capital 10000 --rebound 0.05 --drawback 0.05
-    python3 scripts/backtest_cycle_strategy.py --min-bull 180 --min-bear 60
+    python3 analysis/backtest_cycle_strategy.py
+    python3 analysis/backtest_cycle_strategy.py data/BTCUSDT3197d_20172026.db
+    python3 analysis/backtest_cycle_strategy.py --capital 10000 --rebound 0.05 --drawback 0.05
+    python3 analysis/backtest_cycle_strategy.py --min-bull 180 --min-bear 60
 """
 
 import argparse

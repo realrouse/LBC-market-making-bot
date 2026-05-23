@@ -22,7 +22,7 @@ Usage
     python3 bot/orderbook_bot.py                               # paper, both streams
     python3 bot/orderbook_bot.py --spot-only
     python3 bot/orderbook_bot.py --perp-only
-    python3 bot/orderbook_bot.py --strategy strategies/orderbook_btc.json
+    python3 bot/orderbook_bot.py --strategy strategies/scalping/orderbook_btc.json
     python3 bot/orderbook_bot.py --dir ~/tradinebotte
 """
 

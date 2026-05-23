@@ -1,5 +1,5 @@
 """
-Tests for scripts/backtest.py
+Tests for analysis/backtest.py
 
 Builds synthetic snapshot rows in memory to exercise the replay engine
 without requiring a real live.db.

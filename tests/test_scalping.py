@@ -1,5 +1,5 @@
 """
-Tests for scripts/backtest_scalping.py
+Tests for analysis/backtest_scalping.py
 
 Covers:
   TestIndicators        — sma, ema, atr_series, bollinger, vwap_rolling, vol_zscore

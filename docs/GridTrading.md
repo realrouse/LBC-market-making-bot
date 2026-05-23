@@ -194,11 +194,11 @@ Sur Binance ou MEXC, créer une clé API avec les permissions :
 
 ### 2. Créer le fichier de stratégie
 
-Copier `strategies/grid_BTCUSDT.json` et ajuster les bornes selon le prix
+Copier `strategies/grid/grid_BTCUSDT.json` et ajuster les bornes selon le prix
 actuel de BTC et la volatilité attendue :
 
 ```bash
-cp strategies/grid_BTCUSDT.json strategies/grid_BTCUSDT_live.json
+cp strategies/grid/grid_BTCUSDT.json strategies/grid/grid_BTCUSDT_live.json
 # éditer grid_lower, grid_upper, grid_levels, grid_order_size_usdt
 ```
 
@@ -213,7 +213,7 @@ Règle empirique pour le calibrage :
 
 ```json
 {
-    "strategy": "/chemin/vers/strategies/grid_BTCUSDT_live.json"
+    "strategy": "/chemin/vers/strategies/grid/grid_BTCUSDT_live.json"
 }
 ```
 
@@ -320,11 +320,11 @@ Pour brancher un exchange autre que Binance ou MEXC :
 
 | Fichier | Rôle |
 |---|---|
-| `bot/strategies/grid.py` | Implémentation `GridStrategy` |
-| `bot/strategies/__init__.py` | Factory de stratégies |
-| `bot/strategies/base.py` | Protocole `Strategy` (interface) |
+| `bot/strategy_engines/grid.py` | Implémentation `GridStrategy` |
+| `bot/strategy_engines/__init__.py` | Factory de stratégies |
+| `bot/strategy_engines/base.py` | Protocole `Strategy` (interface) |
 | `bot/connectors/__init__.py` | Factory de connecteurs |
 | `bot/api_binance.py` | Connecteur Binance REST + WebSocket |
 | `bot/api_mexc.py` | Connecteur MEXC REST + WebSocket |
 | `bot/live_bot.py` | Orchestrateur — `_load_connector()`, routage |
-| `strategies/grid_BTCUSDT.json` | Config d'exemple BTC/USDT Binance |
+| `strategies/grid/grid_BTCUSDT.json` | Config d'exemple BTC/USDT Binance |

@@ -18,9 +18,9 @@ Reconnects automatically on WebSocket drop (exponential backoff 1 s → 60 s).
 
 Usage
 -----
-    python3 bot/scalping_bot.py --strategy strategies/scalping_candle_momentum.json
-    python3 bot/scalping_bot.py --strategy strategies/scalping_meanrev.json
-    python3 bot/scalping_bot.py --strategy strategies/scalping_breakout.json
+    python3 bot/scalping_bot.py --strategy strategies/scalping/scalping_candle_momentum.json
+    python3 bot/scalping_bot.py --strategy strategies/scalping/scalping_meanrev.json
+    python3 bot/scalping_bot.py --strategy strategies/scalping/scalping_breakout.json
 
 Parameters (strategy JSON keys)
 --------------------------------
@@ -517,7 +517,7 @@ class ScalpingBot:
 def main() -> None:
     ap = argparse.ArgumentParser(description="Binance 1m scalping bot")
     ap.add_argument("--strategy", required=True, metavar="JSON",
-                    help="Strategy config JSON (e.g. strategies/scalping_meanrev.json)")
+                    help="Strategy config JSON (e.g. strategies/scalping/scalping_meanrev.json)")
     ap.add_argument("--dir", default=None,
                     help="Install dir for logs/DB/PID (default: ~/tradinebotte)")
     args = ap.parse_args()

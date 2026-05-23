@@ -21,8 +21,8 @@
         "current_regime":  "BULL (since 2021-05-19)",
         "prudence_rationale": "C3 peak Mayer Multiple was only 1.86 (vs 2.92 and 3.79). Pi Cycle Top never fired. C3 was frontrun: BTC made new ATH ($73K) BEFORE the Apr-2024 halving — unprecedented. If C4 repeats, all threshold-based top signals will be silent. The halving→top window (526d/548d/529d avg=534d) is the only reliable a priori signal remaining."
     },
-    "_run_backtest": "python3 scripts/backtest_cycle_strategy.py --top-mm 2.4 --rebound 0.04 --drawback 0.04 --tranche 0.20 --prudence",
-    "_run_comparison": "python3 scripts/backtest_cycle_strategy.py --compare",
+    "_run_backtest": "python3 analysis/backtest_cycle_strategy.py --top-mm 2.4 --rebound 0.04 --drawback 0.04 --tranche 0.20 --prudence",
+    "_run_comparison": "python3 analysis/backtest_cycle_strategy.py --compare",
     "_vs_V2": "Same regime detection. Same V2 execution in T0 (<400d post-halving). Adds progressive distribution near expected top: T1 800d→3% rebound/15% tranche/75% target, T2 >480d→2% rebound/10% tranche/50% target.",
 
     "strategy_type": "longtermcycle",

@@ -100,7 +100,7 @@ ne placeront pas d'ordres en double à la reconnexion).
 
 L'account bot est un **processus OS séparé**. Au démarrage, il définit `TRADINEBOTTE_DIR`
 puis importe `live_bot`, qui lit tous les paramètres de stratégie depuis
-`strategies/polymarket_BTC5M.json` de ce répertoire à l'import. Comme chaque processus
+`strategies/polymarket/polymarket_BTC5M.json` de ce répertoire à l'import. Comme chaque processus
 possède sa propre copie du module `live_bot`, **chaque account bot peut exécuter une
 stratégie totalement différente** — seuil différent, mise différente, filtre horaire
 différent, stop-loss différent — tout en partageant le même feed WebSocket brut.
@@ -238,7 +238,7 @@ Exemple avec indicators activés :
 
 ### Paramètres de stratégie — chaque account bot est indépendant
 
-Les paramètres de stratégie (`strategies/polymarket_BTC5M.json`) sont lus depuis
+Les paramètres de stratégie (`strategies/polymarket/polymarket_BTC5M.json`) sont lus depuis
 `TRADINEBOTTE_DIR/strategies/` par chaque account bot **au démarrage du processus**.
 Comme chaque `account_bot.py` est un processus OS séparé avec sa propre copie du
 module `live_bot`, chaque account bot évalue les signaux indépendamment selon **ses
@@ -260,8 +260,8 @@ configuré pour cette stratégie :
 ```bash
 # Configurer un compte conservateur avec un seuil personnalisé
 mkdir -p ~/account-conservateur/strategies
-cp strategies/polymarket_BTC5M.json ~/account-conservateur/strategies/
-# Éditer ~/account-conservateur/strategies/polymarket_BTC5M.json :
+cp strategies/polymarket/polymarket_BTC5M.json ~/account-conservateur/strategies/
+# Éditer ~/account-conservateur/strategies/polymarket/polymarket_BTC5M.json :
 #   "signal_threshold": 0.98, "stake": 5, "daily_stop_loss": 15
 TRADINEBOTTE_DIR=~/account-conservateur python3 scripts/setup.py
 ```
@@ -634,7 +634,7 @@ a besoin au démarrage via la socket REP ; le service démarre les tâches corre
 dynamiquement.
 
 ```bash
-INDICATORS_CONFIG=~/tradinebotte/strategies/indicators_base.json \
+INDICATORS_CONFIG=~/tradinebotte/strategies/indicators/indicators_4h_bitcoin.json \
 bash scripts/install_indicators_service.sh
 
 # Suivre les commandes sudo affichées :

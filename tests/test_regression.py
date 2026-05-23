@@ -10,7 +10,7 @@ Regression tests — two concerns:
 2. Backtest ↔ bot live consistency (TestParamConsistency)
    The critical trading parameters are defined in two places:
      - bot/live_bot.py       (module-level constants)
-     - scripts/backtest.py   (Params dataclass defaults)
+     - analysis/backtest.py   (Params dataclass defaults)
    If they diverge, backtests no longer predict live performance.
    These tests enforce that both files always agree on every shared parameter.
 """
