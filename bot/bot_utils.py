@@ -10,7 +10,7 @@ config.json is loaded:
     ...
 """
 
-import base64, hashlib, html, logging, os, sqlite3
+import base64, hashlib, html, logging, logging.handlers, os, sqlite3, sys
 from datetime import datetime, timezone
 from typing import Any
 
@@ -21,6 +21,34 @@ except ImportError:
     _BCRYPT_AVAILABLE = False
 
 logger = logging.getLogger("live")
+
+
+def warn_if_external_bind(addr: str, name: str) -> None:
+    """Warn when a ZMQ socket is bound to a non-loopback address."""
+    if addr.startswith("tcp://") and "127.0.0.1" not in addr and "localhost" not in addr:
+        logging.warning(
+            "SECURITY: %s (%s) is bound to a non-loopback address — "
+            "ensure ZMQ CURVE auth is active before exposing to the network.",
+            name, addr,
+        )
+
+
+def setup_bot_logger(name: str, log_path: str) -> logging.Logger:
+    """Create a named logger with rotating file output and optional TTY console."""
+    log = logging.getLogger(name)
+    log.setLevel(logging.INFO)
+    log.propagate = False  # don't forward to root — prevents double-write via stdout redirect
+    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s",
+                            datefmt="%Y-%m-%d %H:%M:%S")
+    fh = logging.handlers.RotatingFileHandler(
+        log_path, maxBytes=10 * 1024 * 1024, backupCount=3)
+    fh.setFormatter(fmt)
+    log.addHandler(fh)
+    if sys.stdout.isatty():
+        ch = logging.StreamHandler(sys.stdout)
+        ch.setFormatter(fmt)
+        log.addHandler(ch)
+    return log
 
 
 def _today_ms_utc() -> int:

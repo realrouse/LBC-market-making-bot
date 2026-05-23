@@ -59,6 +59,11 @@ from typing import Any, NamedTuple
 
 import aiohttp, websockets, zmq, zmq.asyncio
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from bot_utils import warn_if_external_bind
+from scalping_math import (atr_last, bollinger_last, vwap_last,
+                            vol_zscore_last, rolling_max_last)
+
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────
 # TRADINEBOTTE_PORT_BASE shifts the entire default port layout uniformly.
 # Default layout (base=5557): feed=5557, indicators PUB=5559, indicators REP=5561.
@@ -67,14 +72,6 @@ import aiohttp, websockets, zmq, zmq.asyncio
 # Per-service env vars still override PORT_BASE when set explicitly.
 _PORT_BASE  = int(os.environ.get("TRADINEBOTTE_PORT_BASE", "5557"))
 _PORT_SHIFT = _PORT_BASE - 5557  # 0 when using defaults
-
-def _warn_if_external_bind(addr: str, name: str) -> None:
-    """Log a security warning if a ZMQ bind address is not loopback."""
-    if addr.startswith("tcp://") and "127.0.0.1" not in addr and "localhost" not in addr:
-        logging.getLogger("indicators").warning(
-            "SECURITY: %s (%s) is bound to a non-loopback address — "
-            "ensure ZMQ CURVE auth is active before exposing to the network.", name, addr
-        )
 
 _FEED_ADDR = os.environ.get("TRADINEBOTTE_FEED_ADDR",
                              f"tcp://127.0.0.1:{_PORT_BASE}")
@@ -208,9 +205,94 @@ class PriceSeries:
         return result
 
 
+# ─── OHLCV SERIES ────────────────────────────────────────────────────────────
+
+class OHLCVSeries:
+    """Ring-buffer OHLCV history for ATR / Bollinger / VWAP / vol-z / rolling-max.
+
+    Also supports all close-only indicators (RSI, SMA, EMA, volatility), so
+    binance_ws streams can request any combination without switching series types.
+
+    Bollinger Bands use a fixed k=2.0 (standard 2σ). Period is configurable.
+    """
+
+    _ABBREV: dict[str, str] = {
+        "rsi":             "rsi",
+        "sma":             "sma",
+        "ema":             "ema",
+        "volatility":      "vol",
+        "atr":             "atr",
+        "bollinger_upper": "bb_upper",
+        "bollinger_mid":   "bb_mid",
+        "bollinger_lower": "bb_lower",
+        "vwap":            "vwap",
+        "vol_zscore":      "vol_z",
+        "rolling_max":     "rmax",
+    }
+
+    def __init__(self, maxlen: int = 200) -> None:
+        self._highs:   deque[float] = deque(maxlen=maxlen)
+        self._lows:    deque[float] = deque(maxlen=maxlen)
+        self._closes:  deque[float] = deque(maxlen=maxlen)
+        self._volumes: deque[float] = deque(maxlen=maxlen)
+
+    def push(self, h: float, l: float, c: float, v: float) -> None:
+        """Append one OHLCV bar (open is unused — only H/L/C/V are needed)."""
+        self._highs.append(h)
+        self._lows.append(l)
+        self._closes.append(c)
+        self._volumes.append(v)
+
+    def __len__(self) -> int:
+        return len(self._closes)
+
+    def compute_indicators(self,
+                           specs: "list[IndicatorSpec]") -> "dict[str, float | None]":
+        """Compute every indicator in specs. Returns {key: value} dict."""
+        closes  = list(self._closes)
+        highs   = list(self._highs)
+        lows    = list(self._lows)
+        volumes = list(self._volumes)
+        result: dict[str, float | None] = {}
+        _bb: dict[int, tuple] = {}       # cache per period to avoid triple computation
+        for spec in specs:
+            key = f"{self._ABBREV[spec.type]}_{spec.period}"
+            if spec.type == "rsi":
+                result[key] = compute_rsi(closes, spec.period)
+            elif spec.type == "sma":
+                result[key] = compute_sma(closes, spec.period)
+            elif spec.type == "ema":
+                result[key] = compute_ema(closes, spec.period)
+            elif spec.type == "volatility":
+                result[key] = compute_volatility(closes, spec.period)
+            elif spec.type == "atr":
+                result[key] = atr_last(highs, lows, closes, spec.period)
+            elif spec.type in ("bollinger_upper", "bollinger_mid", "bollinger_lower"):
+                if spec.period not in _bb:
+                    _bb[spec.period] = bollinger_last(closes, spec.period, 2.0)
+                upper, mid, lower = _bb[spec.period]
+                if spec.type == "bollinger_upper":
+                    result[key] = upper
+                elif spec.type == "bollinger_mid":
+                    result[key] = mid
+                else:
+                    result[key] = lower
+            elif spec.type == "vwap":
+                result[key] = vwap_last(closes, volumes, spec.period)
+            elif spec.type == "vol_zscore":
+                result[key] = vol_zscore_last(volumes, spec.period)
+            elif spec.type == "rolling_max":
+                result[key] = rolling_max_last(highs, spec.period)
+        return result
+
+
 # ─── CONFIG TYPES ────────────────────────────────────────────────────────────
 
-_VALID_INDICATOR_TYPES      = frozenset({"rsi", "sma", "ema", "volatility"})
+_OHLCV_INDICATOR_TYPES      = frozenset({
+    "atr", "bollinger_upper", "bollinger_mid", "bollinger_lower",
+    "vwap", "vol_zscore", "rolling_max",
+})
+_VALID_INDICATOR_TYPES      = frozenset({"rsi", "sma", "ema", "volatility"}) | _OHLCV_INDICATOR_TYPES
 _VALID_SOURCES              = frozenset({
     "feed", "binance_ws", "binance_funding", "deribit_iv", "fear_greed",
     "binance_oi", "binance_ls_ratio", "binance_liquidations",
@@ -275,6 +357,13 @@ class StreamSpec:
             raise ValueError(
                 f"Stream {d.get('id')!r}: at least one indicator required"
             )
+        if source == "feed":
+            ohlcv_reqs = [i.type for i in indicators if i.type in _OHLCV_INDICATOR_TYPES]
+            if ohlcv_reqs:
+                raise ValueError(
+                    f"Stream {d.get('id')!r}: {ohlcv_reqs} require binance_ws source "
+                    f"(feed only provides best_bid — no H/L/V data)"
+                )
         return cls(
             id=str(d.get("id", "")),
             asset=str(d.get("asset", "")),
@@ -397,6 +486,27 @@ async def _seed_series(symbol: str, timeframe: str,
                        symbol, timeframe, exc)
 
 
+async def _seed_ohlcv_series(symbol: str, timeframe: str,
+                              n: int, series: OHLCVSeries) -> None:
+    """Seed OHLCVSeries with the last n closed candles (H/L/C/V) from Binance REST."""
+    params = {"symbol": symbol.upper(), "interval": timeframe, "limit": n + 1}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                _BINANCE_REST_URL, params=params,
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as resp:
+                data = await resp.json(content_type=None)
+        for candle in data[:-1]:          # skip last (still open)
+            series.push(float(candle[2]), float(candle[3]),
+                        float(candle[4]), float(candle[5]))
+        logger.info("[seed] %s/%s: %d closed OHLCV candles loaded",
+                    symbol, timeframe, len(data) - 1)
+    except Exception as exc:              # pylint: disable=broad-except
+        logger.warning("[seed] %s/%s: REST seed failed (%s) — continuing without history",
+                       symbol, timeframe, exc)
+
+
 def _publish(pub: zmq.asyncio.Socket, out: dict[str, Any]) -> None:
     """Send one enriched indicator message on the PUB socket (non-blocking)."""
     pub.send_json(out, zmq.NOBLOCK)
@@ -412,9 +522,14 @@ def _publish(pub: zmq.asyncio.Socket, out: dict[str, Any]) -> None:
 
 async def _binance_kline_task(spec: StreamSpec, pub: zmq.asyncio.Socket,
                               min_ticks: int) -> None:
-    """Stream live klines from Binance WebSocket for spec.asset/spec.timeframe."""
-    series = PriceSeries()
-    await _seed_series(spec.asset, spec.timeframe, spec.seed_periods, series)
+    """Stream live klines from Binance WebSocket for spec.asset/spec.timeframe.
+
+    Uses OHLCVSeries so both close-only (RSI/SMA/EMA/vol) and OHLCV-based
+    (ATR/Bollinger/VWAP/vol_zscore/rolling_max) indicators can be requested
+    on the same stream without switching series types.
+    """
+    series = OHLCVSeries()
+    await _seed_ohlcv_series(spec.asset, spec.timeframe, spec.seed_periods, series)
 
     ws_url  = f"{_BINANCE_WS_BASE}/{spec.asset.lower()}@kline_{spec.timeframe}"
     backoff = 5
@@ -427,11 +542,12 @@ async def _binance_kline_task(spec: StreamSpec, pub: zmq.asyncio.Socket,
                 logger.info("[%s] connected → %s", spec.id, ws_url)
                 backoff = 5
                 async for raw in ws:
-                    msg  = json.loads(raw)
+                    msg   = json.loads(raw)
                     kline = msg.get("k", {})
                     if not kline.get("x"):    # only on closed candles
                         continue
-                    series.push(float(kline["c"]))
+                    series.push(float(kline["h"]), float(kline["l"]),
+                                float(kline["c"]), float(kline["v"]))
                     if len(series) < min_ticks:
                         continue
                     ind = series.compute_indicators(spec.indicators)
@@ -816,8 +932,8 @@ async def run(feed_addr: str, ind_addr: str, reg_addr: str,
         actual_reg  = reg_addr
         actual_min  = min_ticks
 
-    _warn_if_external_bind(actual_out, "INDICATORS_ADDR")
-    _warn_if_external_bind(actual_reg, "INDICATORS_REG_ADDR")
+    warn_if_external_bind(actual_out, "INDICATORS_ADDR")
+    warn_if_external_bind(actual_reg, "INDICATORS_REG_ADDR")
     pub.bind(actual_out)
     logger.info("PUB bind → %s", actual_out)
 

@@ -82,6 +82,6 @@ disable=
     R0915,
 
 [TYPECHECK]
-# websockets is installed in the project venv but not in the system Python
-# that runs pylint; suppress the false-positive import-error it would raise.
-ignored-modules = websockets
+# These packages are installed in the project venv but not in the system Python
+# that runs pylint; suppress the false-positive import-error they would raise.
+ignored-modules = websockets,zmq,py_clob_client

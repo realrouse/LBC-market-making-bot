@@ -1,0 +1,22 @@
+{
+    "_name": "Scalping — Candle Momentum",
+    "_description": "Enters on strong directional 1m candles confirmed by above-average volume. This is a candle-momentum proxy, NOT real order-book depth (L2 OBI requires live WebSocket tick data unavailable in historical OHLCV). Long-only. Single position at a time.",
+    "_signal": "body_ratio = (close-open)/(high-low) ≥ 0.60 AND volume_z-score ≥ 1.0 AND candle_range ≥ 0.03% of price",
+    "_cost_model": "fee_rate 0.1%/side + slippage 0.05%/side = 0.31% round-trip; TP=0.6% provides ~0.29% net edge per winning trade",
+    "_run": "python3 scripts/backtest_scalping.py --strategy strategies/scalping_candle_momentum.json",
+
+    "strategy_type":       "candle_momentum",
+    "symbol":              "BTCUSDT",
+    "capital":             10000.0,
+    "fee_rate":            0.001,
+    "slippage_pct":        0.0005,
+    "stake_frac":          0.20,
+
+    "cm_body_ratio_thresh": 0.60,
+    "cm_vol_z_window":      20,
+    "cm_vol_z_thresh":      1.0,
+    "cm_min_range_pct":     0.0003,
+    "cm_take_profit_pct":   0.006,
+    "cm_stop_loss_pct":     0.003,
+    "cm_max_hold_minutes":  10
+}
