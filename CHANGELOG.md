@@ -6,6 +6,29 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.47] — 2026-05-24
+
+### Added
+- **`bot/strategy_engines/swing.py` — `SwingStrategy` swing trading engine**: places limit BUY orders at configurable support levels and SELL orders at resistance levels; EMA(200) 4h directional filter skips BUY entries when price is below the 200-period EMA; ATR(14) dynamic stop-loss with a configurable multiplier; RSI(14, 4h) overbought filter suppresses buys in overextended conditions; subscribes to the shared indicators service via ZMQ SUB; SQLite persistence with `restore_from_db()` so open positions survive restarts
+- **`strategies/swing/swing_BTCUSDT.json` — swing strategy config for BTC/USDT**: supports `[70000, 72500, 75000, 76000]`, resistances `[78000, 80000, 82500, 85000]`, $200/position, max 3 simultaneous positions, ATR SL multiplier 1.5
+- **`bot/connectors/__init__.py`** — swing strategy connector requirements registered
+- **`bot/strategy_engines/__init__.py`** — `SwingStrategy` registered under the `"swing"` strategy type
+- **`bot/live_bot.py` — `strategy_cfg` dict in `BotConfig`**: strategy engines can now read arbitrary JSON keys from the strategy file via `config.strategy_cfg`, removing the need to hard-code per-strategy config fields in `BotConfig`
+- **`strategies/indicators/indicators_all.json` — unified 9-stream indicator process**: PUB on port 5559, REP on port 5561; `btc_4h` stream extended with EMA(50), EMA(200), and ATR(14); `seed_periods` increased to 250 for reliable warm-up of long-window indicators
+- **`scripts/update_swing.sh` — swing account deploy script**: rsync + `config.json` write + restart + verify in a single SSH session, mirroring the pattern of `update_standalone.sh`
+
+### Changed
+- **`bot/indicators.py` — `binance_scalping` source**: combined Binance WebSocket stream (depth20 + aggTrade) that computes OBI, EMA, deceleration, `spread_bps`, `realized_vol_bps`, and TFI in real time; consumed by `orderbook_bot.py` v2.1 and by the swing strategy via the shared indicators service
+- **`scripts/test_multibot.conf.example`** — updated to cover an additional test account dedicated to swing strategy validation
+
+### Fixed
+- **`bot/orderbook_bot.py` v2.1 — OBI signal direction inverted**: the strategy is now SHORT-only; a bid-heavy order book is treated as spoofing pressure indicating a price fall; the LONG branch has been removed entirely
+- **`bot/orderbook_bot.py` v2.1 — `obi_exit` mechanism disabled**: premature exits at the worst price point have been eliminated; TP widened to 15 bps, SL to 8 bps, `max_hold` extended to 3 minutes
+- **`bot/orderbook_bot.py` v2.1 — limit-order simulation mode added**: simulated orders are identified by `sim_`-prefixed order IDs, enabling paper-trade validation without modifying the live order flow
+- **`bot/indicators.py` — Deribit DVOL endpoint corrected**: `get_volatility_index_data` was calling the wrong endpoint; fixed to use the correct Deribit API method
+
+---
+
 ## [0.46] — 2026-05-23
 
 ### Fixed

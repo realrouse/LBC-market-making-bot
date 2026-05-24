@@ -308,6 +308,10 @@ class BotConfig:
     grid_order_size_usdt: float = GRID_ORDER_SIZE_USDT
     grid_trail_mode:      str   = GRID_TRAIL_MODE
 
+    # Raw strategy JSON — available to all strategy engines that need
+    # params not explicitly declared above (e.g. SwingStrategy).
+    strategy_cfg:         dict  = field(default_factory=dict)
+
     def __post_init__(self) -> None:
         # Compute paths from TRADINEBOTTE_DIR when not explicitly provided.
         if not self.install_dir:
@@ -545,6 +549,7 @@ def make_config(simulate: bool = False, no_log: bool = False,
         grid_levels=grid_levels,
         grid_order_size_usdt=grid_order_size_usdt,
         grid_trail_mode=grid_trail_mode,
+        strategy_cfg=strat,
         stake_bid_alpha=stake_bid_alpha,
         stake_secs_ref=stake_secs_ref,
         stake_secs_alpha=stake_secs_alpha,
@@ -883,7 +888,7 @@ async def handle_book_update(state: BotState, parsed: dict[str, Any]) -> None:
     ts.last_update_ts = time.time()
     # Dispatch to the active strategy.
     # state.strategy is None for the built-in threshold strategy (default),
-    # or a GridStrategy instance when strategy_type == "grid".
+    # or a GridStrategy/SwingStrategy instance for "grid"/"swing".
     if state.strategy is not None:
         await state.strategy.on_book_update(state, ts, _t_ws=t_ws)
     else:

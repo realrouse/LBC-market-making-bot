@@ -611,7 +611,7 @@ Chaque compte déclare ses besoins dans `config.json` :
 
 `account_bot` se connecte à la socket REP au démarrage, envoie chaque entrée sous forme de requête `{"cmd":"subscribe", ...}` et journalise le `stream_id` attribué. Un délai d'expiration est journalisé comme avertissement — le bot continue de fonctionner sans indicateurs.
 
-Sources disponibles : `binance_ws`, `binance_funding`, `deribit_iv`, `fear_greed`, `feed`.
+Sources disponibles : `binance_ws`, `binance_scalping`, `binance_funding`, `deribit_iv`, `fear_greed`, `feed`.
 
 ### Service systemd (recommandé)
 
@@ -642,6 +642,7 @@ Fichiers de config prêts à l'emploi dans `strategies/` :
 
 | Fichier | Sources |
 |---|---|
+| `indicators_all.json` | Configuration unifiée 9 flux : bougies Binance 4h (EMA50, EMA200, ATR14), 1d, funding, DVOL Deribit, Fear & Greed, scalping (depth20 + aggTrade) |
 | `indicators_4h_bitcoin.json` | Bougies Binance BTC/USDT 4h |
 | `indicators_1d_bitcoin.json` | Bougies Binance BTC/USDT 1d |
 | `indicators_funding_bitcoin.json` | Taux de financement perpétuel Binance |

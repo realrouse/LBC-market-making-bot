@@ -15,10 +15,9 @@ TEST_PORT="22"
 
 # ─── Test accounts ─────────────────────────────────────────────────────────────
 # All arrays below must have the same length.
-# Three accounts are required: feed owner (user1), second bot (user2),
-# standalone (user3).
-TEST_USERS=(user1 user2 user3)
-TEST_PASSWORDS=(pass1 pass2 pass3)
+# Roles: user1=feed+bot, user2=bot, user3=grid standalone, user4=scalping, user5=swing
+TEST_USERS=(user1 user2 user3 user4 user5)
+TEST_PASSWORDS=(pass1 pass2 pass3 pass4 pass5)
 
 # ─── Role assignments (indices into TEST_USERS) ────────────────────────────────
 #
@@ -30,8 +29,14 @@ TEST_FEED_USER_IDX=0
 # Must include the feed owner index if that host also runs an account_bot.
 TEST_ACCOUNT_USER_IDXS=(0 1)
 
-# Standalone user: runs live_bot.py via start_bot.sh (test_standalone_deploy.sh).
+# Standalone user: runs live_bot.py in standalone mode (grid strategy, update_standalone.sh).
 TEST_STANDALONE_USER_IDX=2
+
+# Scalping user: runs scalping_bot.py (three concurrent strategies, update_scalping.sh).
+# TEST_SCALPING_USER_IDX=3
+
+# Swing user: runs live_bot.py with swing strategy (update_swing.sh).
+TEST_SWING_USER_IDX=4
 
 # ─── Feed address ──────────────────────────────────────────────────────────────
 # ZeroMQ PUB address where the feed service listens. All account bots on the

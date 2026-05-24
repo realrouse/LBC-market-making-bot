@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Binance OBI scalping bot — real-time L2 orderbook signal.
+Binance OBI scalping bot — real-time L2 orderbook signal (contrarian).
 
 Connects to Binance spot and/or perpetual WebSocket depth20 streams (100ms cadence).
 Computes OBI (Order Book Imbalance) from the top N bid/ask levels, smoothed with an
@@ -10,12 +10,16 @@ configurable threshold for a minimum number of consecutive snapshots.
 Signal
 ------
   OBI = (Σ bid_qty[:n] − Σ ask_qty[:n]) / (Σ bid_qty[:n] + Σ ask_qty[:n])
-  OBI ∈ [−1, +1]:  +1 = all depth on the bid (buy pressure)
-                   −1 = all depth on the ask (sell pressure)
+  OBI ∈ [−1, +1]:  +1 = all depth on the bid (bid-heavy)
+                   −1 = all depth on the ask (ask-heavy)
 
-  Long entry  : OBI_ema > +entry_thresh  for ≥ confirm_n consecutive snapshots
-  Short entry : OBI_ema < −entry_thresh  for ≥ confirm_n (perp only)
-  Exit        : OBI_ema crosses exit_thresh  OR  TP / SL / max-hold
+  Empirically, high bid depth (OBI > 0) precedes price drops as those bids are
+  consumed or cancelled — OBI is contrarian on Binance at sub-minute timeframes.
+
+  Short entry : OBI_ema > +entry_thresh  for ≥ confirm_n consecutive snapshots
+  Exit        : TP / SL / max-hold  (obi_exit disabled — exits too early before move)
+
+  When use_limit_orders=true: entry/exit at mid-price, maker_fee rates, zero slippage.
 
 Usage
 -----
@@ -85,6 +89,10 @@ DEFAULTS = {
     "fee_spot":           0.001,
     "fee_perp":           0.0005,
     "slippage":           0.0005,
+    # Limit-order simulation: entry/exit at mid, no slippage, maker fee rates
+    "use_limit_orders":   False,
+    "maker_fee_spot":     0.0002,
+    "maker_fee_perp":     0.0002,
     "snapshot_every_n":   10,
 }
 
@@ -193,10 +201,14 @@ def compute_obi(bids: list, asks: list, n: int) -> float:
 
 def _open_paper(state: StreamState, direction: str, mid: float,
                 ts_ms: int, db: sqlite3.Connection) -> None:
-    p        = state.p
-    slip     = p["slippage"]
-    fee_rate = p[f"fee_{state.mode}"]
-    entry_px = mid * (1 + slip) if direction == "long" else mid * (1 - slip)
+    p    = state.p
+    slip = p["slippage"]
+    if p.get("use_limit_orders"):
+        entry_px = mid
+        fee_rate = p[f"maker_fee_{state.mode}"]
+    else:
+        entry_px = mid * (1 + slip) if direction == "long" else mid * (1 - slip)
+        fee_rate = p[f"fee_{state.mode}"]
     stake    = state.capital * p["stake_frac"]
     qty      = stake / entry_px
     fee_entry = stake * fee_rate
@@ -236,17 +248,20 @@ def _close_paper(state: StreamState, mid: float, reason: str,
     pos = state.position
     if pos is None:
         return
-    p        = state.p
-    slip     = p["slippage"]
-    fee_rate = p[f"fee_{state.mode}"]
+    p    = state.p
+    slip = p["slippage"]
+    if p.get("use_limit_orders"):
+        fee_rate = p[f"maker_fee_{state.mode}"]
+        exit_px  = mid
+    else:
+        fee_rate = p[f"fee_{state.mode}"]
+        exit_px  = mid * (1 - slip) if pos.direction == "long" else mid * (1 + slip)
 
     if pos.direction == "long":
-        exit_px  = mid * (1 - slip)
         exit_val = pos.qty * exit_px
         fee_exit = exit_val * fee_rate
         pnl_net  = exit_val - fee_exit - pos.stake - pos.fee_entry
     else:
-        exit_px  = mid * (1 + slip)
         exit_val = pos.qty * exit_px
         fee_exit = exit_val * fee_rate
         pnl_net  = pos.stake - exit_val - fee_exit - pos.fee_entry
@@ -311,15 +326,16 @@ async def _handle_message(state: StreamState, db: sqlite3.Connection, raw: str) 
     if state.position is not None:
         pos = state.position
         reason = None
+        # Exit on TP / SL / max-hold only.
+        # obi_exit removed: data showed it exits positions at -2 bps adverse move,
+        # before price has time to move to TP — net loss after 4 bps fees.
         if pos.direction == "long":
-            if   mid >= pos.tp:                            reason = "tp"
-            elif mid <= pos.sl:                            reason = "sl"
-            elif state.obi_ema < p["obi_exit_thresh"]:    reason = "obi_exit"
+            if   mid >= pos.tp:                               reason = "tp"
+            elif mid <= pos.sl:                               reason = "sl"
             elif ts_ms - pos.entry_ts_ms >= pos.max_hold_ms: reason = "timeout"
         else:
-            if   mid <= pos.tp:                            reason = "tp"
-            elif mid >= pos.sl:                            reason = "sl"
-            elif state.obi_ema > -p["obi_exit_thresh"]:   reason = "obi_exit"
+            if   mid <= pos.tp:                               reason = "tp"
+            elif mid >= pos.sl:                               reason = "sl"
             elif ts_ms - pos.entry_ts_ms >= pos.max_hold_ms: reason = "timeout"
 
         if reason:
@@ -329,15 +345,10 @@ async def _handle_message(state: StreamState, db: sqlite3.Connection, raw: str) 
     # ── Entry signal ──────────────────────────────────────────────────────────
     entry_thresh = p["obi_entry_thresh"]
     confirm_n    = p["obi_confirm_n"]
-    can_short    = state.mode == "perp"
 
+    # Short-only: bid-heavy orderbook → spoofing → price falls → short.
+    # Long entries (ask-heavy) disabled: data showed -0.12/trade vs -0.04/trade for shorts.
     if state.obi_ema > entry_thresh:
-        if state.pending_dir == "long":
-            state.pending_count += 1
-        else:
-            state.pending_dir   = "long"
-            state.pending_count = 1
-    elif can_short and state.obi_ema < -entry_thresh:
         if state.pending_dir == "short":
             state.pending_count += 1
         else:

@@ -1,5 +1,5 @@
 [Unit]
-Description=tradinebotte — Unified indicator service (__LABEL__)
+Description=tradinebotte — Scalping microstructure indicator service (__LABEL__)
 Documentation=https://github.com/neofutur/tradinebotte/blob/main/docs/multi.md
 After=network-online.target
 Wants=network-online.target

@@ -601,7 +601,7 @@ Each account declares its needs in `config.json`:
 
 `account_bot` connects to the REP socket at startup, sends each entry as a `{"cmd":"subscribe", ...}` request, and logs the assigned `stream_id`. A timeout is logged as a warning — the bot continues running without indicators.
 
-Available sources: `binance_ws`, `binance_funding`, `deribit_iv`, `fear_greed`, `feed`.
+Available sources: `binance_ws`, `binance_scalping`, `binance_funding`, `deribit_iv`, `fear_greed`, `feed`.
 
 ### Systemd service (recommended)
 
@@ -632,6 +632,7 @@ Ready-to-use config files in `strategies/`:
 
 | File | Sources |
 |---|---|
+| `indicators_all.json` | 9-stream unified config: Binance 4h klines (EMA50, EMA200, ATR14), 1d klines, funding rate, Deribit DVOL, Fear & Greed, scalping (depth20 + aggTrade) |
 | `indicators_4h_bitcoin.json` | Binance BTC/USDT 4h klines |
 | `indicators_1d_bitcoin.json` | Binance BTC/USDT 1d klines |
 | `indicators_funding_bitcoin.json` | Binance perpetual funding rate |

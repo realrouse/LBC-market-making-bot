@@ -19,6 +19,10 @@ class Strategy(Protocol):
     GridStrategy       (bot/strategy_engines/grid.py)
         Multi-level grid on continuous CEX markets (Binance, MEXC).
         Activated when strategy_type is "grid" in the strategy JSON.
+
+    SwingStrategy      (bot/strategy_engines/swing.py)
+        Limit BUY at support levels, SELL at next resistance; optional RSI filter.
+        Activated when strategy_type is "swing" in the strategy JSON.
     """
 
     STRATEGY_TYPE: str

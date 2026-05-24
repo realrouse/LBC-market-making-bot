@@ -90,6 +90,18 @@ in a single SSH session. Useful when working from a dev machine without pushing 
 
 ---
 
+## Scenario 5 — Deploying the swing strategy account
+
+For the dedicated swing trading deployment account, use the swing-specific deploy script:
+
+```bash
+bash scripts/update_swing.sh
+```
+
+This script rsync-copies the swing strategy engine and config to the swing account's install directory, writes its `config.json`, restarts the bot via the PID file, and verifies that the process is running — all in a single SSH session. It mirrors the approach of `update_standalone.sh` but targets the swing account layout.
+
+---
+
 ## Option B — Multi-bot update
 
 Update the shared repo and restart. Account dirs (`~/account-a`, etc.) are not touched.

@@ -36,6 +36,12 @@ _STRATEGY_REQUIREMENTS: dict[str, list[str]] = {
         "make_user_stream_url",
         "parse_user_stream_msg",
     ],
+    "swing": [
+        "post_order",
+        "get_open_orders",
+        "cancel_order",
+        "compute_fee",
+    ],
 }
 
 
