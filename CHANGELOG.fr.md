@@ -6,6 +6,29 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.47] — 2026-05-24
+
+### Ajout
+- **`bot/strategy_engines/swing.py` — moteur de stratégie `SwingStrategy`** : place des ordres limit BUY sur des niveaux de support configurables et des ordres SELL sur des niveaux de résistance ; filtre directionnel EMA(200) 4h — les entrées BUY sont ignorées quand le prix est sous l'EMA 200 périodes ; stop-loss dynamique ATR(14) avec multiplicateur configurable ; filtre RSI(14, 4h) de surachat qui supprime les achats en zone tendue ; souscription au service d'indicateurs partagé via ZMQ SUB ; persistance SQLite avec `restore_from_db()` pour survivre aux redémarrages avec les positions ouvertes
+- **`strategies/swing/swing_BTCUSDT.json` — config swing BTC/USDT** : supports à `[70000, 72500, 75000, 76000]`, résistances à `[78000, 80000, 82500, 85000]`, 200 $/position, 3 positions simultanées maximum, multiplicateur ATR SL 1,5
+- **`bot/connectors/__init__.py`** — exigences du connecteur pour la stratégie swing enregistrées
+- **`bot/strategy_engines/__init__.py`** — `SwingStrategy` enregistrée sous le type de stratégie `"swing"`
+- **`bot/live_bot.py` — dictionnaire `strategy_cfg` dans `BotConfig`** : les moteurs de stratégie peuvent désormais lire des clés JSON arbitraires du fichier de stratégie via `config.strategy_cfg`, sans avoir à les ajouter comme champs fixes dans `BotConfig`
+- **`strategies/indicators/indicators_all.json` — processus d'indicateurs unifié en 9 flux** : PUB sur le port 5559, REP sur le port 5561 ; le flux `btc_4h` est étendu avec EMA(50), EMA(200) et ATR(14) ; `seed_periods` porté à 250 pour un échauffement fiable des indicateurs à longue fenêtre
+- **`scripts/update_swing.sh` — script de déploiement du compte swing** : rsync + écriture de `config.json` + redémarrage + vérification dans une seule session SSH, selon le même schéma que `update_standalone.sh`
+
+### Modifications
+- **`bot/indicators.py` — source `binance_scalping`** : flux WebSocket Binance combiné (depth20 + aggTrade) calculant OBI, EMA, décélération, `spread_bps`, `realized_vol_bps` et TFI en temps réel ; consommé par `orderbook_bot.py` v2.1 et par la stratégie swing via le service d'indicateurs partagé
+- **`scripts/test_multibot.conf.example`** — mis à jour pour couvrir un compte de test supplémentaire dédié à la validation de la stratégie swing
+
+### Correctifs
+- **`bot/orderbook_bot.py` v2.1 — direction du signal OBI inversée** : la stratégie est désormais SHORT uniquement ; un carnet d'ordres dominé par les bids est interprété comme du spoofing indiquant une baisse imminente des prix ; la branche LONG a été entièrement supprimée
+- **`bot/orderbook_bot.py` v2.1 — mécanisme `obi_exit` désactivé** : les sorties prématurées au pire point de prix ont été éliminées ; TP élargi à 15 bps, SL à 8 bps, `max_hold` porté à 3 minutes
+- **`bot/orderbook_bot.py` v2.1 — mode simulation d'ordres à cours limité** : les ordres simulés sont identifiés par des identifiants préfixés `sim_`, permettant une validation en paper trade sans modifier le flux des ordres réels
+- **`bot/indicators.py` — endpoint DVOL Deribit corrigé** : `get_volatility_index_data` appelait le mauvais endpoint ; corrigé pour utiliser la bonne méthode de l'API Deribit
+
+---
+
 ## [0.46] — 2026-05-23
 
 ### Correctifs

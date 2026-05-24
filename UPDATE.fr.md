@@ -87,6 +87,18 @@ Ce script copie en rsync le contenu de `bot/` à plat dans le répertoire d'inst
 
 ---
 
+## Scénario 5 — Déploiement du compte swing
+
+Pour le compte de déploiement dédié à la stratégie swing, utiliser le script de déploiement spécifique :
+
+```bash
+bash scripts/update_swing.sh
+```
+
+Ce script copie en rsync le moteur de stratégie swing et sa configuration vers le répertoire d'installation du compte swing, écrit son `config.json`, redémarre le bot via le fichier PID et vérifie que le processus tourne — le tout dans une seule session SSH. Il suit le même schéma que `update_standalone.sh`, mais cible la structure du compte swing.
+
+---
+
 ## Option B — Mise à jour multi-bot
 
 Mettre à jour le repo partagé et redémarrer. Les répertoires de comptes (`~/account-a`, etc.) ne sont pas touchés.
