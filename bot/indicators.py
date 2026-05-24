@@ -54,7 +54,7 @@ Usage:
 
 import argparse, asyncio, json, logging, math, os, sys, time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, NamedTuple
 
 import aiohttp, websockets, zmq, zmq.asyncio
@@ -79,13 +79,15 @@ _IND_ADDR  = os.environ.get("TRADINEBOTTE_INDICATORS_ADDR",
                              f"tcp://127.0.0.1:{_PORT_BASE + 2}")
 _REG_ADDR  = os.environ.get("TRADINEBOTTE_INDICATORS_REG_ADDR",
                              f"tcp://127.0.0.1:{_PORT_BASE + 4}")
-_BINANCE_REST_URL    = "https://api.binance.com/api/v3/klines"
-_BINANCE_WS_BASE     = "wss://stream.binance.com:9443/ws"
-_BINANCE_FUTURES_URL      = "https://fapi.binance.com/fapi/v1/premiumIndex"
+_BINANCE_REST_URL             = "https://api.binance.com/api/v3/klines"
+_BINANCE_WS_BASE              = "wss://stream.binance.com:9443/ws"
+_BINANCE_SPOT_COMBINED_WS     = "wss://stream.binance.com:9443/stream"
+_BINANCE_PERP_COMBINED_WS     = "wss://fstream.binance.com/stream"
+_BINANCE_FUTURES_URL          = "https://fapi.binance.com/fapi/v1/premiumIndex"
 _BINANCE_OI_HIST_URL      = "https://fapi.binance.com/futures/data/openInterestHist"
 _BINANCE_LS_RATIO_URL     = "https://fapi.binance.com/futures/data/topLongShortAccountRatio"
 _BINANCE_FORCE_ORDERS_URL = "https://fapi.binance.com/fapi/v1/forceOrders"
-_DERIBIT_DVOL_URL         = "https://www.deribit.com/api/v2/public/get_index_price"
+_DERIBIT_DVOL_URL         = "https://www.deribit.com/api/v2/public/get_volatility_index_data"
 _FEAR_GREED_URL           = "https://api.alternative.me/fng/"
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 
@@ -296,10 +298,12 @@ _VALID_INDICATOR_TYPES      = frozenset({"rsi", "sma", "ema", "volatility"}) | _
 _VALID_SOURCES              = frozenset({
     "feed", "binance_ws", "binance_funding", "deribit_iv", "fear_greed",
     "binance_oi", "binance_ls_ratio", "binance_liquidations",
+    "binance_scalping",
 })
 _SOURCES_WITHOUT_INDICATORS = frozenset({
     "binance_funding", "deribit_iv", "fear_greed",
     "binance_oi", "binance_ls_ratio", "binance_liquidations",
+    "binance_scalping",
 })
 _DEFAULT_POLL_INTERVALS: dict[str, int] = {
     "binance_funding":     900,    # 15 min
@@ -342,6 +346,7 @@ class StreamSpec:
     indicators:      list[IndicatorSpec]
     seed_periods:    int = 50       # REST candles to fetch at startup (binance_ws only)
     poll_interval_s: int = 0        # poll interval override; 0 = use source default
+    params:          dict[str, Any] = field(default_factory=dict)  # source-specific params
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "StreamSpec":
@@ -372,6 +377,7 @@ class StreamSpec:
             indicators=indicators,
             seed_periods=int(d.get("seed_periods", 50)),
             poll_interval_s=int(d.get("poll_interval_s", 0)),
+            params=dict(d.get("params", {})),
         )
 
 
@@ -459,6 +465,8 @@ def parse_subscribe_request(req: dict[str, Any]) -> tuple[str, StreamSpec]:
         spec_dict["seed_periods"] = int(req["seed_periods"])
     if "poll_interval_s" in req:
         spec_dict["poll_interval_s"] = int(req["poll_interval_s"])
+    if "params" in req:
+        spec_dict["params"] = dict(req["params"])
 
     spec = StreamSpec.from_dict(spec_dict)
     return stream_id, spec
@@ -637,22 +645,34 @@ async def _binance_funding_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> No
 
 
 async def _deribit_iv_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> None:
-    """Poll Deribit DVOL implied volatility index at the configured interval."""
-    interval   = spec.poll_interval_s or _DEFAULT_POLL_INTERVALS["deribit_iv"]
-    index_name = spec.asset.lower() if spec.asset else "dvol_btc"
+    """Poll Deribit DVOL implied volatility index at the configured interval.
+
+    Uses get_volatility_index_data (1h resolution, last closed bar).
+    asset field accepts "BTC", "ETH", "dvol_btc", "btc_dvol" — currency is extracted.
+    """
+    interval = spec.poll_interval_s or _DEFAULT_POLL_INTERVALS["deribit_iv"]
+    currency = spec.asset.upper().replace("DVOL_", "").replace("_DVOL", "") or "BTC"
     async with aiohttp.ClientSession() as session:
         while True:
             try:
+                now_ms = int(time.time() * 1000)
                 async with session.get(
                     _DERIBIT_DVOL_URL,
-                    params={"index_name": index_name},
+                    params={
+                        "currency":        currency,
+                        "resolution":      3600,
+                        "start_timestamp": now_ms - 7_200_000,
+                        "end_timestamp":   now_ms,
+                    },
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as resp:
                     data = await resp.json(content_type=None)
+                # data["result"]["data"] → [[ts, open, high, low, close], ...]
+                dvol = float(data["result"]["data"][-1][4])
                 _publish(pub, {
                     "t":         "indicators",
                     "stream_id": spec.id,
-                    "dvol":      float(data["result"]["index_price"]),
+                    "dvol":      dvol,
                     "ts":        int(time.time() * 1000),
                 })
             except Exception as exc:  # pylint: disable=broad-except
@@ -782,6 +802,146 @@ async def _binance_liquidations_task(spec: StreamSpec, pub: zmq.asyncio.Socket) 
             await asyncio.sleep(interval)
 
 
+async def _binance_scalping_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> None:
+    """Stream Binance combined depth20 + aggTrade for scalping microstructure indicators.
+
+    Publishes every publish_every_n depth updates:
+      obi          — raw order book imbalance (bid_vol - ask_vol) / total
+      obi_ema      — EMA-smoothed OBI (spoofing filter)
+      obi_decel    — first difference of obi_ema (OBI deceleration signal)
+      spread_bps   — best ask - best bid, in basis points
+      realized_vol_bps — rolling population std of log-returns, in bps
+      tfi          — trade flow imbalance: (buy_vol - sell_vol) / total_vol over tfi_window_s
+
+    Source params (configured in JSON "params" dict):
+      obi_levels      int   (10)    — book levels summed for OBI
+      obi_ema_alpha   float (0.05)  — EMA smoothing factor
+      tfi_window_s    float (60.0)  — TFI rolling window in seconds
+      vol_window_n    int   (200)   — mid-price samples for realized vol
+      publish_every_n int   (10)    — throttle: publish every N depth updates
+      market          str   ("spot") — "spot" or "perp"
+    """
+    p               = spec.params
+    obi_levels      = int(p.get("obi_levels", 10))
+    obi_ema_alpha   = float(p.get("obi_ema_alpha", 0.05))
+    tfi_window_s    = float(p.get("tfi_window_s", 60.0))
+    vol_window_n    = int(p.get("vol_window_n", 200))
+    publish_every_n = int(p.get("publish_every_n", 10))
+    market          = str(p.get("market", "spot")).lower()
+
+    symbol      = spec.asset.lower()
+    ws_base     = _BINANCE_PERP_COMBINED_WS if market == "perp" else _BINANCE_SPOT_COMBINED_WS
+    ws_url      = f"{ws_base}?streams={symbol}@depth20@100ms/{symbol}@aggTrade"
+
+    # Mutable state
+    obi_ema:      float | None = None
+    prev_obi_ema: float | None = None
+    mid_prices:   deque[float] = deque(maxlen=vol_window_n)
+    # (ts_ms, buy_vol, sell_vol) — trimmed by time window
+    trade_window: deque[tuple[float, float, float]] = deque()
+    depth_count   = 0
+    backoff       = 5
+
+    while True:
+        try:
+            async with websockets.connect(ws_url, ping_interval=20, ping_timeout=10) as ws:
+                logger.info("[%s] scalping WS connected → %s", spec.id, ws_url)
+                backoff = 5
+                async for raw in ws:
+                    msg         = json.loads(raw)
+                    stream_name = msg.get("stream", "")
+                    data        = msg.get("data", {})
+
+                    if "aggTrade" in stream_name:
+                        # m=True: buyer is maker → taker sold (sell trade)
+                        qty      = float(data.get("q", 0))
+                        ts_ms    = float(data.get("T", time.time() * 1000))
+                        buy_vol  = 0.0 if data.get("m") else qty
+                        sell_vol = qty if data.get("m") else 0.0
+                        trade_window.append((ts_ms, buy_vol, sell_vol))
+                        cutoff = ts_ms - tfi_window_s * 1000
+                        while trade_window and trade_window[0][0] < cutoff:
+                            trade_window.popleft()
+                        continue
+
+                    if "depth20" not in stream_name:
+                        continue
+
+                    bids = data.get("bids", [])
+                    asks = data.get("asks", [])
+                    if not bids or not asks:
+                        continue
+
+                    best_bid = float(bids[0][0])
+                    best_ask = float(asks[0][0])
+                    if best_bid <= 0 or best_ask <= 0:
+                        continue
+                    mid = (best_bid + best_ask) / 2.0
+
+                    # OBI
+                    bid_vol = sum(float(b[1]) for b in bids[:obi_levels])
+                    ask_vol = sum(float(a[1]) for a in asks[:obi_levels])
+                    total   = bid_vol + ask_vol
+                    obi_raw = (bid_vol - ask_vol) / total if total > 0 else 0.0
+
+                    # OBI EMA + deceleration
+                    if obi_ema is None:
+                        obi_ema = obi_raw
+                    prev_obi_ema = obi_ema
+                    obi_ema  = obi_ema_alpha * obi_raw + (1.0 - obi_ema_alpha) * obi_ema
+                    obi_decel = obi_ema - prev_obi_ema
+
+                    # Spread
+                    spread_bps = (best_ask - best_bid) / mid * 10000.0
+
+                    # Realized volatility (population std of log-returns, in bps)
+                    mid_prices.append(mid)
+                    realized_vol_bps: float | None = None
+                    if len(mid_prices) >= 2:
+                        mids     = list(mid_prices)
+                        log_rets = [
+                            math.log(mids[i] / mids[i - 1]) * 10000.0
+                            for i in range(1, len(mids))
+                            if mids[i - 1] > 0 and mids[i] > 0
+                        ]
+                        if len(log_rets) >= 2:
+                            mean     = sum(log_rets) / len(log_rets)
+                            variance = sum((r - mean) ** 2 for r in log_rets) / len(log_rets)
+                            realized_vol_bps = math.sqrt(variance)
+
+                    # TFI
+                    total_buy  = sum(t[1] for t in trade_window)
+                    total_sell = sum(t[2] for t in trade_window)
+                    total_flow = total_buy + total_sell
+                    tfi        = (total_buy - total_sell) / total_flow if total_flow > 0 else 0.0
+
+                    # Throttle
+                    depth_count += 1
+                    if depth_count % publish_every_n != 0:
+                        continue
+
+                    out: dict[str, Any] = {
+                        "t":           "indicators",
+                        "stream_id":   spec.id,
+                        "asset":       spec.asset,
+                        "obi":         obi_raw,
+                        "obi_ema":     obi_ema,
+                        "obi_decel":   obi_decel,
+                        "spread_bps":  spread_bps,
+                        "tfi":         tfi,
+                        "ts":          int(time.time() * 1000),
+                    }
+                    if realized_vol_bps is not None:
+                        out["realized_vol_bps"] = realized_vol_bps
+                    _publish(pub, out)
+
+        except Exception as exc:          # pylint: disable=broad-except
+            logger.warning("[%s] scalping WS error (%s) — reconnect in %ds",
+                           spec.id, exc, backoff)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60)
+
+
 # ─── DYNAMIC REGISTRATION ────────────────────────────────────────────────────
 
 async def _start_stream(
@@ -812,6 +972,8 @@ async def _start_stream(
         coro = _binance_ls_ratio_task(spec, pub)
     elif spec.source == "binance_liquidations":
         coro = _binance_liquidations_task(spec, pub)
+    elif spec.source == "binance_scalping":
+        coro = _binance_scalping_task(spec, pub)
     else:
         logger.error("[reg] cannot start stream %r: source %r is not dispatchable",
                      spec.id, spec.source)

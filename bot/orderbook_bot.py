@@ -17,8 +17,7 @@ Signal
   consumed or cancelled — OBI is contrarian on Binance at sub-minute timeframes.
 
   Short entry : OBI_ema > +entry_thresh  for ≥ confirm_n consecutive snapshots
-  Long entry  : OBI_ema < −entry_thresh  for ≥ confirm_n
-  Exit        : OBI_ema crosses exit_thresh  OR  TP / SL / max-hold
+  Exit        : TP / SL / max-hold  (obi_exit disabled — exits too early before move)
 
   When use_limit_orders=true: entry/exit at mid-price, maker_fee rates, zero slippage.
 
@@ -327,17 +326,16 @@ async def _handle_message(state: StreamState, db: sqlite3.Connection, raw: str) 
     if state.position is not None:
         pos = state.position
         reason = None
-        # Contrarian OBI: long entered on OBI < -thresh, short entered on OBI > +thresh.
-        # Exit when the triggering imbalance weakens back toward neutral.
+        # Exit on TP / SL / max-hold only.
+        # obi_exit removed: data showed it exits positions at -2 bps adverse move,
+        # before price has time to move to TP — net loss after 4 bps fees.
         if pos.direction == "long":
-            if   mid >= pos.tp:                             reason = "tp"
-            elif mid <= pos.sl:                             reason = "sl"
-            elif state.obi_ema > -p["obi_exit_thresh"]:    reason = "obi_exit"
+            if   mid >= pos.tp:                               reason = "tp"
+            elif mid <= pos.sl:                               reason = "sl"
             elif ts_ms - pos.entry_ts_ms >= pos.max_hold_ms: reason = "timeout"
         else:
-            if   mid <= pos.tp:                             reason = "tp"
-            elif mid >= pos.sl:                             reason = "sl"
-            elif state.obi_ema < p["obi_exit_thresh"]:     reason = "obi_exit"
+            if   mid <= pos.tp:                               reason = "tp"
+            elif mid >= pos.sl:                               reason = "sl"
             elif ts_ms - pos.entry_ts_ms >= pos.max_hold_ms: reason = "timeout"
 
         if reason:
@@ -348,19 +346,13 @@ async def _handle_message(state: StreamState, db: sqlite3.Connection, raw: str) 
     entry_thresh = p["obi_entry_thresh"]
     confirm_n    = p["obi_confirm_n"]
 
-    # Contrarian: bid-heavy orderbook → price falls → short; ask-heavy → price rises → long.
-    # Spot can short in paper-trading simulation.
+    # Short-only: bid-heavy orderbook → spoofing → price falls → short.
+    # Long entries (ask-heavy) disabled: data showed -0.12/trade vs -0.04/trade for shorts.
     if state.obi_ema > entry_thresh:
         if state.pending_dir == "short":
             state.pending_count += 1
         else:
             state.pending_dir   = "short"
-            state.pending_count = 1
-    elif state.obi_ema < -entry_thresh:
-        if state.pending_dir == "long":
-            state.pending_count += 1
-        else:
-            state.pending_dir   = "long"
             state.pending_count = 1
     else:
         state.pending_dir   = None

@@ -1,0 +1,36 @@
+{
+    "_comment": "Binance scalping microstructure indicators — OBI/TFI/spread/realized-vol for BTCUSDT",
+
+    "streams": [
+        {
+            "id":         "btc_scalping_spot",
+            "asset":      "BTCUSDT",
+            "source":     "binance_scalping",
+            "timeframe":  "tick",
+            "indicators": [],
+            "params": {
+                "market":          "spot",
+                "obi_levels":      10,
+                "obi_ema_alpha":   0.05,
+                "tfi_window_s":    60,
+                "vol_window_n":    200,
+                "publish_every_n": 10
+            }
+        },
+        {
+            "id":         "btc_scalping_perp",
+            "asset":      "BTCUSDT",
+            "source":     "binance_scalping",
+            "timeframe":  "tick",
+            "indicators": [],
+            "params": {
+                "market":          "perp",
+                "obi_levels":      10,
+                "obi_ema_alpha":   0.05,
+                "tfi_window_s":    60,
+                "vol_window_n":    200,
+                "publish_every_n": 10
+            }
+        }
+    ]
+}

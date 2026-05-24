@@ -1,0 +1,28 @@
+{
+    "_comment": "BTC swing strategy v1.1 — limit BUY at support, SELL at resistance, RSI+EMA200 filter, ATR SL",
+    "_version": "1.1",
+
+    "strategy_type":        "swing",
+    "connector":            "binance",
+    "symbol":               "BTCUSDT",
+
+    "support_levels":       [70000, 72500, 75000, 76000],
+    "resistance_levels":    [78000, 80000, 82500, 85000],
+
+    "order_size_usdt":      200.0,
+    "max_positions":        3,
+    "sl_pct":               0.02,
+    "tp_pct_fallback":      0.04,
+
+    "trend_filter_enabled":  true,
+    "rsi_buy_max":           52,
+    "rsi_stale_secs":        3600,
+
+    "ema200_filter_enabled": true,
+    "atr_sl_multiplier":     1.5,
+
+    "indicators_addr":      "tcp://127.0.0.1:5559",
+    "indicators_stream_id": "btc_4h",
+
+    "poll_interval":        2.0
+}
