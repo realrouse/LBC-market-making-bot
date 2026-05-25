@@ -422,10 +422,12 @@ async def _handle_message(state: StreamState, db: sqlite3.Connection,
 def _ws_url(mode: str, symbol: str) -> str:
     sym = symbol.lower()
     if mode == "spot":
-        base = "wss://stream.binance.com:9443/stream"
+        # Combined stream: depth20 + aggTrade both work for spot
+        return f"wss://stream.binance.com:9443/stream?streams={sym}@depth20@100ms/{sym}@aggTrade"
     else:
-        base = "wss://fstream.binance.com/stream"
-    return f"{base}?streams={sym}@depth20@100ms/{sym}@aggTrade"
+        # Futures: aggTrade WS silently delivers no data (geo-restriction);
+        # TFI is maintained via REST polling (_poll_tfi_rest task).
+        return f"wss://fstream.binance.com/ws/{sym}@depth20@100ms"
 
 
 async def _ws_loop(state: StreamState, db: sqlite3.Connection) -> None:
@@ -445,6 +447,50 @@ async def _ws_loop(state: StreamState, db: sqlite3.Connection) -> None:
                            state.mode, exc, backoff)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60)
+
+# ---------------------------------------------------------------------------
+# Perp TFI: REST polling fallback (Futures aggTrade WS unavailable)
+# ---------------------------------------------------------------------------
+
+def _fetch_rest_agg_trades(symbol: str, window_s: int) -> list:
+    """Synchronous REST call — must be run via run_in_executor."""
+    import urllib.request
+    now_ms  = int(time.time() * 1000)
+    start_ms = now_ms - window_s * 1000
+    url = (f"https://fapi.binance.com/fapi/v1/aggTrades"
+           f"?symbol={symbol}&startTime={start_ms}&endTime={now_ms}&limit=1000")
+    req = urllib.request.Request(url, headers={"User-Agent": "orderbook_bot/2.4"})
+    with urllib.request.urlopen(req, timeout=8) as r:
+        return json.loads(r.read())
+
+
+async def _poll_tfi_rest(state: StreamState) -> None:
+    """Maintain TFI for perp mode by polling Binance Futures REST aggTrades."""
+    sym      = state.p["symbol"]
+    window_s = state.p.get("tfi_window_s", 30)
+    poll_s   = max(5, window_s // 3)
+    loop     = asyncio.get_event_loop()
+    logger.info("[%s] TFI polling via REST every %ds (WS aggTrade unavailable)",
+                state.mode, poll_s)
+    while True:
+        await asyncio.sleep(poll_s)
+        try:
+            trades = await loop.run_in_executor(
+                None, _fetch_rest_agg_trades, sym, window_s)
+            buy_vol = 0.0
+            sell_vol = 0.0
+            for t in trades:
+                qty    = float(t.get("q", 0))
+                is_buy = not t.get("m", True)
+                if is_buy:
+                    buy_vol += qty
+                else:
+                    sell_vol += qty
+            state.tfi_buy_vol  = buy_vol
+            state.tfi_sell_vol = sell_vol
+        except Exception as exc:
+            logger.warning("[%s] TFI REST poll failed: %s", state.mode, exc)
+
 
 # ---------------------------------------------------------------------------
 # Stats display (every 60s)
@@ -484,6 +530,9 @@ async def _run(p: dict, db: sqlite3.Connection) -> None:
                 p.get("tfi_window_s", 30), tfi_mode)
 
     tasks = [asyncio.create_task(_ws_loop(st, db)) for st in states]
+    for st in states:
+        if st.mode != "spot":
+            tasks.append(asyncio.create_task(_poll_tfi_rest(st)))
     tasks.append(asyncio.create_task(_stats_loop(states)))
 
     try:
