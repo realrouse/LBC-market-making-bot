@@ -1,12 +1,14 @@
 {
-    "_comment": "BTC long-term accumulation v1.0 — OBI dip-buy + partial profit ladder (spot only)",
-    "_version": "1.0",
+    "_comment": "BTC long-term accumulation v1.1 — OBI dip-buy + adaptive profit ladder + adaptive rebuy",
+    "_version": "1.1",
 
     "symbol":               "BTCUSDT",
 
     "capital_usdt":         1000.0,
     "initial_stake_usdt":   200.0,
     "scale_in_usdt":        100.0,
+    "scale_in_dip_factor":  0.5,
+    "scale_in_max_mult":    3.0,
     "max_invested_pct":     0.90,
 
     "obi_levels":           10,
@@ -17,7 +19,10 @@
 
     "profit_bands_pct":     [0.5, 1.0, 2.0, 3.0, 5.0],
     "sell_fraction":        0.20,
-    "rebuy_discount_pct":   0.30,
+    "min_holdings_pct":     0.30,
+    "rebuy_discount_min_pct": 0.15,
+    "rebuy_discount_max_pct": 1.00,
+    "rebuy_spread_mult":    3.0,
 
     "fee_spot":             0.001,
     "maker_fee_spot":       0.0002,
