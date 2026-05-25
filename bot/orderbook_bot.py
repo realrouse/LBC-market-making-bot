@@ -100,7 +100,9 @@ DEFAULTS = {
     "snapshot_every_n":    10,
     # TFI parameters
     "tfi_window_s":        30,     # rolling window for trade flow
-    "tfi_confirm_thresh":  0.0,    # 0 = log only (no gating); >0 = require TFI < -thresh
+    "tfi_confirm_thresh":  0.0,    # 0 = log only; >0 gates entry by TFI direction
+    # Direction
+    "direction":           "long", # "long" | "short" | "both"
 }
 
 # ---------------------------------------------------------------------------
@@ -375,19 +377,36 @@ async def _handle_depth(state: StreamState, db: sqlite3.Connection,
     entry_thresh  = p["obi_entry_thresh"]
     confirm_n     = p["obi_confirm_n"]
     tfi_thresh    = p.get("tfi_confirm_thresh", 0.0)
-    # TFI gate: when tfi_thresh > 0, require net selling (TFI < -thresh)
-    tfi_ok = (tfi_thresh <= 0.0) or (tfi < -tfi_thresh)
+    direction     = p.get("direction", "long")
 
-    if state.obi_ema > entry_thresh:
+    # TFI gate: long needs net buying (TFI > +thresh), short needs net selling (TFI < -thresh)
+    if tfi_thresh <= 0.0:
+        tfi_ok_long  = True
+        tfi_ok_short = True
+    else:
+        tfi_ok_long  = tfi >  tfi_thresh
+        tfi_ok_short = tfi < -tfi_thresh
+
+    # OBI signal: ask-heavy (OBI < -thresh) → contrarian LONG  (sellers absorbed → price up)
+    #             bid-heavy (OBI > +thresh) → contrarian SHORT  (buyers absorbed → price down)
+    want_long  = (direction in ("long",  "both")) and state.obi_ema < -entry_thresh
+    want_short = (direction in ("short", "both")) and state.obi_ema >  entry_thresh
+
+    if want_long:
+        if state.pending_dir == "long":
+            state.pending_count += 1
+        else:
+            state.pending_dir, state.pending_count = "long", 1
+    elif want_short:
         if state.pending_dir == "short":
             state.pending_count += 1
         else:
-            state.pending_dir   = "short"
-            state.pending_count = 1
+            state.pending_dir, state.pending_count = "short", 1
     else:
         state.pending_dir   = None
         state.pending_count = 0
 
+    tfi_ok = tfi_ok_long if state.pending_dir == "long" else tfi_ok_short
     if state.pending_count >= confirm_n and state.pending_dir and tfi_ok:
         _open_paper(state, state.pending_dir, mid, tfi, ts_ms, db)
         state.pending_dir   = None
@@ -518,11 +537,11 @@ async def _run(p: dict, db: sqlite3.Connection) -> None:
     tfi_thresh = p.get("tfi_confirm_thresh", 0.0)
     tfi_mode   = f"TFI<-{tfi_thresh:.2f}" if tfi_thresh > 0 else "TFI logged (no gate)"
 
-    logger.info("OrderBook bot started — symbol=%s  modes=%s  paper=True",
-                p["symbol"], modes)
-    logger.info("OBI: entry=%.2f  exit=%.2f  confirm=%d  alpha=%.2f  levels=%d",
-                p["obi_entry_thresh"], p["obi_exit_thresh"],
-                p["obi_confirm_n"], p["obi_ema_alpha"], p["obi_levels"])
+    logger.info("OrderBook bot started — symbol=%s  modes=%s  direction=%s  paper=True",
+                p["symbol"], modes, p.get("direction", "long"))
+    logger.info("OBI: entry=%.2f  confirm=%d  alpha=%.2f  levels=%d",
+                p["obi_entry_thresh"], p["obi_confirm_n"],
+                p["obi_ema_alpha"], p["obi_levels"])
     logger.info("Trade: tp=%.3f%%  sl=%.3f%%  max_hold=%dm  stake=%.0f%%",
                 p["tp_pct"] * 100, p["sl_pct"] * 100,
                 p["max_hold_minutes"], p["stake_frac"] * 100)

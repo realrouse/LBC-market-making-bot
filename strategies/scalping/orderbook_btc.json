@@ -1,9 +1,10 @@
 {
-    "_comment": "Binance OBI scalping v2.2 — short-only + TP 8bps / SL 4bps / hold 1min",
-    "_version": "2.2",
+    "_comment": "Binance OBI scalping v2.4 — long-only + TP 8bps / SL 4bps / hold 1min",
+    "_version": "2.4",
 
     "symbol":             "BTCUSDT",
     "modes":              ["spot", "perp"],
+    "direction":          "long",
 
     "capital_spot":       1000.0,
     "capital_perp":       1000.0,
@@ -24,6 +25,9 @@
     "maker_fee_spot":     0.0002,
     "maker_fee_perp":     0.0002,
     "slippage":           0.0005,
+
+    "tfi_window_s":       30,
+    "tfi_confirm_thresh": 0.0,
 
     "snapshot_every_n":   10
 }
