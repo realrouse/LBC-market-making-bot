@@ -70,22 +70,22 @@ logger = logging.getLogger("accumulation_bot")
 DEFAULTS: dict = {
     "symbol":                "BTCUSDT",
     "capital_usdt":          1000.0,
-    "initial_stake_usdt":    200.0,
+    "initial_stake_usdt":    500.0,   # deploy 50% upfront at startup
     "scale_in_usdt":         100.0,
-    "scale_in_dip_factor":   0.5,    # extra 50% per 1% below avg_entry
-    "scale_in_max_mult":     3.0,    # cap scale-in at 3× base amount
+    "scale_in_dip_factor":   0.5,
+    "scale_in_max_mult":     3.0,
     "max_invested_pct":      0.90,
     "obi_levels":            10,
     "obi_ema_alpha":         0.05,
     "obi_entry_thresh":      0.50,
     "obi_confirm_n":         20,
-    "min_scale_interval_s":  1800,
-    "profit_bands_pct":      [0.5, 1.0, 2.0, 3.0, 5.0],
-    "sell_fraction":         0.20,
-    "min_holdings_pct":      0.30,   # never sell below 30% of peak holdings
-    "rebuy_discount_min_pct": 0.15,  # minimum rebuy discount
-    "rebuy_discount_max_pct": 1.00,  # maximum rebuy discount
-    "rebuy_spread_mult":      3.0,   # rebuy_discount = spread_ema * this mult
+    "min_scale_interval_s":  3600,    # 1h cooldown between OBI scale-ins
+    "profit_bands_pct":      [5.0, 10.0, 20.0, 30.0, 50.0],  # sell only at major milestones
+    "sell_fraction":         0.15,    # sell 15% at each band
+    "min_holdings_pct":      0.50,    # never sell below 50% of peak holdings
+    "rebuy_discount_min_pct": 3.0,   # rebuys require real corrections
+    "rebuy_discount_max_pct": 10.0,
+    "rebuy_spread_mult":      3.0,
     "fee_spot":              0.001,
     "maker_fee_spot":        0.0002,
     "use_limit_orders":      True,
