@@ -1,6 +1,6 @@
 {
-    "_comment": "Binance OBI scalping v2.1 — short-only contrarian + TP/SL/hold exits only",
-    "_version": "2.1",
+    "_comment": "Binance OBI scalping v2.2 — short-only + TP 8bps / SL 4bps / hold 1min",
+    "_version": "2.2",
 
     "symbol":             "BTCUSDT",
     "modes":              ["spot", "perp"],
@@ -14,9 +14,9 @@
     "obi_entry_thresh":   0.60,
     "obi_confirm_n":      15,
 
-    "tp_pct":             0.0015,
-    "sl_pct":             0.0008,
-    "max_hold_minutes":   3,
+    "tp_pct":             0.0008,
+    "sl_pct":             0.0004,
+    "max_hold_minutes":   1,
 
     "use_limit_orders":   true,
     "fee_spot":           0.001,
