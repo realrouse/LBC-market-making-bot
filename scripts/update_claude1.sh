@@ -5,13 +5,12 @@
 # Retrieve live.db BEFORE any update if you plan to wipe the install.
 #
 # Usage:
-#   bash scripts/update_claude1.sh                                        # rsync + restart live_bot
-#   bash scripts/update_claude1.sh --skip-restart                         # rsync only
-#   bash scripts/update_claude1.sh --verify-only                          # check status only
-#   bash scripts/update_claude1.sh --restart-indicators                   # rsync + restart tradinebotte-indicators
-#   bash scripts/update_claude1.sh --restart-feed                         # rsync + restart tradinebotte-feed
-#   bash scripts/update_claude1.sh --skip-restart --restart-indicators    # rsync + restart indicators only
-#   bash scripts/update_claude1.sh --skip-restart --restart-feed          # rsync + restart feed only
+#   bash scripts/update_claude1.sh                    # rsync + restart live_bot
+#   bash scripts/update_claude1.sh --skip-restart     # rsync only, nothing restarted
+#   bash scripts/update_claude1.sh --verify-only      # check status only
+#   bash scripts/update_claude1.sh --restart-indicators  # rsync + restart tradinebotte-indicators (live_bot untouched)
+#   bash scripts/update_claude1.sh --restart-feed        # rsync + restart tradinebotte-feed (live_bot untouched)
+#   bash scripts/update_claude1.sh --restart-indicators --restart-feed  # rsync + restart both services
 
 set -uo pipefail
 
@@ -27,6 +26,15 @@ while [[ $# -gt 0 ]]; do
     esac
     shift
 done
+
+# --restart-indicators / --restart-feed imply --skip-restart (don't touch live_bot)
+# unless the caller explicitly passed --skip-restart themselves.
+if [[ "$RESTART_INDICATORS" == "true" || "$RESTART_FEED" == "true" ]]; then
+    # Only add --skip-restart if it wasn't already in FORWARD_ARGS
+    if ! printf '%s\n' "${FORWARD_ARGS[@]}" | grep -q -- '--skip-restart\|--verify-only'; then
+        FORWARD_ARGS+=(--skip-restart)
+    fi
+fi
 
 # ─── Run the standard update (rsync + optional live_bot restart + verify) ──────
 TEST_STANDALONE_USER_IDX=0 bash "$(dirname "$0")/update_standalone.sh" "${FORWARD_ARGS[@]}"
