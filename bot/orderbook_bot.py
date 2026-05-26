@@ -408,7 +408,7 @@ async def _zmq_loop(states: list, db: sqlite3.Connection, p: dict) -> None:
             state = stream_map.get(sid)
             if state is None:
                 continue
-            ts_ms = int(msg.get("ts", time.time()) * 1000)
+            ts_ms = int(msg.get("ts", time.time() * 1000))
             await _handle_indicator(state, db, msg, ts_ms)
     finally:
         sub.close()

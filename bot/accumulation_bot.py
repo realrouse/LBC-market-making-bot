@@ -523,7 +523,7 @@ async def _zmq_loop(state: AccumState, db: sqlite3.Connection) -> None:
 
             sid = msg.get("stream_id")
             if sid == scalping_id:
-                ts_ms = int(msg.get("ts", time.time()) * 1000)
+                ts_ms = int(msg.get("ts", time.time() * 1000))
                 await _handle_indicator(state, db, msg, ts_ms)
             elif sid == "btc_vwap_context":
                 _handle_vwap(state, msg)
