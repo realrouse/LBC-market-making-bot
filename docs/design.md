@@ -74,6 +74,17 @@ the feed is reachable before connecting.
 | `feed` | `bot/feed.py` | Broadcast-only WebSocket relay | **None** | PUB bind `:5557` |
 | `account_bot` | `bot/account_bot.py` | Per-account trading logic | Private key required | SUB connect `:5557` |
 | `indicators` | `bot/indicators.py` | Shared technical indicator pipeline | None | SUB connect `:5557`, PUB bind `:5559`, REP bind `:5561` |
+| `orderbook_bot` | `bot/orderbook_bot.py` | OBI scalping for BTCUSDT spot + perp; connects directly to Binance WebSocket | Binance API key (optional for paper mode) | None (no ZMQ — direct Binance WS) |
+| `accumulation_bot` | `bot/accumulation_bot.py` | Long-term BTC spot accumulation: initial buy + OBI dip scale-in + profit ladder | Binance API key | None (no ZMQ — direct Binance WS) |
+
+`orderbook_bot` and `accumulation_bot` are standalone Binance bots. They do
+not participate in the Polymarket feed/account-bot ZeroMQ topology and do not
+consume from the `indicators` service — each computes OBI internally from its
+own Binance depth20@100ms WebSocket connection. State files: `live_ob.db` /
+`orderbook_bot.pid` / `orderbook_bot.log` and `live_accum.db` /
+`accumulation_bot.pid` / `accumulation_bot.log`. Strategy configs:
+`strategies/scalping/orderbook_btc.json` and
+`strategies/accumulation/btc_accumulation.json`.
 
 ---
 
@@ -426,6 +437,174 @@ Consumers: any process subscribing to the indicators PUB port.
 
 ---
 
+### `indicators` — Binance scalping OBI + TFI (`source="binance_scalping"`)
+
+Driven by the Binance combined `depth20@100ms` + `aggTrade` WebSocket stream.
+Published every `publish_every_n` depth events (default 10). Computes
+real-time OBI and trade-flow imbalance.
+
+```json
+{
+  "t":                "indicators",
+  "stream_id":        "btc_scalping_spot",
+  "asset":            "BTCUSDT",
+  "market":           "spot",
+  "obi":              0.12,
+  "obi_ema":          0.10,
+  "obi_decel":        -0.003,
+  "spread_bps":       1.8,
+  "tfi":              0.23,
+  "realized_vol_bps": 4.7,
+  "ts":               1745664125000
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `obi` | float | Raw OBI: `(bid_vol − ask_vol) / (bid_vol + ask_vol)` ∈ [−1, +1] |
+| `obi_ema` | float | EMA-smoothed OBI (spoofing filter) |
+| `obi_decel` | float | First difference of `obi_ema` (acceleration signal) |
+| `spread_bps` | float | Bid/ask spread in basis points |
+| `tfi` | float | Trade flow imbalance over `tfi_window_s`: `(buy_vol − sell_vol) / total_vol` ∈ [−1, +1] |
+| `realized_vol_bps` | float | Rolling std-dev of mid-price log-returns in bps (absent when insufficient data) |
+| `ts` | int | Publish timestamp (Unix ms) |
+
+---
+
+### `indicators` — Binance full order book (`source="binance_full_depth"`)
+
+Maintains a complete Binance spot order book (up to 5 000 levels) via REST
+snapshot + incremental WebSocket diffs with full resync on any gap. Published
+every `publish_every_n` depth events (default 10).
+
+```json
+{
+  "t":                  "indicators",
+  "stream_id":          "btc_full_depth",
+  "asset":              "BTCUSDT",
+  "best_bid":           67420.10,
+  "best_ask":           67421.50,
+  "mid":                67420.80,
+  "spread_bps":         2.08,
+  "obi_10":             0.15,
+  "obi_100":            0.08,
+  "obi_500":            0.03,
+  "cum_bid_vol_1.0pct": 12.45,
+  "cum_ask_vol_1.0pct": 9.87,
+  "wall_bid_price":     67300.00,
+  "wall_bid_qty":       4.2,
+  "wall_ask_price":     67500.00,
+  "wall_ask_qty":       3.8,
+  "book_levels_bid":    4872,
+  "book_levels_ask":    4651,
+  "ts":                 1745664125000
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `best_bid`, `best_ask`, `mid` | float | Top-of-book prices |
+| `spread_bps` | float | Spread in basis points |
+| `obi_N` | float | OBI at N levels for each N in `obi_levels_list` (e.g. `obi_10`, `obi_100`, `obi_500`) |
+| `cum_bid_vol_Xpct` / `cum_ask_vol_Xpct` | float | Cumulative qty within X% of mid on bid/ask side |
+| `wall_bid_price`, `wall_bid_qty` | float | Largest single bid level within `wall_range_pct` of mid |
+| `wall_ask_price`, `wall_ask_qty` | float | Largest single ask level within `wall_range_pct` of mid |
+| `book_levels_bid`, `book_levels_ask` | int | Number of price levels currently tracked |
+| `ts` | int | Publish timestamp (Unix ms) |
+
+---
+
+### `indicators` — VWAP price context (`source="binance_vwap_context"`)
+
+Polled hourly (default). Fetches the last 24 closed 4h candles from Binance
+REST, computes VWAP via typical price × volume, then fetches the current spot
+price to derive a dip score.
+
+```json
+{
+  "t":         "indicators",
+  "stream_id": "btc_vwap_context",
+  "vwap":      67150.40,
+  "price":     67420.10,
+  "dip_score": -0.00402,
+  "dip_zone":  "above_vwap",
+  "ts":        1745664125000
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `vwap` | float | VWAP of the last `vwap_period` closed candles |
+| `price` | float | Current spot price |
+| `dip_score` | float | `(vwap − price) / vwap`. Positive = below VWAP (dip); negative = above VWAP |
+| `dip_zone` | string | `"below_vwap"` or `"above_vwap"` |
+| `ts` | int | Publish timestamp (Unix ms) |
+
+---
+
+### `indicators` — Taker volume profile (`source="binance_volume_profile"`)
+
+Polled hourly (default). Fetches the last 288 closed 5m candles, aggregates
+taker buy/sell volume into $500-wide price buckets, and identifies the top 5
+High-Volume Nodes (HVN).
+
+```json
+{
+  "t":               "indicators",
+  "stream_id":       "btc_volume_profile",
+  "price":           67420.10,
+  "price_bucket":    67000.0,
+  "bucket_buy_vol":  145.3,
+  "bucket_sell_vol": 98.7,
+  "bucket_net_vol":  46.6,
+  "price_zone":      "buy_hvn",
+  "zone_score":      0.32,
+  "hvn_buckets":     [65000.0, 66500.0, 67000.0, 68000.0, 69500.0],
+  "ts":              1745664125000
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `price` | float | Current spot price |
+| `price_bucket` | float | Lower bound of the price bucket containing `price` |
+| `bucket_buy_vol` / `bucket_sell_vol` | float | Taker buy/sell volume in the current bucket |
+| `bucket_net_vol` | float | `bucket_buy_vol − bucket_sell_vol` |
+| `price_zone` | string | `"buy_hvn"` / `"sell_hvn"` / `"neutral"` |
+| `zone_score` | float | `bucket_net_vol / total_bucket_vol` ∈ [−1, +1] |
+| `hvn_buckets` | list[float] | Sorted list of the top `hvn_top_n` HVN bucket lower bounds |
+| `ts` | int | Publish timestamp (Unix ms) |
+
+---
+
+### `indicators` — Macro OBI from klines (`source="binance_macro_obi"`)
+
+Polled every minute (default). Fetches the last 60 closed 1m candles,
+computes per-candle taker flow imbalance `(taker_buy / total − 0.5) × 2`, and
+EMA-smooths the series.
+
+```json
+{
+  "t":                   "indicators",
+  "stream_id":           "btc_macro_obi",
+  "macro_obi":           0.18,
+  "macro_obi_raw":       0.24,
+  "macro_obi_direction": "bullish",
+  "ts":                  1745664125000
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `macro_obi` | float | EMA-smoothed taker flow imbalance ∈ [−1, +1] |
+| `macro_obi_raw` | float | Raw value of the most recent closed candle |
+| `macro_obi_direction` | string | `"bullish"` / `"neutral"` / `"bearish"` |
+| `ts` | int | Publish timestamp (Unix ms) |
+
+Consumers: any process subscribing to the indicators PUB port.
+
+---
+
 ## 5. Feed auto-start mechanism
 
 When running in multi-bot mode, manual feed management is not required. The
@@ -511,18 +690,42 @@ happen independently inside each account bot process.
 ## 7. Indicators pipeline
 
 `indicators.py` is an optional, stateless pipeline stage. It does not trade.
+In production it runs as the `tradinebotte-indicators` systemd service using
+`strategies/indicators/indicators_all.json`, which consolidates all 14 streams
+into a single process on ports 5559/5561.
+
+The pipeline has three categories of stream:
+
+**1. WebSocket-based** (event-driven asyncio tasks):
+- `binance_ws` — Binance kline WebSocket; pushes on each closed candle. Feeds the `PriceSeries` ring buffer for RSI/SMA/EMA/Vol and OHLCV-based indicators (ATR, Bollinger, VWAP, vol_zscore, rolling_max).
+- `binance_scalping` — Binance combined `depth20@100ms` + `aggTrade`; publishes OBI, EMA-OBI, TFI, and realized vol at 100 ms granularity.
+- `binance_full_depth` — Binance `depth@100ms` + REST snapshot; maintains a full 5 000-level order book and publishes multi-depth OBI, cumulative volume, and wall levels.
+
+**2. REST-polled** (asyncio sleep loops):
+- `binance_funding` (15 min), `binance_oi` (5 min), `binance_ls_ratio` (5 min), `binance_liquidations` (5 min)
+- `deribit_iv` (5 min), `fear_greed` (1 h)
+- `binance_vwap_context` (1 h), `binance_volume_profile` (1 h), `binance_macro_obi` (1 min)
+
+**3. Feed-based** (SUB to `feed.py`):
+- `feed` source — Polymarket `best_bid` ticks per token. Feeds the `PriceSeries` ring buffer for computed indicators. Must be declared statically in the JSON config (not available via dynamic registration).
 
 ```
 Per-token ring buffer (deque, maxlen=200)
     │
-    │  push(best_bid) on every "book" message
+    │  push(best_bid) on every "book" message  [feed source]
+    │  push(close, high, low, volume) on closed candle  [binance_ws source]
     │
-    ├── RSI(N)       Cutler's: sum(gains)/n ÷ sum(losses)/n over fixed window of N deltas
-    ├── SMA(N)       mean(prices[-N:])
-    ├── EMA(N)       iterative: ema = price*k + ema*(1−k),  k = 2/(N+1)
-    └── Vol(N)       std-dev of log-returns over last N+1 prices
+    ├── RSI(N)         Cutler's: sum(gains)/n ÷ sum(losses)/n over N deltas
+    ├── SMA(N)         mean(prices[-N:])
+    ├── EMA(N)         iterative: ema = price*k + ema*(1−k),  k = 2/(N+1)
+    ├── Vol(N)         std-dev of log-returns over last N+1 prices
+    ├── ATR(N)         average true range  [binance_ws only]
+    ├── Bollinger(N)   SMA ± 2σ  [binance_ws only]
+    ├── VWAP(N)        close × volume weighted average  [binance_ws only]
+    ├── vol_zscore(N)  volume z-score vs rolling mean/std  [binance_ws only]
+    └── rolling_max(N) max(highs[-N:])  [binance_ws only]
          │
-         └── publish "indicators" when all four are non-None
+         └── publish "indicators" when all configured indicators have valid values
 ```
 
 Indicators return `None` until the buffer has enough history. No message is
@@ -533,17 +736,23 @@ never receive partial data.
 
 **Dynamic registration** — streams can be added at runtime without restarting `indicators.py`. Any bot sends a REQ to the REP socket (`:5561`) with its indicator needs; the server starts the task if new and replies with the `stream_id` to subscribe to. Streams declared in the JSON config are pre-loaded at startup; bot-requested streams are added on top.
 
-**Limitation** — dynamic registration is supported for all non-feed sources: `"binance_ws"`, `"binance_funding"`, `"deribit_iv"`, `"fear_greed"`, `"binance_oi"`, `"binance_ls_ratio"`, and `"binance_liquidations"`. Feed-source streams (Polymarket ticks) must be declared statically in the JSON config.
+**Supported sources for dynamic registration:** `"binance_ws"`,
+`"binance_scalping"`, `"binance_full_depth"`, `"binance_funding"`,
+`"deribit_iv"`, `"fear_greed"`, `"binance_oi"`, `"binance_ls_ratio"`,
+`"binance_liquidations"`, `"binance_vwap_context"`, `"binance_volume_profile"`,
+and `"binance_macro_obi"`. Feed-source streams (Polymarket ticks) must be
+declared statically in the JSON config.
 
 **Starting the pipeline:**
 
 ```bash
-# Start feed first (or let account_bot auto-start it)
+# Production: unified service (all 14 streams)
+TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators/indicators_all.json \
+  bash scripts/start_indicators.sh
+
+# Or start feed first and run indicators manually
 python3 bot/feed.py &
-
-# Start indicators (subscribes to feed, publishes on :5559)
 python3 bot/indicators.py &
-
 # A consumer subscribes to :5559
 # (any python script with zmq.SUB connecting to tcp://127.0.0.1:5559)
 ```
@@ -674,6 +883,11 @@ a scenario that is currently out of scope.
 | `bot/feed.py` | ZMQ feed broadcaster (Option B) |
 | `bot/account_bot.py` | Per-account subscriber + trading logic |
 | `bot/indicators.py` | Technical indicator pipeline stage |
+| `bot/orderbook_bot.py` | Standalone Binance OBI scalping bot (no ZMQ) |
+| `bot/accumulation_bot.py` | Standalone BTC accumulation bot (no ZMQ) |
+| `strategies/indicators/indicators_all.json` | Unified production indicators config (all 14 streams) |
+| `strategies/scalping/orderbook_btc.json` | Strategy config for `orderbook_bot` |
+| `strategies/accumulation/btc_accumulation.json` | Strategy config for `accumulation_bot` |
 | `docs/multi.md` | Option B setup guide and per-account strategy configuration |
 | `docs/GridTrading.md` | Grid strategy architecture and JSON config |
 | `tests/test_multibot.py` | ZMQ integration tests for feed + account_bot |

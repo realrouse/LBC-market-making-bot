@@ -3,14 +3,18 @@
 # tradinebotte indicator service (indicators.py) running the unified config.
 #
 # The unified config (indicators_all.json) runs ALL streams in one process:
-#   binance_ws    — 4h and 1d BTC/USDT candles (RSI, volatility)
-#   binance_scalping — L2 orderbook + aggTrade for OBI/TFI/spread/realized-vol
-#   binance_funding  — perpetual funding rate (REST, every 15 min)
-#   binance_oi       — open interest (REST, every 5 min)
-#   binance_ls_ratio — long/short ratio (REST, every 5 min)
+#   binance_ws           — 4h and 1d BTC/USDT candles (RSI, EMA, ATR, volatility)
+#   binance_scalping     — L2 orderbook + aggTrade for OBI/TFI/spread/realized-vol
+#   binance_full_depth   — full spot OB 5000 levels, OBI 10/100/500, walls, cum vol
+#   binance_funding      — perpetual funding rate (REST, every 15 min)
+#   binance_oi           — open interest (REST, every 5 min)
+#   binance_ls_ratio     — long/short ratio (REST, every 5 min)
 #   binance_liquidations — forced liquidations (REST, every 5 min)
-#   deribit_iv       — DVOL implied volatility (REST, every 5 min)
-#   fear_greed       — Fear & Greed Index (REST, every 1 h)
+#   binance_vwap_context — 4h VWAP vs price, dip_score (REST, every 1 h)
+#   binance_volume_profile — 24h taker buy/sell by price bucket, HVN zones (REST, every 1 h)
+#   binance_macro_obi    — 1h of 1m candles macro OBI, trend direction (REST, every 1 min)
+#   deribit_iv           — DVOL implied volatility (REST, every 5 min)
+#   fear_greed           — Fear & Greed Index (REST, every 1 h)
 #
 # All streams connect directly to external APIs — tradinebotte-feed.service
 # is NOT required.
@@ -141,14 +145,18 @@ echo "  REP reg : $REG_ADDR    (TRADINEBOTTE_INDICATORS_REG_ADDR)"
 echo "  venv    : $VENV"
 echo ""
 echo "  Streams included in unified config:"
-echo "    binance_ws        — btc_4h, btc_1d (RSI, volatility)"
-echo "    binance_scalping  — btc_scalping_spot, btc_scalping_perp (OBI/TFI/spread/vol)"
-echo "    binance_funding   — btc_funding (every 15 min)"
-echo "    binance_oi        — btc_oi (every 5 min)"
-echo "    binance_ls_ratio  — btc_ls_ratio (every 5 min)"
-echo "    binance_liquidations — btc_liquidations (every 5 min)"
-echo "    deribit_iv        — btc_dvol (every 5 min)"
-echo "    fear_greed        — fear_greed (every 1 h)"
+echo "    binance_ws            — btc_4h, btc_1d (RSI, EMA, ATR, volatility)"
+echo "    binance_scalping      — btc_scalping_spot, btc_scalping_perp (OBI/TFI/spread/vol)"
+echo "    binance_full_depth    — btc_full_depth (5000 levels, OBI 10/100/500, walls, cum vol)"
+echo "    binance_funding       — btc_funding (every 15 min)"
+echo "    binance_oi            — btc_oi (every 5 min)"
+echo "    binance_ls_ratio      — btc_ls_ratio (every 5 min)"
+echo "    binance_liquidations  — btc_liquidations (every 5 min)"
+echo "    binance_vwap_context  — btc_vwap_context (4h VWAP vs price, dip_score, every 1 h)"
+echo "    binance_volume_profile— btc_volume_profile (HVN zones, every 1 h)"
+echo "    binance_macro_obi     — btc_macro_obi (trend direction from 1m flow, every 1 min)"
+echo "    deribit_iv            — btc_dvol (every 5 min)"
+echo "    fear_greed            — fear_greed (every 1 h)"
 echo ""
 echo "  Bots subscribe to indicators via config.json:"
 echo "  \"indicators_addr\": \"$IND_ADDR\","

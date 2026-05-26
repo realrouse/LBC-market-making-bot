@@ -8,19 +8,35 @@ RSI / SMA / EMA / volatility → PUB enriched messages on a second socket.
 A REP socket accepts dynamic stream-registration requests from any bot at
 runtime so new indicator streams can be added without restarting the service.
 
-Five data sources are supported, configured via a JSON file:
+Eight data sources are supported, configured via a JSON file:
 
-  source="feed"            — subscribes to feed.py PUB (best_bid tick-by-tick,
-                             one PriceSeries per Polymarket token)
-  source="binance_ws"      — opens a Binance kline WebSocket for one asset/
-                             timeframe; seeds from REST on startup; pushes the
-                             close price of each completed candle
-  source="binance_funding" — polls Binance perp funding rate (REST, every 15 min
-                             by default); no indicator math required
-  source="deribit_iv"      — polls Deribit DVOL implied volatility index (REST,
-                             every 5 min by default); no indicator math required
-  source="fear_greed"      — polls Alternative.me Fear & Greed Index (REST,
-                             every 1 h by default); no indicator math required
+  source="feed"                  — subscribes to feed.py PUB (best_bid tick-by-tick,
+                                   one PriceSeries per Polymarket token)
+  source="binance_ws"            — opens a Binance kline WebSocket for one asset/
+                                   timeframe; seeds from REST on startup; pushes the
+                                   close price of each completed candle
+  source="binance_funding"       — polls Binance perp funding rate (REST, every 15 min
+                                   by default); no indicator math required
+  source="deribit_iv"            — polls Deribit DVOL implied volatility index (REST,
+                                   every 5 min by default); no indicator math required
+  source="fear_greed"            — polls Alternative.me Fear & Greed Index (REST,
+                                   every 1 h by default); no indicator math required
+  source="binance_vwap_context"  — polls Binance klines hourly; computes VWAP of the
+                                   last N 4h candles and publishes dip_score =
+                                   (vwap - price) / vwap as a price-context filter
+  source="binance_volume_profile"— polls Binance 5m klines hourly; builds a taker
+                                   buy/sell volume profile by price bucket; publishes
+                                   price_zone ("buy_hvn"|"sell_hvn"|"neutral") and
+                                   zone_score for the current price bucket
+  source="binance_macro_obi"     — polls Binance 1m klines every minute; computes an
+                                   EMA-smoothed macro OBI from taker_buy_ratio as a
+                                   trend-direction filter; publishes macro_obi and
+                                   macro_obi_direction ("bullish"|"neutral"|"bearish")
+  source="binance_full_depth"   — maintains a full spot order book (up to 5000 levels)
+                                   via REST snapshot + incremental WS diffs; publishes
+                                   OBI at multiple depths (obi_10/100/500), cumulative
+                                   bid/ask volume within N% of mid, largest bid/ask walls,
+                                   best bid/ask, spread_bps; reconnects + resyncs on drop
 
 Output messages (PUB socket):
   source="feed":
@@ -87,6 +103,8 @@ _BINANCE_FUTURES_URL          = "https://fapi.binance.com/fapi/v1/premiumIndex"
 _BINANCE_OI_HIST_URL      = "https://fapi.binance.com/futures/data/openInterestHist"
 _BINANCE_LS_RATIO_URL     = "https://fapi.binance.com/futures/data/topLongShortAccountRatio"
 _BINANCE_FORCE_ORDERS_URL = "https://fapi.binance.com/fapi/v1/forceOrders"
+_BINANCE_TICKER_PRICE_URL = "https://api.binance.com/api/v3/ticker/price"
+_BINANCE_SPOT_DEPTH_URL   = "https://api.binance.com/api/v3/depth"
 _DERIBIT_DVOL_URL         = "https://www.deribit.com/api/v2/public/get_volatility_index_data"
 _FEAR_GREED_URL           = "https://api.alternative.me/fng/"
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
@@ -299,19 +317,26 @@ _VALID_SOURCES              = frozenset({
     "feed", "binance_ws", "binance_funding", "deribit_iv", "fear_greed",
     "binance_oi", "binance_ls_ratio", "binance_liquidations",
     "binance_scalping",
+    "binance_vwap_context", "binance_volume_profile", "binance_macro_obi",
+    "binance_full_depth",
 })
 _SOURCES_WITHOUT_INDICATORS = frozenset({
     "binance_funding", "deribit_iv", "fear_greed",
     "binance_oi", "binance_ls_ratio", "binance_liquidations",
     "binance_scalping",
+    "binance_vwap_context", "binance_volume_profile", "binance_macro_obi",
+    "binance_full_depth",
 })
 _DEFAULT_POLL_INTERVALS: dict[str, int] = {
-    "binance_funding":     900,    # 15 min
-    "deribit_iv":          300,    # 5 min
-    "fear_greed":         3600,    # 1 hour
-    "binance_oi":          300,    # 5 min
-    "binance_ls_ratio":    300,    # 5 min
-    "binance_liquidations": 300,   # 5 min
+    "binance_funding":        900,    # 15 min
+    "deribit_iv":             300,    # 5 min
+    "fear_greed":            3600,    # 1 hour
+    "binance_oi":             300,    # 5 min
+    "binance_ls_ratio":       300,    # 5 min
+    "binance_liquidations":   300,    # 5 min
+    "binance_vwap_context":  3600,    # 1 hour (VWAP changes slowly)
+    "binance_volume_profile": 3600,   # 1 hour (volume profile rebuilt hourly)
+    "binance_macro_obi":        60,   # 1 min  (macro OBI tracks recent flow)
 }
 
 
@@ -942,6 +967,471 @@ async def _binance_scalping_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> N
             backoff = min(backoff * 2, 60)
 
 
+def _apply_depth_event(bids: dict[float, float], asks: dict[float, float],
+                        event: dict[str, Any]) -> None:
+    """Apply one Binance depthUpdate diff event to the local bid/ask level dicts.
+
+    Levels with qty=0 are deleted; qty>0 update (or insert) the level.
+    Works for both spot and perp format ('b'/'a' keys are identical).
+    """
+    for price_str, qty_str in event.get("b", []):
+        p, q = float(price_str), float(qty_str)
+        if q == 0.0:
+            bids.pop(p, None)
+        else:
+            bids[p] = q
+    for price_str, qty_str in event.get("a", []):
+        p, q = float(price_str), float(qty_str)
+        if q == 0.0:
+            asks.pop(p, None)
+        else:
+            asks[p] = q
+
+
+async def _fetch_depth_snapshot(session: aiohttp.ClientSession,
+                                 asset: str) -> dict[str, Any]:
+    """Fetch a full spot order book snapshot (5000 levels) from Binance REST."""
+    async with session.get(
+        _BINANCE_SPOT_DEPTH_URL,
+        params={"symbol": asset.upper(), "limit": 5000},
+        timeout=aiohttp.ClientTimeout(total=30),
+    ) as resp:
+        return await resp.json(content_type=None)
+
+
+async def _binance_full_depth_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> None:
+    """Maintain a full spot order book (up to 5000 levels) via REST snapshot + WS diffs.
+
+    Implements the Binance documented reconstruction algorithm:
+      1. Connect to the diff WebSocket (btcusdt@depth@100ms).
+      2. Buffer incoming events while fetching a REST snapshot (GET /api/v3/depth?limit=5000).
+      3. Apply snapshot; replay buffered events discarding those with u <= lastUpdateId.
+      4. For each subsequent event validate U == lastUpdateId+1; break on gap → resync.
+      5. On any error/gap: reconnect and re-snapshot from scratch.
+
+    Publishes every publish_every_n depth updates:
+      best_bid, best_ask, mid, spread_bps
+      obi_N             — OBI at N levels for each N in obi_levels_list
+                          (multi-depth, harder to spoof than depth20)
+      cum_bid_vol_Xpct  — cumulative bid qty within X% below mid
+      cum_ask_vol_Xpct  — cumulative ask qty within X% above mid
+      wall_bid_price, wall_bid_qty — largest single bid level within wall_range_pct of mid
+      wall_ask_price, wall_ask_qty — largest single ask level within wall_range_pct of mid
+      book_levels_bid, book_levels_ask — total maintained price levels
+
+    Source params:
+      obi_levels_list   list[int] ([10, 100, 500]) — book depths for OBI
+      cum_vol_range_pct float     (1.0)   — cumulative vol within X% of mid
+      wall_range_pct    float     (2.0)   — wall search range (% from mid)
+      publish_every_n   int       (10)    — throttle: publish every N depth events
+    """
+    p               = spec.params
+    obi_levels_list = [int(x) for x in p.get("obi_levels_list", [10, 100, 500])]
+    cum_pct         = float(p.get("cum_vol_range_pct", 1.0))
+    wall_pct        = float(p.get("wall_range_pct", 2.0))
+    publish_every_n = int(p.get("publish_every_n", 10))
+
+    symbol  = spec.asset.lower()
+    ws_url  = f"{_BINANCE_WS_BASE}/{symbol}@depth@100ms"
+    backoff = 5
+
+    while True:
+        bids:           dict[float, float] = {}
+        asks:           dict[float, float] = {}
+        last_update_id: int                = 0
+        depth_count                        = 0
+
+        try:
+            async with websockets.connect(ws_url, ping_interval=20, ping_timeout=10) as ws:
+                logger.info("[%s] full depth WS connected → %s", spec.id, ws_url)
+                backoff = 5
+
+                # Buffer events while REST snapshot is in flight
+                event_buffer: list[dict[str, Any]] = []
+                async with aiohttp.ClientSession() as session:
+                    snap_task = asyncio.create_task(
+                        _fetch_depth_snapshot(session, spec.asset)
+                    )
+                    while not snap_task.done():
+                        try:
+                            raw = await asyncio.wait_for(ws.recv(), timeout=0.1)
+                            event_buffer.append(json.loads(raw))
+                        except asyncio.TimeoutError:
+                            continue
+                    snapshot = await snap_task
+
+                last_update_id = int(snapshot["lastUpdateId"])
+                for ps, qs in snapshot["bids"]:
+                    q = float(qs)
+                    if q > 0:
+                        bids[float(ps)] = q
+                for ps, qs in snapshot["asks"]:
+                    q = float(qs)
+                    if q > 0:
+                        asks[float(ps)] = q
+                logger.info("[%s] snapshot: %d bids / %d asks  lastUpdateId=%d",
+                            spec.id, len(bids), len(asks), last_update_id)
+
+                # Replay buffered events onto the snapshot
+                synced = False
+                for ev in event_buffer:
+                    u = int(ev.get("u", 0))
+                    U = int(ev.get("U", 0))
+                    if u <= last_update_id:
+                        continue            # already included in snapshot
+                    if not synced:
+                        if U > last_update_id + 1:
+                            logger.warning("[%s] buffered gap U=%d > lastId+1=%d — resync",
+                                           spec.id, U, last_update_id + 1)
+                            break
+                        synced = True
+                    _apply_depth_event(bids, asks, ev)
+                    last_update_id = u
+                else:
+                    synced = True
+
+                if not synced:
+                    logger.warning("[%s] failed to sync from buffer — resync", spec.id)
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, 60)
+                    continue
+
+                # Live diff stream
+                async for raw in ws:
+                    ev = json.loads(raw)
+                    u  = int(ev.get("u", 0))
+                    U  = int(ev.get("U", 0))
+
+                    if u <= last_update_id:
+                        continue            # stale event
+                    if U != last_update_id + 1:
+                        logger.warning("[%s] sequence gap U=%d expected %d — resync",
+                                       spec.id, U, last_update_id + 1)
+                        break
+
+                    _apply_depth_event(bids, asks, ev)
+                    last_update_id = u
+
+                    depth_count += 1
+                    if depth_count % publish_every_n != 0:
+                        continue
+                    if not bids or not asks:
+                        continue
+
+                    best_bid = max(bids)
+                    best_ask = min(asks)
+                    if best_bid <= 0 or best_ask <= 0 or best_bid >= best_ask:
+                        continue
+                    mid        = (best_bid + best_ask) / 2.0
+                    spread_bps = (best_ask - best_bid) / mid * 10000.0
+
+                    sorted_bids = sorted(bids.items(), reverse=True)   # high → low
+                    sorted_asks = sorted(asks.items())                  # low → high
+
+                    out: dict[str, Any] = {
+                        "t":               "indicators",
+                        "stream_id":       spec.id,
+                        "asset":           spec.asset,
+                        "best_bid":        best_bid,
+                        "best_ask":        best_ask,
+                        "mid":             mid,
+                        "spread_bps":      spread_bps,
+                        "book_levels_bid": len(bids),
+                        "book_levels_ask": len(asks),
+                        "ts":              int(time.time() * 1000),
+                    }
+
+                    # OBI at each requested depth
+                    for n in obi_levels_list:
+                        bv    = sum(q for _, q in sorted_bids[:n])
+                        av    = sum(q for _, q in sorted_asks[:n])
+                        total = bv + av
+                        out[f"obi_{n}"] = (bv - av) / total if total > 0 else 0.0
+
+                    # Cumulative bid/ask volume within cum_pct% of mid
+                    bid_floor = mid * (1.0 - cum_pct / 100.0)
+                    ask_ceil  = mid * (1.0 + cum_pct / 100.0)
+                    out[f"cum_bid_vol_{cum_pct}pct"] = sum(
+                        q for p, q in sorted_bids if p >= bid_floor)
+                    out[f"cum_ask_vol_{cum_pct}pct"] = sum(
+                        q for p, q in sorted_asks if p <= ask_ceil)
+
+                    # Largest single bid/ask wall within wall_pct% of mid
+                    wall_bid_floor = mid * (1.0 - wall_pct / 100.0)
+                    wall_ask_ceil  = mid * (1.0 + wall_pct / 100.0)
+                    bids_in_range  = [(p, q) for p, q in sorted_bids if p >= wall_bid_floor]
+                    asks_in_range  = [(p, q) for p, q in sorted_asks if p <= wall_ask_ceil]
+                    if bids_in_range:
+                        wp, wq = max(bids_in_range, key=lambda x: x[1])
+                        out["wall_bid_price"] = wp
+                        out["wall_bid_qty"]   = wq
+                    if asks_in_range:
+                        wp, wq = max(asks_in_range, key=lambda x: x[1])
+                        out["wall_ask_price"] = wp
+                        out["wall_ask_qty"]   = wq
+
+                    _publish(pub, out)
+
+        except Exception as exc:            # pylint: disable=broad-except
+            logger.warning("[%s] full depth error (%s) — reconnect in %ds",
+                           spec.id, exc, backoff)
+        await asyncio.sleep(backoff)
+        backoff = min(backoff * 2, 60)
+
+
+async def _binance_vwap_context_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> None:
+    """Poll Binance klines to compute VWAP context and price-distance (dip_score).
+
+    Fetches the last vwap_period closed candles at the configured timeframe (default 4h),
+    computes VWAP using typical price (H+L+C)/3 × base volume, then compares to the
+    current spot price fetched from the REST ticker.
+
+    Publishes every poll_interval_s (default 1h):
+      vwap        — VWAP of the last vwap_period candles
+      price       — current spot mid price
+      dip_score   — (vwap - price) / vwap; positive = below VWAP (dip), negative = above
+      dip_zone    — "below_vwap" | "above_vwap"
+
+    Source params:
+      vwap_period  int   (24)   — number of closed candles for VWAP (24×4h = 4 days)
+      timeframe    str   ("4h") — kline interval
+    """
+    interval    = spec.poll_interval_s or _DEFAULT_POLL_INTERVALS["binance_vwap_context"]
+    asset       = spec.asset or "BTCUSDT"
+    p           = spec.params
+    vwap_period = int(p.get("vwap_period", 24))
+    timeframe   = str(p.get("timeframe", "4h"))
+
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
+                async with session.get(
+                    _BINANCE_REST_URL,
+                    params={"symbol": asset.upper(), "interval": timeframe,
+                            "limit": vwap_period + 1},
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    candles = await resp.json(content_type=None)
+                candles = candles[:-1]   # drop the still-open candle
+                if len(candles) < vwap_period:
+                    logger.warning("[%s] only %d candles (need %d) — skipping",
+                                   spec.id, len(candles), vwap_period)
+                    await asyncio.sleep(interval)
+                    continue
+
+                highs   = [float(c[2]) for c in candles]
+                lows    = [float(c[3]) for c in candles]
+                closes  = [float(c[4]) for c in candles]
+                volumes = [float(c[5]) for c in candles]
+                typical = [(h + l + c) / 3.0 for h, l, c in zip(highs, lows, closes)]
+                total_vol = sum(volumes)
+                vwap = (sum(tp * v for tp, v in zip(typical, volumes)) / total_vol
+                        if total_vol > 0 else closes[-1])
+
+                async with session.get(
+                    _BINANCE_TICKER_PRICE_URL,
+                    params={"symbol": asset.upper()},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    ticker = await resp.json(content_type=None)
+                price = float(ticker["price"])
+
+                dip_score = (vwap - price) / vwap if vwap > 0 else 0.0
+                dip_zone  = "below_vwap" if price < vwap else "above_vwap"
+
+                _publish(pub, {
+                    "t":          "indicators",
+                    "stream_id":  spec.id,
+                    "asset":      asset,
+                    "vwap":       vwap,
+                    "price":      price,
+                    "dip_score":  dip_score,
+                    "dip_zone":   dip_zone,
+                    "ts":         int(time.time() * 1000),
+                })
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("[%s] VWAP context fetch failed (%s)", spec.id, exc)
+            await asyncio.sleep(interval)
+
+
+async def _binance_volume_profile_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> None:
+    """Poll Binance klines to build a taker buy/sell volume profile by price bucket.
+
+    Fetches kline_limit closed 5m candles (default 288 = 24h), aggregates taker
+    buy/sell volume into bucket_size_usd-wide price buckets (midpoint-based),
+    identifies the top hvn_top_n High-Volume-Nodes (HVN), and determines whether
+    the current price sits in a buy-dominant HVN, sell-dominant HVN, or neutral zone.
+
+    Publishes every poll_interval_s (default 1h):
+      price           — current spot price
+      price_bucket    — bucket containing current price
+      bucket_buy_vol  — taker buy volume in current bucket
+      bucket_sell_vol — taker sell volume in current bucket
+      bucket_net_vol  — buy_vol - sell_vol (positive = buy pressure)
+      price_zone      — "buy_hvn" | "sell_hvn" | "neutral"
+      zone_score      — net_vol / total_vol in bucket  (range: -1 to +1)
+      hvn_buckets     — sorted list of the top hvn_top_n bucket prices
+
+    Source params:
+      bucket_size_usd  float (500)  — bucket width in USD
+      hvn_top_n        int   (5)    — number of HVN buckets to flag
+      kline_limit      int   (288)  — candles to fetch (288 × 5m = 24h)
+      timeframe        str   ("5m") — kline interval
+    """
+    interval    = spec.poll_interval_s or _DEFAULT_POLL_INTERVALS["binance_volume_profile"]
+    asset       = spec.asset or "BTCUSDT"
+    p           = spec.params
+    bucket_size = float(p.get("bucket_size_usd", 500.0))
+    hvn_top_n   = int(p.get("hvn_top_n", 5))
+    kline_limit = int(p.get("kline_limit", 288))
+    timeframe   = str(p.get("timeframe", "5m"))
+
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
+                async with session.get(
+                    _BINANCE_REST_URL,
+                    params={"symbol": asset.upper(), "interval": timeframe,
+                            "limit": kline_limit + 1},
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    candles = await resp.json(content_type=None)
+                candles = candles[:-1]   # drop open candle
+
+                buy_vol:  dict[float, float] = {}
+                sell_vol: dict[float, float] = {}
+                for c in candles:
+                    high         = float(c[2])
+                    low          = float(c[3])
+                    total_v      = float(c[5])
+                    taker_buy_v  = float(c[9])
+                    taker_sell_v = total_v - taker_buy_v
+                    mid          = (high + low) / 2.0
+                    bucket       = round(mid / bucket_size) * bucket_size
+                    buy_vol[bucket]  = buy_vol.get(bucket, 0.0)  + taker_buy_v
+                    sell_vol[bucket] = sell_vol.get(bucket, 0.0) + taker_sell_v
+
+                all_buckets = sorted(set(buy_vol) | set(sell_vol))
+                total_vols  = {b: buy_vol.get(b, 0.0) + sell_vol.get(b, 0.0)
+                               for b in all_buckets}
+                hvn_buckets = set(
+                    sorted(all_buckets, key=lambda b: total_vols[b], reverse=True)
+                    [:hvn_top_n]
+                )
+
+                async with session.get(
+                    _BINANCE_TICKER_PRICE_URL,
+                    params={"symbol": asset.upper()},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    ticker = await resp.json(content_type=None)
+                price  = float(ticker["price"])
+                bucket = round(price / bucket_size) * bucket_size
+
+                bv = buy_vol.get(bucket, 0.0)
+                sv = sell_vol.get(bucket, 0.0)
+                nv = bv - sv
+
+                if bucket in hvn_buckets:
+                    price_zone = "buy_hvn" if nv >= 0 else "sell_hvn"
+                else:
+                    price_zone = "neutral"
+
+                bucket_total = bv + sv
+                zone_score   = nv / bucket_total if bucket_total > 0 else 0.0
+
+                _publish(pub, {
+                    "t":               "indicators",
+                    "stream_id":       spec.id,
+                    "asset":           asset,
+                    "price":           price,
+                    "price_bucket":    bucket,
+                    "bucket_buy_vol":  bv,
+                    "bucket_sell_vol": sv,
+                    "bucket_net_vol":  nv,
+                    "price_zone":      price_zone,
+                    "zone_score":      zone_score,
+                    "hvn_buckets":     sorted(hvn_buckets),
+                    "ts":              int(time.time() * 1000),
+                })
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("[%s] volume profile fetch failed (%s)", spec.id, exc)
+            await asyncio.sleep(interval)
+
+
+async def _binance_macro_obi_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> None:
+    """Poll Binance klines to compute a macro Order Book Imbalance from taker flow.
+
+    Fetches kline_limit closed 1m candles, computes taker_buy_ratio per candle,
+    maps it to [-1, +1] via (ratio - 0.5) × 2, then EMA-smooths the series.
+    Acts as a trend-direction filter: if macro OBI is bearish, suppress long entries.
+
+    Publishes every poll_interval_s (default 60s):
+      macro_obi           — EMA-smoothed macro OBI  (-1 = full sell pressure, +1 = buy)
+      macro_obi_raw       — raw OBI of the most recent candle
+      macro_obi_direction — "bullish" | "neutral" | "bearish"
+
+    Source params:
+      kline_limit       int   (60)   — candles to fetch (60 × 1m = 1h look-back)
+      ema_alpha         float (0.20) — EMA smoothing factor applied over candle sequence
+      neutral_threshold float (0.10) — |macro_obi| below this → "neutral"
+      timeframe         str   ("1m") — kline interval
+    """
+    interval    = spec.poll_interval_s or _DEFAULT_POLL_INTERVALS["binance_macro_obi"]
+    asset       = spec.asset or "BTCUSDT"
+    p           = spec.params
+    kline_limit = int(p.get("kline_limit", 60))
+    ema_alpha   = float(p.get("ema_alpha", 0.20))
+    neutral_thr = float(p.get("neutral_threshold", 0.10))
+    timeframe   = str(p.get("timeframe", "1m"))
+
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
+                async with session.get(
+                    _BINANCE_REST_URL,
+                    params={"symbol": asset.upper(), "interval": timeframe,
+                            "limit": kline_limit + 1},
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    candles = await resp.json(content_type=None)
+                candles = candles[:-1]   # drop open candle
+
+                obis: list[float] = []
+                for c in candles:
+                    total_v     = float(c[5])
+                    taker_buy_v = float(c[9])
+                    if total_v > 0:
+                        obis.append((taker_buy_v / total_v - 0.5) * 2.0)
+
+                if not obis:
+                    await asyncio.sleep(interval)
+                    continue
+
+                ema = obis[0]
+                for v in obis[1:]:
+                    ema = ema_alpha * v + (1.0 - ema_alpha) * ema
+
+                direction = (
+                    "bullish" if ema >  neutral_thr
+                    else "bearish" if ema < -neutral_thr
+                    else "neutral"
+                )
+
+                _publish(pub, {
+                    "t":                   "indicators",
+                    "stream_id":           spec.id,
+                    "asset":               asset,
+                    "macro_obi":           ema,
+                    "macro_obi_raw":       obis[-1],
+                    "macro_obi_direction": direction,
+                    "ts":                  int(time.time() * 1000),
+                })
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("[%s] macro OBI fetch failed (%s)", spec.id, exc)
+            await asyncio.sleep(interval)
+
+
 # ─── DYNAMIC REGISTRATION ────────────────────────────────────────────────────
 
 async def _start_stream(
@@ -974,6 +1464,14 @@ async def _start_stream(
         coro = _binance_liquidations_task(spec, pub)
     elif spec.source == "binance_scalping":
         coro = _binance_scalping_task(spec, pub)
+    elif spec.source == "binance_full_depth":
+        coro = _binance_full_depth_task(spec, pub)
+    elif spec.source == "binance_vwap_context":
+        coro = _binance_vwap_context_task(spec, pub)
+    elif spec.source == "binance_volume_profile":
+        coro = _binance_volume_profile_task(spec, pub)
+    elif spec.source == "binance_macro_obi":
+        coro = _binance_macro_obi_task(spec, pub)
     else:
         logger.error("[reg] cannot start stream %r: source %r is not dispatchable",
                      spec.id, spec.source)

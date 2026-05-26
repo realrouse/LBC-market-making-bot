@@ -88,6 +88,16 @@
         },
 
         {
+            "_comment": "Binance futures forced liquidations — aggregated every 5 min",
+            "id":              "btc_liquidations",
+            "asset":           "BTCUSDT",
+            "source":          "binance_liquidations",
+            "timeframe":       "n/a",
+            "indicators":      [],
+            "poll_interval_s": 300
+        },
+
+        {
             "_comment": "Binance spot L2 orderbook + trade stream — scalping microstructure",
             "id":         "btc_scalping_spot",
             "asset":      "BTCUSDT",
@@ -118,6 +128,67 @@
                 "tfi_window_s":    60,
                 "vol_window_n":    200,
                 "publish_every_n": 10
+            }
+        },
+
+        {
+            "_comment": "Full spot OB — 5000 levels via snapshot+diff; OBI 10/100/500, walls, cum vol",
+            "id":         "btc_full_depth",
+            "asset":      "BTCUSDT",
+            "source":     "binance_full_depth",
+            "timeframe":  "tick",
+            "indicators": [],
+            "params": {
+                "obi_levels_list":   [10, 100, 500],
+                "cum_vol_range_pct": 1.0,
+                "wall_range_pct":    2.0,
+                "publish_every_n":   10
+            }
+        },
+
+        {
+            "_comment": "VWAP context filter — 4h VWAP vs current price; dip_score = (vwap-price)/vwap",
+            "id":              "btc_vwap_context",
+            "asset":           "BTCUSDT",
+            "source":          "binance_vwap_context",
+            "timeframe":       "n/a",
+            "indicators":      [],
+            "poll_interval_s": 3600,
+            "params": {
+                "vwap_period": 24,
+                "timeframe":   "4h"
+            }
+        },
+
+        {
+            "_comment": "Volume profile — 24h taker buy/sell by $500 bucket; identifies HVN zones",
+            "id":              "btc_volume_profile",
+            "asset":           "BTCUSDT",
+            "source":          "binance_volume_profile",
+            "timeframe":       "n/a",
+            "indicators":      [],
+            "poll_interval_s": 3600,
+            "params": {
+                "bucket_size_usd": 500,
+                "hvn_top_n":       5,
+                "kline_limit":     288,
+                "timeframe":       "5m"
+            }
+        },
+
+        {
+            "_comment": "Macro OBI — 1h of 1m candles taker flow; trend-direction filter",
+            "id":              "btc_macro_obi",
+            "asset":           "BTCUSDT",
+            "source":          "binance_macro_obi",
+            "timeframe":       "n/a",
+            "indicators":      [],
+            "poll_interval_s": 60,
+            "params": {
+                "kline_limit":       60,
+                "ema_alpha":         0.20,
+                "neutral_threshold": 0.10,
+                "timeframe":         "1m"
             }
         }
 
