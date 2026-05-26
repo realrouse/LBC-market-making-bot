@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """
-BTC Long-Term Accumulation Bot v1.1
+BTC Long-Term Accumulation Bot v1.2
 
 Builds a growing BTC spot position using OBI dip-buying + partial profit ladder.
+
+Changes from v1.1:
+  - Refactor: consumes OBI/price data from the shared indicators service (ZMQ)
+    instead of opening a redundant Binance WebSocket connection directly.
+    Subscribes to btc_scalping_spot (OBI, price) and btc_vwap_context (VWAP).
+  - New: VWAP gate — scale-ins are suspended when price is above the 4h VWAP
+    (dip_score < 0). Enabled by default via vwap_gate=true in config.
 
 Changes from v1.0:
   - Fix: last_buy_ts only updated on OBI dip scale-ins (not on rebuys)
@@ -15,7 +22,9 @@ Changes from v1.0:
 Strategy:
   1. Initial buy at startup (initial_stake_usdt)
   2. OBI dip signal: OBI_ema < -entry_thresh for confirm_n consecutive ticks
-     → scale in (adaptive amount), 30min cooldown
+     from the shared indicators service (btc_scalping_spot stream)
+     VWAP gate: skip scale-in when price > 4h VWAP (dip_score < 0)
+     → scale in (adaptive amount), cooldown between scale-ins
   3. Profit ladder: when price >= avg_entry * (1 + band_pct), sell sell_fraction
      of current holdings; set rebuy target at adaptive discount below sell price
   4. Rebuy: when price reaches rebuy_target, buy back the sold quantity
@@ -36,12 +45,6 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-
-try:
-    import websockets
-except ImportError:
-    print("ERROR: websockets not installed — run: pip install websockets", file=sys.stderr)
-    sys.exit(1)
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -75,21 +78,28 @@ DEFAULTS: dict = {
     "scale_in_dip_factor":   0.5,
     "scale_in_max_mult":     3.0,
     "max_invested_pct":      0.90,
+    # OBI parameters — obi_ema_alpha is informational when using ZMQ mode;
+    # the actual alpha is set in the indicators service config.
     "obi_levels":            10,
     "obi_ema_alpha":         0.05,
     "obi_entry_thresh":      0.50,
     "obi_confirm_n":         20,
     "min_scale_interval_s":  3600,    # 1h cooldown between OBI scale-ins
-    "profit_bands_pct":      [5.0, 10.0, 20.0, 30.0, 50.0],  # sell only at major milestones
+    "profit_bands_pct":      [5.0, 10.0, 20.0, 30.0, 50.0],
     "sell_fraction":         0.15,    # sell 15% at each band
     "min_holdings_pct":      0.50,    # never sell below 50% of peak holdings
-    "rebuy_discount_min_pct": 3.0,   # rebuys require real corrections
+    "rebuy_discount_min_pct": 3.0,
     "rebuy_discount_max_pct": 10.0,
     "rebuy_spread_mult":      3.0,
     "fee_spot":              0.001,
     "maker_fee_spot":        0.0002,
     "use_limit_orders":      True,
     "snapshot_every_n":      20,
+    # Indicators service (ZMQ)
+    "indicators_addr":       "tcp://127.0.0.1:5559",
+    "scalping_stream_id":    "btc_scalping_spot",
+    # VWAP gate: when True, scale-ins are suspended when price is above the 4h VWAP
+    "vwap_gate":             True,
 }
 
 # ---------------------------------------------------------------------------
@@ -170,6 +180,9 @@ class AccumState:
     snap_counter:       int   = 0
     total_realized:     float = 0.0
     peak_holdings_btc:  float = 0.0
+    # VWAP context — updated from btc_vwap_context stream
+    vwap_dip_score:     float = 0.0
+    vwap_dip_zone:      str   = "neutral"
 
     def unrealized_pct(self) -> float:
         if self.avg_entry > 0 and self.last_price > 0:
@@ -230,16 +243,6 @@ def _restore_state(state: AccumState, db: sqlite3.Connection) -> bool:
                 holdings, avg, free, realized,
                 len(state.pending_rebuys), sorted(state.active_bands))
     return True
-
-# ---------------------------------------------------------------------------
-# OBI
-# ---------------------------------------------------------------------------
-
-def compute_obi(bids: list, asks: list, levels: int) -> float:
-    bid_vol = sum(float(b[1]) for b in bids[:levels])
-    ask_vol = sum(float(a[1]) for a in asks[:levels])
-    total   = bid_vol + ask_vol
-    return (bid_vol - ask_vol) / total if total > 0 else 0.0
 
 # ---------------------------------------------------------------------------
 # Adaptive helpers
@@ -350,7 +353,6 @@ def _check_profit_bands(state: AccumState, price: float,
     fraction = p.get("sell_fraction", 0.20)
     discount = _rebuy_discount(state)
 
-    # Minimum holdings floor: never sell below min_holdings_pct of peak
     min_hold_pct = p.get("min_holdings_pct", 0.0)
     floor_btc    = state.peak_holdings_btc * min_hold_pct if state.peak_holdings_btc > 0 else 0.0
 
@@ -361,7 +363,6 @@ def _check_profit_bands(state: AccumState, price: float,
         if price < target:
             break
         qty = state.holdings_btc * fraction
-        # Enforce floor
         max_sellable = max(0.0, state.holdings_btc - floor_btc)
         qty = min(qty, max_sellable)
         if qty < 1e-6:
@@ -402,6 +403,13 @@ def _check_obi_scale_in(state: AccumState, price: float,
 
     if (ts_ms - state.last_buy_ts) / 1000.0 < min_iv:
         return
+
+    # VWAP gate: skip scale-ins when price is above the 4h VWAP
+    if p.get("vwap_gate", True) and state.vwap_dip_score < 0.0:
+        logger.debug("Scale-in skipped — price above 4h VWAP (dip_score=%.4f zone=%s)",
+                     state.vwap_dip_score, state.vwap_dip_zone)
+        return
+
     invested = state.holdings_btc * price
     scale_usdt = _scale_in_amount(state, price)
     if invested + scale_usdt > max_invest:
@@ -414,91 +422,113 @@ def _check_obi_scale_in(state: AccumState, price: float,
                if state.avg_entry > 0 else 0.0)
     reason = f"obi_dip({dip_pct:+.1f}%)"
     if _buy(state, price, scale_usdt, reason, ts_ms, db):
-        state.last_buy_ts = ts_ms  # cooldown only on OBI scale-ins, not rebuys
+        state.last_buy_ts = ts_ms
 
 # ---------------------------------------------------------------------------
-# WebSocket handler
+# Indicators ZMQ handler
 # ---------------------------------------------------------------------------
 
-async def _handle_depth(state: AccumState, db: sqlite3.Connection,
-                        data: dict, ts_ms: int) -> None:
-    bids = data.get("bids") or data.get("b")
-    asks = data.get("asks") or data.get("a")
-    if not bids or not asks:
+def _handle_vwap(state: AccumState, msg: dict) -> None:
+    dip_score = msg.get("dip_score")
+    dip_zone  = msg.get("dip_zone", "neutral")
+    if dip_score is not None:
+        state.vwap_dip_score = float(dip_score)
+    state.vwap_dip_zone = str(dip_zone)
+    logger.debug("VWAP: dip_score=%.4f zone=%s", state.vwap_dip_score, state.vwap_dip_zone)
+
+
+async def _handle_indicator(state: AccumState, db: sqlite3.Connection,
+                             msg: dict, ts_ms: int) -> None:
+    mid = msg.get("mid")
+    if mid is None:
         return
 
-    best_bid     = float(bids[0][0])
-    best_ask     = float(asks[0][0])
-    mid          = (best_bid + best_ask) / 2.0
-    state.last_price = mid
+    state.last_price = float(mid)
 
-    # Spread EMA (volatility proxy for adaptive rebuy discount)
-    if mid > 0:
-        spread_pct = (best_ask - best_bid) / mid * 100.0
+    obi_ema = msg.get("obi_ema")
+    if obi_ema is not None:
+        state.obi_ema = float(obi_ema)
+
+    # Spread EMA: convert spread_bps to pct for adaptive rebuy discount
+    spread_bps = msg.get("spread_bps")
+    if spread_bps is not None:
+        spread_pct = float(spread_bps) / 100.0
         state.spread_ema = 0.1 * spread_pct + 0.9 * state.spread_ema
 
-    p = state.p
-    obi_raw      = compute_obi(bids, asks, p["obi_levels"])
-    state.obi_ema = p["obi_ema_alpha"] * obi_raw + (1 - p["obi_ema_alpha"]) * state.obi_ema
-
     state.snap_counter += 1
-    if state.snap_counter % p["snapshot_every_n"] == 0:
+    if state.snap_counter % state.p["snapshot_every_n"] == 0:
         invested = state.holdings_btc * state.avg_entry if state.avg_entry > 0 else 0.0
         db.execute("""
             INSERT INTO accum_snapshots
                 (ts_ms, price, holdings_btc, avg_entry, invested_usdt,
                  free_usdt, unrealized_pct, obi_ema)
             VALUES (?,?,?,?,?,?,?,?)""",
-            (ts_ms, mid, state.holdings_btc, state.avg_entry or 0.0,
+            (ts_ms, float(mid), state.holdings_btc, state.avg_entry or 0.0,
              invested, state.free_usdt, state.unrealized_pct(), state.obi_ema))
         db.commit()
 
-    # Initial buy
+    price = float(mid)
+
     if not state.initial_done:
-        init_usdt = min(p["initial_stake_usdt"], state.free_usdt)
-        if _buy(state, mid, init_usdt, "initial", ts_ms, db):
+        init_usdt = min(state.p["initial_stake_usdt"], state.free_usdt)
+        if _buy(state, price, init_usdt, "initial", ts_ms, db):
             state.last_buy_ts = ts_ms
             state.initial_done = True
         return
 
-    _check_profit_bands(state, mid, ts_ms, db)
-    _check_rebuys(state, mid, ts_ms, db)
+    _check_profit_bands(state, price, ts_ms, db)
+    _check_rebuys(state, price, ts_ms, db)
 
-    thresh = p["obi_entry_thresh"]
+    thresh = state.p["obi_entry_thresh"]
     if state.obi_ema < -thresh:
         state.pending_count += 1
     else:
         state.pending_count = 0
 
-    if state.pending_count >= p["obi_confirm_n"]:
-        _check_obi_scale_in(state, mid, ts_ms, db)
+    if state.pending_count >= state.p["obi_confirm_n"]:
+        _check_obi_scale_in(state, price, ts_ms, db)
         state.pending_count = 0
 
 # ---------------------------------------------------------------------------
-# WebSocket loop
+# ZMQ subscription loop
 # ---------------------------------------------------------------------------
 
-async def _ws_loop(state: AccumState, db: sqlite3.Connection) -> None:
-    sym = state.p["symbol"].lower()
-    url = f"wss://stream.binance.com:9443/ws/{sym}@depth20@100ms"
-    backoff = 1.0
-    while True:
-        try:
-            async with websockets.connect(url, ping_interval=20, ping_timeout=10) as ws:
-                logger.info("connected — %s", url)
-                backoff = 1.0
-                async for raw in ws:
-                    try:
-                        msg = json.loads(raw)
-                    except (json.JSONDecodeError, TypeError):
-                        continue
-                    await _handle_depth(state, db, msg, int(time.time() * 1000))
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.warning("WS disconnected (%s) — retry in %.0fs", exc, backoff)
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, 60)
+async def _zmq_loop(state: AccumState, db: sqlite3.Connection) -> None:
+    try:
+        import zmq
+        import zmq.asyncio as azmq
+    except ImportError:
+        logger.error("pyzmq not installed — run: pip install pyzmq")
+        return
+
+    addr        = state.p.get("indicators_addr", "tcp://127.0.0.1:5559")
+    scalping_id = state.p.get("scalping_stream_id", "btc_scalping_spot")
+
+    ctx = azmq.Context.instance()
+    sub = ctx.socket(zmq.SUB)
+    sub.setsockopt(zmq.SUBSCRIBE, b"")
+    sub.connect(addr)
+    logger.info("ZMQ SUB → %s  (streams: %s, btc_vwap_context)", addr, scalping_id)
+
+    try:
+        while True:
+            try:
+                msg = await sub.recv_json()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("ZMQ recv error: %s — retrying in 5s", exc)
+                await asyncio.sleep(5)
+                continue
+
+            sid = msg.get("stream_id")
+            if sid == scalping_id:
+                ts_ms = int(msg.get("ts", time.time()) * 1000)
+                await _handle_indicator(state, db, msg, ts_ms)
+            elif sid == "btc_vwap_context":
+                _handle_vwap(state, msg)
+    finally:
+        sub.close()
 
 # ---------------------------------------------------------------------------
 # Stats loop (every 60s)
@@ -511,11 +541,13 @@ async def _stats_loop(state: AccumState) -> None:
                          (int(time.time() * 1000) - state.last_buy_ts) / 1000)
         logger.info(
             "HOLD %.6f BTC @ avg %.2f  price=%.2f  uPnL=%+.2f%%  "
-            "free=%.2f  realized=%+.2f  spread=%.4f%%  bands=%s  rebuys=%d  dip_in=%ds",
+            "free=%.2f  realized=%+.2f  spread=%.4f%%  bands=%s  rebuys=%d  "
+            "dip_in=%ds  obi=%.3f  vwap_dip=%.4f(%s)",
             state.holdings_btc, state.avg_entry or 0.0, state.last_price,
             state.unrealized_pct(), state.free_usdt, state.total_realized,
             state.spread_ema, sorted(state.active_bands),
-            len(state.pending_rebuys), int(cooldown_s))
+            len(state.pending_rebuys), int(cooldown_s),
+            state.obi_ema, state.vwap_dip_score, state.vwap_dip_zone)
 
 # ---------------------------------------------------------------------------
 # Main
@@ -526,7 +558,7 @@ async def _run(p: dict, db: sqlite3.Connection) -> None:
 
     restored = _restore_state(state, db)
 
-    logger.info("Accumulation bot v1.1 — %s  capital=%.0f USDT  paper=True%s",
+    logger.info("Accumulation bot v1.2 — %s  capital=%.0f USDT  paper=True%s",
                 p["symbol"], p["capital_usdt"],
                 "  [RESTORED]" if restored else "")
     logger.info("Initial %.0f USDT  scale-in %.0f-%.0f USDT  "
@@ -545,9 +577,12 @@ async def _run(p: dict, db: sqlite3.Connection) -> None:
                 p.get("rebuy_discount_min_pct", 0.15),
                 p.get("rebuy_discount_max_pct", 1.00),
                 p.get("rebuy_spread_mult", 3.0))
+    logger.info("VWAP gate: %s  indicators: %s",
+                "enabled" if p.get("vwap_gate", True) else "disabled",
+                p.get("indicators_addr", "tcp://127.0.0.1:5559"))
 
     tasks = [
-        asyncio.create_task(_ws_loop(state, db)),
+        asyncio.create_task(_zmq_loop(state, db)),
         asyncio.create_task(_stats_loop(state)),
     ]
     try:
@@ -557,7 +592,7 @@ async def _run(p: dict, db: sqlite3.Connection) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="BTC long-term accumulation bot v1.1")
+    ap = argparse.ArgumentParser(description="BTC long-term accumulation bot v1.2")
     ap.add_argument("--strategy", metavar="JSON")
     ap.add_argument("--dir",      default=None)
     args = ap.parse_args()

@@ -1,5 +1,5 @@
 {
-    "_comment": "BTC long-term accumulation v1.2 — wide bands, larger initial stake, real correction dips only",
+    "_comment": "BTC long-term accumulation v1.2 — ZMQ indicators, VWAP gate, wide bands, larger initial stake",
     "_version": "1.2",
 
     "symbol":               "BTCUSDT",
@@ -28,5 +28,9 @@
     "maker_fee_spot":       0.0002,
     "use_limit_orders":     true,
 
-    "snapshot_every_n":     20
+    "snapshot_every_n":     20,
+
+    "indicators_addr":      "tcp://127.0.0.1:5559",
+    "scalping_stream_id":   "btc_scalping_spot",
+    "vwap_gate":            true
 }

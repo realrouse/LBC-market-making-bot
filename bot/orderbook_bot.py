@@ -2,30 +2,19 @@
 """
 Binance OBI scalping bot — real-time L2 orderbook signal (contrarian).
 
-Connects to Binance combined WebSocket streams (depth20@100ms + aggTrade) for
-spot and/or perpetual markets.  Computes OBI (Order Book Imbalance) from the
-top N bid/ask levels, smoothed with an EMA, and TFI (Trade Flow Imbalance)
-over a rolling time window from aggTrade events.
+Consumes pre-computed OBI and TFI values from the shared tradinebotte-indicators
+service via ZMQ (streams: btc_scalping_spot, btc_scalping_perp).  No direct
+Binance WebSocket connection is opened by this bot.
 
 Signal
 ------
-  OBI = (Σ bid_qty[:n] − Σ ask_qty[:n]) / (Σ bid_qty[:n] + Σ ask_qty[:n])
-  OBI ∈ [−1, +1]:  +1 = all depth on the bid (bid-heavy)
-                   −1 = all depth on the ask (ask-heavy)
+  OBI_ema published by the indicators service (btc_scalping_spot / perp):
+    ask-heavy (OBI < -thresh) → contrarian LONG  (sellers absorbed → price up)
+    bid-heavy (OBI > +thresh) → contrarian SHORT  (buyers absorbed → price down)
 
-  TFI = (buy_vol − sell_vol) / (buy_vol + sell_vol)  over tfi_window_s seconds
-  TFI ∈ [−1, +1]:  −1 = all taker selling (net sellers)
-                   +1 = all taker buying (net buyers)
-  (m=True in aggTrade = buyer is maker → taker SOLD)
-
-  Empirically, high bid depth (OBI > 0) precedes price drops as those bids are
-  consumed or cancelled — OBI is contrarian on Binance at sub-minute timeframes.
-
-  Short entry : OBI_ema > +entry_thresh  for ≥ confirm_n consecutive snapshots
-                AND TFI < −tfi_confirm_thresh  (when tfi_confirm_thresh > 0)
-  Exit        : TP / SL / max-hold  (obi_exit disabled)
-
-  TFI is always recorded at entry for later analysis even when tfi_confirm_thresh=0.
+  TFI gate (optional, tfi_confirm_thresh > 0):
+    long entry requires TFI > +thresh  (net taker buying)
+    short entry requires TFI < -thresh (net taker selling)
 
 Usage
 -----
@@ -34,6 +23,14 @@ Usage
     python3 bot/orderbook_bot.py --perp-only
     python3 bot/orderbook_bot.py --strategy strategies/scalping/orderbook_btc.json
     python3 bot/orderbook_bot.py --dir ~/tradinebotte
+
+Refactor history
+----------------
+  v2.6: Removed direct Binance WebSocket connections and local OBI/TFI computation.
+        Now subscribes to tradinebotte-indicators via ZMQ, consistent with the
+        project rule that all computation lives in the shared indicators service.
+        Eliminated: _ws_loop, _poll_tfi_rest, compute_obi, compute_tfi, _update_tfi,
+        _fetch_rest_agg_trades, _handle_depth, _handle_message, _ws_url.
 """
 
 import argparse
@@ -44,14 +41,7 @@ import logging.handlers
 import sqlite3
 import sys
 import time
-from collections import deque
 from pathlib import Path
-
-try:
-    import websockets
-except ImportError:
-    print("ERROR: websockets not installed — run: pip install websockets", file=sys.stderr)
-    sys.exit(1)
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -84,7 +74,9 @@ DEFAULTS = {
     "capital_perp":        1000.0,
     "stake_frac":          0.10,
     "obi_levels":          10,
-    "obi_ema_alpha":       0.15,
+    # obi_ema_alpha and tfi_window_s are informational — actual values are set
+    # in the indicators service config (indicators_all.json).
+    "obi_ema_alpha":       0.05,
     "obi_entry_thresh":    0.30,
     "obi_exit_thresh":     0.05,
     "obi_confirm_n":       3,
@@ -98,11 +90,13 @@ DEFAULTS = {
     "maker_fee_spot":      0.0002,
     "maker_fee_perp":      0.0002,
     "snapshot_every_n":    10,
-    # TFI parameters
-    "tfi_window_s":        30,     # rolling window for trade flow
-    "tfi_confirm_thresh":  0.0,    # 0 = log only; >0 gates entry by TFI direction
-    # Direction
-    "direction":           "long", # "long" | "short" | "both"
+    "tfi_window_s":        30,
+    "tfi_confirm_thresh":  0.0,
+    "direction":           "long",
+    # Indicators service (ZMQ)
+    "indicators_addr":     "tcp://127.0.0.1:5559",
+    "spot_stream_id":      "btc_scalping_spot",
+    "perp_stream_id":      "btc_scalping_perp",
 }
 
 # ---------------------------------------------------------------------------
@@ -146,14 +140,12 @@ def init_db(db_path: Path) -> sqlite3.Connection:
             capital_after  REAL
         )""")
     conn.commit()
-    # Migrations for existing DBs
-    for col, definition in [("tfi", "REAL"), ("entry_tfi", "REAL")]:
-        for table in (("ob_snapshots", "tfi"), ("ob_trades", "entry_tfi")):
-            try:
-                conn.execute(f"ALTER TABLE {table[0]} ADD COLUMN {table[1]} REAL")
-                conn.commit()
-            except sqlite3.OperationalError:
-                pass
+    for table, col in (("ob_snapshots", "tfi"), ("ob_trades", "entry_tfi")):
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} REAL")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
     return conn
 
 # ---------------------------------------------------------------------------
@@ -189,6 +181,7 @@ class StreamState:
         self.mode          = mode
         self.p             = p
         self.obi_ema       = 0.0
+        self.tfi           = 0.0
         self.pending_dir   = None
         self.pending_count = 0
         self.position      = None
@@ -198,41 +191,6 @@ class StreamState:
         self.wins          = 0
         self.losses        = 0
         self.total_pnl     = 0.0
-        # TFI rolling window: deque of (ts_ms, is_buy, qty)
-        self.tfi_trades:   deque = deque()
-        self.tfi_buy_vol:  float = 0.0
-        self.tfi_sell_vol: float = 0.0
-
-# ---------------------------------------------------------------------------
-# OBI / TFI
-# ---------------------------------------------------------------------------
-
-def compute_obi(bids: list, asks: list, n: int) -> float:
-    bid_vol = sum(float(qty) for _, qty in bids[:n])
-    ask_vol = sum(float(qty) for _, qty in asks[:n])
-    total   = bid_vol + ask_vol
-    return (bid_vol - ask_vol) / total if total > 0 else 0.0
-
-
-def compute_tfi(buy_vol: float, sell_vol: float) -> float:
-    total = buy_vol + sell_vol
-    return (buy_vol - sell_vol) / total if total > 0 else 0.0
-
-
-def _update_tfi(state: StreamState, is_buy: bool, qty: float, ts_ms: int) -> None:
-    """Add one aggTrade to the rolling TFI window and evict stale entries."""
-    window_ms = state.p.get("tfi_window_s", 30) * 1000
-    state.tfi_trades.append((ts_ms, is_buy, qty))
-    if is_buy:
-        state.tfi_buy_vol += qty
-    else:
-        state.tfi_sell_vol += qty
-    while state.tfi_trades and ts_ms - state.tfi_trades[0][0] > window_ms:
-        old_ts, old_is_buy, old_qty = state.tfi_trades.popleft()
-        if old_is_buy:
-            state.tfi_buy_vol = max(0.0, state.tfi_buy_vol - old_qty)
-        else:
-            state.tfi_sell_vol = max(0.0, state.tfi_sell_vol - old_qty)
 
 # ---------------------------------------------------------------------------
 # Paper trade helpers
@@ -326,35 +284,35 @@ def _close_paper(state: StreamState, mid: float, reason: str,
     state.position = None
 
 # ---------------------------------------------------------------------------
-# Message handlers
+# Indicator message handler
 # ---------------------------------------------------------------------------
 
-async def _handle_depth(state: StreamState, db: sqlite3.Connection,
-                        data: dict, ts_ms: int) -> None:
-    bids = data.get("bids") or data.get("b")
-    asks = data.get("asks") or data.get("a")
-    if not bids or not asks:
+async def _handle_indicator(state: StreamState, db: sqlite3.Connection,
+                             msg: dict, ts_ms: int) -> None:
+    mid = msg.get("mid")
+    if mid is None:
         return
+    mid = float(mid)
 
-    best_bid = float(bids[0][0])
-    best_ask = float(asks[0][0])
-    mid      = (best_bid + best_ask) / 2.0
+    best_bid = float(msg.get("best_bid", mid))
+    best_ask = float(msg.get("best_ask", mid))
     spread   = (best_ask - best_bid) / mid if mid > 0 else 0.0
 
-    p     = state.p
-    alpha = p["obi_ema_alpha"]
-    obi_raw       = compute_obi(bids, asks, p["obi_levels"])
-    state.obi_ema = alpha * obi_raw + (1 - alpha) * state.obi_ema
-    tfi           = compute_tfi(state.tfi_buy_vol, state.tfi_sell_vol)
+    obi_ema = msg.get("obi_ema")
+    if obi_ema is not None:
+        state.obi_ema = float(obi_ema)
 
-    # Snapshot recording
+    tfi = msg.get("tfi")
+    state.tfi = float(tfi) if tfi is not None else 0.0
+
     state.snap_counter += 1
-    if state.snap_counter % p["snapshot_every_n"] == 0:
+    if state.snap_counter % state.p["snapshot_every_n"] == 0:
         db.execute("""
             INSERT INTO ob_snapshots
                 (ts_ms, mode, best_bid, best_ask, spread, obi_raw, obi_ema, tfi)
             VALUES (?,?,?,?,?,?,?,?)""",
-            (ts_ms, state.mode, best_bid, best_ask, spread, obi_raw, state.obi_ema, tfi))
+            (ts_ms, state.mode, best_bid, best_ask, spread,
+             None, state.obi_ema, state.tfi))
         db.commit()
 
     # Exit check
@@ -374,21 +332,19 @@ async def _handle_depth(state: StreamState, db: sqlite3.Connection,
         return
 
     # Entry signal
+    p             = state.p
     entry_thresh  = p["obi_entry_thresh"]
     confirm_n     = p["obi_confirm_n"]
     tfi_thresh    = p.get("tfi_confirm_thresh", 0.0)
     direction     = p.get("direction", "long")
 
-    # TFI gate: long needs net buying (TFI > +thresh), short needs net selling (TFI < -thresh)
     if tfi_thresh <= 0.0:
         tfi_ok_long  = True
         tfi_ok_short = True
     else:
-        tfi_ok_long  = tfi >  tfi_thresh
-        tfi_ok_short = tfi < -tfi_thresh
+        tfi_ok_long  = state.tfi >  tfi_thresh
+        tfi_ok_short = state.tfi < -tfi_thresh
 
-    # OBI signal: ask-heavy (OBI < -thresh) → contrarian LONG  (sellers absorbed → price up)
-    #             bid-heavy (OBI > +thresh) → contrarian SHORT  (buyers absorbed → price down)
     want_long  = (direction in ("long",  "both")) and state.obi_ema < -entry_thresh
     want_short = (direction in ("short", "both")) and state.obi_ema >  entry_thresh
 
@@ -408,108 +364,54 @@ async def _handle_depth(state: StreamState, db: sqlite3.Connection,
 
     tfi_ok = tfi_ok_long if state.pending_dir == "long" else tfi_ok_short
     if state.pending_count >= confirm_n and state.pending_dir and tfi_ok:
-        _open_paper(state, state.pending_dir, mid, tfi, ts_ms, db)
+        _open_paper(state, state.pending_dir, mid, state.tfi, ts_ms, db)
         state.pending_dir   = None
         state.pending_count = 0
 
+# ---------------------------------------------------------------------------
+# ZMQ subscription loop
+# ---------------------------------------------------------------------------
 
-async def _handle_message(state: StreamState, db: sqlite3.Connection,
-                          raw: str) -> None:
+async def _zmq_loop(states: list, db: sqlite3.Connection, p: dict) -> None:
     try:
-        msg = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
+        import zmq
+        import zmq.asyncio as azmq
+    except ImportError:
+        logger.error("pyzmq not installed — run: pip install pyzmq")
         return
 
-    ts_ms = int(time.time() * 1000)
+    addr = p.get("indicators_addr", "tcp://127.0.0.1:5559")
+    stream_map = {}
+    for st in states:
+        sid_key = f"{st.mode}_stream_id"
+        sid     = p.get(sid_key, f"btc_scalping_{st.mode}")
+        stream_map[sid] = st
 
-    # Combined stream: {"stream": "...", "data": {...}}
-    data        = msg.get("data", msg)
-    event_type  = data.get("e", "")
+    ctx = azmq.Context.instance()
+    sub = ctx.socket(zmq.SUB)
+    sub.setsockopt(zmq.SUBSCRIBE, b"")
+    sub.connect(addr)
+    logger.info("ZMQ SUB → %s  streams: %s", addr, list(stream_map.keys()))
 
-    if event_type == "aggTrade":
-        # m=True: buyer is maker → taker SOLD → is_buy=False
-        is_buy = not data.get("m", True)
-        qty    = float(data.get("q", 0))
-        _update_tfi(state, is_buy, qty, ts_ms)
-    else:
-        await _handle_depth(state, db, data, ts_ms)
+    try:
+        while True:
+            try:
+                msg = await sub.recv_json()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("ZMQ recv error: %s — retrying in 5s", exc)
+                await asyncio.sleep(5)
+                continue
 
-# ---------------------------------------------------------------------------
-# WebSocket loop
-# ---------------------------------------------------------------------------
-
-def _ws_url(mode: str, symbol: str) -> str:
-    sym = symbol.lower()
-    if mode == "spot":
-        # Combined stream: depth20 + aggTrade both work for spot
-        return f"wss://stream.binance.com:9443/stream?streams={sym}@depth20@100ms/{sym}@aggTrade"
-    else:
-        # Futures: aggTrade WS silently delivers no data (geo-restriction);
-        # TFI is maintained via REST polling (_poll_tfi_rest task).
-        return f"wss://fstream.binance.com/ws/{sym}@depth20@100ms"
-
-
-async def _ws_loop(state: StreamState, db: sqlite3.Connection) -> None:
-    url     = _ws_url(state.mode, state.p["symbol"])
-    backoff = 1.0
-    while True:
-        try:
-            async with websockets.connect(url, ping_interval=20, ping_timeout=10) as ws:
-                logger.info("[%s] connected", state.mode)
-                backoff = 1.0
-                async for raw in ws:
-                    await _handle_message(state, db, raw)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.warning("[%s] disconnected (%s) — retry in %.0fs",
-                           state.mode, exc, backoff)
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, 60)
-
-# ---------------------------------------------------------------------------
-# Perp TFI: REST polling fallback (Futures aggTrade WS unavailable)
-# ---------------------------------------------------------------------------
-
-def _fetch_rest_agg_trades(symbol: str, window_s: int) -> list:
-    """Synchronous REST call — must be run via run_in_executor."""
-    import urllib.request
-    now_ms  = int(time.time() * 1000)
-    start_ms = now_ms - window_s * 1000
-    url = (f"https://fapi.binance.com/fapi/v1/aggTrades"
-           f"?symbol={symbol}&startTime={start_ms}&endTime={now_ms}&limit=1000")
-    req = urllib.request.Request(url, headers={"User-Agent": "orderbook_bot/2.4"})
-    with urllib.request.urlopen(req, timeout=8) as r:
-        return json.loads(r.read())
-
-
-async def _poll_tfi_rest(state: StreamState) -> None:
-    """Maintain TFI for perp mode by polling Binance Futures REST aggTrades."""
-    sym      = state.p["symbol"]
-    window_s = state.p.get("tfi_window_s", 30)
-    poll_s   = max(5, window_s // 3)
-    loop     = asyncio.get_event_loop()
-    logger.info("[%s] TFI polling via REST every %ds (WS aggTrade unavailable)",
-                state.mode, poll_s)
-    while True:
-        await asyncio.sleep(poll_s)
-        try:
-            trades = await loop.run_in_executor(
-                None, _fetch_rest_agg_trades, sym, window_s)
-            buy_vol = 0.0
-            sell_vol = 0.0
-            for t in trades:
-                qty    = float(t.get("q", 0))
-                is_buy = not t.get("m", True)
-                if is_buy:
-                    buy_vol += qty
-                else:
-                    sell_vol += qty
-            state.tfi_buy_vol  = buy_vol
-            state.tfi_sell_vol = sell_vol
-        except Exception as exc:
-            logger.warning("[%s] TFI REST poll failed: %s", state.mode, exc)
-
+            sid   = msg.get("stream_id")
+            state = stream_map.get(sid)
+            if state is None:
+                continue
+            ts_ms = int(msg.get("ts", time.time()) * 1000)
+            await _handle_indicator(state, db, msg, ts_ms)
+    finally:
+        sub.close()
 
 # ---------------------------------------------------------------------------
 # Stats display (every 60s)
@@ -520,11 +422,10 @@ async def _stats_loop(states: list) -> None:
         await asyncio.sleep(60)
         for st in states:
             wr  = f"{st.wins}/{st.total_trades}" if st.total_trades else "0/0"
-            tfi = compute_tfi(st.tfi_buy_vol, st.tfi_sell_vol)
             pos = (f"{st.position.direction.upper()}@{st.position.entry_price:.2f}"
                    if st.position else "flat")
             logger.info("[%s] OBI=%.3f  TFI=%+.3f  capital=%.2f  W/T=%s  PnL=%+.4f  %s",
-                        st.mode, st.obi_ema, tfi, st.capital, wr, st.total_pnl, pos)
+                        st.mode, st.obi_ema, st.tfi, st.capital, wr, st.total_pnl, pos)
 
 # ---------------------------------------------------------------------------
 # Main
@@ -539,21 +440,19 @@ async def _run(p: dict, db: sqlite3.Connection) -> None:
 
     logger.info("OrderBook bot started — symbol=%s  modes=%s  direction=%s  paper=True",
                 p["symbol"], modes, p.get("direction", "long"))
-    logger.info("OBI: entry=%.2f  confirm=%d  alpha=%.2f  levels=%d",
+    logger.info("OBI: entry=%.2f  confirm=%d  alpha=%.2f (indicators)  levels=%d",
                 p["obi_entry_thresh"], p["obi_confirm_n"],
                 p["obi_ema_alpha"], p["obi_levels"])
     logger.info("Trade: tp=%.3f%%  sl=%.3f%%  max_hold=%dm  stake=%.0f%%",
                 p["tp_pct"] * 100, p["sl_pct"] * 100,
                 p["max_hold_minutes"], p["stake_frac"] * 100)
-    logger.info("TFI: window=%ds  gate=%s",
-                p.get("tfi_window_s", 30), tfi_mode)
+    logger.info("TFI: gate=%s  indicators: %s",
+                tfi_mode, p.get("indicators_addr", "tcp://127.0.0.1:5559"))
 
-    tasks = [asyncio.create_task(_ws_loop(st, db)) for st in states]
-    for st in states:
-        if st.mode != "spot":
-            tasks.append(asyncio.create_task(_poll_tfi_rest(st)))
-    tasks.append(asyncio.create_task(_stats_loop(states)))
-
+    tasks = [
+        asyncio.create_task(_zmq_loop(states, db, p)),
+        asyncio.create_task(_stats_loop(states)),
+    ]
     try:
         await asyncio.gather(*tasks)
     except asyncio.CancelledError:

@@ -1,6 +1,6 @@
 {
-    "_comment": "Binance OBI scalping v2.5 — TFI filter + TP 30bps / SL 15bps / hold 5min",
-    "_version": "2.5",
+    "_comment": "Binance OBI scalping v2.6 — ZMQ indicators, TFI filter, TP 30bps / SL 15bps / hold 5min",
+    "_version": "2.6",
 
     "symbol":             "BTCUSDT",
     "modes":              ["spot", "perp"],
@@ -29,5 +29,9 @@
     "tfi_window_s":       30,
     "tfi_confirm_thresh": 0.30,
 
-    "snapshot_every_n":   10
+    "snapshot_every_n":   10,
+
+    "indicators_addr":    "tcp://127.0.0.1:5559",
+    "spot_stream_id":     "btc_scalping_spot",
+    "perp_stream_id":     "btc_scalping_perp"
 }
