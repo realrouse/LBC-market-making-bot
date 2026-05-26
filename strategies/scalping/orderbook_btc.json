@@ -1,6 +1,6 @@
 {
-    "_comment": "Binance OBI scalping v2.4 — long-only + TP 8bps / SL 4bps / hold 1min",
-    "_version": "2.4",
+    "_comment": "Binance OBI scalping v2.5 — TFI filter + TP 30bps / SL 15bps / hold 5min",
+    "_version": "2.5",
 
     "symbol":             "BTCUSDT",
     "modes":              ["spot", "perp"],
@@ -12,12 +12,12 @@
 
     "obi_levels":         10,
     "obi_ema_alpha":      0.05,
-    "obi_entry_thresh":   0.60,
+    "obi_entry_thresh":   0.65,
     "obi_confirm_n":      15,
 
-    "tp_pct":             0.0008,
-    "sl_pct":             0.0004,
-    "max_hold_minutes":   1,
+    "tp_pct":             0.0030,
+    "sl_pct":             0.0015,
+    "max_hold_minutes":   5,
 
     "use_limit_orders":   true,
     "fee_spot":           0.001,
@@ -27,7 +27,7 @@
     "slippage":           0.0005,
 
     "tfi_window_s":       30,
-    "tfi_confirm_thresh": 0.0,
+    "tfi_confirm_thresh": 0.30,
 
     "snapshot_every_n":   10
 }
