@@ -96,6 +96,10 @@ _rsync() {
         --exclude='config.json' --exclude='live.db' --exclude='live_ob.db' --exclude='*.log' \
         -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
         "$LOCAL_REPO/bot/" "$SC_USER@$SERVER:$INSTALL_DIR/" 2>&1
+    SSHPASS="$SC_PASS" /usr/bin/sshpass -e \
+        rsync -az \
+        -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
+        "$LOCAL_REPO/requirements.txt" "$SC_USER@$SERVER:$INSTALL_DIR/" 2>&1
 
     SSHPASS="$SC_PASS" /usr/bin/sshpass -e \
         rsync -az \
@@ -143,9 +147,11 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
 if [ ! -x venv/bin/python3 ]; then
     echo 'Creating venv...'
     python3 -m venv venv
-    venv/bin/pip install -q websockets
     echo 'Venv ready'
 fi
+echo 'updating dependencies...'
+venv/bin/pip install --quiet -r $INSTALL_DIR/requirements.txt \
+    && echo 'deps ok' || echo 'pip warning (non-fatal)'
 "
     # Stop legacy candle/meanrev/breakout bots if still running
     for LEGACY in scalping_candle_momentum scalping_meanrev scalping_breakout; do

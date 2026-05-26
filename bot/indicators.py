@@ -827,6 +827,50 @@ async def _binance_liquidations_task(spec: StreamSpec, pub: zmq.asyncio.Socket) 
             await asyncio.sleep(interval)
 
 
+_BINANCE_FUTURES_AGG_TRADES_URL = "https://fapi.binance.com/fapi/v1/aggTrades"
+
+
+async def _perp_agg_trade_rest_loop(
+    symbol: str,
+    trade_window: deque,
+    tfi_window_s: float,
+    stream_id: str,
+) -> None:
+    """Poll Binance futures aggTrades via REST every second.
+
+    fstream WebSocket streams (both /ws/ and combined) silently drop aggTrade
+    messages in the presence of depth20@100ms. REST polling is reliable.
+    Rebuilds trade_window atomically on each poll — safe in single-threaded asyncio.
+    """
+    poll_s = 1.0
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
+                now_ms = int(time.time() * 1000)
+                start_ms = now_ms - int(tfi_window_s * 1000)
+                async with session.get(
+                    _BINANCE_FUTURES_AGG_TRADES_URL,
+                    params={"symbol": symbol.upper(), "limit": 1000,
+                            "startTime": start_ms, "endTime": now_ms},
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as resp:
+                    trades = await resp.json()
+                if isinstance(trades, list):
+                    trade_window.clear()
+                    for t in trades:
+                        ts_ms    = float(t.get("T", now_ms))
+                        qty      = float(t.get("q", 0))
+                        is_maker = t.get("m", False)
+                        trade_window.append((
+                            ts_ms,
+                            0.0 if is_maker else qty,
+                            qty if is_maker else 0.0,
+                        ))
+            except Exception as exc:
+                logger.warning("[%s] aggTrade REST error: %s", stream_id, exc)
+            await asyncio.sleep(poll_s)
+
+
 async def _binance_scalping_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> None:
     """Stream Binance combined depth20 + aggTrade for scalping microstructure indicators.
 
@@ -856,7 +900,6 @@ async def _binance_scalping_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> N
 
     symbol      = spec.asset.lower()
     ws_base     = _BINANCE_PERP_COMBINED_WS if market == "perp" else _BINANCE_SPOT_COMBINED_WS
-    ws_url      = f"{ws_base}?streams={symbol}@depth20@100ms/{symbol}@aggTrade"
 
     # Mutable state
     obi_ema:      float | None = None
@@ -866,6 +909,16 @@ async def _binance_scalping_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> N
     trade_window: deque[tuple[float, float, float]] = deque()
     depth_count   = 0
     backoff       = 5
+
+    if market == "perp":
+        # fstream combined stream silently drops aggTrade alongside depth20@100ms;
+        # use depth-only WS for OBI + REST polling for TFI.
+        ws_url = f"{ws_base}?streams={symbol}@depth20@100ms"
+        asyncio.create_task(_perp_agg_trade_rest_loop(
+            symbol, trade_window, tfi_window_s, spec.id,
+        ))
+    else:
+        ws_url = f"{ws_base}?streams={symbol}@depth20@100ms/{symbol}@aggTrade"
 
     while True:
         try:
@@ -892,8 +945,9 @@ async def _binance_scalping_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> N
                     if "depth20" not in stream_name:
                         continue
 
-                    bids = data.get("bids", [])
-                    asks = data.get("asks", [])
+                    # spot uses "bids"/"asks"; futures depth20 uses "b"/"a"
+                    bids = data.get("bids") or data.get("b", [])
+                    asks = data.get("asks") or data.get("a", [])
                     if not bids or not asks:
                         continue
 

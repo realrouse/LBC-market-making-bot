@@ -79,6 +79,11 @@ _rsync() {
         --filter='+ **/' --filter='+ *.json' --filter='- *' \
         -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
         "$LOCAL_REPO/strategies/" "$SC_USER@$SERVER:$INSTALL_DIR/strategies/" 2>&1
+
+    SSHPASS="$SC_PASS" /usr/bin/sshpass -e \
+        rsync -az \
+        -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
+        "$LOCAL_REPO/requirements.txt" "$SC_USER@$SERVER:$INSTALL_DIR/" 2>&1
 }
 
 section "PRE-FLIGHT"
@@ -104,6 +109,10 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
 
     REMOTE_CMD="set -e; cd $INSTALL_DIR"$'\n'
     REMOTE_CMD+="
+echo 'updating dependencies...'
+venv/bin/pip install --quiet -r $INSTALL_DIR/requirements.txt \
+    && echo 'deps ok' || echo 'pip warning (non-fatal)'
+
 PF=$INSTALL_DIR/${BOT_NAME}.pid
 if [ -f \"\$PF\" ]; then
     PID=\$(cat \"\$PF\")
