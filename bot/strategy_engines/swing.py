@@ -20,8 +20,9 @@ BUY fill at support S (entry_price):
   → Record SL = entry_price * (1 − sl_pct)
 
 SL breach (price drops below sl_price while LONG):
-  → Simulation: detected in on_book_update, close at current bid
-  → Live: TODO — market SELL order via REST
+  → Cancel active TP SELL order via REST
+  → Place MARKET SELL for remaining qty (api_binance.post_market_order)
+  → Simulation path: no REST call, PnL logged at current bid
 
 SELL fill (TP hit):
   → Account PnL
@@ -585,23 +586,36 @@ class SwingStrategy:
                             self.sw.symbol, pos.level_price, new_oid)
 
     async def _close_sl(self, state: Any, pos: SwingPosition, price: float) -> None:
-        """Stop-loss triggered: cancel TP order and close at current price."""
+        """Stop-loss triggered: cancel TP order, place MARKET SELL, account PnL."""
         entry = pos.buy_price or pos.level_price
         qty   = self.sw.order_size_usdt / entry
-        pnl   = (price - entry) * qty   # approximate, fees omitted on emergency close
 
-        self.sw.total_pnl    += pnl
-        self.sw.total_trades += 1
-
+        # Cancel the outstanding TP SELL first to free the position
         if pos.sell_order_id:
             await self._api.cancel_order(state.session, self.sw.symbol, pos.sell_order_id)
 
+        # Place market SELL to exit immediately (live) or simulate (no credentials)
+        post_market = getattr(self._api, "post_market_order", None)
+        if post_market is not None:
+            mkt_oid = await post_market(state.session, self.sw.symbol, qty, side="SELL")
+            if mkt_oid:
+                logger.warning(
+                    "SwingStrategy [%s] SL MARKET SELL %.6f BTC → [%s]",
+                    self.sw.symbol, qty, mkt_oid,
+                )
+            else:
+                logger.error("SwingStrategy [%s] SL MARKET SELL failed — position marked closed",
+                             self.sw.symbol)
+
+        pnl = (price - entry) * qty   # approximate at triggered price; fees omitted
+        self.sw.total_pnl    += pnl
+        self.sw.total_trades += 1
         pos.status = "closed"
 
         logger.warning(
-            "SwingStrategy [%s] SL hit @ %.2f | entry=%.2f | pnl≈$%+.4f | "
+            "SwingStrategy [%s] SL hit @ %.2f | entry=%.2f | qty=%.6f | pnl≈$%+.4f | "
             "total_pnl=$%+.2f",
-            self.sw.symbol, price, entry, pnl, self.sw.total_pnl,
+            self.sw.symbol, price, entry, qty, pnl, self.sw.total_pnl,
         )
 
     # ── Fill detection ─────────────────────────────────────────────────────────

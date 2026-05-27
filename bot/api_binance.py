@@ -269,6 +269,51 @@ async def post_order(session, symbol, price, size_usdc, *,
         return None
 
 
+async def post_market_order(session, symbol, quantity, *, side="SELL",
+                            api_key=None, api_secret=None,
+                            private_key=None, install_dir=None):
+    """
+    Submit a MARKET order — executed immediately at best available price.
+
+    Used for emergency exits (stop-loss) where execution certainty matters
+    more than price. quantity is in base asset (BTC), not USDT.
+
+    Returns order ID string on success, "sim_..." in dry-run, or None on error.
+    """
+    _key    = api_key    or os.environ.get("BINANCE_API_KEY", "")
+    _secret = api_secret or os.environ.get("BINANCE_API_SECRET", "")
+    _sym    = str(symbol).split(":", maxsplit=1)[0]
+    _side   = side.upper()
+
+    if not _key or not _secret:
+        logger.warning("Binance — simulated market order (BINANCE_API_KEY/SECRET not set)")
+        return f"sim_{uuid.uuid4().hex[:12]}"
+
+    try:
+        params = {
+            "symbol":    _sym,
+            "side":      _side,
+            "type":      "MARKET",
+            "quantity":  f"{quantity:.6f}",
+            "timestamp": int(time.time() * 1000),
+        }
+        params["signature"] = _sign(params, _secret)
+        async with session.post(
+            f"{BASE_URL}/api/v3/order",
+            params=params,
+            headers={"X-MBX-APIKEY": _key},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            data = await resp.json(content_type=None)
+            if resp.status != 200:
+                logger.error("Binance market order error %d : %.300s", resp.status, data)
+                return None
+            return str(data.get("orderId", "")) or None
+    except Exception as e:
+        logger.error("Binance post_market_order error : %s", e)
+        return None
+
+
 # ─── ORDER MANAGEMENT (grid trading) ─────────────────────────────────────────
 
 async def get_order_status(session, symbol, order_id, *,
