@@ -31,6 +31,10 @@ Usage
 
 Refactor history
 ----------------
+  v2.8: VWAP context gate — suspend long entries when price is above the 4h VWAP
+        (entering into resistance); relax OBI threshold (0.65→0.50) when price is
+        ≥1% below VWAP (strong dip context). VWAP published by indicators service
+        via btc_vwap_context ZMQ stream. Enabled via vwap_gate=true in JSON.
   v2.7: TFI gate flipped to "flat" mode — require neutral TFI at entry rather than
         directional TFI. Data analysis on ob_snapshots showed OBI>0.6+TFI_flat has
         the strongest 30s predictive signal (+0.035); OBI+strong_TFI reverses.
@@ -101,10 +105,15 @@ DEFAULTS = {
     "tfi_window_s":        30,
     "tfi_confirm_thresh":  0.0,
     "direction":           "long",
+    # VWAP context gate
+    "vwap_gate":           False,
+    "vwap_relax_min_pct":  0.01,   # relax OBI thresh when dip_score >= this value
+    "vwap_obi_relax":      0.50,   # relaxed OBI entry threshold (below VWAP dip)
     # Indicators service (ZMQ)
     "indicators_addr":     "tcp://127.0.0.1:5559",
     "spot_stream_id":      "btc_scalping_spot",
     "perp_stream_id":      "btc_scalping_perp",
+    "vwap_stream_id":      "btc_vwap_context",
 }
 
 # ---------------------------------------------------------------------------
@@ -186,19 +195,21 @@ class Position:
 
 class StreamState:
     def __init__(self, mode: str, p: dict):
-        self.mode          = mode
-        self.p             = p
-        self.obi_ema       = 0.0
-        self.tfi           = 0.0
-        self.pending_dir   = None
-        self.pending_count = 0
-        self.position      = None
-        self.capital       = p[f"capital_{mode}"]
-        self.snap_counter  = 0
-        self.total_trades  = 0
-        self.wins          = 0
-        self.losses        = 0
-        self.total_pnl     = 0.0
+        self.mode            = mode
+        self.p               = p
+        self.obi_ema         = 0.0
+        self.tfi             = 0.0
+        self.vwap_dip_score  = 0.0    # (vwap - price) / vwap; positive = below VWAP
+        self.vwap_dip_zone   = "neutral"
+        self.pending_dir     = None
+        self.pending_count   = 0
+        self.position        = None
+        self.capital         = p[f"capital_{mode}"]
+        self.snap_counter    = 0
+        self.total_trades    = 0
+        self.wins            = 0
+        self.losses          = 0
+        self.total_pnl       = 0.0
 
 # ---------------------------------------------------------------------------
 # Paper trade helpers
@@ -292,6 +303,19 @@ def _close_paper(state: StreamState, mid: float, reason: str,
     state.position = None
 
 # ---------------------------------------------------------------------------
+# VWAP context handler
+# ---------------------------------------------------------------------------
+
+def _handle_vwap(state: StreamState, msg: dict) -> None:
+    dip_score = msg.get("dip_score")
+    dip_zone  = msg.get("dip_zone", "neutral")
+    if dip_score is not None:
+        state.vwap_dip_score = float(dip_score)
+    state.vwap_dip_zone = str(dip_zone)
+    logger.debug("[%s] VWAP: dip_score=%.4f zone=%s",
+                 state.mode, state.vwap_dip_score, state.vwap_dip_zone)
+
+# ---------------------------------------------------------------------------
 # Indicator message handler
 # ---------------------------------------------------------------------------
 
@@ -347,6 +371,23 @@ async def _handle_indicator(state: StreamState, db: sqlite3.Connection,
     tfi_gate_mode = p.get("tfi_gate_mode", "flat")
     direction     = p.get("direction", "long")
 
+    # VWAP gate: suspend longs above VWAP; relax OBI thresh when deep below VWAP
+    vwap_gate = p.get("vwap_gate", False)
+    if vwap_gate:
+        dip = state.vwap_dip_score
+        relax_min = p.get("vwap_relax_min_pct", 0.01)
+        if dip < 0.0:
+            # price above VWAP → entering into resistance, skip longs
+            if direction in ("long", "both"):
+                logger.debug("[%s] VWAP gate: long blocked (dip_score=%.4f above VWAP)",
+                             state.mode, dip)
+                state.pending_dir   = None
+                state.pending_count = 0
+                return
+        elif dip >= relax_min:
+            # price ≥1% below VWAP → strong dip context, relax OBI threshold
+            entry_thresh = p.get("vwap_obi_relax", entry_thresh)
+
     if tfi_thresh <= 0.0:
         tfi_ok_long  = True
         tfi_ok_short = True
@@ -401,11 +442,14 @@ async def _zmq_loop(states: list, db: sqlite3.Connection, p: dict) -> None:
         sid     = p.get(sid_key, f"btc_scalping_{st.mode}")
         stream_map[sid] = st
 
+    vwap_sid = p.get("vwap_stream_id", "btc_vwap_context") if p.get("vwap_gate") else None
+    all_streams = list(stream_map.keys()) + ([vwap_sid] if vwap_sid else [])
+
     ctx = azmq.Context.instance()
     sub = ctx.socket(zmq.SUB)
     sub.setsockopt(zmq.SUBSCRIBE, b"")
     sub.connect(addr)
-    logger.info("ZMQ SUB → %s  streams: %s", addr, list(stream_map.keys()))
+    logger.info("ZMQ SUB → %s  streams: %s", addr, all_streams)
 
     try:
         while True:
@@ -418,7 +462,12 @@ async def _zmq_loop(states: list, db: sqlite3.Connection, p: dict) -> None:
                 await asyncio.sleep(5)
                 continue
 
-            sid   = msg.get("stream_id")
+            sid = msg.get("stream_id")
+            if sid == vwap_sid and vwap_sid:
+                for st in states:
+                    _handle_vwap(st, msg)
+                continue
+
             state = stream_map.get(sid)
             if state is None:
                 continue
@@ -458,7 +507,15 @@ async def _run(p: dict, db: sqlite3.Connection) -> None:
     else:
         tfi_mode = f"TFI>{tfi_thresh:.2f} long / TFI<-{tfi_thresh:.2f} short (directional)"
 
-    logger.info("OrderBook bot v2.7 — symbol=%s  modes=%s  direction=%s  paper=True",
+    vwap_gate = p.get("vwap_gate", False)
+    if vwap_gate:
+        vwap_mode = (f"enabled — suspend long above VWAP, "
+                     f"relax OBI→{p.get('vwap_obi_relax', 0.50):.2f} "
+                     f"when ≥{p.get('vwap_relax_min_pct', 0.01)*100:.0f}% below")
+    else:
+        vwap_mode = "disabled"
+
+    logger.info("OrderBook bot v2.8 — symbol=%s  modes=%s  direction=%s  paper=True",
                 p["symbol"], modes, p.get("direction", "long"))
     logger.info("OBI: entry=%.2f  confirm=%d  alpha=%.2f (indicators)  levels=%d",
                 p["obi_entry_thresh"], p["obi_confirm_n"],
@@ -466,8 +523,9 @@ async def _run(p: dict, db: sqlite3.Connection) -> None:
     logger.info("Trade: tp=%.3f%%  sl=%.3f%%  max_hold=%dm  stake=%.0f%%",
                 p["tp_pct"] * 100, p["sl_pct"] * 100,
                 p["max_hold_minutes"], p["stake_frac"] * 100)
-    logger.info("TFI: gate=%s  indicators: %s",
-                tfi_mode, p.get("indicators_addr", "tcp://127.0.0.1:5559"))
+    logger.info("TFI: gate=%s", tfi_mode)
+    logger.info("VWAP: %s  indicators: %s",
+                vwap_mode, p.get("indicators_addr", "tcp://127.0.0.1:5559"))
 
     tasks = [
         asyncio.create_task(_zmq_loop(states, db, p)),
