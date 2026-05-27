@@ -13,8 +13,13 @@ Signal
     bid-heavy (OBI > +thresh) → contrarian SHORT  (buyers absorbed → price down)
 
   TFI gate (optional, tfi_confirm_thresh > 0):
-    long entry requires TFI > +thresh  (net taker buying)
-    short entry requires TFI < -thresh (net taker selling)
+    tfi_gate_mode = "flat" (default):
+      entry allowed only when |TFI| < thresh  (taker flow is neutral)
+      rationale: high OBI + neutral TFI is the strongest predictive combination;
+                 high OBI + strong TFI (either direction) shows mean-reversion reversal
+    tfi_gate_mode = "directional" (legacy):
+      long  requires TFI > +thresh  (net taker buying)
+      short requires TFI < -thresh  (net taker selling)
 
 Usage
 -----
@@ -26,6 +31,10 @@ Usage
 
 Refactor history
 ----------------
+  v2.7: TFI gate flipped to "flat" mode — require neutral TFI at entry rather than
+        directional TFI. Data analysis on ob_snapshots showed OBI>0.6+TFI_flat has
+        the strongest 30s predictive signal (+0.035); OBI+strong_TFI reverses.
+        Removed orphaned obi_exit_thresh default (obi_exit was eliminated in v2.6).
   v2.6: Removed direct Binance WebSocket connections and local OBI/TFI computation.
         Now subscribes to tradinebotte-indicators via ZMQ, consistent with the
         project rule that all computation lives in the shared indicators service.
@@ -78,7 +87,6 @@ DEFAULTS = {
     # in the indicators service config (indicators_all.json).
     "obi_ema_alpha":       0.05,
     "obi_entry_thresh":    0.30,
-    "obi_exit_thresh":     0.05,
     "obi_confirm_n":       3,
     "tp_pct":              0.005,
     "sl_pct":              0.003,
@@ -336,12 +344,18 @@ async def _handle_indicator(state: StreamState, db: sqlite3.Connection,
     entry_thresh  = p["obi_entry_thresh"]
     confirm_n     = p["obi_confirm_n"]
     tfi_thresh    = p.get("tfi_confirm_thresh", 0.0)
+    tfi_gate_mode = p.get("tfi_gate_mode", "flat")
     direction     = p.get("direction", "long")
 
     if tfi_thresh <= 0.0:
         tfi_ok_long  = True
         tfi_ok_short = True
+    elif tfi_gate_mode == "flat":
+        # Flat gate: entry only when taker flow is neutral (no exhaustion signal)
+        tfi_ok_long  = abs(state.tfi) < tfi_thresh
+        tfi_ok_short = abs(state.tfi) < tfi_thresh
     else:
+        # Directional gate (legacy): require taker flow in trade direction
         tfi_ok_long  = state.tfi >  tfi_thresh
         tfi_ok_short = state.tfi < -tfi_thresh
 
@@ -435,10 +449,16 @@ async def _run(p: dict, db: sqlite3.Connection) -> None:
     modes  = p["modes"]
     states = [StreamState(m, p) for m in modes]
 
-    tfi_thresh = p.get("tfi_confirm_thresh", 0.0)
-    tfi_mode   = f"TFI<-{tfi_thresh:.2f}" if tfi_thresh > 0 else "TFI logged (no gate)"
+    tfi_thresh    = p.get("tfi_confirm_thresh", 0.0)
+    tfi_gate_mode = p.get("tfi_gate_mode", "flat")
+    if tfi_thresh <= 0.0:
+        tfi_mode = "TFI logged (no gate)"
+    elif tfi_gate_mode == "flat":
+        tfi_mode = f"|TFI|<{tfi_thresh:.2f} (flat)"
+    else:
+        tfi_mode = f"TFI>{tfi_thresh:.2f} long / TFI<-{tfi_thresh:.2f} short (directional)"
 
-    logger.info("OrderBook bot started — symbol=%s  modes=%s  direction=%s  paper=True",
+    logger.info("OrderBook bot v2.7 — symbol=%s  modes=%s  direction=%s  paper=True",
                 p["symbol"], modes, p.get("direction", "long"))
     logger.info("OBI: entry=%.2f  confirm=%d  alpha=%.2f (indicators)  levels=%d",
                 p["obi_entry_thresh"], p["obi_confirm_n"],

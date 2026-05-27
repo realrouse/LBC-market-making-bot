@@ -1,6 +1,6 @@
 {
-    "_comment": "Binance OBI scalping v2.6 — ZMQ indicators, TFI filter, TP 30bps / SL 15bps / hold 5min",
-    "_version": "2.6",
+    "_comment": "Binance OBI scalping v2.7 — TFI flat gate (|TFI|<0.30), TP 30bps / SL 15bps / hold 5min",
+    "_version": "2.7",
 
     "symbol":             "BTCUSDT",
     "modes":              ["spot", "perp"],
@@ -28,6 +28,7 @@
 
     "tfi_window_s":       30,
     "tfi_confirm_thresh": 0.30,
+    "tfi_gate_mode":      "flat",
 
     "snapshot_every_n":   10,
 
