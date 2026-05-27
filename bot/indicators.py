@@ -68,7 +68,7 @@ Usage:
       --config strategies/indicators.json
 """
 
-import argparse, asyncio, json, logging, math, os, sys, time
+import argparse, asyncio, hashlib, hmac, json, logging, math, os, sys, time, urllib.parse
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple
@@ -793,25 +793,50 @@ async def _binance_ls_ratio_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> N
 
 
 async def _binance_liquidations_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> None:
-    """Aggregate Binance forced liquidation orders over the last poll interval."""
+    """Aggregate Binance forced liquidation orders over the last poll interval.
+
+    Requires BINANCE_API_KEY and BINANCE_API_SECRET env vars (signed endpoint).
+    Exits immediately if credentials are absent.
+    """
+    api_key = os.environ.get("BINANCE_API_KEY", "")
+    api_secret = os.environ.get("BINANCE_API_SECRET", "")
+    if not api_key or not api_secret:
+        logger.warning("[%s] BINANCE_API_KEY/SECRET not set — liquidations stream disabled", spec.id)
+        return
+
     interval = spec.poll_interval_s or _DEFAULT_POLL_INTERVALS["binance_liquidations"]
     asset    = spec.asset or "BTCUSDT"
+    headers  = {"X-MBX-APIKEY": api_key}
+
     async with aiohttp.ClientSession() as session:
         while True:
             try:
                 start_ms = int((time.time() - interval) * 1000)
+                params   = {
+                    "symbol":    asset.upper(),
+                    "startTime": start_ms,
+                    "limit":     1000,
+                    "timestamp": int(time.time() * 1000),
+                }
+                query = urllib.parse.urlencode(params)
+                params["signature"] = hmac.new(
+                    api_secret.encode(), query.encode(), hashlib.sha256
+                ).hexdigest()
                 async with session.get(
                     _BINANCE_FORCE_ORDERS_URL,
-                    params={"symbol": asset.upper(), "startTime": start_ms, "limit": 1000},
+                    params=params,
+                    headers=headers,
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as resp:
                     orders = await resp.json(content_type=None)
+                if not isinstance(orders, list):
+                    raise ValueError(orders)
                 liq_long = liq_short = 0.0
                 for o in orders:
                     notional = float(o.get("executedQty", 0)) * float(o.get("averagePrice", 0))
-                    if o.get("side") == "SELL":   # long position liquidated
+                    if o.get("side") == "SELL":
                         liq_long += notional
-                    else:                          # short position liquidated
+                    else:
                         liq_short += notional
                 _publish(pub, {
                     "t":             "indicators",
