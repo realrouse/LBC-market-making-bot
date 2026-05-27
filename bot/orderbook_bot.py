@@ -31,6 +31,10 @@ Usage
 
 Refactor history
 ----------------
+  v2.10: Macro OBI gate — block long entries when 1h-of-1m macro taker flow is
+         bullish (direction="bullish"); ask-heavy micro OBI in a bullish macro
+         is noise rather than genuine exhaustion. Consumes btc_macro_obi ZMQ
+         stream (refreshed every 60s). Enabled via macro_obi_gate=true in JSON.
   v2.9: Volume profile gate — block long entries in sell-dominant HVN zones;
         accelerate entry (lower confirm_n) in buy-dominant HVN zones. Consumes
         btc_volume_profile stream from indicators service (hourly, 24h of 5m klines,
@@ -116,6 +120,9 @@ DEFAULTS = {
     # Volume profile gate
     "vol_profile_gate":    False,
     "vol_buy_confirm_n":   10,     # obi_confirm_n override inside a buy_hvn (faster entry)
+    # Macro OBI gate
+    "macro_obi_gate":      False,
+    "macro_obi_stream_id": "btc_macro_obi",
     # Indicators service (ZMQ)
     "indicators_addr":     "tcp://127.0.0.1:5559",
     "spot_stream_id":      "btc_scalping_spot",
@@ -211,6 +218,8 @@ class StreamState:
         self.vwap_dip_zone   = "neutral"
         self.vol_price_zone  = "neutral"  # "buy_hvn" | "sell_hvn" | "neutral"
         self.vol_zone_score  = 0.0        # net_vol / total_vol in current bucket
+        self.macro_obi       = 0.0        # EMA-smoothed macro OBI (-1 to +1)
+        self.macro_obi_dir   = "neutral"  # "bullish" | "neutral" | "bearish"
         self.pending_dir     = None
         self.pending_count   = 0
         self.position        = None
@@ -335,6 +344,16 @@ def _handle_vol_profile(state: StreamState, msg: dict) -> None:
     logger.debug("[%s] VolProfile: zone=%s score=%.3f",
                  state.mode, state.vol_price_zone, state.vol_zone_score)
 
+
+def _handle_macro_obi(state: StreamState, msg: dict) -> None:
+    val = msg.get("macro_obi")
+    drn = msg.get("macro_obi_direction", "neutral")
+    if val is not None:
+        state.macro_obi = float(val)
+    state.macro_obi_dir = str(drn)
+    logger.debug("[%s] MacroOBI: obi=%.4f dir=%s",
+                 state.mode, state.macro_obi, state.macro_obi_dir)
+
 # ---------------------------------------------------------------------------
 # Indicator message handler
 # ---------------------------------------------------------------------------
@@ -420,6 +439,16 @@ async def _handle_indicator(state: StreamState, db: sqlite3.Connection,
         if zone == "buy_hvn":
             confirm_n = p.get("vol_buy_confirm_n", confirm_n)
 
+    # Macro OBI gate: block longs when macro taker flow is bullish
+    # (ask-heavy micro OBI in a bullish macro is noise, not exhaustion)
+    if p.get("macro_obi_gate", False):
+        if state.macro_obi_dir == "bullish" and direction in ("long", "both"):
+            logger.debug("[%s] MacroOBI gate: long blocked (macro=%s obi=%.4f)",
+                         state.mode, state.macro_obi_dir, state.macro_obi)
+            state.pending_dir   = None
+            state.pending_count = 0
+            return
+
     if tfi_thresh <= 0.0:
         tfi_ok_long  = True
         tfi_ok_short = True
@@ -474,11 +503,13 @@ async def _zmq_loop(states: list, db: sqlite3.Connection, p: dict) -> None:
         sid     = p.get(sid_key, f"btc_scalping_{st.mode}")
         stream_map[sid] = st
 
-    vwap_sid = p.get("vwap_stream_id", "btc_vwap_context") if p.get("vwap_gate") else None
-    vol_sid  = p.get("vol_profile_stream_id", "btc_volume_profile") if p.get("vol_profile_gate") else None
+    vwap_sid  = p.get("vwap_stream_id",      "btc_vwap_context")   if p.get("vwap_gate")       else None
+    vol_sid   = p.get("vol_profile_stream_id","btc_volume_profile") if p.get("vol_profile_gate") else None
+    macro_sid = p.get("macro_obi_stream_id", "btc_macro_obi")      if p.get("macro_obi_gate")   else None
     all_streams = (list(stream_map.keys())
-                   + ([vwap_sid] if vwap_sid else [])
-                   + ([vol_sid]  if vol_sid  else []))
+                   + ([vwap_sid]  if vwap_sid  else [])
+                   + ([vol_sid]   if vol_sid   else [])
+                   + ([macro_sid] if macro_sid else []))
 
     ctx = azmq.Context.instance()
     sub = ctx.socket(zmq.SUB)
@@ -505,6 +536,10 @@ async def _zmq_loop(states: list, db: sqlite3.Connection, p: dict) -> None:
             if sid == vol_sid and vol_sid:
                 for st in states:
                     _handle_vol_profile(st, msg)
+                continue
+            if sid == macro_sid and macro_sid:
+                for st in states:
+                    _handle_macro_obi(st, msg)
                 continue
 
             state = stream_map.get(sid)
@@ -554,7 +589,7 @@ async def _run(p: dict, db: sqlite3.Connection) -> None:
     else:
         vwap_mode = "disabled"
 
-    logger.info("OrderBook bot v2.9 — symbol=%s  modes=%s  direction=%s  paper=True",
+    logger.info("OrderBook bot v2.10 — symbol=%s  modes=%s  direction=%s  paper=True",
                 p["symbol"], modes, p.get("direction", "long"))
     logger.info("OBI: entry=%.2f  confirm=%d  alpha=%.2f (indicators)  levels=%d",
                 p["obi_entry_thresh"], p["obi_confirm_n"],
@@ -567,8 +602,11 @@ async def _run(p: dict, db: sqlite3.Connection) -> None:
     vol_mode = ("enabled — block sell_hvn longs, confirm_n→%d in buy_hvn" %
                 p.get("vol_buy_confirm_n", 10)
                 if p.get("vol_profile_gate") else "disabled")
-    logger.info("VolProfile: %s  indicators: %s",
-                vol_mode, p.get("indicators_addr", "tcp://127.0.0.1:5559"))
+    logger.info("VolProfile: %s", vol_mode)
+    macro_mode = ("enabled — block longs when macro direction=bullish"
+                  if p.get("macro_obi_gate") else "disabled")
+    logger.info("MacroOBI: %s  indicators: %s",
+                macro_mode, p.get("indicators_addr", "tcp://127.0.0.1:5559"))
 
     tasks = [
         asyncio.create_task(_zmq_loop(states, db, p)),
