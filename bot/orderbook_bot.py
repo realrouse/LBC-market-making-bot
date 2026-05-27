@@ -31,6 +31,10 @@ Usage
 
 Refactor history
 ----------------
+  v2.9: Volume profile gate — block long entries in sell-dominant HVN zones;
+        accelerate entry (lower confirm_n) in buy-dominant HVN zones. Consumes
+        btc_volume_profile stream from indicators service (hourly, 24h of 5m klines,
+        $500 price buckets, top-5 HVN). Enabled via vol_profile_gate=true in JSON.
   v2.8: VWAP context gate — suspend long entries when price is above the 4h VWAP
         (entering into resistance); relax OBI threshold (0.65→0.50) when price is
         ≥1% below VWAP (strong dip context). VWAP published by indicators service
@@ -109,11 +113,15 @@ DEFAULTS = {
     "vwap_gate":           False,
     "vwap_relax_min_pct":  0.01,   # relax OBI thresh when dip_score >= this value
     "vwap_obi_relax":      0.50,   # relaxed OBI entry threshold (below VWAP dip)
+    # Volume profile gate
+    "vol_profile_gate":    False,
+    "vol_buy_confirm_n":   10,     # obi_confirm_n override inside a buy_hvn (faster entry)
     # Indicators service (ZMQ)
     "indicators_addr":     "tcp://127.0.0.1:5559",
     "spot_stream_id":      "btc_scalping_spot",
     "perp_stream_id":      "btc_scalping_perp",
     "vwap_stream_id":      "btc_vwap_context",
+    "vol_profile_stream_id": "btc_volume_profile",
 }
 
 # ---------------------------------------------------------------------------
@@ -201,6 +209,8 @@ class StreamState:
         self.tfi             = 0.0
         self.vwap_dip_score  = 0.0    # (vwap - price) / vwap; positive = below VWAP
         self.vwap_dip_zone   = "neutral"
+        self.vol_price_zone  = "neutral"  # "buy_hvn" | "sell_hvn" | "neutral"
+        self.vol_zone_score  = 0.0        # net_vol / total_vol in current bucket
         self.pending_dir     = None
         self.pending_count   = 0
         self.position        = None
@@ -315,6 +325,16 @@ def _handle_vwap(state: StreamState, msg: dict) -> None:
     logger.debug("[%s] VWAP: dip_score=%.4f zone=%s",
                  state.mode, state.vwap_dip_score, state.vwap_dip_zone)
 
+
+def _handle_vol_profile(state: StreamState, msg: dict) -> None:
+    zone  = msg.get("price_zone", "neutral")
+    score = msg.get("zone_score")
+    state.vol_price_zone = str(zone)
+    if score is not None:
+        state.vol_zone_score = float(score)
+    logger.debug("[%s] VolProfile: zone=%s score=%.3f",
+                 state.mode, state.vol_price_zone, state.vol_zone_score)
+
 # ---------------------------------------------------------------------------
 # Indicator message handler
 # ---------------------------------------------------------------------------
@@ -388,6 +408,18 @@ async def _handle_indicator(state: StreamState, db: sqlite3.Connection,
             # price ≥1% below VWAP → strong dip context, relax OBI threshold
             entry_thresh = p.get("vwap_obi_relax", entry_thresh)
 
+    # Volume profile gate: block entries in sell-dominant HVN; accelerate in buy HVN
+    if p.get("vol_profile_gate", False):
+        zone = state.vol_price_zone
+        if zone == "sell_hvn" and direction in ("long", "both"):
+            logger.debug("[%s] VolProfile gate: long blocked (sell_hvn score=%.3f)",
+                         state.mode, state.vol_zone_score)
+            state.pending_dir   = None
+            state.pending_count = 0
+            return
+        if zone == "buy_hvn":
+            confirm_n = p.get("vol_buy_confirm_n", confirm_n)
+
     if tfi_thresh <= 0.0:
         tfi_ok_long  = True
         tfi_ok_short = True
@@ -443,7 +475,10 @@ async def _zmq_loop(states: list, db: sqlite3.Connection, p: dict) -> None:
         stream_map[sid] = st
 
     vwap_sid = p.get("vwap_stream_id", "btc_vwap_context") if p.get("vwap_gate") else None
-    all_streams = list(stream_map.keys()) + ([vwap_sid] if vwap_sid else [])
+    vol_sid  = p.get("vol_profile_stream_id", "btc_volume_profile") if p.get("vol_profile_gate") else None
+    all_streams = (list(stream_map.keys())
+                   + ([vwap_sid] if vwap_sid else [])
+                   + ([vol_sid]  if vol_sid  else []))
 
     ctx = azmq.Context.instance()
     sub = ctx.socket(zmq.SUB)
@@ -466,6 +501,10 @@ async def _zmq_loop(states: list, db: sqlite3.Connection, p: dict) -> None:
             if sid == vwap_sid and vwap_sid:
                 for st in states:
                     _handle_vwap(st, msg)
+                continue
+            if sid == vol_sid and vol_sid:
+                for st in states:
+                    _handle_vol_profile(st, msg)
                 continue
 
             state = stream_map.get(sid)
@@ -515,7 +554,7 @@ async def _run(p: dict, db: sqlite3.Connection) -> None:
     else:
         vwap_mode = "disabled"
 
-    logger.info("OrderBook bot v2.8 — symbol=%s  modes=%s  direction=%s  paper=True",
+    logger.info("OrderBook bot v2.9 — symbol=%s  modes=%s  direction=%s  paper=True",
                 p["symbol"], modes, p.get("direction", "long"))
     logger.info("OBI: entry=%.2f  confirm=%d  alpha=%.2f (indicators)  levels=%d",
                 p["obi_entry_thresh"], p["obi_confirm_n"],
@@ -524,8 +563,12 @@ async def _run(p: dict, db: sqlite3.Connection) -> None:
                 p["tp_pct"] * 100, p["sl_pct"] * 100,
                 p["max_hold_minutes"], p["stake_frac"] * 100)
     logger.info("TFI: gate=%s", tfi_mode)
-    logger.info("VWAP: %s  indicators: %s",
-                vwap_mode, p.get("indicators_addr", "tcp://127.0.0.1:5559"))
+    logger.info("VWAP: %s", vwap_mode)
+    vol_mode = ("enabled — block sell_hvn longs, confirm_n→%d in buy_hvn" %
+                p.get("vol_buy_confirm_n", 10)
+                if p.get("vol_profile_gate") else "disabled")
+    logger.info("VolProfile: %s  indicators: %s",
+                vol_mode, p.get("indicators_addr", "tcp://127.0.0.1:5559"))
 
     tasks = [
         asyncio.create_task(_zmq_loop(states, db, p)),

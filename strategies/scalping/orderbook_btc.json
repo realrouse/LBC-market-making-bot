@@ -1,6 +1,6 @@
 {
-    "_comment": "Binance OBI scalping v2.8 — VWAP gate + TFI flat gate (|TFI|<0.30), TP 30bps / SL 15bps / hold 5min",
-    "_version": "2.8",
+    "_comment": "Binance OBI scalping v2.9 — VWAP + VolProfile gates + TFI flat (|TFI|<0.30), TP 30bps / SL 15bps / hold 5min",
+    "_version": "2.9",
 
     "symbol":             "BTCUSDT",
     "modes":              ["spot", "perp"],
@@ -34,6 +34,10 @@
     "vwap_relax_min_pct": 0.01,
     "vwap_obi_relax":     0.50,
     "vwap_stream_id":     "btc_vwap_context",
+
+    "vol_profile_gate":   true,
+    "vol_buy_confirm_n":  10,
+    "vol_profile_stream_id": "btc_volume_profile",
 
     "snapshot_every_n":   10,
 
