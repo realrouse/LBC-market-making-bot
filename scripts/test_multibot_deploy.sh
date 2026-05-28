@@ -125,6 +125,7 @@ run_bg() {
 
 deploy_code() {
     # Flat rsync: bot/ → $REMOTE_INSTALL_DIR/ (same layout as install.sh and update_standalone.sh).
+    # indicators.py lives in tradinebotte-indicators/ and is also synced flat.
     # Never use --delete on the full repo: it wipes flat live_bot.py on standalone accounts.
     local idx="$1"
     local user="${ALL_USERS[$idx]}"
@@ -139,9 +140,23 @@ deploy_code() {
 
     SSHPASS="${ALL_PASSWORDS[$idx]}" /usr/bin/sshpass -e \
         rsync -az \
+        --exclude='__pycache__' --exclude='*.pyc' \
+        -e "ssh $ssh_opts" \
+        "$LOCAL_REPO/tradinebotte-indicators/indicators.py" \
+        "$user@$SERVER:$REMOTE_INSTALL_DIR/indicators.py" 2>&1 || return 1
+
+    SSHPASS="${ALL_PASSWORDS[$idx]}" /usr/bin/sshpass -e \
+        rsync -az \
         --filter='+ **/' --filter='+ *.json' --filter='- *' \
         -e "ssh $ssh_opts" \
         "$LOCAL_REPO/strategies/" "$user@$SERVER:$REMOTE_INSTALL_DIR/strategies/" 2>&1 || return 1
+
+    SSHPASS="${ALL_PASSWORDS[$idx]}" /usr/bin/sshpass -e \
+        rsync -az \
+        --filter='+ **/' --filter='+ *.json' --filter='- *' \
+        -e "ssh $ssh_opts" \
+        "$LOCAL_REPO/tradinebotte-indicators/strategies/" \
+        "$user@$SERVER:$REMOTE_INSTALL_DIR/strategies/indicators/" 2>&1 || return 1
 
     SSHPASS="${ALL_PASSWORDS[$idx]}" /usr/bin/sshpass -e \
         rsync -az \
@@ -363,7 +378,7 @@ if [[ -n "$IND_CFG_REL" ]]; then
     info "Launching shared indicators.py under ${ALL_USERS[$FEED_IDX]} — config=$IND_CFG_REL"
     run_bg "$FEED_IDX" "
         cd $REMOTE_INSTALL_DIR
-        nohup $REMOTE_INSTALL_DIR/venv/bin/python3 -u bot/indicators.py \
+        nohup $REMOTE_INSTALL_DIR/venv/bin/python3 -u indicators.py \
             --config $REMOTE_INSTALL_DIR/$IND_CFG_REL \
             > $REMOTE_INSTALL_DIR/indicators.log 2>&1 < /dev/null &
         IND_PID=\$!

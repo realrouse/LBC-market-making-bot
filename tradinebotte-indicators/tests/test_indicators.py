@@ -1,8 +1,8 @@
-"""Tests for bot/indicators.py — pure-math functions, PriceSeries, and config types."""
+"""Tests for tradinebotte-indicators/indicators.py — pure-math functions, PriceSeries, and config types."""
 
 import sys, os, unittest, json, tempfile, time
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bot"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from indicators import (
     compute_sma, compute_ema, compute_rsi, compute_volatility, PriceSeries,
     OHLCVSeries, _OHLCV_INDICATOR_TYPES,

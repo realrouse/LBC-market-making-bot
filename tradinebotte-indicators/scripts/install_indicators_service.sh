@@ -39,10 +39,10 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 TEMPLATE="$SCRIPT_DIR/systemd/tradinebotte-indicators.service"
 
 USER_NAME=$(id -un)
-BOT_DIR="$PROJECT_DIR/bot"
+BOT_DIR="$PROJECT_DIR"
 
 # ── Config file ───────────────────────────────────────────────────────────────
-CONFIG_FILE="${INDICATORS_CONFIG:-$PROJECT_DIR/strategies/indicators/indicators_all.json}"
+CONFIG_FILE="${INDICATORS_CONFIG:-$PROJECT_DIR/strategies/indicators_all.json}"
 CONFIG_FILE="${CONFIG_FILE/#\~/$HOME}"
 if [[ ! -f "$CONFIG_FILE" ]]; then
     echo "ERROR: config file not found: $CONFIG_FILE" >&2

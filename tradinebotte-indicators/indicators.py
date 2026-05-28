@@ -61,11 +61,11 @@ Dynamic registration (REP socket):
          or {"status":"error", "message":"..."}
 
 Usage:
-  python3 bot/indicators.py --config strategies/indicators.json
-  python3 bot/indicators.py          # legacy: CLI flags, ZMQ feed source
-  python3 bot/indicators.py --rsi 14 --sma 20 --ema 9 --vol 20
-  TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 python3 bot/indicators.py \\
-      --config strategies/indicators.json
+  python3 tradinebotte-indicators/indicators.py --config tradinebotte-indicators/strategies/indicators.json
+  python3 tradinebotte-indicators/indicators.py          # legacy: CLI flags, ZMQ feed source
+  python3 tradinebotte-indicators/indicators.py --rsi 14 --sma 20 --ema 9 --vol 20
+  TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 python3 tradinebotte-indicators/indicators.py \\
+      --config tradinebotte-indicators/strategies/indicators.json
 """
 
 import argparse, asyncio, hashlib, hmac, json, logging, math, os, sys, time, urllib.parse
@@ -75,16 +75,15 @@ from typing import Any, NamedTuple
 
 import aiohttp, websockets, zmq, zmq.asyncio
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from bot_utils import warn_if_external_bind
-from scalping_math import (atr_last, bollinger_last, vwap_last,
-                            vol_zscore_last, rolling_max_last)
+from tradinetools.zmq import warn_if_external_bind
+from tradinetools.math import (atr_last, bollinger_last, vwap_last,
+                                vol_zscore_last, rolling_max_last)
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────
 # TRADINEBOTTE_PORT_BASE shifts the entire default port layout uniformly.
 # Default layout (base=5557): feed=5557, indicators PUB=5559, indicators REP=5561.
 # Example — run a second independent stack on base 6557:
-#   TRADINEBOTTE_PORT_BASE=6557 python3 bot/indicators.py --config ...
+#   TRADINEBOTTE_PORT_BASE=6557 python3 tradinebotte-indicators/indicators.py --config ...
 # Per-service env vars still override PORT_BASE when set explicitly.
 _PORT_BASE  = int(os.environ.get("TRADINEBOTTE_PORT_BASE", "5557"))
 _PORT_SHIFT = _PORT_BASE - 5557  # 0 when using defaults
