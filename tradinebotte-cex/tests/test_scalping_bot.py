@@ -25,7 +25,7 @@ import unittest
 from collections import deque
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bot"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import scalping_bot as sb
 from scalping_bot import ScalpingBot, DEFAULTS, _MIN_WARM
 
@@ -55,7 +55,7 @@ def _flat_buf(n: int, price: float = 50_000.0, volume: float = 5.0,
 def _make_bot(tmpdir: str, **cfg_overrides) -> ScalpingBot:
     """Create a ScalpingBot with a temp dir, suppressing all logging output."""
     cfg_path = _make_config(tmpdir, **cfg_overrides)
-    with patch("scalping_bot.setup_bot_logger", return_value=MagicMock()):
+    with patch("scalping_bot.setup_logger", return_value=MagicMock()):
         bot = ScalpingBot(cfg_path, install_dir=tmpdir)
     return bot
 

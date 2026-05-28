@@ -175,9 +175,9 @@ LOG="\$COLLECTOR/live.log"
 # restarting; lifecycle is managed via pgrep/pkill on live_bot.py.
 systemd-run --user \
     --description="tradinebotte data collector" \
-    --working-directory="\$INSTALL/bot" \
+    --working-directory="\$INSTALL" \
     --setenv=TRADINEBOTTE_DIR="\$COLLECTOR" \
-    "\$PYTHON" "\$INSTALL/bot/live_bot.py" \
+    "\$PYTHON" "\$INSTALL/live_bot.py" \
     --simulate \
     --snapshot-interval "\$SNAP"
 # systemd-run exits non-zero if it fails to launch the unit; set -e catches that.

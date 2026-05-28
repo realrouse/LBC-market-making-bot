@@ -146,8 +146,8 @@ from pathlib import Path
 import aiohttp
 import websockets
 
-from bot_utils import setup_bot_logger
-from scalping_math import (
+from tradinetools.logging import setup_logger
+from tradinetools.math import (
     sma_last        as _sma,
     ema_last        as _ema_last,
     atr_last        as _atr_last,
@@ -253,7 +253,7 @@ class ScalpingBot:
         self._dir.mkdir(parents=True, exist_ok=True)
 
         log_path = self._dir / f"scalping_{stype}.log"
-        self._log = setup_bot_logger(f"scalping.{stype}", str(log_path))
+        self._log = setup_logger(f"scalping.{stype}", str(log_path))
 
         db_path = self._dir / f"scalping_{stype}.db"
         self._db = sqlite3.connect(str(db_path), check_same_thread=False)

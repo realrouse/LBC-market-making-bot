@@ -27,7 +27,7 @@ _TEST_DIR = os.path.join(os.path.expanduser("~"), "tmp", "tradinebotte-test")
 os.environ.setdefault("TRADINEBOTTE_DIR", _TEST_DIR)
 os.makedirs(_TEST_DIR, exist_ok=True)
 
-BOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "bot"))
+BOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, BOT_DIR)
 
 import live_bot as bot

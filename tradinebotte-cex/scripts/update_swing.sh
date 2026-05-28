@@ -22,7 +22,7 @@
 
 set -uo pipefail
 
-LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SKIP_RESTART=false
 VERIFY_ONLY=false
 
@@ -86,20 +86,29 @@ _ssh() {
 _rsync() {
     local ssh_opts="-p $PORT -o StrictHostKeyChecking=yes"
 
-    # bot/ contents → $INSTALL_DIR/ (flat layout)
+    # tradinebotte-polymarket/ contents → $INSTALL_DIR/ (flat layout)
     SSHPASS="$SW_PASS" /usr/bin/sshpass -e \
         rsync -az \
         --exclude='__pycache__' --exclude='*.pyc' \
         --exclude='live.db' --exclude='*.log' --exclude='venv' --exclude='.venv' \
+        --exclude='scripts' --exclude='tests' \
         -e "ssh $ssh_opts" \
-        "$LOCAL_REPO/bot/" "$SW_USER@$SERVER:$INSTALL_DIR/" 2>&1 || return 1
+        "$LOCAL_REPO/tradinebotte-polymarket/" "$SW_USER@$SERVER:$INSTALL_DIR/" 2>&1 || return 1
 
-    # strategies/ JSON config files → $INSTALL_DIR/strategies/
+    # tradinebotte-cex/ Python files → $INSTALL_DIR/ (flat layout)
+    SSHPASS="$SW_PASS" /usr/bin/sshpass -e \
+        rsync -az \
+        --exclude='__pycache__' --exclude='*.pyc' \
+        --exclude='scripts' --exclude='tests' \
+        -e "ssh $ssh_opts" \
+        "$LOCAL_REPO/tradinebotte-cex/" "$SW_USER@$SERVER:$INSTALL_DIR/" 2>&1 || return 1
+
+    # CEX strategy JSON config files → $INSTALL_DIR/strategies/
     SSHPASS="$SW_PASS" /usr/bin/sshpass -e \
         rsync -az \
         --filter='+ **/' --filter='+ *.json' --filter='- *' \
         -e "ssh $ssh_opts" \
-        "$LOCAL_REPO/strategies/" "$SW_USER@$SERVER:$INSTALL_DIR/strategies/" 2>&1 || return 1
+        "$LOCAL_REPO/tradinebotte-cex/strategies/" "$SW_USER@$SERVER:$INSTALL_DIR/strategies/" 2>&1 || return 1
 
     # requirements.txt
     SSHPASS="$SW_PASS" /usr/bin/sshpass -e \

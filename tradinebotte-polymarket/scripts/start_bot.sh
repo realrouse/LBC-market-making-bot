@@ -96,13 +96,11 @@ else
     exit 1
 fi
 
-# ── Locate live_bot.py (prefer bot/ subdirectory) ─────────────────
-if [ -f "$INSTALL_DIR/bot/live_bot.py" ]; then
-    BOT_SCRIPT="$INSTALL_DIR/bot/live_bot.py"
-elif [ -f "$INSTALL_DIR/live_bot.py" ]; then
+# ── Locate live_bot.py ────────────────────────────────────────────
+if [ -f "$INSTALL_DIR/live_bot.py" ]; then
     BOT_SCRIPT="$INSTALL_DIR/live_bot.py"
 else
-    echo "$(_t "❌ ERROR: live_bot.py not found in" "❌ ERREUR : live_bot.py introuvable dans") $INSTALL_DIR/{bot/,}"
+    echo "$(_t "❌ ERROR: live_bot.py not found in" "❌ ERREUR : live_bot.py introuvable dans") $INSTALL_DIR"
     exit 1
 fi
 

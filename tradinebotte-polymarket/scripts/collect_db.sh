@@ -175,8 +175,8 @@ if [ "$ROTATE" = "1" ]; then
         PYTHON=$INSTALL_DIR/venv/bin/python3
         LOG=$COLLECTOR_DIR/live.log
         export TRADINEBOTTE_DIR=$COLLECTOR_DIR
-        cd $INSTALL_DIR/bot
-        nohup "\$PYTHON" $INSTALL_DIR/bot/live_bot.py \
+        cd $INSTALL_DIR
+        nohup "\$PYTHON" $INSTALL_DIR/live_bot.py \
             --simulate --snapshot-interval 1 \
             </dev/null >> "\$LOG" 2>&1 &
         CPID=\$!

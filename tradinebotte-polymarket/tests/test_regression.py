@@ -18,10 +18,10 @@ Regression tests — two concerns:
 import os, sqlite3, sys, unittest
 
 # ── path setup ────────────────────────────────────────────────────────────────
-_ROOT    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_BOT_DIR = os.path.join(_ROOT, "bot")
-_SCR_DIR = os.path.join(_ROOT, "scripts")
-_DATA_DIR = os.path.join(_ROOT, "data")
+_ROOT      = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_BOT_DIR   = os.path.join(_ROOT, "tradinebotte-polymarket")
+_SCR_DIR   = os.path.join(_ROOT, "analysis")
+_DATA_DIR  = os.path.join(_ROOT, "data")
 
 sys.path.insert(0, _BOT_DIR)
 sys.path.insert(0, _SCR_DIR)

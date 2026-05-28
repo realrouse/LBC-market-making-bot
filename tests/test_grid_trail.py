@@ -13,7 +13,8 @@ import types
 import unittest
 import unittest.mock
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bot"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tradinebotte-polymarket"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tradinebotte-cex"))
 
 import connectors
 import api_polymarket

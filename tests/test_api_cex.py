@@ -14,7 +14,8 @@ All tests are offline — no real API calls.
 
 import json, os, sys, unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bot"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tradinebotte-polymarket"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tradinebotte-cex"))
 import api_binance   as binance
 import api_bitstamp  as bitstamp
 import api_mexc      as mexc

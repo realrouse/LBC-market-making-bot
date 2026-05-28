@@ -59,7 +59,7 @@ SC_IDX="${TEST_SCALPING_USER_IDX:-3}"
 SC_USER="${ALL_USERS[$SC_IDX]}"
 SC_PASS="${ALL_PASSWORDS[$SC_IDX]}"
 
-LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 _ssh() {
     SSHPASS="$SC_PASS" /usr/bin/sshpass -e \
@@ -71,14 +71,21 @@ _rsync() {
     SSHPASS="$SC_PASS" /usr/bin/sshpass -e \
         rsync -az --exclude='__pycache__' --exclude='*.pyc' \
         --exclude='config.json' --exclude='live*.db' --exclude='*.log' \
+        --exclude='scripts' --exclude='tests' \
         -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
-        "$LOCAL_REPO/bot/" "$SC_USER@$SERVER:$INSTALL_DIR/" 2>&1
+        "$LOCAL_REPO/tradinebotte-polymarket/" "$SC_USER@$SERVER:$INSTALL_DIR/" 2>&1
+    SSHPASS="$SC_PASS" /usr/bin/sshpass -e \
+        rsync -az \
+        --exclude='__pycache__' --exclude='*.pyc' \
+        --exclude='scripts' --exclude='tests' \
+        -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
+        "$LOCAL_REPO/tradinebotte-cex/" "$SC_USER@$SERVER:$INSTALL_DIR/" 2>&1
 
     SSHPASS="$SC_PASS" /usr/bin/sshpass -e \
         rsync -az \
         --filter='+ **/' --filter='+ *.json' --filter='- *' \
         -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
-        "$LOCAL_REPO/strategies/" "$SC_USER@$SERVER:$INSTALL_DIR/strategies/" 2>&1
+        "$LOCAL_REPO/tradinebotte-cex/strategies/" "$SC_USER@$SERVER:$INSTALL_DIR/strategies/" 2>&1
 
     SSHPASS="$SC_PASS" /usr/bin/sshpass -e \
         rsync -az \

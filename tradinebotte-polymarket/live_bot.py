@@ -36,9 +36,14 @@ import aiohttp, websockets
 _BOT_START: float = time.time()
 
 # sys.path insert finds api_polymarket.py in the same directory as this file,
-# whether running standalone from INSTALL_DIR or imported as bot.live_bot from
-# the project root. To target a different exchange, replace the import below.
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# whether running standalone from INSTALL_DIR or imported as tradinebotte-polymarket.live_bot
+# from the project root. To target a different exchange, replace the import below.
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)
+# connectors/ lives in tradinebotte-cex/ in the monorepo (flat deploy: same dir)
+_cex_dir = os.path.join(_THIS_DIR, "..", "tradinebotte-cex")
+if os.path.isdir(_cex_dir) and _cex_dir not in sys.path:
+    sys.path.insert(0, os.path.normpath(_cex_dir))
 import api_polymarket as api
 import bot_utils
 from bot_utils import print_dashboard, write_web_status

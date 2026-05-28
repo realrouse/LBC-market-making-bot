@@ -57,7 +57,7 @@ export TRADINEBOTTE_FEED_ADDR="${TRADINEBOTTE_FEED_ADDR:-tcp://127.0.0.1:5557}"
 echo "Starting account_bot.py — dir=$INSTALL_DIR feed=$TRADINEBOTTE_FEED_ADDR"
 echo "Log: $BOT_LOG"
 
-nohup "$VENV/bin/python3" "$(dirname "$0")/../bot/account_bot.py" \
+nohup "$VENV/bin/python3" "$(dirname "$0")/../account_bot.py" \
     </dev/null >> "$BOT_LOG" 2>&1 &
 _pid=$!
 disown "$_pid"

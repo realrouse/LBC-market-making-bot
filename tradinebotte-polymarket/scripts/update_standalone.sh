@@ -23,7 +23,7 @@
 
 set -uo pipefail
 
-LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SKIP_RESTART=false
 VERIFY_ONLY=false
 
@@ -87,20 +87,21 @@ _ssh() {
 _rsync() {
     local ssh_opts="-p $PORT -o StrictHostKeyChecking=yes"
 
-    # bot/ contents → $INSTALL_DIR/ (flat, matching install.sh layout)
+    # tradinebotte-polymarket/ contents → $INSTALL_DIR/ (flat deploy layout)
     SSHPASS="$SA_PASS" /usr/bin/sshpass -e \
         rsync -az \
         --exclude='__pycache__' --exclude='*.pyc' \
         --exclude='config.json' --exclude='live.db' --exclude='*.log' \
+        --exclude='scripts' --exclude='tests' \
         -e "ssh $ssh_opts" \
-        "$LOCAL_REPO/bot/" "$SA_USER@$SERVER:$INSTALL_DIR/" 2>&1 || return 1
+        "$LOCAL_REPO/tradinebotte-polymarket/" "$SA_USER@$SERVER:$INSTALL_DIR/" 2>&1 || return 1
 
-    # strategies/ JSON config files → $INSTALL_DIR/strategies/
+    # Polymarket strategy JSON config files → $INSTALL_DIR/strategies/
     SSHPASS="$SA_PASS" /usr/bin/sshpass -e \
         rsync -az \
         --filter='+ **/' --filter='+ *.json' --filter='- *' \
         -e "ssh $ssh_opts" \
-        "$LOCAL_REPO/strategies/" "$SA_USER@$SERVER:$INSTALL_DIR/strategies/" 2>&1 || return 1
+        "$LOCAL_REPO/tradinebotte-polymarket/strategies/" "$SA_USER@$SERVER:$INSTALL_DIR/strategies/" 2>&1 || return 1
 
     # requirements.txt — needed for pip update check on restart
     SSHPASS="$SA_PASS" /usr/bin/sshpass -e \

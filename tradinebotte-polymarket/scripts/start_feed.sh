@@ -41,7 +41,7 @@ export TRADINEBOTTE_FEED_ADDR="${TRADINEBOTTE_FEED_ADDR:-tcp://127.0.0.1:5557}"
 echo "Starting feed.py — PUB on $TRADINEBOTTE_FEED_ADDR"
 echo "Log: $FEED_LOG"
 
-nohup "$VENV/bin/python3" "$(dirname "$0")/../bot/feed.py" \
+nohup "$VENV/bin/python3" "$(dirname "$0")/../feed.py" \
     </dev/null >> "$FEED_LOG" 2>&1 &
 _pid=$!
 disown "$_pid"

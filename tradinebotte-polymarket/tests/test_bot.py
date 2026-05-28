@@ -18,7 +18,8 @@ _TEST_DIR = os.path.join(os.path.expanduser("~"), "tmp", "tradinebotte-test")
 os.environ["TRADINEBOTTE_DIR"] = _TEST_DIR
 os.makedirs(_TEST_DIR, exist_ok=True)
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bot"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "tradinebotte-cex"))
 import live_bot as bot
 import api_polymarket as api_poly
 import bot_utils

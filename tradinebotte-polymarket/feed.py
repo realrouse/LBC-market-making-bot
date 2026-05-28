@@ -19,8 +19,8 @@ Message types published:
   {"t": "ping",  "ts": ...}
 
 Usage:
-  python3 bot/feed.py
-  python3 bot/feed.py --verbose
+  python3 tradinebotte-polymarket/feed.py
+  python3 tradinebotte-polymarket/feed.py --verbose
   TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 python3 bot/feed.py
 """
 
@@ -30,7 +30,7 @@ import aiohttp, websockets, zmq, zmq.asyncio
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import api_polymarket as api
-from bot_utils import warn_if_external_bind
+from tradinetools.zmq import warn_if_external_bind
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────
 _PORT_BASE      = int(os.environ.get("TRADINEBOTTE_PORT_BASE", "5557"))
