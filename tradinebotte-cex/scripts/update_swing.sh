@@ -115,6 +115,13 @@ _rsync() {
         rsync -az \
         -e "ssh $ssh_opts" \
         "$LOCAL_REPO/requirements.txt" "$SW_USER@$SERVER:$INSTALL_DIR/" 2>&1 || return 1
+
+    # tradinetools shared library
+    SSHPASS="$SW_PASS" /usr/bin/sshpass -e \
+        rsync -az \
+        --exclude='__pycache__' --exclude='*.pyc' --exclude='*.egg-info' \
+        -e "ssh $ssh_opts" \
+        "$LOCAL_REPO/tradinetools/" "$SW_USER@$SERVER:$INSTALL_DIR/tradinetools/" 2>&1 || return 1
 }
 
 # ─── Pre-flight ─────────────────────────────────────────────────────────────────
@@ -190,6 +197,8 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
             2>/dev/null && echo 'deps ok' || \
         .venv/bin/pip install --quiet -r $INSTALL_DIR/requirements.txt \
             && echo 'deps ok (.venv)' || echo 'pip warning (non-fatal)'
+        venv/bin/pip install --quiet -e $INSTALL_DIR/tradinetools \
+            && echo 'tradinetools ok' || echo 'tradinetools install warning (non-fatal)'
         PYTHON=\$(ls $INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/.venv/bin/python3 2>/dev/null | head -1)
         nohup \$PYTHON live_bot.py </dev/null >>live.log 2>&1 &
         BOT_PID=\$!

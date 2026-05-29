@@ -113,6 +113,12 @@ _rsync() {
         --filter='+ **/' --filter='+ *.json' --filter='- *' \
         -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
         "$LOCAL_REPO/tradinebotte-cex/strategies/" "$SC_USER@$SERVER:$INSTALL_DIR/strategies/" 2>&1
+
+    SSHPASS="$SC_PASS" /usr/bin/sshpass -e \
+        rsync -az \
+        --exclude='__pycache__' --exclude='*.pyc' --exclude='*.egg-info' \
+        -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
+        "$LOCAL_REPO/tradinetools/" "$SC_USER@$SERVER:$INSTALL_DIR/tradinetools/" 2>&1
 }
 
 # ─── Pre-flight ────────────────────────────────────────────────────────────────
@@ -159,6 +165,8 @@ fi
 echo 'updating dependencies...'
 venv/bin/pip install --quiet -r $INSTALL_DIR/requirements.txt \
     && echo 'deps ok' || echo 'pip warning (non-fatal)'
+venv/bin/pip install --quiet -e $INSTALL_DIR/tradinetools \
+    && echo 'tradinetools ok' || echo 'tradinetools install warning (non-fatal)'
 "
     # Stop legacy candle/meanrev/breakout bots if still running
     for LEGACY in scalping_candle_momentum scalping_meanrev scalping_breakout; do

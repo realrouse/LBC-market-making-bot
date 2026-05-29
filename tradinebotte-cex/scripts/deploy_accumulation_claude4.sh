@@ -91,6 +91,12 @@ _rsync() {
         rsync -az \
         -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
         "$LOCAL_REPO/requirements.txt" "$SC_USER@$SERVER:$INSTALL_DIR/" 2>&1
+
+    SSHPASS="$SC_PASS" /usr/bin/sshpass -e \
+        rsync -az \
+        --exclude='__pycache__' --exclude='*.pyc' --exclude='*.egg-info' \
+        -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
+        "$LOCAL_REPO/tradinetools/" "$SC_USER@$SERVER:$INSTALL_DIR/tradinetools/" 2>&1
 }
 
 section "PRE-FLIGHT"
@@ -119,6 +125,8 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
 echo 'updating dependencies...'
 venv/bin/pip install --quiet -r $INSTALL_DIR/requirements.txt \
     && echo 'deps ok' || echo 'pip warning (non-fatal)'
+venv/bin/pip install --quiet -e $INSTALL_DIR/tradinetools \
+    && echo 'tradinetools ok' || echo 'tradinetools install warning (non-fatal)'
 
 PF=$INSTALL_DIR/${BOT_NAME}.pid
 if [ -f \"\$PF\" ]; then
