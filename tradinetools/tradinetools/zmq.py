@@ -24,9 +24,9 @@ def warn_if_external_bind(addr: str, name: str) -> None:
         )
 
 
-def make_pub(ctx: zmq.asyncio.Context, addr: str) -> zmq.asyncio.Socket:
+def make_pub(ctx: zmq.asyncio.Context, addr: str, name: str = "PUB") -> zmq.asyncio.Socket:
     """Bind a PUB socket to addr and return it."""
-    warn_if_external_bind(addr, "PUB")
+    warn_if_external_bind(addr, name)
     sock = ctx.socket(zmq.PUB)
     sock.bind(addr)
     return sock
@@ -40,9 +40,9 @@ def make_sub(ctx: zmq.asyncio.Context, addr: str) -> zmq.asyncio.Socket:
     return sock
 
 
-def make_rep(ctx: zmq.Context, addr: str) -> zmq.Socket:
+def make_rep(ctx: zmq.Context, addr: str, name: str = "REP") -> zmq.Socket:
     """Bind a synchronous REP socket to addr and return it."""
-    warn_if_external_bind(addr, "REP")
+    warn_if_external_bind(addr, name)
     sock = ctx.socket(zmq.REP)
     sock.bind(addr)
     return sock

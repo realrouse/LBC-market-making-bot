@@ -75,7 +75,7 @@ from typing import Any, NamedTuple
 
 import aiohttp, websockets, zmq, zmq.asyncio
 
-from tradinetools.zmq import warn_if_external_bind
+from tradinetools.zmq import make_pub, make_sub, make_rep
 from tradinetools.math import (atr_last, bollinger_last, vwap_last,
                                 vol_zscore_last, rolling_max_last)
 
@@ -541,7 +541,7 @@ async def _seed_ohlcv_series(symbol: str, timeframe: str,
 
 def _publish(pub: zmq.asyncio.Socket, out: dict[str, Any]) -> None:
     """Send one enriched indicator message on the PUB socket (non-blocking)."""
-    pub.send_json(out, zmq.NOBLOCK)
+    pub.send_json({"v": 1, **out}, zmq.NOBLOCK)
     if VERBOSE:
         keys = [k for k in out if k not in ("t", "token_id", "asset",
                                              "timeframe", "stream_id", "ts")]
@@ -605,9 +605,7 @@ async def _zmq_feed_task(feed_addr: str, pub: zmq.asyncio.Socket,
                          min_ticks: int) -> None:
     """Subscribe to the ZeroMQ feed and compute indicators on best_bid per token."""
     ctx = zmq.asyncio.Context.instance()
-    sub = ctx.socket(zmq.SUB)
-    sub.setsockopt(zmq.SUBSCRIBE, b"")
-    sub.connect(feed_addr)
+    sub = make_sub(ctx, feed_addr)
     logger.info("[feed] SUB connected → %s", feed_addr)
 
     all_specs: list[IndicatorSpec] = []
@@ -1604,8 +1602,7 @@ async def _registration_task(
 ) -> None:
     """REP loop: accept subscribe requests from bots and start new streams on demand."""
     ctx = zmq.asyncio.Context.instance()
-    rep = ctx.socket(zmq.REP)
-    rep.bind(reg_addr)
+    rep = make_rep(ctx, reg_addr, name="INDICATORS_REG_ADDR")
     logger.info("[reg] REP bind → %s", reg_addr)
     try:
         while True:
@@ -1641,7 +1638,6 @@ async def run(feed_addr: str, ind_addr: str, reg_addr: str,
     Otherwise: legacy mode — one ZMQ feed stream with CLI-specified periods.
     """
     ctx = zmq.asyncio.Context()
-    pub = ctx.socket(zmq.PUB)
 
     # active: stream_id → (StreamSpec, Task) — shared with _registration_task
     active: dict[str, tuple[StreamSpec, asyncio.Task[None]]] = {}
@@ -1673,9 +1669,7 @@ async def run(feed_addr: str, ind_addr: str, reg_addr: str,
         actual_reg  = reg_addr
         actual_min  = min_ticks
 
-    warn_if_external_bind(actual_out, "INDICATORS_ADDR")
-    warn_if_external_bind(actual_reg, "INDICATORS_REG_ADDR")
-    pub.bind(actual_out)
+    pub = make_pub(ctx, actual_out, name="INDICATORS_ADDR")
     logger.info("PUB bind → %s", actual_out)
 
     tasks: list[asyncio.Task[None]] = []
