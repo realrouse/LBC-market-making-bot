@@ -108,6 +108,13 @@ _rsync() {
         rsync -az \
         -e "ssh $ssh_opts" \
         "$LOCAL_REPO/requirements.txt" "$SA_USER@$SERVER:$INSTALL_DIR/" 2>&1 || return 1
+
+    # tradinetools shared library — rsync then pip install -e on remote
+    SSHPASS="$SA_PASS" /usr/bin/sshpass -e \
+        rsync -az \
+        --exclude='__pycache__' --exclude='*.pyc' --exclude='*.egg-info' \
+        -e "ssh $ssh_opts" \
+        "$LOCAL_REPO/tradinetools/" "$SA_USER@$SERVER:$INSTALL_DIR/tradinetools/" 2>&1 || return 1
 }
 
 # ─── Pre-flight ─────────────────────────────────────────────────────────────────
@@ -164,6 +171,8 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
         echo 'updating dependencies...'
         venv/bin/pip install --quiet -r $INSTALL_DIR/requirements.txt \
             && echo 'deps ok' || echo 'pip warning (non-fatal)'
+        venv/bin/pip install --quiet -e $INSTALL_DIR/tradinetools \
+            && echo 'tradinetools ok' || echo 'tradinetools install warning (non-fatal)'
         nohup venv/bin/python3 live_bot.py </dev/null >>live.log 2>&1 &
         BOT_PID=\$!
         disown \$BOT_PID
