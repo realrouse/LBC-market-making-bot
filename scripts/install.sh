@@ -68,6 +68,7 @@ _pip_install() {
     local pip="$INSTALL_DIR/venv/bin/pip"
     "$pip" install --quiet --upgrade pip
     "$pip" install --quiet "$@" -r "$REPO_DIR/requirements.txt"
+    "$pip" install --quiet -e "$REPO_DIR/tradinetools"
 }
 
 # ── System dependencies ───────────────────────────────────────────
@@ -119,8 +120,9 @@ mkdir -p "$INSTALL_DIR/connectors"
 cp tradinebotte-cex/connectors/__init__.py "$INSTALL_DIR/connectors/__init__.py"
 
 mkdir -p "$INSTALL_DIR/strategy_engines" "$INSTALL_DIR/strategies"
-cp tradinebotte-cex/strategy_engines/__init__.py "$INSTALL_DIR/strategy_engines/__init__.py"
-cp tradinebotte-cex/strategy_engines/grid.py     "$INSTALL_DIR/strategy_engines/grid.py"
+for _f in __init__.py base.py grid.py swing.py swinghold.py dca.py; do
+    cp "tradinebotte-cex/strategy_engines/$_f" "$INSTALL_DIR/strategy_engines/$_f"
+done
 _STRAT_SRC="$(cd tradinebotte-polymarket/strategies && pwd)"
 _STRAT_DST="$(cd "$INSTALL_DIR/strategies" && pwd)"
 if [ "$_STRAT_SRC" != "$_STRAT_DST" ]; then
@@ -150,7 +152,9 @@ chmod +x "$INSTALL_DIR/run.sh"
 # ── Syntax check ──────────────────────────────────────────────────
 echo "=== $(_t "Checking syntax" "Vérification syntaxe") ==="
 for _f in live_bot.py api_polymarket.py api_binance.py api_mexc.py bot_utils.py \
-          connectors/__init__.py strategy_engines/__init__.py strategy_engines/grid.py; do
+          connectors/__init__.py \
+          strategy_engines/__init__.py strategy_engines/base.py strategy_engines/grid.py \
+          strategy_engines/swing.py strategy_engines/swinghold.py strategy_engines/dca.py; do
     _check_syntax "$INSTALL_DIR/$_f"
 done
 
