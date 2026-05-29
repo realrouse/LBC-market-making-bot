@@ -76,6 +76,46 @@ _restart_service() {
 
 # ─── Restart tradinebotte-indicators if requested ──────────────────────────────
 if [[ "$RESTART_INDICATORS" == "true" ]]; then
+    CONF="${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
+    source "$CONF"
+    _c1_user="${TEST_USERS[0]}"
+    _c1_pass="${TEST_PASSWORDS[0]}"
+    _server="${TEST_SERVER:?}"
+    _port="${TEST_PORT:-22}"
+    _install_dir="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
+    _ssh_opts="-p $_port -o StrictHostKeyChecking=yes"
+
+    echo -e "\n${BOLD}${YELLOW}═══ RSYNC indicators + tradinetools ═══${NC}"
+
+    # Push the new indicators.py to the flat install directory
+    SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
+        rsync -az \
+        -e "ssh $_ssh_opts" \
+        "$LOCAL_REPO/tradinebotte-indicators/indicators.py" \
+        "$_c1_user@$_server:$_install_dir/indicators.py" 2>&1 \
+        && echo -e "${GREEN}  ✓ indicators.py synced${NC}" \
+        || { echo -e "${RED}  ✗ rsync indicators.py failed${NC}"; exit 1; }
+
+    # Push tradinetools (service uses .venv, not venv — install separately)
+    SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
+        rsync -az \
+        --exclude='__pycache__' --exclude='*.pyc' --exclude='*.egg-info' \
+        -e "ssh $_ssh_opts" \
+        "$LOCAL_REPO/tradinetools/" \
+        "$_c1_user@$_server:$_install_dir/tradinetools/" 2>&1 \
+        && echo -e "${GREEN}  ✓ tradinetools synced${NC}" \
+        || { echo -e "${RED}  ✗ rsync tradinetools failed${NC}"; exit 1; }
+
+    # Install tradinetools in the .venv used by the systemd service
+    SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
+        ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+        -p "$_port" "$_c1_user@$_server" \
+        "$_install_dir/.venv/bin/pip install --quiet -e $_install_dir/tradinetools \
+         && echo 'tradinetools ok (.venv)' \
+         || echo 'tradinetools install warning (non-fatal)'" 2>&1 \
+        && echo -e "${GREEN}  ✓ tradinetools installed in .venv${NC}" \
+        || echo -e "${YELLOW}  ! tradinetools pip step had warnings${NC}"
+
     _restart_service "tradinebotte-indicators" "INDICATORS" "PUB bind|scalping|ERROR"
 fi
 
