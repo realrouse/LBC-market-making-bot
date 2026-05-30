@@ -76,10 +76,10 @@ re-demandera la langue et régénérera le fichier).
 Pour déployer uniquement les fichiers du bot (sans synchronisation complète du dépôt), utiliser le script dédié :
 
 ```bash
-bash scripts/update_standalone.sh
+bash tradinebotte-polymarket/scripts/update_standalone.sh
 ```
 
-Ce script copie en rsync le contenu de `bot/` à plat dans le répertoire d'installation, les fichiers `strategies/*.json` et `requirements.txt`, puis exécute `pip install -r requirements.txt` pour mettre à jour les dépendances Python avant de stopper le bot en cours d'exécution (via `live.pid`) et de relancer la nouvelle version dans une seule session SSH. Pratique pour déployer depuis une machine de développement sans passer par git.
+Ce script copie en rsync le contenu de `tradinebotte-polymarket/` à plat dans le répertoire d'installation, les fichiers `tradinebotte-polymarket/strategies/*.json` et `requirements.txt`, puis exécute `pip install -r requirements.txt` pour mettre à jour les dépendances Python avant de stopper le bot en cours d'exécution (via `live.pid`) et de relancer la nouvelle version dans une seule session SSH. Pratique pour déployer depuis une machine de développement sans passer par git.
 
 **Options :**
 - `--skip-restart` — rsync uniquement, sans stop/start du bot
@@ -92,10 +92,27 @@ Ce script copie en rsync le contenu de `bot/` à plat dans le répertoire d'inst
 Pour le compte de déploiement dédié à la stratégie swing, utiliser le script de déploiement spécifique :
 
 ```bash
-bash scripts/update_swing.sh
+bash tradinebotte-cex/scripts/update_swing.sh
 ```
 
 Ce script copie en rsync le moteur de stratégie swing et sa configuration vers le répertoire d'installation du compte swing, écrit son `config.json`, redémarre le bot via le fichier PID et vérifie que le processus tourne — le tout dans une seule session SSH. Il suit le même schéma que `update_standalone.sh`, mais cible la structure du compte swing.
+
+---
+
+## Scénario 6 — Déploiement d'une stratégie CEX
+
+Trois scripts couvrent les stratégies du sous-service CEX. Chacun copie en rsync le moteur et la configuration concernés, redémarre le bot via son fichier PID et vérifie le processus — le tout dans une seule session SSH.
+
+```bash
+# Bot de scalping (OBI Binance)
+bash tradinebotte-cex/scripts/deploy_scalping_claude4.sh
+
+# Bot d'accumulation BTC v1.2
+bash tradinebotte-cex/scripts/deploy_accumulation_claude4.sh
+
+# Stratégie swing
+bash tradinebotte-cex/scripts/update_swing.sh
+```
 
 ---
 

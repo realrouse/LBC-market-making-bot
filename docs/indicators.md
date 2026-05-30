@@ -2,7 +2,7 @@
 
 > 🇫🇷 [Version française](indicators.fr.md)
 
-`bot/indicators.py` is an optional pipeline stage that subscribes to market
+`tradinebotte-indicators/indicators.py` is an optional pipeline stage that subscribes to market
 data (ZeroMQ feed and/or Binance WebSocket) and publishes enriched messages
 on a dedicated PUB socket. It supports three categories of data:
 
@@ -689,7 +689,7 @@ The series is EMA-smoothed with `ema_alpha` to produce `macro_obi`.
 
 ### Production unified config
 
-`strategies/indicators/indicators_all.json` is the production configuration.
+`tradinebotte-indicators/strategies/indicators_all.json` is the production configuration.
 It runs all 14 streams in a single `indicators.py` process on ports 5559/5561
 (the `tradinebotte-indicators` systemd service). Individual config files exist
 for standalone testing only.
@@ -729,12 +729,12 @@ Each file declares a single stream on a dedicated port pair.
 
 ```bash
 # Production: all 14 streams (managed by tradinebotte-indicators systemd service)
-TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators/indicators_all.json \
-  bash scripts/start_indicators.sh
+TRADINEBOTTE_INDICATORS_CONFIG=tradinebotte-indicators/strategies/indicators_all.json \
+  bash tradinebotte-indicators/scripts/start_indicators.sh
 
 # Testing a single stream in isolation
-TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators/indicators_oi_bitcoin.json \
-  bash scripts/start_indicators.sh
+TRADINEBOTTE_INDICATORS_CONFIG=tradinebotte-indicators/strategies/indicators_oi_bitcoin.json \
+  bash tradinebotte-indicators/scripts/start_indicators.sh
 ```
 
 ---
@@ -798,12 +798,12 @@ vars override everything without shifting.
 
 ```bash
 # Default stack — ports 5557 / 5559 / 5561 …
-bash scripts/start_indicators.sh
+bash tradinebotte-indicators/scripts/start_indicators.sh
 
 # Second independent stack — all ports shifted by +1000
 TRADINEBOTTE_PORT_BASE=6557 \
-TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators/indicators_4h_bitcoin.json \
-  bash scripts/start_indicators.sh
+TRADINEBOTTE_INDICATORS_CONFIG=tradinebotte-indicators/strategies/indicators_4h_bitcoin.json \
+  bash tradinebotte-indicators/scripts/start_indicators.sh
 ```
 
 ---
@@ -825,8 +825,8 @@ kline data — no new REST or WebSocket source needed.
 
 | File | Role |
 |---|---|
-| `bot/indicators.py` | Implementation: all sources, `PriceSeries`, config loader, ZMQ tasks |
-| `strategies/indicators/indicators_all.json` | Unified production config (all 14 streams) |
-| `strategies/indicators/indicators_*.json` | Per-stream config files for standalone testing |
-| `tests/test_indicators.py` | Unit and integration tests (117 tests) |
+| `tradinebotte-indicators/indicators.py` | Implementation: all sources, `PriceSeries`, config loader, ZMQ tasks |
+| `tradinebotte-indicators/strategies/indicators_all.json` | Unified production config (all 14 streams) |
+| `tradinebotte-indicators/strategies/indicators_*.json` | Per-stream config files for standalone testing |
+| `tradinebotte-indicators/tests/test_indicators.py` | Unit and integration tests (117 tests) |
 | `docs/design.md` | ZeroMQ topology, message catalog, ZeroMQ vs MQTT analysis |

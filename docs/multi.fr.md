@@ -73,7 +73,7 @@ de maintenir son propre WebSocket.
 
 ## Composants
 
-### `bot/feed.py`
+### `tradinebotte-polymarket/feed.py`
 
 | Responsabilité | Détails |
 |---|---|
@@ -87,7 +87,7 @@ Le feed ne stocke aucun état de trading. Il peut être redémarré à tout mome
 affecter les account bots (ils rateront les mises à jour pendant l'interruption mais
 ne placeront pas d'ordres en double à la reconnexion).
 
-### `bot/account_bot.py`
+### `tradinebotte-polymarket/account_bot.py`
 
 | Responsabilité | Détails |
 |---|---|
@@ -635,7 +635,7 @@ dynamiquement.
 
 ```bash
 INDICATORS_CONFIG=~/tradinebotte/strategies/indicators/indicators_4h_bitcoin.json \
-bash scripts/install_indicators_service.sh
+bash tradinebotte-indicators/scripts/install_indicators_service.sh
 
 # Suivre les commandes sudo affichées :
 sudo cp ~/tmp/tradinebotte-indicators.service /etc/systemd/system/

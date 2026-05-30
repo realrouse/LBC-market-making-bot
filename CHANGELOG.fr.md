@@ -6,6 +6,43 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.48] — 2026-05-30
+
+### Ajout
+- **Monorepo Phase 1 — bibliothèque partagée `tradinetools` v0.1** : package Python `tradinetools/` avec `zmq.py` (fabriques de sockets `make_pub/sub/rep/req`, `warn_if_external_bind`, constantes de ports), `schemas.py` (dataclasses ZMQ versionnées `BookMessage`, `IndicatorsMessage`, `RegisterRequest`, `RegisterReply`, etc. avec round-trip `to_dict()`/`from_dict()`), `math.py` (indicateurs scalaires `sma_last`, `ema_last`, `atr_last`, `bollinger_last`, `vwap_last`, `vol_zscore_last`, `rolling_max_last`), `logging.py` (`setup_logger` partagé) ; installé comme package éditable via `pyproject.toml`
+- **Monorepo Phase 2 — `tradinebotte-indicators/`** : service d'indicateurs entièrement isolé dans son propre sous-répertoire avec `scripts/`, `strategies/` et `tests/` dédiés ; le service adopte les fabriques ZMQ de tradinetools et le schéma v1 pour tous les messages publiés
+- **Monorepo Phase 3 — `tradinebotte-polymarket/`** : service Polymarket isolé avec `feed.py`, `live_bot.py`, `account_bot.py`, `api_polymarket.py`, `bot_utils.py` et tous les scripts/stratégies/tests associés
+- **Monorepo Phase 4 — `tradinebotte-cex/`** : service CEX isolé avec tous les moteurs de stratégie, bots, scripts de déploiement, configs JSON et tests
+- **`tradinebotte-cex/strategy_engines/dca.py` — plugin `DCAStrategy`** : achats DCA horodatés à intervalles configurables ; ordres à cours limité avec TP et SL optionnel ; persistance SQLite ; s'intègre au schéma d'injection de connecteur partagé
+- **`tradinebotte-cex/strategy_engines/swinghold.py` — plugin `SwingHoldStrategy`** : variante swing qui sort partiellement à chaque niveau de résistance (`sell_fraction` par niveau) au lieu d'un seul TP ; `hold_fraction = 1 − sell_fraction` conservé pour l'accumulation long terme ; SL complet sur la position restante
+- **`tradinebotte-cex/strategy_engines/swing.py` — SELL marché pour les sorties stop-loss** : le SL s'exécute désormais via un ordre marché REST (`post_market_order`) au lieu d'une annulation de limite, garantissant le fill dans les marchés en mouvement rapide
+- **`tradinebotte-cex/accumulation_bot.py` — bot d'accumulation BTC v1.2** : achat sur creux OBI avec ratchet de profit progressif ; scale-in adaptatif avec logique de rebuy ; persistance d'état à travers les redémarrages ; v1.1 corrige des bugs et ajoute le rebuy adaptatif ; v1.2 promeut les bandes de profit larges issues de la calibration comme valeurs par défaut
+- **`tradinebotte-cex/orderbook_bot.py` — scalping OBI v2.3–v2.10** : v2.3 ajoute le filtre TFI (Trade Flow Imbalance) ; v2.4 direction long uniquement ; v2.5 TP/SL élargis calibrés le 2026-05-26 ; v2.7 gate TFI plat + suppression de `obi_exit_thresh` ; v2.8 gate VWAP contextuel ; v2.9 gate profil de volume ; v2.10 gate OBI macro (filtre multi-temporel)
+- **`tradinebotte-indicators/indicators.py` — 4 nouvelles sources** : liquidations Bitcoin (Coinalyze), open interest, ratio long/short, taux de financement ; tous publiés sur le flux ZMQ d'indicateurs unifié ; authentification HMAC ajoutée pour l'endpoint liquidations
+- **`analysis/backtest_swing_dca.py` — backtesteur de stratégies CEX** : simule DCA, Swing et SwingHold sur des bases SQLite OHLCV 1 minute ; modèle de fill : BUY remplit quand `candle_low ≤ limit_price`, SELL quand `candle_high ≥ limit_price`, SL quand `candle_low ≤ sl_price` ; verrou de récupération empêchant les ré-entrées en cascade lors de mouvements brusques à travers le cluster de supports ; modèle de capital basé uniquement sur le PnL réalisé ; modes `--compare`, `--all-dbs`, `--sweep`, `--config`
+- **`analysis/backtest_orderbook.py`** — backtesteur de scalping OBI sur snapshots de carnet d'ordres live
+- **`analysis/calibrate_obi_proxy.py`** — script de calibration des paramètres du proxy OBI
+- **`scripts/backtest_accumulation.py`** — backtesteur de la stratégie d'accumulation
+- **`tradinebotte-cex/scripts/deploy_accumulation_claude4.sh`** — script de déploiement du bot d'accumulation
+- **`tradinebotte-polymarket/scripts/update_claude3.sh`** — wrapper de déploiement ciblant le troisième compte de test
+- **Extension de la suite de tests** : `tradinebotte-cex/tests/test_strategy_engines.py` (64 tests couvrant `SwingStrategy`, `DCAStrategy`, `SwingHoldStrategy` — validation d'init, méthodes de calcul pures, fills asynchrones simulés via `IsolatedAsyncioTestCase`) ; `tradinetools/tests/test_zmq.py`, `test_schemas.py`, `test_math.py` (87 tests au total) ; les 5 répertoires de tests des sous-services sont désormais découverts par la CI
+
+### Modifications
+- **`.github/workflows/tests.yml`** — la CI exécute désormais `unittest discover` sur les cinq répertoires de tests et installe `tradinetools` comme package éditable avant l'exécution
+- **`tradinebotte-indicators/indicators.py`** — couche de publication ZMQ remplacée par les fabriques tradinetools `make_pub`/`make_sub`/`make_rep`/`make_req` ; tous les messages sérialisés en dicts schéma v1 ; `warn_if_external_bind` appelé sur chaque adresse de bind
+- **Tous les scripts de déploiement** (`update_claude1.sh`, `deploy_scalping_claude4.sh`, `deploy_accumulation_claude4.sh`) mis à jour pour rsync `tradinetools/` vers le répertoire d'installation distant et l'installer dans le `.venv` distant
+
+### Correctifs
+- **`tradinebotte-polymarket/scripts/update_claude1.sh` — `--restart-feed`** : synchronise `feed.py` et `tradinetools/` vers le serveur distant ; installe tradinetools dans `.venv` ; corrige le fichier unit systemd si `ExecStart` pointe encore vers l'ancien chemin `bot/feed.py`
+- **`tradinebotte-polymarket/scripts/install_feed_service.sh`** — `BOT_DIR` corrigé pour pointer vers la racine du projet au lieu du sous-répertoire `bot/`
+- **`tradinebotte-indicators/indicators.py`** — TFI perpétuel basculé de WebSocket aggTrade (indisponible) vers polling REST ; clés depth Binance futures corrigées (`b`/`a` vs `bids`/`asks`)
+- **Pylint 10,00/10** sur tous les nouveaux modules et scripts
+
+### Tests
+- Total : **1 148 tests réussis** sur cinq suites de sous-services (340 + 87 + 170 + 415 + 136)
+
+---
+
 ## [0.47] — 2026-05-24
 
 ### Ajout

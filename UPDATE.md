@@ -76,10 +76,10 @@ re-prompt for language and regenerate the file).
 For deploying only the bot files (no full repo sync), use the dedicated script:
 
 ```bash
-bash scripts/update_standalone.sh
+bash tradinebotte-polymarket/scripts/update_standalone.sh
 ```
 
-This rsync-copies `bot/` contents flat to the install directory, `strategies/*.json`, and
+This rsync-copies `tradinebotte-polymarket/` contents flat to the install directory, `tradinebotte-polymarket/strategies/*.json`, and
 `requirements.txt`, then runs `pip install -r requirements.txt` to update Python
 dependencies before stopping the running bot (via `live.pid`) and starting the new version
 in a single SSH session. Useful when working from a dev machine without pushing to git first.
@@ -95,10 +95,27 @@ in a single SSH session. Useful when working from a dev machine without pushing 
 For the dedicated swing trading deployment account, use the swing-specific deploy script:
 
 ```bash
-bash scripts/update_swing.sh
+bash tradinebotte-cex/scripts/update_swing.sh
 ```
 
 This script rsync-copies the swing strategy engine and config to the swing account's install directory, writes its `config.json`, restarts the bot via the PID file, and verifies that the process is running — all in a single SSH session. It mirrors the approach of `update_standalone.sh` but targets the swing account layout.
+
+---
+
+## Scenario 6 — Deploying a CEX strategy
+
+Three deploy scripts cover the CEX sub-service strategies. Each rsync-copies the relevant engine and config, restarts the running bot via its PID file, and verifies the process — all in a single SSH session.
+
+```bash
+# Scalping bot (Binance OBI)
+bash tradinebotte-cex/scripts/deploy_scalping_claude4.sh
+
+# BTC accumulation bot v1.2
+bash tradinebotte-cex/scripts/deploy_accumulation_claude4.sh
+
+# Swing strategy
+bash tradinebotte-cex/scripts/update_swing.sh
+```
 
 ---
 
