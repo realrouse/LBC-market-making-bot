@@ -28,7 +28,7 @@ class _Base:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "_Base":
-        known = {f.name for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
+        known = {f.name for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]  # pylint: disable=no-member
         return cls(**{k: v for k, v in d.items() if k in known})
 
 
