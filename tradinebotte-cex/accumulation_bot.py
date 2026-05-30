@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """
-BTC Long-Term Accumulation Bot v1.2
+BTC Long-Term Accumulation Bot v1.3
 
 Builds a growing BTC spot position using OBI dip-buying + partial profit ladder.
+
+Changes from v1.2:
+  - New: Binance Simple Earn integration (earn_manager.EarnManager).
+    Idle USDT is parked in Flexible Earn after every trade and redeemed
+    before each buy.  Enabled by default (earn_enabled=true).
+    Requires BINANCE_API_KEY + BINANCE_API_SECRET with "Flexible Savings"
+    permission; without credentials EarnManager runs in sim mode (logs only).
 
 Changes from v1.1:
   - Refactor: consumes OBI/price data from the shared indicators service (ZMQ)
@@ -45,6 +52,10 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import aiohttp
+
+from earn_manager import EarnManager
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -95,11 +106,17 @@ DEFAULTS: dict = {
     "maker_fee_spot":        0.0002,
     "use_limit_orders":      True,
     "snapshot_every_n":      20,
+    "spread_ema_alpha":       0.1,   # EMA smoothing for spread — drives rebuy discount range
+    "buy_dust_tolerance_usdt": 0.01, # allow buy if shortfall < this amount (rounding tolerance)
     # Indicators service (ZMQ)
     "indicators_addr":       "tcp://127.0.0.1:5559",
     "scalping_stream_id":    "btc_scalping_spot",
     # VWAP gate: when True, scale-ins are suspended when price is above the 4h VWAP
     "vwap_gate":             True,
+    # Binance Simple Earn: park idle USDT after each trade, redeem before buys.
+    # Requires BINANCE_API_KEY + BINANCE_API_SECRET with Flexible Savings permission.
+    # Without credentials EarnManager runs in sim mode (logs only, no real calls).
+    "earn_enabled":          True,
 }
 
 # ---------------------------------------------------------------------------
@@ -183,6 +200,7 @@ class AccumState:
     # VWAP context — updated from btc_vwap_context stream
     vwap_dip_score:     float = 0.0
     vwap_dip_zone:      str   = "neutral"
+    earn: EarnManager | None  = field(default=None, repr=False)
 
     def unrealized_pct(self) -> float:
         if self.avg_entry > 0 and self.last_price > 0:
@@ -261,8 +279,8 @@ def _scale_in_amount(state: AccumState, price: float) -> float:
 
 def _rebuy_discount(state: AccumState) -> float:
     p       = state.p
-    min_d   = p.get("rebuy_discount_min_pct", 0.15)
-    max_d   = p.get("rebuy_discount_max_pct", 1.00)
+    min_d   = p.get("rebuy_discount_min_pct", 3.0)
+    max_d   = p.get("rebuy_discount_max_pct", 10.0)
     mult    = p.get("rebuy_spread_mult", 3.0)
     pct     = max(min_d, min(max_d, state.spread_ema * mult))
     return pct / 100.0
@@ -271,17 +289,20 @@ def _rebuy_discount(state: AccumState) -> float:
 # Trade execution (paper)
 # ---------------------------------------------------------------------------
 
-def _buy(state: AccumState, price: float, usdt_amount: float,
-         reason: str, ts_ms: int, db: sqlite3.Connection) -> bool:
+async def _buy(state: AccumState, price: float, usdt_amount: float,
+               reason: str, ts_ms: int, db: sqlite3.Connection) -> bool:
     p        = state.p
     fee_rate = p["maker_fee_spot"] if p.get("use_limit_orders") else p["fee_spot"]
     qty_btc  = usdt_amount / price
     fee      = usdt_amount * fee_rate
     total    = usdt_amount + fee
 
-    if total > state.free_usdt + 0.01:
+    if total > state.free_usdt + p.get("buy_dust_tolerance_usdt", 0.01):
         logger.warning("BUY skipped — need %.2f USDT, have %.2f", total, state.free_usdt)
         return False
+
+    if state.earn is not None:
+        await state.earn.ensure_liquid(total)
 
     if state.holdings_btc > 0 and state.avg_entry > 0:
         total_btc       = state.holdings_btc + qty_btc
@@ -293,6 +314,9 @@ def _buy(state: AccumState, price: float, usdt_amount: float,
     state.free_usdt    -= total
     if state.holdings_btc > state.peak_holdings_btc:
         state.peak_holdings_btc = state.holdings_btc
+
+    if state.earn is not None:
+        await state.earn.park_idle(state.free_usdt)
 
     db.execute("""
         INSERT INTO accum_trades
@@ -310,8 +334,8 @@ def _buy(state: AccumState, price: float, usdt_amount: float,
     return True
 
 
-def _sell(state: AccumState, price: float, qty_btc: float,
-          reason: str, ts_ms: int, db: sqlite3.Connection) -> bool:
+async def _sell(state: AccumState, price: float, qty_btc: float,
+                reason: str, ts_ms: int, db: sqlite3.Connection) -> bool:
     if qty_btc <= 0 or state.holdings_btc <= 0:
         return False
     qty_btc  = min(qty_btc, state.holdings_btc)
@@ -324,6 +348,9 @@ def _sell(state: AccumState, price: float, qty_btc: float,
     state.holdings_btc   -= qty_btc
     state.free_usdt      += usdt_val - fee
     state.total_realized += realized
+
+    if state.earn is not None:
+        await state.earn.park_idle(state.free_usdt)
 
     db.execute("""
         INSERT INTO accum_trades
@@ -344,8 +371,8 @@ def _sell(state: AccumState, price: float, qty_btc: float,
 # Strategy logic
 # ---------------------------------------------------------------------------
 
-def _check_profit_bands(state: AccumState, price: float,
-                        ts_ms: int, db: sqlite3.Connection) -> None:
+async def _check_profit_bands(state: AccumState, price: float,
+                              ts_ms: int, db: sqlite3.Connection) -> None:
     if state.holdings_btc <= 0 or state.avg_entry <= 0:
         return
     p        = state.p
@@ -369,7 +396,7 @@ def _check_profit_bands(state: AccumState, price: float,
             logger.info("Band +%.1f%% skipped — holdings at floor (%.2f%%)",
                         band_pct, min_hold_pct * 100)
             continue
-        if _sell(state, price, qty, f"profit+{band_pct:.1f}%", ts_ms, db):
+        if await _sell(state, price, qty, f"profit+{band_pct:.1f}%", ts_ms, db):
             rebuy = price * (1.0 - discount)
             state.active_bands.add(band_pct)
             state.pending_rebuys.append(
@@ -379,8 +406,8 @@ def _check_profit_bands(state: AccumState, price: float,
                         qty, rebuy, state.spread_ema, discount * 100)
 
 
-def _check_rebuys(state: AccumState, price: float,
-                  ts_ms: int, db: sqlite3.Connection) -> None:
+async def _check_rebuys(state: AccumState, price: float,
+                        ts_ms: int, db: sqlite3.Connection) -> None:
     filled = []
     for rb in state.pending_rebuys:
         if price > rb.rebuy_price:
@@ -388,15 +415,15 @@ def _check_rebuys(state: AccumState, price: float,
         usdt_needed = rb.qty_btc * price
         if usdt_needed > state.free_usdt:
             continue
-        if _buy(state, price, usdt_needed, f"rebuy+{rb.band_pct:.1f}%", ts_ms, db):
+        if await _buy(state, price, usdt_needed, f"rebuy+{rb.band_pct:.1f}%", ts_ms, db):
             state.active_bands.discard(rb.band_pct)
             filled.append(rb)
     for rb in filled:
         state.pending_rebuys.remove(rb)
 
 
-def _check_obi_scale_in(state: AccumState, price: float,
-                         ts_ms: int, db: sqlite3.Connection) -> None:
+async def _check_obi_scale_in(state: AccumState, price: float,
+                               ts_ms: int, db: sqlite3.Connection) -> None:
     p          = state.p
     min_iv     = p.get("min_scale_interval_s", 1800)
     max_invest = state.max_investable()
@@ -421,7 +448,7 @@ def _check_obi_scale_in(state: AccumState, price: float,
     dip_pct = ((state.avg_entry - price) / state.avg_entry * 100.0
                if state.avg_entry > 0 else 0.0)
     reason = f"obi_dip({dip_pct:+.1f}%)"
-    if _buy(state, price, scale_usdt, reason, ts_ms, db):
+    if await _buy(state, price, scale_usdt, reason, ts_ms, db):
         state.last_buy_ts = ts_ms
 
 # ---------------------------------------------------------------------------
@@ -453,7 +480,8 @@ async def _handle_indicator(state: AccumState, db: sqlite3.Connection,
     spread_bps = msg.get("spread_bps")
     if spread_bps is not None:
         spread_pct = float(spread_bps) / 100.0
-        state.spread_ema = 0.1 * spread_pct + 0.9 * state.spread_ema
+        _alpha = state.p.get("spread_ema_alpha", 0.1)
+        state.spread_ema = _alpha * spread_pct + (1 - _alpha) * state.spread_ema
 
     state.snap_counter += 1
     if state.snap_counter % state.p["snapshot_every_n"] == 0:
@@ -471,13 +499,13 @@ async def _handle_indicator(state: AccumState, db: sqlite3.Connection,
 
     if not state.initial_done:
         init_usdt = min(state.p["initial_stake_usdt"], state.free_usdt)
-        if _buy(state, price, init_usdt, "initial", ts_ms, db):
+        if await _buy(state, price, init_usdt, "initial", ts_ms, db):
             state.last_buy_ts = ts_ms
             state.initial_done = True
         return
 
-    _check_profit_bands(state, price, ts_ms, db)
-    _check_rebuys(state, price, ts_ms, db)
+    await _check_profit_bands(state, price, ts_ms, db)
+    await _check_rebuys(state, price, ts_ms, db)
 
     thresh = state.p["obi_entry_thresh"]
     if state.obi_ema < -thresh:
@@ -486,7 +514,7 @@ async def _handle_indicator(state: AccumState, db: sqlite3.Connection,
         state.pending_count = 0
 
     if state.pending_count >= state.p["obi_confirm_n"]:
-        _check_obi_scale_in(state, price, ts_ms, db)
+        await _check_obi_scale_in(state, price, ts_ms, db)
         state.pending_count = 0
 
 # ---------------------------------------------------------------------------
@@ -558,37 +586,42 @@ async def _run(p: dict, db: sqlite3.Connection) -> None:
 
     restored = _restore_state(state, db)
 
-    logger.info("Accumulation bot v1.2 — %s  capital=%.0f USDT  paper=True%s",
-                p["symbol"], p["capital_usdt"],
-                "  [RESTORED]" if restored else "")
-    logger.info("Initial %.0f USDT  scale-in %.0f-%.0f USDT  "
-                "every %dmin (dip_factor=%.1f  max_mult=%.1f×)",
-                p["initial_stake_usdt"],
-                p["scale_in_usdt"],
-                p["scale_in_usdt"] * p.get("scale_in_max_mult", 3.0),
-                p.get("min_scale_interval_s", 1800) // 60,
-                p.get("scale_in_dip_factor", 0.5),
-                p.get("scale_in_max_mult", 3.0))
-    logger.info("Profit bands: %s%%  sell %.0f%%  min_hold %.0f%%  "
-                "rebuy discount %.2f–%.2f%% (spread×%.1f)",
-                p.get("profit_bands_pct"),
-                p.get("sell_fraction", 0.20) * 100,
-                p.get("min_holdings_pct", 0.0) * 100,
-                p.get("rebuy_discount_min_pct", 0.15),
-                p.get("rebuy_discount_max_pct", 1.00),
-                p.get("rebuy_spread_mult", 3.0))
-    logger.info("VWAP gate: %s  indicators: %s",
-                "enabled" if p.get("vwap_gate", True) else "disabled",
-                p.get("indicators_addr", "tcp://127.0.0.1:5559"))
+    async with aiohttp.ClientSession() as http_session:
+        if p.get("earn_enabled", True):
+            state.earn = EarnManager(http_session)
 
-    tasks = [
-        asyncio.create_task(_zmq_loop(state, db)),
-        asyncio.create_task(_stats_loop(state)),
-    ]
-    try:
-        await asyncio.gather(*tasks)
-    except asyncio.CancelledError:
-        logger.info("Shutdown")
+        logger.info("Accumulation bot v1.3 — %s  capital=%.0f USDT  paper=True%s  earn=%s",
+                    p["symbol"], p["capital_usdt"],
+                    "  [RESTORED]" if restored else "",
+                    "enabled" if state.earn is not None else "disabled")
+        logger.info("Initial %.0f USDT  scale-in %.0f-%.0f USDT  "
+                    "every %dmin (dip_factor=%.1f  max_mult=%.1f×)",
+                    p["initial_stake_usdt"],
+                    p["scale_in_usdt"],
+                    p["scale_in_usdt"] * p.get("scale_in_max_mult", 3.0),
+                    p.get("min_scale_interval_s", 1800) // 60,
+                    p.get("scale_in_dip_factor", 0.5),
+                    p.get("scale_in_max_mult", 3.0))
+        logger.info("Profit bands: %s%%  sell %.0f%%  min_hold %.0f%%  "
+                    "rebuy discount %.2f–%.2f%% (spread×%.1f)",
+                    p.get("profit_bands_pct"),
+                    p.get("sell_fraction", 0.20) * 100,
+                    p.get("min_holdings_pct", 0.0) * 100,
+                    p.get("rebuy_discount_min_pct", 3.0),
+                    p.get("rebuy_discount_max_pct", 10.0),
+                    p.get("rebuy_spread_mult", 3.0))
+        logger.info("VWAP gate: %s  indicators: %s",
+                    "enabled" if p.get("vwap_gate", True) else "disabled",
+                    p.get("indicators_addr", "tcp://127.0.0.1:5559"))
+
+        tasks = [
+            asyncio.create_task(_zmq_loop(state, db)),
+            asyncio.create_task(_stats_loop(state)),
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        except asyncio.CancelledError:
+            logger.info("Shutdown")
 
 
 def main() -> None:

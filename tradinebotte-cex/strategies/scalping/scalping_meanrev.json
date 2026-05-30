@@ -19,5 +19,6 @@
     "mr_vwap_dev_thresh":  0.005,
     "mr_atr_period":       14,
     "mr_sl_atr_mult":      1.5,
+    "mr_sl_hard_cap_pct":  0.02,
     "mr_max_hold_minutes": 60
 }

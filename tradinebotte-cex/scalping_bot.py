@@ -78,6 +78,13 @@ cm_stop_loss_pct : float
 cm_max_hold_minutes : int
     Hard time limit in minutes. Position is closed at the current close
     price if neither TP nor SL is reached within this window. Default 10.
+cm_vwap_gate : bool
+    When True, skip long entries when the candle close is above the rolling
+    VWAP. Entering above VWAP means chasing momentum into resistance; the
+    gate preserves entries for genuine dip recoveries only. Default False.
+cm_vwap_window : int
+    Rolling VWAP lookback in candles used by the gate. 390 ≈ one 6.5-hour
+    US session. Default 390.
 
 meanrev (prefix ``mr_``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -188,6 +195,8 @@ DEFAULTS = {
     "cm_take_profit_pct":    0.006,  # TP = entry × (1 + pct); 0.6% → ~0.29% net after costs
     "cm_stop_loss_pct":      0.003,  # SL = entry × (1 − pct); 0.3% → 2:1 gross R:R
     "cm_max_hold_minutes":   10,     # forced close at current price after N minutes
+    "cm_vwap_gate":          False,  # skip longs when close > rolling VWAP (above resistance)
+    "cm_vwap_window":        390,    # VWAP rolling window (candles); 390 min ≈ one US session
 
     # ── meanrev ───────────────────────────────────────────────────────────────
     # Entry: close < BB_lower(period, std_mult) AND close < VWAP × (1 − vwap_dev_thresh)
@@ -197,7 +206,8 @@ DEFAULTS = {
     "mr_vwap_window":        390,    # VWAP rolling window (candles); 390 min ≈ one US session
     "mr_vwap_dev_thresh":    0.005,  # min % below VWAP to trigger entry (0.5%)
     "mr_atr_period":         14,     # ATR lookback for SL sizing (candles)
-    "mr_sl_atr_mult":        1.5,    # SL = entry − mult × ATR; hard cap at 2% below entry
+    "mr_sl_atr_mult":        1.5,    # SL = entry − mult × ATR; hard cap at mr_sl_hard_cap_pct below entry
+    "mr_sl_hard_cap_pct":    0.02,   # hard cap: SL no more than this fraction below entry (2%)
     "mr_max_hold_minutes":   60,     # forced close if VWAP re-touch not reached after N minutes
 
     # ── breakout ──────────────────────────────────────────────────────────────
@@ -273,6 +283,9 @@ class ScalpingBot:
         self._log.info("ScalpingBot started  strategy=%s  capital=%.2f",
                        stype, self._capital)
         self._log.info("Config: %s", config_path)
+        if stype == "candle_momentum" and self.p.get("cm_vwap_gate", False):
+            self._log.info("VWAP gate: enabled  window=%d candles  (skip longs above VWAP)",
+                           self.p.get("cm_vwap_window", 390))
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -409,6 +422,14 @@ class ScalpingBot:
             body_r = (cl - op) / rng
             vol_z  = _vol_zscore_last(
                 [c["volume"] for c in self._buf], self.p["cm_vol_z_window"])
+
+            if self.p.get("cm_vwap_gate", False):
+                closes  = [c["close"]  for c in self._buf]
+                volumes = [c["volume"] for c in self._buf]
+                vwp = _vwap_last(closes, volumes, self.p.get("cm_vwap_window", 390))
+                if vwp is not None and cl > vwp:
+                    return
+
             if (vol_z is not None
                     and body_r >= self.p["cm_body_ratio_thresh"]
                     and vol_z  >= self.p["cm_vol_z_thresh"]):
@@ -430,7 +451,7 @@ class ScalpingBot:
             if cl < bbl and cl < vwp * (1 - self.p["mr_vwap_dev_thresh"]):
                 tp = vwp
                 sl = cl - self.p["mr_sl_atr_mult"] * atr
-                if sl < cl * 0.98:
+                if sl < cl * (1 - self.p.get("mr_sl_hard_cap_pct", 0.02)):
                     return
                 self._open_position(cl, tp, sl, ts, "mr_long")
 

@@ -18,5 +18,8 @@
     "cm_min_range_pct":     0.0003,
     "cm_take_profit_pct":   0.006,
     "cm_stop_loss_pct":     0.003,
-    "cm_max_hold_minutes":  10
+    "cm_max_hold_minutes":  10,
+
+    "cm_vwap_gate":         true,
+    "cm_vwap_window":       390
 }

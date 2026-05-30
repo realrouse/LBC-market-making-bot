@@ -7,7 +7,7 @@
 
     "signal_threshold":   0.95,
     "entry_max":          0.998,
-    "min_secs_remaining": 45,
+    "min_secs_remaining": 30,
     "min_ask_vol":        10.0,
     "win_threshold":      0.99,
     "loss_threshold":     0.01,
@@ -32,6 +32,10 @@
         "s2": 6.0,
         "s3": 6.0
     },
+
+    "api_fail_threshold":    3,
+    "api_cooldown_secs":     300,
+    "recent_trade_lookback_ms": 600000,
 
     "hour_filter": {
         "_comment": "US weekly open = Mon 13:30 UTC (NYSE open). US weekly close = Fri 20:00 UTC (NYSE close).",

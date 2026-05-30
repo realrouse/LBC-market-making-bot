@@ -1,6 +1,6 @@
 {
-    "_comment": "BTC long-term accumulation v1.2 — ZMQ indicators, VWAP gate, wide bands, larger initial stake",
-    "_version": "1.2",
+    "_comment": "BTC long-term accumulation v1.3 — ZMQ indicators, VWAP gate, Binance Earn integration, wide bands, larger initial stake",
+    "_version": "1.3",
 
     "symbol":               "BTCUSDT",
 
@@ -29,6 +29,11 @@
     "use_limit_orders":     true,
 
     "snapshot_every_n":     20,
+
+    "spread_ema_alpha":     0.1,
+    "buy_dust_tolerance_usdt": 0.01,
+
+    "earn_enabled":         true,
 
     "indicators_addr":      "tcp://127.0.0.1:5559",
     "scalping_stream_id":   "btc_scalping_spot",

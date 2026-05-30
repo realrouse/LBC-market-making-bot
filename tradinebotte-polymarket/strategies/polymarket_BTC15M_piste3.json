@@ -1,6 +1,6 @@
 {
     "_name": "Polymarket BTC 15M — Piste 3: bid scaling + capital cap + weekly stop + OBI",
-    "_description": "15-minute BTC Up/Down markets (tag_id=102467). Architecture mirrors polymarket_BTC5M_piste3: bid_alpha=2.0, capital cap=12%, weekly_stop=$60, obi_reject_thresh=-0.65. OBI threshold and all signal parameters are provisional — no 15M backtest data exists yet. Recalibrate with analysis/calibrate_obi.py once live 15M data is collected. The market_window_mins=16 ensures the bot subscribes to all active 15M markets throughout their full lifecycle, not only in the last 6 minutes.",
+    "_description": "15-minute BTC Up/Down markets (tag_id=102467). Architecture mirrors polymarket_BTC5M_piste3: bid_alpha=2.0, capital cap=12%, weekly_stop=$60. obi_reject_thresh=-0.40 calibrated 2026-05-30 on 874 live trades (2026-05-16→2026-05-30): MaxDD $10 vs $68 at -0.65, Sharpe 4.30 vs 2.23, WR 99.5% vs 98.4% (202 trades kept, 77% filtered). The market_window_mins=16 ensures the bot subscribes to all active 15M markets throughout their full lifecycle, not only in the last 6 minutes.",
 
     "strategy_type": "threshold",
     "connector":     "polymarket",
@@ -10,11 +10,11 @@
 
     "signal_threshold":   0.95,
     "entry_max":          0.998,
-    "min_secs_remaining": 45,
+    "min_secs_remaining": 30,
     "min_ask_vol":        10.0,
     "win_threshold":      0.99,
     "loss_threshold":     0.01,
-    "obi_reject_thresh":  -0.65,
+    "obi_reject_thresh":  -0.40,
     "daily_stop_loss":    30.0,
     "weekly_stop_loss":   60.0,
     "stake":              10.0,
@@ -26,6 +26,10 @@
     "stake_secs_alpha":      0.0,
     "stake_max":             15.0,
     "stake_max_pct_capital": 0.12,
+
+    "api_fail_threshold":    3,
+    "api_cooldown_secs":     300,
+    "recent_trade_lookback_ms": 600000,
 
     "hour_filter": {
         "_comment": "US weekly open = Mon 13:30 UTC. US weekly close = Fri 20:00 UTC.",

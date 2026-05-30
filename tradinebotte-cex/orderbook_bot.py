@@ -31,6 +31,12 @@ Usage
 
 Refactor history
 ----------------
+  v2.11: Funding rate gate — block long entries when the Binance perp funding rate
+         exceeds a threshold (default 0.05%/8h). High positive funding means longs
+         are crowded and paying carry; the ask-heavy contrarian OBI signal is weaker
+         in that regime. Consumes btc_funding ZMQ stream (refreshed every 15min).
+         Enabled via funding_gate=true in JSON. Short entries are unaffected (positive
+         funding is a tailwind for shorts in the contrarian direction).
   v2.10: Macro OBI gate — block long entries when 1h-of-1m macro taker flow is
          bullish (direction="bullish"); ask-heavy micro OBI in a bullish macro
          is noise rather than genuine exhaustion. Consumes btc_macro_obi ZMQ
@@ -123,6 +129,10 @@ DEFAULTS = {
     # Macro OBI gate
     "macro_obi_gate":      False,
     "macro_obi_stream_id": "btc_macro_obi",
+    # Funding rate gate
+    "funding_gate":        False,
+    "funding_gate_thresh": 0.0005,   # 0.05%/8h — typical "crowded longs" threshold
+    "funding_stream_id":   "btc_funding",
     # Indicators service (ZMQ)
     "indicators_addr":     "tcp://127.0.0.1:5559",
     "spot_stream_id":      "btc_scalping_spot",
@@ -220,6 +230,7 @@ class StreamState:
         self.vol_zone_score  = 0.0        # net_vol / total_vol in current bucket
         self.macro_obi       = 0.0        # EMA-smoothed macro OBI (-1 to +1)
         self.macro_obi_dir   = "neutral"  # "bullish" | "neutral" | "bearish"
+        self.funding_rate    = 0.0        # Binance perp funding rate (decimal/8h)
         self.pending_dir     = None
         self.pending_count   = 0
         self.position        = None
@@ -354,6 +365,14 @@ def _handle_macro_obi(state: StreamState, msg: dict) -> None:
     logger.debug("[%s] MacroOBI: obi=%.4f dir=%s",
                  state.mode, state.macro_obi, state.macro_obi_dir)
 
+
+def _handle_funding(state: StreamState, msg: dict) -> None:
+    rate = msg.get("funding_rate")
+    if rate is not None:
+        state.funding_rate = float(rate)
+    logger.debug("[%s] Funding: rate=%.6f (%.4f%%/8h)",
+                 state.mode, state.funding_rate, state.funding_rate * 100)
+
 # ---------------------------------------------------------------------------
 # Indicator message handler
 # ---------------------------------------------------------------------------
@@ -449,6 +468,17 @@ async def _handle_indicator(state: StreamState, db: sqlite3.Connection,
             state.pending_count = 0
             return
 
+    # Funding rate gate: block longs when perp funding is highly positive
+    # (crowded longs paying carry weaken the contrarian ask-heavy OBI signal)
+    if p.get("funding_gate", False):
+        thresh = p.get("funding_gate_thresh", 0.0005)
+        if state.funding_rate > thresh and direction in ("long", "both"):
+            logger.debug("[%s] Funding gate: long blocked (rate=%.6f > thresh=%.6f)",
+                         state.mode, state.funding_rate, thresh)
+            state.pending_dir   = None
+            state.pending_count = 0
+            return
+
     if tfi_thresh <= 0.0:
         tfi_ok_long  = True
         tfi_ok_short = True
@@ -503,13 +533,15 @@ async def _zmq_loop(states: list, db: sqlite3.Connection, p: dict) -> None:
         sid     = p.get(sid_key, f"btc_scalping_{st.mode}")
         stream_map[sid] = st
 
-    vwap_sid  = p.get("vwap_stream_id",      "btc_vwap_context")   if p.get("vwap_gate")       else None
-    vol_sid   = p.get("vol_profile_stream_id","btc_volume_profile") if p.get("vol_profile_gate") else None
-    macro_sid = p.get("macro_obi_stream_id", "btc_macro_obi")      if p.get("macro_obi_gate")   else None
+    vwap_sid     = p.get("vwap_stream_id",       "btc_vwap_context")   if p.get("vwap_gate")        else None
+    vol_sid      = p.get("vol_profile_stream_id","btc_volume_profile") if p.get("vol_profile_gate") else None
+    macro_sid    = p.get("macro_obi_stream_id",  "btc_macro_obi")      if p.get("macro_obi_gate")   else None
+    funding_sid  = p.get("funding_stream_id",    "btc_funding")         if p.get("funding_gate")     else None
     all_streams = (list(stream_map.keys())
-                   + ([vwap_sid]  if vwap_sid  else [])
-                   + ([vol_sid]   if vol_sid   else [])
-                   + ([macro_sid] if macro_sid else []))
+                   + ([vwap_sid]     if vwap_sid     else [])
+                   + ([vol_sid]      if vol_sid      else [])
+                   + ([macro_sid]    if macro_sid    else [])
+                   + ([funding_sid]  if funding_sid  else []))
 
     ctx = azmq.Context.instance()
     sub = ctx.socket(zmq.SUB)
@@ -540,6 +572,10 @@ async def _zmq_loop(states: list, db: sqlite3.Connection, p: dict) -> None:
             if sid == macro_sid and macro_sid:
                 for st in states:
                     _handle_macro_obi(st, msg)
+                continue
+            if sid == funding_sid and funding_sid:
+                for st in states:
+                    _handle_funding(st, msg)
                 continue
 
             state = stream_map.get(sid)
@@ -589,7 +625,7 @@ async def _run(p: dict, db: sqlite3.Connection) -> None:
     else:
         vwap_mode = "disabled"
 
-    logger.info("OrderBook bot v2.10 — symbol=%s  modes=%s  direction=%s  paper=True",
+    logger.info("OrderBook bot v2.11 — symbol=%s  modes=%s  direction=%s  paper=True",
                 p["symbol"], modes, p.get("direction", "long"))
     logger.info("OBI: entry=%.2f  confirm=%d  alpha=%.2f (indicators)  levels=%d",
                 p["obi_entry_thresh"], p["obi_confirm_n"],
@@ -607,6 +643,10 @@ async def _run(p: dict, db: sqlite3.Connection) -> None:
                   if p.get("macro_obi_gate") else "disabled")
     logger.info("MacroOBI: %s  indicators: %s",
                 macro_mode, p.get("indicators_addr", "tcp://127.0.0.1:5559"))
+    funding_thresh = p.get("funding_gate_thresh", 0.0005)
+    funding_mode = (f"enabled — block longs when funding_rate > {funding_thresh:.4%}/8h"
+                    if p.get("funding_gate") else "disabled")
+    logger.info("Funding gate: %s", funding_mode)
 
     tasks = [
         asyncio.create_task(_zmq_loop(states, db, p)),

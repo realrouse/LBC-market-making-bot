@@ -103,8 +103,8 @@ These are backtested. Changing them without re-running the full backtest invalid
 
 | Parameter | Value | Purpose |
 |---|---|---|
-| `SIGNAL_THRESHOLD` | 0.96 | Core entry signal: best_bid >= 0.96 |
-| `MIN_SECS_REMAINING` | 45s | Minimum time left at entry |
+| `SIGNAL_THRESHOLD` | 0.95 | Core entry signal: best_bid >= 0.95 |
+| `MIN_SECS_REMAINING` | 30s | Minimum time left at entry |
 | `WIN_THRESHOLD` | 0.99 | Auto-resolve as WIN |
 | `LOSS_THRESHOLD` | 0.01 | Auto-resolve as LOSS |
 | `DAILY_STOP_LOSS` | $30 | Max daily loss before halting |
