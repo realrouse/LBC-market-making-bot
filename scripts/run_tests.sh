@@ -27,9 +27,16 @@ cd "$PROJECT_DIR"
 export TRADINEBOTTE_DIR="${HOME}/tmp/tradinebotte-test"
 
 echo "Python : $PYTHON ($("$PYTHON" --version))"
-echo "Tests  : $PROJECT_DIR/tests/"
+echo "Tests  : $PROJECT_DIR/tests/ + tradinebotte-*/tests/"
 echo ""
 "$PYTHON" -W ignore::ResourceWarning -m unittest discover -s tests/ -p "test_*.py" -v
+for _svc_tests in tradinebotte-*/tests/; do
+    if [ -d "$_svc_tests" ] && ls "$_svc_tests"test_*.py >/dev/null 2>&1; then
+        echo ""
+        echo "=== Tests: $_svc_tests ==="
+        "$PYTHON" -W ignore::ResourceWarning -m unittest discover -s "$_svc_tests" -p "test_*.py" -v
+    fi
+done
 
 # ── Backtest multi-DB ─────────────────────────────────────────────
 if ls "$PROJECT_DIR"/data/*.db >/dev/null 2>&1; then

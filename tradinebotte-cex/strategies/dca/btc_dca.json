@@ -1,0 +1,17 @@
+{
+    "_comment": "BTC DCA strategy v1.0 — buy $100 every 4h, TP at +3%, max 5 positions",
+    "_version": "1.0",
+
+    "strategy_type":   "dca",
+    "connector":       "binance",
+    "symbol":          "BTCUSDT",
+
+    "dca_interval_h":  4,
+    "dca_amount_usdt": 100.0,
+    "max_positions":   5,
+
+    "tp_pct":          0.03,
+    "sl_pct":          0.0,
+
+    "poll_interval":   2.0
+}

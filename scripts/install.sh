@@ -68,6 +68,7 @@ _pip_install() {
     local pip="$INSTALL_DIR/venv/bin/pip"
     "$pip" install --quiet --upgrade pip
     "$pip" install --quiet "$@" -r "$REPO_DIR/requirements.txt"
+    "$pip" install --quiet -e "$REPO_DIR/tradinetools"
 }
 
 # ── System dependencies ───────────────────────────────────────────
@@ -108,20 +109,24 @@ echo "=== $(_t "Creating directories" "Création des répertoires") ==="
 mkdir -p "$INSTALL_DIR"
 
 echo "=== $(_t "Copying bot files" "Copie du bot") ==="
-for _f in live_bot.py api_polymarket.py api_binance.py api_mexc.py bot_utils.py; do
-    cp "bot/$_f" "$INSTALL_DIR/$_f"
+for _f in live_bot.py api_polymarket.py bot_utils.py feed.py account_bot.py; do
+    cp "tradinebotte-polymarket/$_f" "$INSTALL_DIR/$_f"
+done
+for _f in api_binance.py api_mexc.py; do
+    cp "tradinebotte-cex/$_f" "$INSTALL_DIR/$_f"
 done
 
 mkdir -p "$INSTALL_DIR/connectors"
-cp bot/connectors/__init__.py "$INSTALL_DIR/connectors/__init__.py"
+cp tradinebotte-cex/connectors/__init__.py "$INSTALL_DIR/connectors/__init__.py"
 
 mkdir -p "$INSTALL_DIR/strategy_engines" "$INSTALL_DIR/strategies"
-cp bot/strategy_engines/__init__.py "$INSTALL_DIR/strategy_engines/__init__.py"
-cp bot/strategy_engines/grid.py     "$INSTALL_DIR/strategy_engines/grid.py"
-_STRAT_SRC="$(cd strategies && pwd)"
+for _f in __init__.py base.py grid.py swing.py swinghold.py dca.py; do
+    cp "tradinebotte-cex/strategy_engines/$_f" "$INSTALL_DIR/strategy_engines/$_f"
+done
+_STRAT_SRC="$(cd tradinebotte-polymarket/strategies && pwd)"
 _STRAT_DST="$(cd "$INSTALL_DIR/strategies" && pwd)"
 if [ "$_STRAT_SRC" != "$_STRAT_DST" ]; then
-    cp -r strategies/. "$INSTALL_DIR/strategies/"
+    cp -r tradinebotte-polymarket/strategies/. "$INSTALL_DIR/strategies/"
 fi
 
 # ── Python virtual environment ────────────────────────────────────
@@ -147,7 +152,9 @@ chmod +x "$INSTALL_DIR/run.sh"
 # ── Syntax check ──────────────────────────────────────────────────
 echo "=== $(_t "Checking syntax" "Vérification syntaxe") ==="
 for _f in live_bot.py api_polymarket.py api_binance.py api_mexc.py bot_utils.py \
-          connectors/__init__.py strategy_engines/__init__.py strategy_engines/grid.py; do
+          connectors/__init__.py \
+          strategy_engines/__init__.py strategy_engines/base.py strategy_engines/grid.py \
+          strategy_engines/swing.py strategy_engines/swinghold.py strategy_engines/dca.py; do
     _check_syntax "$INSTALL_DIR/$_f"
 done
 
@@ -156,7 +163,7 @@ if [ "$WITH_TESTS" = "1" ]; then
     echo "=== $(_t "Copying test files" "Copie des fichiers de test") ==="
     mkdir -p "$INSTALL_DIR/tests" "$INSTALL_DIR/analysis" "$INSTALL_DIR/scripts" "$INSTALL_DIR/data"
     if [ "$REPO_DIR" != "$INSTALL_DIR" ]; then
-        cp tests/test_bot.py      "$INSTALL_DIR/tests/test_bot.py"
+        cp tradinebotte-polymarket/tests/test_bot.py "$INSTALL_DIR/tests/test_bot.py"
         cp tests/test_backtest.py "$INSTALL_DIR/tests/test_backtest.py"
         cp analysis/backtest.py    "$INSTALL_DIR/analysis/backtest.py"
         cp scripts/run_tests.sh   "$INSTALL_DIR/scripts/run_tests.sh"

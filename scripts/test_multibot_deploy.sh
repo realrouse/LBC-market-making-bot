@@ -124,7 +124,9 @@ run_bg() {
 }
 
 deploy_code() {
-    # Flat rsync: bot/ → $REMOTE_INSTALL_DIR/ (same layout as install.sh and update_standalone.sh).
+    # Flat rsync: tradinebotte-polymarket/ + tradinebotte-cex/ → $REMOTE_INSTALL_DIR/
+    # indicators.py lives in tradinebotte-indicators/ and is also synced flat.
+    # tradinebotte-cex/ Python files (strategy_engines, connectors, etc.) also synced flat.
     # Never use --delete on the full repo: it wipes flat live_bot.py on standalone accounts.
     local idx="$1"
     local user="${ALL_USERS[$idx]}"
@@ -134,14 +136,43 @@ deploy_code() {
         rsync -az \
         --exclude='__pycache__' --exclude='*.pyc' \
         --exclude='config.json' --exclude='*.db' --exclude='*.log' \
+        --exclude='scripts' --exclude='tests' \
         -e "ssh $ssh_opts" \
-        "$LOCAL_REPO/bot/" "$user@$SERVER:$REMOTE_INSTALL_DIR/" 2>&1 || return 1
+        "$LOCAL_REPO/tradinebotte-polymarket/" "$user@$SERVER:$REMOTE_INSTALL_DIR/" 2>&1 || return 1
+
+    SSHPASS="${ALL_PASSWORDS[$idx]}" /usr/bin/sshpass -e \
+        rsync -az \
+        --exclude='__pycache__' --exclude='*.pyc' \
+        -e "ssh $ssh_opts" \
+        "$LOCAL_REPO/tradinebotte-indicators/indicators.py" \
+        "$user@$SERVER:$REMOTE_INSTALL_DIR/indicators.py" 2>&1 || return 1
+
+    SSHPASS="${ALL_PASSWORDS[$idx]}" /usr/bin/sshpass -e \
+        rsync -az \
+        --exclude='__pycache__' --exclude='*.pyc' \
+        --exclude='scripts' --exclude='tests' \
+        -e "ssh $ssh_opts" \
+        "$LOCAL_REPO/tradinebotte-cex/" "$user@$SERVER:$REMOTE_INSTALL_DIR/" 2>&1 || return 1
 
     SSHPASS="${ALL_PASSWORDS[$idx]}" /usr/bin/sshpass -e \
         rsync -az \
         --filter='+ **/' --filter='+ *.json' --filter='- *' \
         -e "ssh $ssh_opts" \
-        "$LOCAL_REPO/strategies/" "$user@$SERVER:$REMOTE_INSTALL_DIR/strategies/" 2>&1 || return 1
+        "$LOCAL_REPO/tradinebotte-polymarket/strategies/" "$user@$SERVER:$REMOTE_INSTALL_DIR/strategies/" 2>&1 || return 1
+
+    SSHPASS="${ALL_PASSWORDS[$idx]}" /usr/bin/sshpass -e \
+        rsync -az \
+        --filter='+ **/' --filter='+ *.json' --filter='- *' \
+        -e "ssh $ssh_opts" \
+        "$LOCAL_REPO/tradinebotte-cex/strategies/" \
+        "$user@$SERVER:$REMOTE_INSTALL_DIR/strategies/" 2>&1 || return 1
+
+    SSHPASS="${ALL_PASSWORDS[$idx]}" /usr/bin/sshpass -e \
+        rsync -az \
+        --filter='+ **/' --filter='+ *.json' --filter='- *' \
+        -e "ssh $ssh_opts" \
+        "$LOCAL_REPO/tradinebotte-indicators/strategies/" \
+        "$user@$SERVER:$REMOTE_INSTALL_DIR/strategies/indicators/" 2>&1 || return 1
 
     SSHPASS="${ALL_PASSWORDS[$idx]}" /usr/bin/sshpass -e \
         rsync -az \
@@ -247,9 +278,9 @@ STALE=$(run "${ACCOUNT_IDXS[0]}" \
 # ─── Phase 3: Capture current feed.py hash BEFORE any deploy ───────────────────
 section "PHASE 3 — FEED VERSION CHECK"
 
-LOCAL_FEED_HASH=$(sha256sum "$LOCAL_REPO/bot/feed.py" | cut -d' ' -f1)
+LOCAL_FEED_HASH=$(sha256sum "$LOCAL_REPO/tradinebotte-polymarket/feed.py" | cut -d' ' -f1)
 REMOTE_FEED_HASH=$(run "$FEED_IDX" \
-    "sha256sum $REMOTE_INSTALL_DIR/bot/feed.py 2>/dev/null | cut -d' ' -f1" || echo "")
+    "sha256sum $REMOTE_INSTALL_DIR/feed.py 2>/dev/null | cut -d' ' -f1" || echo "")
 FEED_UPDATE_NEEDED=false
 
 if [[ -z "$REMOTE_FEED_HASH" ]]; then
@@ -363,7 +394,7 @@ if [[ -n "$IND_CFG_REL" ]]; then
     info "Launching shared indicators.py under ${ALL_USERS[$FEED_IDX]} — config=$IND_CFG_REL"
     run_bg "$FEED_IDX" "
         cd $REMOTE_INSTALL_DIR
-        nohup $REMOTE_INSTALL_DIR/venv/bin/python3 -u bot/indicators.py \
+        nohup $REMOTE_INSTALL_DIR/venv/bin/python3 -u indicators.py \
             --config $REMOTE_INSTALL_DIR/$IND_CFG_REL \
             > $REMOTE_INSTALL_DIR/indicators.log 2>&1 < /dev/null &
         IND_PID=\$!
@@ -387,7 +418,7 @@ info "Sending $N_BOTS launch commands in parallel..."
 LAUNCH_CMD="
     cd $REMOTE_INSTALL_DIR
     TRADINEBOTTE_DIR=$REMOTE_BOT_DIR \\
-    nohup $REMOTE_INSTALL_DIR/venv/bin/python3 -u bot/account_bot.py --verbose \\
+    nohup $REMOTE_INSTALL_DIR/venv/bin/python3 -u account_bot.py --verbose \\
         > $REMOTE_BOT_DIR/account.log 2>&1 < /dev/null &
     BOT_PID=\$!
     disown \$BOT_PID

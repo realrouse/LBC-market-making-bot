@@ -59,3 +59,4 @@ scripts/test_multibot.conf
 !data/liveweek.db
 .coverage
 notes/audit170526.md
+tradinetools.egg-info/
