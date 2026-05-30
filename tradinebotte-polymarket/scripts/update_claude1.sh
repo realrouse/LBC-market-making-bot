@@ -134,5 +134,62 @@ fi
 
 # ─── Restart tradinebotte-feed if requested ────────────────────────────────────
 if [[ "$RESTART_FEED" == "true" ]]; then
+    RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; NC='\033[0m'
+    LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+    CONF="${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
+    source "$CONF"
+    _c1_user="${TEST_USERS[0]}"
+    _c1_pass="${TEST_PASSWORDS[0]}"
+    _server="${TEST_SERVER:?}"
+    _port="${TEST_PORT:-22}"
+    _install_dir="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
+    _ssh_opts="-p $_port -o StrictHostKeyChecking=yes"
+
+    echo -e "\n${BOLD}${YELLOW}═══ RSYNC feed + tradinetools ═══${NC}"
+
+    # Push the new feed.py to the flat install directory
+    SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
+        rsync -az \
+        -e "ssh $_ssh_opts" \
+        "$LOCAL_REPO/tradinebotte-polymarket/feed.py" \
+        "$_c1_user@$_server:$_install_dir/feed.py" 2>&1 \
+        && echo -e "${GREEN}  ✓ feed.py synced${NC}" \
+        || { echo -e "${RED}  ✗ rsync feed.py failed${NC}"; exit 1; }
+
+    # Push tradinetools
+    SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
+        rsync -az \
+        --exclude='__pycache__' --exclude='*.pyc' --exclude='*.egg-info' \
+        -e "ssh $_ssh_opts" \
+        "$LOCAL_REPO/tradinetools/" \
+        "$_c1_user@$_server:$_install_dir/tradinetools/" 2>&1 \
+        && echo -e "${GREEN}  ✓ tradinetools synced${NC}" \
+        || { echo -e "${RED}  ✗ rsync tradinetools failed${NC}"; exit 1; }
+
+    # Install tradinetools in .venv; fall back to direct copy if pip is absent
+    SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
+        ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+        -p "$_port" "$_c1_user@$_server" "
+VENV=$_install_dir/.venv
+PYVER=\$(\$VENV/bin/python3 -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')
+SITE=\$VENV/lib/python\${PYVER}/site-packages
+if \$VENV/bin/python3 -m pip install --quiet -e $_install_dir/tradinetools 2>/dev/null; then
+    echo 'tradinetools ok (pip)'
+else
+    mkdir -p \$SITE
+    cp -r $_install_dir/tradinetools/tradinetools \$SITE/tradinetools
+    echo 'tradinetools ok (copy)'
+fi
+\$VENV/bin/python3 -c 'from tradinetools.zmq import warn_if_external_bind; print(\"import check ok\")' 2>&1
+# Ensure ExecStart in the unit file points to the flat feed.py, not bot/feed.py
+if grep -q 'bot/feed\.py' /etc/systemd/system/tradinebotte-feed.service 2>/dev/null; then
+    echo '$_c1_pass' | sudo -S sed -i 's|bot/feed\.py|feed.py|g' /etc/systemd/system/tradinebotte-feed.service
+    echo '$_c1_pass' | sudo -S systemctl daemon-reload
+    echo 'unit file path fixed'
+fi
+" 2>&1 \
+        && echo -e "${GREEN}  ✓ tradinetools installed in .venv${NC}" \
+        || echo -e "${RED}  ✗ tradinetools install failed${NC}"
+
     _restart_service "tradinebotte-feed.service" "FEED" "connected|bind|ERROR"
 fi

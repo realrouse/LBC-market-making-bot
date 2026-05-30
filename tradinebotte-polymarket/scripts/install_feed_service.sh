@@ -18,7 +18,7 @@ OUTPUT="${HOME}/tmp/tradinebotte-feed.service"
 mkdir -p "${HOME}/tmp"
 
 USER_NAME=$(id -un)
-BOT_DIR="$PROJECT_DIR/bot"
+BOT_DIR="$PROJECT_DIR"
 FEED_ADDR="${TRADINEBOTTE_FEED_ADDR:-tcp://127.0.0.1:5557}"
 
 # Auto-detect venv: prefer project .venv (dev), fall back to ~/tradinebotte/venv (prod)
