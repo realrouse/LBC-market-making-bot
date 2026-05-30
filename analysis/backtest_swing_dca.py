@@ -216,7 +216,7 @@ def run_dca(rows: list, p: DCAParams, db_label: str = "",
 
     next_buy_ms = rows[0][0]   # first candle fires immediately
 
-    for ts_ms, o, h, l, c, v in rows:
+    for ts_ms, _o, h, l, c, _v in rows:
         # Timer-based buy
         if ts_ms >= next_buy_ms:
             while next_buy_ms <= ts_ms:
@@ -309,7 +309,7 @@ def run_swing(rows: list, p: SwingParams, db_label: str = "") -> BacktestResult:
     slot:   List[Optional[Dict]] = [None] * n_sup
     locked: List[bool]           = [False] * n_sup
 
-    for ts_ms, o, h, l, c, v in rows:
+    for _ts, _o, h, l, c, _v in rows:
         # Unlock levels where price has recovered above the support
         for i, sp in enumerate(sup):
             if locked[i] and h >= sp:
@@ -415,7 +415,7 @@ def run_swinghold(rows: list, p: SwingHoldParams, db_label: str = "") -> Backtes
     slot:   List[Optional[Dict]] = [None] * n_sup
     locked: List[bool]           = [False] * n_sup
 
-    for ts_ms, o, h, l, c, v in rows:
+    for _ts, _o, h, l, c, _v in rows:
         for i, sp in enumerate(sup):
             if locked[i] and h >= sp:
                 locked[i] = False
@@ -545,7 +545,7 @@ def run_swinghold(rows: list, p: SwingHoldParams, db_label: str = "") -> Backtes
 
 def _params_from_json(cfg_path: Path, capital: float = DEFAULT_CAPITAL):
     """Parse strategy JSON and return (DCAParams | SwingParams | SwingHoldParams)."""
-    with open(cfg_path) as f:
+    with open(cfg_path, encoding="utf-8") as f:
         raw = json.load(f)
     sc = raw.get("strategy_cfg", raw)
 
@@ -695,7 +695,6 @@ def _print_all_dbs_table(all_results: List[List[BacktestResult]]) -> None:
 def _run_sweep_dca(rows: list, db_label: str) -> None:
     tp_pcts = [0.02, 0.03, 0.05, 0.08]
     sl_pcts = [0.0, 0.01, 0.02, 0.03]
-    start   = rows[0][4]
     w = 80
     print()
     print(f"{'DCA SWEEP':─^{w}}")
@@ -796,7 +795,6 @@ def _run_one_db(db_path: Path, strategy: str, cfg_path: Optional[Path],
         else:
             strategies = ["swing"]
     else:
-        sup, res = _derive_levels(start)
         strategies = [strategy] if strategy != "all" else ["dca", "swing", "swinghold"]
         params     = None
 
