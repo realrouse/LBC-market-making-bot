@@ -72,7 +72,7 @@ market data from the shared feed instead of maintaining its own WebSocket.
 
 ## Components
 
-### `bot/feed.py`
+### `tradinebotte-polymarket/feed.py`
 
 | Responsibility | Details |
 |---|---|
@@ -86,7 +86,7 @@ The feed holds no trading state.  It can be restarted at any time without
 affecting account bots (they will miss updates during the gap but will not
 place duplicate orders on reconnection).
 
-### `bot/account_bot.py`
+### `tradinebotte-polymarket/account_bot.py`
 
 | Responsibility | Details |
 |---|---|
@@ -625,7 +625,7 @@ the REP socket; the indicators service starts the corresponding tasks dynamicall
 
 ```bash
 INDICATORS_CONFIG=~/tradinebotte/strategies/indicators/indicators_4h_bitcoin.json \
-bash scripts/install_indicators_service.sh
+bash tradinebotte-indicators/scripts/install_indicators_service.sh
 
 # Follow the printed sudo commands:
 sudo cp ~/tmp/tradinebotte-indicators.service /etc/systemd/system/

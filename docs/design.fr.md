@@ -29,7 +29,7 @@ signaux, place les ordres, écrit la base de données. Utilisé pour les
 configurations mono-compte.
 
 ```bash
-python3 bot/live_bot.py
+python3 tradinebotte-polymarket/live_bot.py
 ```
 
 ### Option B — Multi-bot (feed + N bots de compte)
@@ -57,9 +57,9 @@ avec ses propres clés, sa propre base de données et ses propres paramètres de
 stratégie.
 
 ```bash
-python3 bot/feed.py &
-TRADINEBOTTE_DIR=~/compte-a python3 bot/account_bot.py &
-TRADINEBOTTE_DIR=~/compte-b python3 bot/account_bot.py &
+python3 tradinebotte-polymarket/feed.py &
+TRADINEBOTTE_DIR=~/compte-a python3 tradinebotte-polymarket/account_bot.py &
+TRADINEBOTTE_DIR=~/compte-b python3 tradinebotte-polymarket/account_bot.py &
 ```
 
 **Démarrage automatique du feed :** le premier `account_bot.py` à démarrer
@@ -74,21 +74,21 @@ se connecter.
 
 | Processus | Fichier | Rôle | Credentials | Socket ZMQ |
 |---|---|---|---|---|
-| `live_bot` | `bot/live_bot.py` | Bot autonome : WebSocket + signal + ordres + BD | Clé privée requise | Aucun (pas de ZMQ) |
-| `feed` | `bot/feed.py` | Relais WebSocket diffusion seule | **Aucune** | PUB bind `:5557` |
-| `account_bot` | `bot/account_bot.py` | Logique de trading par compte | Clé privée requise | SUB connect `:5557` |
-| `indicators` | `bot/indicators.py` | Pipeline d'indicateurs partagé | Aucune | SUB connect `:5557`, PUB bind `:5559`, REP bind `:5561` |
-| `orderbook_bot` | `bot/orderbook_bot.py` | Scalping OBI sur BTCUSDT spot + perp ; connexion directe au WebSocket Binance | Clé API Binance (optionnelle en mode paper) | Aucun (pas de ZMQ — WS Binance direct) |
-| `accumulation_bot` | `bot/accumulation_bot.py` | Accumulation BTC spot long terme : achat initial + renforcement OBI + ladder de profits | Clé API Binance | Aucun (pas de ZMQ — WS Binance direct) |
+| `live_bot` | `tradinebotte-polymarket/live_bot.py` | Bot autonome : WebSocket + signal + ordres + BD | Clé privée requise | Aucun (pas de ZMQ) |
+| `feed` | `tradinebotte-polymarket/feed.py` | Relais WebSocket diffusion seule | **Aucune** | PUB bind `:5557` |
+| `account_bot` | `tradinebotte-polymarket/account_bot.py` | Logique de trading par compte | Clé privée requise | SUB connect `:5557` |
+| `indicators` | `tradinebotte-indicators/indicators.py` | Pipeline d'indicateurs partagé | Aucune | SUB connect `:5557`, PUB bind `:5559`, REP bind `:5561` |
+| `orderbook_bot` | `tradinebotte-cex/orderbook_bot.py` | Scalping OBI sur BTCUSDT spot + perp ; moteurs de stratégie interchangeables (OBI, DCA, Swing, SwingHold) | Clé API Binance (optionnelle en mode paper) | SUB connect `:5559` (consommateur indicators) |
+| `accumulation_bot` | `tradinebotte-cex/accumulation_bot.py` | Accumulation BTC spot long terme : achat initial + renforcement OBI + ladder de profits | Clé API Binance | SUB connect `:5559` (consommateur indicators) |
 
-`orderbook_bot` et `accumulation_bot` sont des bots Binance autonomes. Ils ne
-participent pas à la topologie ZeroMQ feed/account-bot Polymarket et ne
-consomment pas le service `indicators` — chacun calcule l'OBI en interne depuis
-sa propre connexion WebSocket Binance `depth20@100ms`. Fichiers d'état :
-`live_ob.db` / `orderbook_bot.pid` / `orderbook_bot.log` et `live_accum.db` /
-`accumulation_bot.pid` / `accumulation_bot.log`. Configs de stratégie :
-`strategies/scalping/orderbook_btc.json` et
-`strategies/accumulation/btc_accumulation.json`.
+`orderbook_bot` et `accumulation_bot` sont des bots Binance dans le sous-service
+`tradinebotte-cex`. Ils ne participent pas à la topologie ZeroMQ feed/account-bot
+Polymarket, mais consomment tous deux le service `indicators` partagé (ZMQ SUB
+sur `:5559`). Fichiers d'état : `live_ob.db` / `orderbook_bot.pid` /
+`orderbook_bot.log` et `live_accum.db` / `accumulation_bot.pid` /
+`accumulation_bot.log`. Configs de stratégie :
+`tradinebotte-cex/strategies/scalping/orderbook_btc.json` et
+`tradinebotte-cex/strategies/accumulation/btc_accumulation.json`.
 
 ---
 
@@ -177,6 +177,7 @@ les doublons comme des no-ops).
 ```json
 {
   "t":           "market",
+  "v":           1,
   "market_id":   "0xabc…",
   "question":    "Bitcoin Up or Down — 5 minutes (13:00 UTC)",
   "up_token_id": "1234…",
@@ -207,6 +208,7 @@ Publié par `feed.py` à chaque événement WebSocket `book`, `price_change` ou
 ```json
 {
   "t":        "book",
+  "v":        1,
   "token_id": "1234…",
   "best_bid": 0.97,
   "best_ask": 0.975,
@@ -238,7 +240,7 @@ Publié par `feed.py` toutes les 10 secondes. L'absence de pings indique un
 crash du feed ou un problème réseau.
 
 ```json
-{"t": "ping", "ts": 1745664123456}
+{"t": "ping", "v": 1, "ts": 1745664123456}
 ```
 
 Consommateurs : ignoré par `account_bot.py` ; utile pour le monitoring externe.
@@ -254,6 +256,7 @@ d'indicateurs sont satisfaites.
 ```json
 {
   "t":        "indicators",
+  "v":        1,
   "token_id": "1234…",
   "ts":       1745664125000,
   "rsi_14":   72.3,
@@ -289,6 +292,7 @@ quel.
 ```json
 {
   "t":               "indicators",
+  "v":               1,
   "stream_id":       "btc_funding",
   "funding_rate":    0.0001,
   "next_funding_ms": 1746000000000,
@@ -313,6 +317,7 @@ les 5 min (par défaut). Fournit l'indice de volatilité implicite annualisé BT
 ```json
 {
   "t":         "indicators",
+  "v":         1,
   "stream_id": "btc_dvol",
   "dvol":      62.5,
   "ts":        1745664125000
@@ -335,6 +340,7 @@ défaut). L'indice va de 0 (Peur Extrême) à 100 (Avidité Extrême).
 ```json
 {
   "t":                "indicators",
+  "v":                1,
   "stream_id":        "fear_greed",
   "fear_greed":       72,
   "fear_greed_label": "Greed",
@@ -362,6 +368,7 @@ précédent.
 ```json
 {
   "t":             "indicators",
+  "v":             1,
   "stream_id":     "btc_oi",
   "oi_btc":        45690.57,
   "oi_usd":        4569056780.0,
@@ -392,6 +399,7 @@ toutes les 5 min (par défaut). Reflète le positionnement des comptes top-trade
 ```json
 {
   "t":                "indicators",
+  "v":                1,
   "stream_id":        "btc_ls_ratio",
   "long_short_ratio": 1.2345,
   "long_pct":         0.5523,
@@ -420,6 +428,7 @@ de poll (5 min par défaut). Ordres `SELL` = positions longues liquidées ; ordr
 ```json
 {
   "t":             "indicators",
+  "v":             1,
   "stream_id":     "btc_liquidations",
   "liq_long_usd":  1250000.0,
   "liq_short_usd": 80000.0,
@@ -450,6 +459,7 @@ réel l'OBI et le trade flow imbalance.
 ```json
 {
   "t":                "indicators",
+  "v":                1,
   "stream_id":        "btc_scalping_spot",
   "asset":            "BTCUSDT",
   "market":           "spot",
@@ -484,6 +494,7 @@ en cas de gap. Publié tous les `publish_every_n` events de profondeur (défaut 
 ```json
 {
   "t":                  "indicators",
+  "v":                  1,
   "stream_id":          "btc_full_depth",
   "asset":              "BTCUSDT",
   "best_bid":           67420.10,
@@ -527,6 +538,7 @@ puis récupère le prix spot courant pour dériver un score de dip.
 ```json
 {
   "t":         "indicators",
+  "v":         1,
   "stream_id": "btc_vwap_context",
   "vwap":      67150.40,
   "price":     67420.10,
@@ -555,6 +567,7 @@ identifie les 5 nœuds à volume élevé (HVN) principaux.
 ```json
 {
   "t":               "indicators",
+  "v":               1,
   "stream_id":       "btc_volume_profile",
   "price":           67420.10,
   "price_bucket":    67000.0,
@@ -590,6 +603,7 @@ Interrogé toutes les minutes (par défaut). Récupère les 60 dernières bougie
 ```json
 {
   "t":                   "indicators",
+  "v":                   1,
   "stream_id":           "btc_macro_obi",
   "macro_obi":           0.18,
   "macro_obi_raw":       0.24,
@@ -696,7 +710,7 @@ ordres et le suivi des trades se font indépendamment dans chaque bot de compte.
 
 `indicators.py` est un étage pipeline optionnel et sans état. Il ne trade pas.
 En production, il tourne en tant que service systemd `tradinebotte-indicators`
-avec `strategies/indicators/indicators_all.json`, qui regroupe les 14 flux en
+avec `tradinebotte-indicators/strategies/indicators_all.json`, qui regroupe les 14 flux en
 un seul processus sur les ports 5559/5561.
 
 Le pipeline comporte trois catégories de flux :
@@ -752,12 +766,12 @@ déclarés statiquement dans le fichier de config JSON.
 
 ```bash
 # Production : service unifié (14 flux)
-TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators/indicators_all.json \
-  bash scripts/start_indicators.sh
+TRADINEBOTTE_INDICATORS_CONFIG=tradinebotte-indicators/strategies/indicators_all.json \
+  bash tradinebotte-indicators/scripts/start_indicators.sh
 
 # Ou démarrer le feed puis les indicateurs manuellement
-python3 bot/feed.py &
-python3 bot/indicators.py &
+python3 tradinebotte-polymarket/feed.py &
+python3 tradinebotte-indicators/indicators.py &
 # Un consommateur souscrit à :5559
 # (tout script Python avec zmq.SUB connectant tcp://127.0.0.1:5559)
 ```
@@ -769,10 +783,11 @@ python3 bot/indicators.py &
 Pour l'Option B avec indicateurs :
 
 ```
-1. feed.py           bind  :5557   (service systemd, ou démarrage auto si feed_auto_start=true)
-2. indicators.py     SUB→  :5557   / bind :5559 + :5561  (service systemd, optionnel)
-3. account_bot(s)    SUB→  :5557, REQ→ :5561 (enregistrement des flux d'indicateurs au démarrage)
-4. consommateurs     SUB→  :5559
+1. tradinebotte-polymarket/feed.py       bind  :5557   (service systemd, ou démarrage auto si feed_auto_start=true)
+2. tradinebotte-indicators/indicators.py SUB→  :5557   / bind :5559 + :5561  (service systemd, optionnel)
+3. tradinebotte-polymarket/account_bot   SUB→  :5557, REQ→ :5561 (enregistrement des flux d'indicateurs au démarrage)
+4. tradinebotte-cex/orderbook_bot        SUB→  :5559  (consommateur indicators)
+5. tradinebotte-cex/accumulation_bot     SUB→  :5559  (consommateur indicators)
 ```
 
 ZeroMQ PUB/SUB est **sans état de connexion côté publisher** : le socket PUB
@@ -798,12 +813,12 @@ sont re-publiés au prochain refresh de 30 secondes.
 
 ```bash
 # Pile A — ports par défaut (5557, 5559, 5561 …)
-TRADINEBOTTE_DIR=~/compte-a python3 bot/account_bot.py &
+TRADINEBOTTE_DIR=~/compte-a python3 tradinebotte-polymarket/account_bot.py &
 
 # Pile B — tous les ports décalés de +1000
-TRADINEBOTTE_PORT_BASE=6557 TRADINEBOTTE_DIR=~/compte-b python3 bot/account_bot.py &
-TRADINEBOTTE_PORT_BASE=6557 TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators/indicators_4h_bitcoin.json \
-  bash scripts/start_indicators.sh &
+TRADINEBOTTE_PORT_BASE=6557 TRADINEBOTTE_DIR=~/compte-b python3 tradinebotte-polymarket/account_bot.py &
+TRADINEBOTTE_PORT_BASE=6557 TRADINEBOTTE_INDICATORS_CONFIG=tradinebotte-indicators/strategies/indicators_4h_bitcoin.json \
+  bash tradinebotte-indicators/scripts/start_indicators.sh &
 ```
 
 `TRADINEBOTTE_PORT_BASE` décale également les adresses déclarées dans les
@@ -886,16 +901,16 @@ scénario hors périmètre actuellement.
 
 | Fichier | Rôle |
 |---|---|
-| `bot/live_bot.py` | Bot autonome (Option A) |
-| `bot/feed.py` | Diffuseur ZMQ (Option B) |
-| `bot/account_bot.py` | Abonné par compte + logique de trading |
-| `bot/indicators.py` | Étage pipeline d'indicateurs techniques |
-| `bot/orderbook_bot.py` | Bot de scalping OBI Binance autonome (sans ZMQ) |
-| `bot/accumulation_bot.py` | Bot d'accumulation BTC autonome (sans ZMQ) |
-| `strategies/indicators/indicators_all.json` | Config indicators unifiée de production (14 flux) |
-| `strategies/scalping/orderbook_btc.json` | Config de stratégie pour `orderbook_bot` |
-| `strategies/accumulation/btc_accumulation.json` | Config de stratégie pour `accumulation_bot` |
+| `tradinebotte-polymarket/live_bot.py` | Bot autonome Polymarket (Option A) |
+| `tradinebotte-polymarket/feed.py` | Diffuseur ZMQ (Option B) |
+| `tradinebotte-polymarket/account_bot.py` | Abonné par compte + logique de trading |
+| `tradinebotte-indicators/indicators.py` | Étage pipeline d'indicateurs techniques |
+| `tradinebotte-cex/orderbook_bot.py` | Bot de scalping OBI Binance ; moteurs de stratégie interchangeables (OBI, DCA, Swing, SwingHold) |
+| `tradinebotte-cex/accumulation_bot.py` | Bot d'accumulation BTC ; consommateur ZMQ du service indicators |
+| `tradinebotte-indicators/strategies/indicators_all.json` | Config indicators unifiée de production (14 flux) |
+| `tradinebotte-cex/strategies/scalping/orderbook_btc.json` | Config de stratégie pour `orderbook_bot` |
+| `tradinebotte-cex/strategies/accumulation/btc_accumulation.json` | Config de stratégie pour `accumulation_bot` |
 | `docs/multi.fr.md` | Guide de configuration Option B et stratégies par compte |
 | `docs/GridTrading.fr.md` | Architecture de la stratégie grid et config JSON |
-| `tests/test_multibot.py` | Tests d'intégration ZMQ pour feed + account_bot |
-| `tests/test_indicators.py` | Tests unitaires pour les maths d'indicateurs et PriceSeries |
+| `tradinebotte-polymarket/tests/test_multibot.py` | Tests d'intégration ZMQ pour feed + account_bot |
+| `tradinebotte-indicators/tests/test_indicators.py` | Tests unitaires pour les maths d'indicateurs et PriceSeries |

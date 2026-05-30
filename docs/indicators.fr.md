@@ -2,7 +2,7 @@
 
 > 🇬🇧 [English version](indicators.md)
 
-`bot/indicators.py` est un étage de pipeline optionnel qui souscrit aux données
+`tradinebotte-indicators/indicators.py` est un étage de pipeline optionnel qui souscrit aux données
 de marché (feed ZeroMQ et/ou WebSocket Binance) et publie des messages enrichis
 sur un socket PUB dédié. Il supporte trois catégories de données :
 
@@ -700,7 +700,7 @@ plage [−1, +1]. La série est lissée par EMA avec `ema_alpha` pour produire
 
 ### Config unifiée de production
 
-`strategies/indicators/indicators_all.json` est la configuration de production.
+`tradinebotte-indicators/strategies/indicators_all.json` est la configuration de production.
 Elle fait tourner les 14 flux dans un seul processus `indicators.py` sur les
 ports 5559/5561 (service systemd `tradinebotte-indicators`). Les fichiers
 individuels existent uniquement pour les tests en standalone.
@@ -740,12 +740,12 @@ Chaque fichier déclare un flux sur une paire de ports PUB + REP dédiés.
 
 ```bash
 # Production : 14 flux (géré par le service systemd tradinebotte-indicators)
-TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators/indicators_all.json \
-  bash scripts/start_indicators.sh
+TRADINEBOTTE_INDICATORS_CONFIG=tradinebotte-indicators/strategies/indicators_all.json \
+  bash tradinebotte-indicators/scripts/start_indicators.sh
 
 # Test d'un flux unique en isolation
-TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators/indicators_oi_bitcoin.json \
-  bash scripts/start_indicators.sh
+TRADINEBOTTE_INDICATORS_CONFIG=tradinebotte-indicators/strategies/indicators_oi_bitcoin.json \
+  bash tradinebotte-indicators/scripts/start_indicators.sh
 ```
 
 ---
@@ -811,12 +811,12 @@ Les variables par service restent prioritaires sans décalage.
 
 ```bash
 # Pile par défaut — ports 5557 / 5559 / 5561 …
-bash scripts/start_indicators.sh
+bash tradinebotte-indicators/scripts/start_indicators.sh
 
 # Deuxième pile indépendante — tous les ports décalés de +1000
 TRADINEBOTTE_PORT_BASE=6557 \
-TRADINEBOTTE_INDICATORS_CONFIG=strategies/indicators/indicators_4h_bitcoin.json \
-  bash scripts/start_indicators.sh
+TRADINEBOTTE_INDICATORS_CONFIG=tradinebotte-indicators/strategies/indicators_4h_bitcoin.json \
+  bash tradinebotte-indicators/scripts/start_indicators.sh
 ```
 
 ---
@@ -839,8 +839,8 @@ REST ou WebSocket requise.
 
 | Fichier | Rôle |
 |---|---|
-| `bot/indicators.py` | Implémentation : toutes les sources, `PriceSeries`, chargeur de config, tâches ZMQ |
-| `strategies/indicators/indicators_all.json` | Config unifiée de production (14 flux) |
-| `strategies/indicators/indicators_*.json` | Fichiers de config par flux pour les tests standalone |
-| `tests/test_indicators.py` | Tests unitaires et d'intégration (117 tests) |
+| `tradinebotte-indicators/indicators.py` | Implémentation : toutes les sources, `PriceSeries`, chargeur de config, tâches ZMQ |
+| `tradinebotte-indicators/strategies/indicators_all.json` | Config unifiée de production (14 flux) |
+| `tradinebotte-indicators/strategies/indicators_*.json` | Fichiers de config par flux pour les tests standalone |
+| `tradinebotte-indicators/tests/test_indicators.py` | Tests unitaires et d'intégration (117 tests) |
 | `docs/design.fr.md` | Topologie ZeroMQ, catalogue de messages, analyse ZeroMQ vs MQTT |
