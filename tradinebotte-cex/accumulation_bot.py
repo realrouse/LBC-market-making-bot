@@ -1,8 +1,23 @@
 #!/usr/bin/env python3
 """
-BTC Long-Term Accumulation Bot v1.3
+BTC Long-Term Accumulation Bot v1.4
 
 Builds a growing BTC spot position using OBI dip-buying + partial profit ladder.
+
+Changes from v1.3:
+  - New: Macro OBI gate (P1) — blocks scale-ins when macro_obi < macro_obi_block_thresh
+    (-0.30 default). Prevents DCA-ing into a macro downtrend while allowing opportunistic
+    dip-buys during uptrend pullbacks. Consumes btc_macro_obi ZMQ stream.
+  - New: VWAP gate on initial buy (P2, vwap_gate_initial=False) — optionally defers the
+    initial deployment until price is below the 4h VWAP.
+  - New: Adaptive cooldown (P3) — when |obi_ema| >= scale_in_obi_strong_thresh (0.80),
+    cooldown is halved, floored at scale_in_cooldown_min_s (900 s = 15 min).
+  - New: Pending rebuy expiry (P4, rebuy_max_age_days=30) — stale rebuys cancelled and
+    their bands re-armed, preventing permanent band lock-out after large sell moves.
+  - New: Trailing rebuy (P5, rebuy_trail_pct=0.005) — requires a 0.5% bounce from the
+    lowest seen price before filling a rebuy, avoiding falling-knife entries.
+  - New: Configurable Earn liquid buffer (P6, earn_min_liquid_usdt=20.0) — was
+    hardcoded in earn_manager.py, now a strategy JSON parameter.
 
 Changes from v1.2:
   - New: Binance Simple Earn integration (earn_manager.EarnManager).
@@ -27,14 +42,17 @@ Changes from v1.0:
   - New: adaptive rebuy discount — scales with spread EMA (volatility proxy)
 
 Strategy:
-  1. Initial buy at startup (initial_stake_usdt)
+  1. Initial buy at startup (initial_stake_usdt), optionally VWAP-gated (vwap_gate_initial)
   2. OBI dip signal: OBI_ema < -entry_thresh for confirm_n consecutive ticks
      from the shared indicators service (btc_scalping_spot stream)
      VWAP gate: skip scale-in when price > 4h VWAP (dip_score < 0)
+     Macro OBI gate: skip scale-in when macro_obi < macro_obi_block_thresh
+     Adaptive cooldown: halved when |obi_ema| >= scale_in_obi_strong_thresh
      → scale in (adaptive amount), cooldown between scale-ins
   3. Profit ladder: when price >= avg_entry * (1 + band_pct), sell sell_fraction
      of current holdings; set rebuy target at adaptive discount below sell price
-  4. Rebuy: when price reaches rebuy_target, buy back the sold quantity
+  4. Rebuy: when price reaches rebuy_target (with optional trailing bounce),
+     buy back the sold quantity; rebuys expire after rebuy_max_age_days
 
 Usage:
     python3 bot/accumulation_bot.py
@@ -95,7 +113,7 @@ DEFAULTS: dict = {
     "obi_ema_alpha":         0.05,
     "obi_entry_thresh":      0.50,
     "obi_confirm_n":         20,
-    "min_scale_interval_s":  3600,    # 1h cooldown between OBI scale-ins
+    "min_scale_interval_s":  3600,    # base cooldown between OBI scale-ins (1h)
     "profit_bands_pct":      [5.0, 10.0, 20.0, 30.0, 50.0],
     "sell_fraction":         0.15,    # sell 15% at each band
     "min_holdings_pct":      0.50,    # never sell below 50% of peak holdings
@@ -113,10 +131,22 @@ DEFAULTS: dict = {
     "scalping_stream_id":    "btc_scalping_spot",
     # VWAP gate: when True, scale-ins are suspended when price is above the 4h VWAP
     "vwap_gate":             True,
+    "vwap_gate_initial":     False,  # also gate the initial deployment on VWAP (P2)
     # Binance Simple Earn: park idle USDT after each trade, redeem before buys.
     # Requires BINANCE_API_KEY + BINANCE_API_SECRET with Flexible Savings permission.
     # Without credentials EarnManager runs in sim mode (logs only, no real calls).
     "earn_enabled":          True,
+    "earn_min_liquid_usdt":  20.0,   # USDT kept liquid in spot wallet at all times (P6)
+    # Macro OBI gate: block scale-ins when macro order-book is bearish (P1)
+    "macro_obi_gate":         True,
+    "macro_obi_block_thresh": -0.30,
+    "macro_obi_stream_id":    "btc_macro_obi",
+    # Adaptive cooldown: shorten wait when OBI signal is very strong (P3)
+    "scale_in_cooldown_min_s":    900,   # floor cooldown (15 min) for very strong OBI
+    "scale_in_obi_strong_thresh": 0.80,  # |obi_ema| >= this → halve base cooldown
+    # Rebuy improvements
+    "rebuy_max_age_days":  30,    # cancel pending rebuys older than N days (P4)
+    "rebuy_trail_pct":     0.0,   # require N% bounce from low before filling (0=disabled) (P5)
 }
 
 # ---------------------------------------------------------------------------
@@ -179,6 +209,8 @@ class PendingRebuy:
     sell_price:  float
     qty_btc:     float
     rebuy_price: float
+    ts_ms:       int   = 0     # creation timestamp for expiry (P4)
+    low_seen:    float = -1.0  # lowest price tracked for trailing bounce (P5)
 
 @dataclass
 class AccumState:
@@ -200,6 +232,9 @@ class AccumState:
     # VWAP context — updated from btc_vwap_context stream
     vwap_dip_score:     float = 0.0
     vwap_dip_zone:      str   = "neutral"
+    # Macro OBI — updated from btc_macro_obi stream (P1)
+    macro_obi:          float = 0.0
+    macro_obi_dir:      str   = "neutral"
     earn: EarnManager | None  = field(default=None, repr=False)
 
     def unrealized_pct(self) -> float:
@@ -217,7 +252,8 @@ class AccumState:
 def _save_state(state: AccumState, db: sqlite3.Connection) -> None:
     rebuys_json = json.dumps([
         {"band_pct": r.band_pct, "sell_price": r.sell_price,
-         "qty_btc":  r.qty_btc,  "rebuy_price": r.rebuy_price}
+         "qty_btc":  r.qty_btc,  "rebuy_price": r.rebuy_price,
+         "ts_ms":    r.ts_ms,    "low_seen":    r.low_seen}
         for r in state.pending_rebuys
     ])
     bands_json = json.dumps(sorted(state.active_bands))
@@ -301,8 +337,9 @@ async def _buy(state: AccumState, price: float, usdt_amount: float,
         logger.warning("BUY skipped — need %.2f USDT, have %.2f", total, state.free_usdt)
         return False
 
+    earn_keep = p.get("earn_min_liquid_usdt", 20.0)
     if state.earn is not None:
-        await state.earn.ensure_liquid(total)
+        await state.earn.ensure_liquid(total, keep_liquid=earn_keep)
 
     if state.holdings_btc > 0 and state.avg_entry > 0:
         total_btc       = state.holdings_btc + qty_btc
@@ -316,7 +353,7 @@ async def _buy(state: AccumState, price: float, usdt_amount: float,
         state.peak_holdings_btc = state.holdings_btc
 
     if state.earn is not None:
-        await state.earn.park_idle(state.free_usdt)
+        await state.earn.park_idle(state.free_usdt, keep_liquid=earn_keep)
 
     db.execute("""
         INSERT INTO accum_trades
@@ -349,8 +386,9 @@ async def _sell(state: AccumState, price: float, qty_btc: float,
     state.free_usdt      += usdt_val - fee
     state.total_realized += realized
 
+    earn_keep = p.get("earn_min_liquid_usdt", 20.0)
     if state.earn is not None:
-        await state.earn.park_idle(state.free_usdt)
+        await state.earn.park_idle(state.free_usdt, keep_liquid=earn_keep)
 
     db.execute("""
         INSERT INTO accum_trades
@@ -401,35 +439,68 @@ async def _check_profit_bands(state: AccumState, price: float,
             state.active_bands.add(band_pct)
             state.pending_rebuys.append(
                 PendingRebuy(band_pct=band_pct, sell_price=price,
-                             qty_btc=qty, rebuy_price=rebuy))
+                             qty_btc=qty, rebuy_price=rebuy, ts_ms=ts_ms))
             logger.info("  → rebuy %.6f BTC @ %.2f  (spread=%.4f%% → discount=%.3f%%)",
                         qty, rebuy, state.spread_ema, discount * 100)
 
 
 async def _check_rebuys(state: AccumState, price: float,
                         ts_ms: int, db: sqlite3.Connection) -> None:
-    filled = []
+    p       = state.p
+    max_age = p.get("rebuy_max_age_days", 30) * 86_400_000  # ms
+    trail   = p.get("rebuy_trail_pct", 0.0)
+
+    expired = []
+    filled  = []
     for rb in state.pending_rebuys:
+        # P4 — expiry: cancel stale rebuys and re-arm the band
+        if max_age > 0 and rb.ts_ms > 0 and (ts_ms - rb.ts_ms) > max_age:
+            logger.info("Rebuy +%.1f%% expired (age=%dd) — band re-armed",
+                        rb.band_pct, (ts_ms - rb.ts_ms) // 86_400_000)
+            state.active_bands.discard(rb.band_pct)
+            expired.append(rb)
+            continue
+
         if price > rb.rebuy_price:
             continue
+
+        # P5 — trailing: track low and require bounce before filling
+        if trail > 0.0:
+            rb.low_seen = price if rb.low_seen < 0 else min(rb.low_seen, price)
+            if price < rb.low_seen * (1.0 + trail):
+                continue  # still falling — wait for bounce
+
         usdt_needed = rb.qty_btc * price
         if usdt_needed > state.free_usdt:
             continue
         if await _buy(state, price, usdt_needed, f"rebuy+{rb.band_pct:.1f}%", ts_ms, db):
             state.active_bands.discard(rb.band_pct)
             filled.append(rb)
-    for rb in filled:
+
+    for rb in expired + filled:
         state.pending_rebuys.remove(rb)
 
 
 async def _check_obi_scale_in(state: AccumState, price: float,
                                ts_ms: int, db: sqlite3.Connection) -> None:
     p          = state.p
-    min_iv     = p.get("min_scale_interval_s", 1800)
     max_invest = state.max_investable()
 
+    # P3 — adaptive cooldown: halve wait when OBI signal is very strong
+    base_iv  = p.get("min_scale_interval_s", 3600)
+    floor_iv = p.get("scale_in_cooldown_min_s", base_iv)
+    strong   = p.get("scale_in_obi_strong_thresh", 0.80)
+    min_iv   = max(floor_iv, base_iv // 2) if abs(state.obi_ema) >= strong else base_iv
     if (ts_ms - state.last_buy_ts) / 1000.0 < min_iv:
         return
+
+    # P1 — macro OBI gate: block scale-ins during macro bearish regimes
+    if p.get("macro_obi_gate", True):
+        thresh = p.get("macro_obi_block_thresh", -0.30)
+        if state.macro_obi < thresh:
+            logger.debug("Scale-in blocked — macro OBI bearish (%.3f < %.3f)",
+                         state.macro_obi, thresh)
+            return
 
     # VWAP gate: skip scale-ins when price is above the 4h VWAP
     if p.get("vwap_gate", True) and state.vwap_dip_score < 0.0:
@@ -452,7 +523,7 @@ async def _check_obi_scale_in(state: AccumState, price: float,
         state.last_buy_ts = ts_ms
 
 # ---------------------------------------------------------------------------
-# Indicators ZMQ handler
+# Indicators ZMQ handlers
 # ---------------------------------------------------------------------------
 
 def _handle_vwap(state: AccumState, msg: dict) -> None:
@@ -462,6 +533,15 @@ def _handle_vwap(state: AccumState, msg: dict) -> None:
         state.vwap_dip_score = float(dip_score)
     state.vwap_dip_zone = str(dip_zone)
     logger.debug("VWAP: dip_score=%.4f zone=%s", state.vwap_dip_score, state.vwap_dip_zone)
+
+
+def _handle_macro_obi(state: AccumState, msg: dict) -> None:
+    val = msg.get("macro_obi")
+    drn = msg.get("macro_obi_direction", "neutral")
+    if val is not None:
+        state.macro_obi = float(val)
+    state.macro_obi_dir = str(drn)
+    logger.debug("MacroOBI: %.3f (%s)", state.macro_obi, state.macro_obi_dir)
 
 
 async def _handle_indicator(state: AccumState, db: sqlite3.Connection,
@@ -498,6 +578,10 @@ async def _handle_indicator(state: AccumState, db: sqlite3.Connection,
     price = float(mid)
 
     if not state.initial_done:
+        # P2 — optionally gate initial buy on VWAP (waits for price below VWAP)
+        if state.p.get("vwap_gate_initial", False):
+            if state.p.get("vwap_gate", True) and state.vwap_dip_score < 0.0:
+                return  # defer until price drops below VWAP
         init_usdt = min(state.p["initial_stake_usdt"], state.free_usdt)
         if await _buy(state, price, init_usdt, "initial", ts_ms, db):
             state.last_buy_ts = ts_ms
@@ -529,14 +613,17 @@ async def _zmq_loop(state: AccumState, db: sqlite3.Connection) -> None:
         logger.error("pyzmq not installed — run: pip install pyzmq")
         return
 
-    addr        = state.p.get("indicators_addr", "tcp://127.0.0.1:5559")
-    scalping_id = state.p.get("scalping_stream_id", "btc_scalping_spot")
+    p           = state.p
+    addr        = p.get("indicators_addr", "tcp://127.0.0.1:5559")
+    scalping_id = p.get("scalping_stream_id", "btc_scalping_spot")
+    macro_id    = p.get("macro_obi_stream_id", "btc_macro_obi") if p.get("macro_obi_gate", True) else None
 
     ctx = azmq.Context.instance()
     sub = ctx.socket(zmq.SUB)
     sub.setsockopt(zmq.SUBSCRIBE, b"")
     sub.connect(addr)
-    logger.info("ZMQ SUB → %s  (streams: %s, btc_vwap_context)", addr, scalping_id)
+    streams = ", ".join(s for s in [scalping_id, "btc_vwap_context", macro_id] if s)
+    logger.info("ZMQ SUB → %s  (streams: %s)", addr, streams)
 
     try:
         while True:
@@ -555,6 +642,8 @@ async def _zmq_loop(state: AccumState, db: sqlite3.Connection) -> None:
                 await _handle_indicator(state, db, msg, ts_ms)
             elif sid == "btc_vwap_context":
                 _handle_vwap(state, msg)
+            elif macro_id and sid == macro_id:
+                _handle_macro_obi(state, msg)
     finally:
         sub.close()
 
@@ -570,12 +659,13 @@ async def _stats_loop(state: AccumState) -> None:
         logger.info(
             "HOLD %.6f BTC @ avg %.2f  price=%.2f  uPnL=%+.2f%%  "
             "free=%.2f  realized=%+.2f  spread=%.4f%%  bands=%s  rebuys=%d  "
-            "dip_in=%ds  obi=%.3f  vwap_dip=%.4f(%s)",
+            "dip_in=%ds  obi=%.3f  macro_obi=%.3f(%s)  vwap_dip=%.4f(%s)",
             state.holdings_btc, state.avg_entry or 0.0, state.last_price,
             state.unrealized_pct(), state.free_usdt, state.total_realized,
             state.spread_ema, sorted(state.active_bands),
             len(state.pending_rebuys), int(cooldown_s),
-            state.obi_ema, state.vwap_dip_score, state.vwap_dip_zone)
+            state.obi_ema, state.macro_obi, state.macro_obi_dir,
+            state.vwap_dip_score, state.vwap_dip_zone)
 
 # ---------------------------------------------------------------------------
 # Main
@@ -590,7 +680,7 @@ async def _run(p: dict, db: sqlite3.Connection) -> None:
         if p.get("earn_enabled", True):
             state.earn = EarnManager(http_session)
 
-        logger.info("Accumulation bot v1.3 — %s  capital=%.0f USDT  paper=True%s  earn=%s",
+        logger.info("Accumulation bot v1.4 — %s  capital=%.0f USDT  paper=True%s  earn=%s",
                     p["symbol"], p["capital_usdt"],
                     "  [RESTORED]" if restored else "",
                     "enabled" if state.earn is not None else "disabled")
@@ -610,9 +700,20 @@ async def _run(p: dict, db: sqlite3.Connection) -> None:
                     p.get("rebuy_discount_min_pct", 3.0),
                     p.get("rebuy_discount_max_pct", 10.0),
                     p.get("rebuy_spread_mult", 3.0))
-        logger.info("VWAP gate: %s  indicators: %s",
+        logger.info("VWAP gate: %s%s  indicators: %s",
                     "enabled" if p.get("vwap_gate", True) else "disabled",
+                    " (initial=gated)" if p.get("vwap_gate_initial", False) else "",
                     p.get("indicators_addr", "tcp://127.0.0.1:5559"))
+        if p.get("macro_obi_gate", True):
+            logger.info("Macro OBI gate: enabled — block when macro_obi < %.2f  stream: %s",
+                        p.get("macro_obi_block_thresh", -0.30),
+                        p.get("macro_obi_stream_id", "btc_macro_obi"))
+        logger.info("Rebuy: trail=%.1f%%  expiry=%dd  cooldown=%ds (min=%ds  strong_thresh=%.2f)",
+                    p.get("rebuy_trail_pct", 0.0) * 100,
+                    p.get("rebuy_max_age_days", 30),
+                    p.get("min_scale_interval_s", 3600),
+                    p.get("scale_in_cooldown_min_s", p.get("min_scale_interval_s", 3600)),
+                    p.get("scale_in_obi_strong_thresh", 0.80))
 
         tasks = [
             asyncio.create_task(_zmq_loop(state, db)),
@@ -625,7 +726,7 @@ async def _run(p: dict, db: sqlite3.Connection) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="BTC long-term accumulation bot v1.2")
+    ap = argparse.ArgumentParser(description="BTC long-term accumulation bot v1.4")
     ap.add_argument("--strategy", metavar="JSON")
     ap.add_argument("--dir",      default=None)
     args = ap.parse_args()
