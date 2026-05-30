@@ -60,6 +60,12 @@ dans un virtualenv situé dans `~/tradinebotte/venv/` :
 - `pyzmq`
 - `bcrypt`
 
+La bibliothèque partagée `tradinetools` est installée séparément comme package éditable :
+
+```bash
+pip install -e tradinetools/
+```
+
 La liste canonique est `requirements.txt` à la racine du projet. Les CVE dans ces
 packages sont détectés automatiquement à chaque push via `pip-audit` (GitHub Actions)
 et Dependabot ouvre des PRs lorsque de nouvelles versions sont disponibles.
@@ -110,12 +116,12 @@ ssh user@serveur "cd ~/tradinebotte && bash scripts/install.sh"
 > Le flag `--exclude='config.json'` est critique lors des mises à jour — sans lui,
 > rsync écrase le fichier de credentials de production.
 
-Pour les mises à jour du bot uniquement (sans synchronisation complète du dépôt), utiliser `scripts/update_standalone.sh` :
+Pour les mises à jour du bot uniquement (sans synchronisation complète du dépôt), utiliser `tradinebotte-polymarket/scripts/update_standalone.sh` :
 
 ```bash
-bash scripts/update_standalone.sh            # rsync bot/ + strategies/*.json, puis redémarrage
-bash scripts/update_standalone.sh --skip-restart   # rsync uniquement
-bash scripts/update_standalone.sh --verify-only    # vérifie les fichiers et le processus, sans transfert
+bash tradinebotte-polymarket/scripts/update_standalone.sh            # rsync tradinebotte-polymarket/ + strategies/*.json, puis redémarrage
+bash tradinebotte-polymarket/scripts/update_standalone.sh --skip-restart   # rsync uniquement
+bash tradinebotte-polymarket/scripts/update_standalone.sh --verify-only    # vérifie les fichiers et le processus, sans transfert
 ```
 
 Ce script stoppe le bot via `live.pid`, synchronise uniquement les fichiers nécessaires et redémarre dans une seule session SSH. Voir [UPDATE.fr.md](UPDATE.fr.md) pour le scénario complet.
@@ -266,15 +272,15 @@ bash scripts/install.sh [répertoire_installation] [--lang EN|FR] [--with-tests]
   Sans ce flag, le script propose le choix au démarrage comme avant.
 - `--with-tests` — Copie aussi `tests/`, `analysis/backtest.py` et
   `data/backtest_sample_btc5m_range_2026.db`, puis lance
-  la suite complète de tests (868 tests) juste après l'installation.
+  la suite complète de tests (1 148 tests en 5 suites) juste après l'installation.
   Le backtest utilise `live.db` uniquement s'il contient ≥ 100 snapshots ;
   sinon il bascule automatiquement sur le dataset embarqué.
 
 Ce script va :
 - Installer les packages système (python3, pip, venv, sqlite3)
 - Créer le répertoire d'installation
-- Copier `bot/live_bot.py` et `bot/api_polymarket.py` vers `<TRADINEBOTTE_DIR>/`
-- Copier `strategies/*.json` vers `<TRADINEBOTTE_DIR>/strategies/`
+- Copier `tradinebotte-polymarket/live_bot.py` et `tradinebotte-polymarket/api_polymarket.py` vers `<TRADINEBOTTE_DIR>/`
+- Copier `tradinebotte-polymarket/strategies/*.json` vers `<TRADINEBOTTE_DIR>/strategies/`
 - Créer un virtualenv dans `<TRADINEBOTTE_DIR>/venv/`
 - Installer les dépendances Python dans le virtualenv
 - Générer `<TRADINEBOTTE_DIR>/run.sh` (wrapper avec `TRADINEBOTTE_DIR` pré-défini)
@@ -427,7 +433,7 @@ Le service redémarre automatiquement en cas d'erreur (`Restart=on-failure`, dé
 max 5 redémarrages par 5 minutes). Au reboot, le bot revient dès que le réseau est
 disponible (`After=network-online.target`).
 
-> **Multi-bot (Option B)** : utilisez `scripts/install_feed_service.sh`, `scripts/install_indicators_service.sh` (indicateurs partagés, optionnel) et `scripts/install_account_service.sh`. Voir [docs/multi.md](docs/multi.md).
+> **Multi-bot (Option B)** : utilisez `scripts/install_feed_service.sh`, `tradinebotte-indicators/scripts/install_indicators_service.sh` (indicateurs partagés, optionnel) et `scripts/install_account_service.sh`. Voir [docs/multi.md](docs/multi.md).
 
 **Flags :**
 - *(aucun flag)* — mode normal : les écritures de logs sont asynchrones (thread daemon, ne bloque jamais le event loop)
@@ -542,7 +548,7 @@ Quand plusieurs fichiers sont traités, chaque fichier tourne avec le capital r�
 
 ## Service d'indicateurs techniques
 
-`bot/indicators.py` est un étage pipeline ZeroMQ qui se place entre feed.py et n'importe quel consommateur. Il souscrit au socket PUB du feed, accumule un historique de prix par token, et republie des messages d'indicateurs enrichis sur un second socket PUB.
+`tradinebotte-indicators/indicators.py` est un étage pipeline ZeroMQ qui se place entre feed.py et n'importe quel consommateur. Il souscrit au socket PUB du feed, accumule un historique de prix par token, et republie des messages d'indicateurs enrichis sur un second socket PUB.
 
 ```
 feed.py  PUB :5557  ──SUB──▶  indicators.py  ──PUB :5559──▶  consommateurs
@@ -550,16 +556,16 @@ feed.py  PUB :5557  ──SUB──▶  indicators.py  ──PUB :5559──▶ 
 
 ```bash
 # Démarrage avec les paramètres par défaut (SUB :5557 → PUB :5559)
-python3 bot/indicators.py
+python3 tradinebotte-indicators/indicators.py
 
 # Périodes personnalisées
-python3 bot/indicators.py --rsi 7 --sma 10 --ema 5 --vol 10
+python3 tradinebotte-indicators/indicators.py --rsi 7 --sma 10 --ema 5 --vol 10
 
 # Adresses ZMQ personnalisées
-python3 bot/indicators.py --feed tcp://127.0.0.1:5558 --out tcp://127.0.0.1:5560
+python3 tradinebotte-indicators/indicators.py --feed tcp://127.0.0.1:5558 --out tcp://127.0.0.1:5560
 
 # Verbeux (affiche chaque publication d'indicateur)
-python3 bot/indicators.py --verbose
+python3 tradinebotte-indicators/indicators.py --verbose
 ```
 
 **Format des messages publiés :**
@@ -617,7 +623,7 @@ Sources disponibles : `binance_ws`, `binance_scalping`, `binance_funding`, `deri
 
 ```bash
 INDICATORS_CONFIG=~/tradinebotte/strategies/indicators/indicators_4h_bitcoin.json \
-bash scripts/install_indicators_service.sh
+bash tradinebotte-indicators/scripts/install_indicators_service.sh
 ```
 
 Génère `~/tmp/tradinebotte-indicators.service`. Installer aux côtés du service feed :
@@ -635,19 +641,19 @@ Optionnel : définir `INDICATORS_LABEL=btc` pour nommer le service `tradinebotte
 ### Démarrage manuel
 
 ```bash
-python3 bot/indicators.py --config strategies/indicators/indicators_4h_bitcoin.json
+python3 tradinebotte-indicators/indicators.py --config tradinebotte-indicators/strategies/indicators_4h_bitcoin.json
 ```
 
-Fichiers de config prêts à l'emploi dans `strategies/` :
+Fichiers de config prêts à l'emploi dans `tradinebotte-indicators/strategies/` :
 
 | Fichier | Sources |
 |---|---|
-| `indicators_all.json` | Configuration unifiée 9 flux : bougies Binance 4h (EMA50, EMA200, ATR14), 1d, funding, DVOL Deribit, Fear & Greed, scalping (depth20 + aggTrade) |
-| `indicators_4h_bitcoin.json` | Bougies Binance BTC/USDT 4h |
-| `indicators_1d_bitcoin.json` | Bougies Binance BTC/USDT 1d |
-| `indicators_funding_bitcoin.json` | Taux de financement perpétuel Binance |
-| `indicators_deribit_iv_bitcoin.json` | Volatilité implicite DVOL Deribit |
-| `indicators_fear_greed.json` | Indice Fear & Greed d'Alternative.me |
+| `tradinebotte-indicators/strategies/indicators_all.json` | Configuration unifiée 9 flux : bougies Binance 4h (EMA50, EMA200, ATR14), 1d, funding, DVOL Deribit, Fear & Greed, scalping (depth20 + aggTrade) |
+| `tradinebotte-indicators/strategies/indicators_4h_bitcoin.json` | Bougies Binance BTC/USDT 4h |
+| `tradinebotte-indicators/strategies/indicators_1d_bitcoin.json` | Bougies Binance BTC/USDT 1d |
+| `tradinebotte-indicators/strategies/indicators_funding_bitcoin.json` | Taux de financement perpétuel Binance |
+| `tradinebotte-indicators/strategies/indicators_deribit_iv_bitcoin.json` | Volatilité implicite DVOL Deribit |
+| `tradinebotte-indicators/strategies/indicators_fear_greed.json` | Indice Fear & Greed d'Alternative.me |
 
 
 ## Backtest grid trading
@@ -723,7 +729,7 @@ Les bases de données téléchargées sont exclues du git (`.gitignore`). Le té
 
 ## Filtre heure / jour
 
-Le bot peut restreindre les entrées en trade à des plages horaires UTC selon le type de jour. Le filtre est configuré dans le fichier de stratégie JSON (`strategies/polymarket/polymarket_BTC5M.json`) et est **désactivé par défaut** — le comportement existant est préservé jusqu'à activation explicite.
+Le bot peut restreindre les entrées en trade à des plages horaires UTC selon le type de jour. Le filtre est configuré dans le fichier de stratégie JSON (`tradinebotte-polymarket/strategies/polymarket_BTC5M.json`) et est **désactivé par défaut** — le comportement existant est préservé jusqu'à activation explicite.
 
 ### Pourquoi un filtre horaire ?
 
@@ -846,8 +852,8 @@ L'architecture ZeroMQ sépare le bot en deux processus distincts :
 
 | Processus | Fichier | Rôle |
 |---|---|---|
-| Feed | `bot/feed.py` | Connexion WS unique ; diffuse les mises à jour via ZMQ PUB |
-| Account bot | `bot/account_bot.py` | Souscrit au feed ; trade un compte en isolation complète |
+| Feed | `tradinebotte-polymarket/feed.py` | Connexion WS unique ; diffuse les mises à jour via ZMQ PUB |
+| Account bot | `tradinebotte-polymarket/account_bot.py` | Souscrit au feed ; trade un compte en isolation complète |
 
 ### Prérequis
 
@@ -899,11 +905,11 @@ TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash scripts/start_feed.sh
 TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
 ```
 
-**Flags du feed** (`scripts/start_feed.sh` les transmet à `bot/feed.py`) :
+**Flags du feed** (`scripts/start_feed.sh` les transmet à `tradinebotte-polymarket/feed.py`) :
 
 - `--verbose` — active le logging DEBUG ; affiche chaque message WebSocket brut et chaque publish ZMQ ; utile pour diagnostiquer des problèmes de connectivité du feed ou de format de message
 
-**Flags de l'account bot** (`scripts/start_account.sh` les transmet à `bot/account_bot.py`) :
+**Flags de l'account bot** (`scripts/start_account.sh` les transmet à `tradinebotte-polymarket/account_bot.py`) :
 
 - `--verbose` — active le logging DEBUG pour le diagnostic ; affiche chaque book update, évaluation de signal et message ZMQ reçu ; utile lors de la mise en place initiale ou du débogage
 
@@ -928,7 +934,7 @@ Le feed publie trois types de messages JSON via ZeroMQ PUB :
 ### Notes d'architecture
 
 - Le feed n'a aucune logique de trading et ne stocke aucune clé — il est sûr de le redémarrer sans affecter l'état des comptes.
-- Chaque processus `account_bot.py` écrit dans sa propre base SQLite ; le chemin `handle_book_update` / `check_signal` / `enter_live_trade` de `live_bot.py` s'exécute sans modification.
+- Chaque processus `tradinebotte-polymarket/account_bot.py` écrit dans sa propre base SQLite ; le chemin `handle_book_update` / `check_signal` / `enter_live_trade` de `live_bot.py` s'exécute sans modification.
 - Si le feed redémarre, les account bots récupèrent automatiquement — ils rateront les mises à jour pendant l'interruption mais ne placeront pas d'ordres en double car l'ensemble `signalled` est persisté dans la DB entre les sessions.
 - Le pattern PUB/SUB ZeroMQ est unidirectionnel : les account bots n'envoient jamais de messages au feed.
 
@@ -1078,7 +1084,7 @@ uv pip install aiohttp websockets web3 py-clob-client --python .venv/bin/python3
 Vérification de la syntaxe :
 
 ```bash
-.venv/bin/python3 -m py_compile bot/live_bot.py && echo "SYNTAX OK"
+.venv/bin/python3 -m py_compile tradinebotte-polymarket/live_bot.py && echo "SYNTAX OK"
 ```
 
 Vérification des imports (s'assure que le code au niveau module s'exécute
@@ -1086,8 +1092,9 @@ sans erreur) :
 
 ```bash
 .venv/bin/python3 -c "
-import sys; sys.path.insert(0, '.')
-import bot.live_bot as b
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location('live_bot', 'tradinebotte-polymarket/live_bot.py')
+b = importlib.util.module_from_spec(spec); spec.loader.exec_module(b)
 print('CONFIG_PATH:', b.CONFIG_PATH)
 print('PRIVATE_KEY set:', bool(b.PRIVATE_KEY))
 print('SIGNAL_THRESHOLD:', b.SIGNAL_THRESHOLD)
@@ -1098,7 +1105,7 @@ Lancer le bot pendant 20 secondes en mode simulation isolé (logs sur stdout,
 écrit dans `~/tradinebotte-sim` — les données de production ne sont jamais touchées) :
 
 ```bash
-timeout 20 .venv/bin/python3 bot/live_bot.py --simulate
+timeout 20 .venv/bin/python3 tradinebotte-polymarket/live_bot.py --simulate
 ```
 
 Sortie attendue (affichée directement dans le terminal) :
@@ -1147,9 +1154,9 @@ Trois adaptateurs d'exchange supplémentaires sont inclus comme remplaçants dir
 
 | Fichier | Exchange | Frais | Flux WebSocket |
 |---|---|---|---|
-| `bot/api_binance.py` | Binance spot | 0,1 % taker | `btcusdt@depth5@100ms` |
-| `bot/api_mexc.py` | MEXC spot | 0,2 % taker | `spot@public.limit.depth.v3.api@BTCUSDT@5` |
-| `bot/api_bitstamp.py` | Bitstamp spot | 0,1 % taker | `wss://ws.bitstamp.net` carnet d'ordres live |
+| `tradinebotte-cex/api_binance.py` | Binance spot | 0,1 % taker | `btcusdt@depth5@100ms` |
+| `tradinebotte-cex/api_mexc.py` | MEXC spot | 0,2 % taker | `spot@public.limit.depth.v3.api@BTCUSDT@5` |
+| `tradinebotte-cex/api_bitstamp.py` | Bitstamp spot | 0,1 % taker | `wss://ws.bitstamp.net` carnet d'ordres live |
 
 Les trois implémentent l'interface publique identique : `get_markets`, `post_order`,
 `parse_book_update`, `compute_fee` et les helpers de métadonnées de marché.
