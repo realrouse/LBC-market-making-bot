@@ -6,6 +6,43 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.48] — 2026-05-30
+
+### Added
+- **Monorepo Phase 1 — `tradinetools` v0.1 shared library**: `tradinetools/` Python package with `zmq.py` (socket factories `make_pub/sub/rep/req`, `warn_if_external_bind`, port constants), `schemas.py` (versioned ZMQ message dataclasses `BookMessage`, `IndicatorsMessage`, `RegisterRequest`, `RegisterReply`, etc. with `to_dict()`/`from_dict()` round-trip), `math.py` (scalar indicator helpers `sma_last`, `ema_last`, `atr_last`, `bollinger_last`, `vwap_last`, `vol_zscore_last`, `rolling_max_last`), `logging.py` (shared `setup_logger`); installed as editable package via `pyproject.toml`
+- **Monorepo Phase 2 — `tradinebotte-indicators/`**: indicators service fully isolated into its own sub-service directory with dedicated `scripts/`, `strategies/`, and `tests/`; service adopts tradinetools ZMQ factories and schema v1 for all published messages
+- **Monorepo Phase 3 — `tradinebotte-polymarket/`**: Polymarket service isolated with `feed.py`, `live_bot.py`, `account_bot.py`, `api_polymarket.py`, `bot_utils.py` and all related scripts/strategies/tests
+- **Monorepo Phase 4 — `tradinebotte-cex/`**: CEX service isolated with all strategy engines, bots, deploy scripts, JSON configs, and tests
+- **`tradinebotte-cex/strategy_engines/dca.py` — `DCAStrategy` plugin**: timed DCA buys at configurable intervals; limit orders with TP and optional SL; SQLite persistence; integrates with the shared connector injection pattern
+- **`tradinebotte-cex/strategy_engines/swinghold.py` — `SwingHoldStrategy` plugin**: swing strategy variant that partially exits at each resistance level (`sell_fraction` per level) instead of a single TP; `hold_fraction = 1 − sell_fraction` kept for long-term accumulation; full SL on remaining position
+- **`tradinebotte-cex/strategy_engines/swing.py` — market SELL for stop-loss exits**: SL now executes via REST market order (`post_market_order`) instead of a cancelled limit, ensuring fills in fast-moving markets
+- **`tradinebotte-cex/accumulation_bot.py` — BTC accumulation bot v1.2**: OBI dip-buy with profit-ladder ratchet; adaptive scale-in with rebuy logic; state persistence across restarts; v1.1 fixed bugs + added adaptive rebuy; v1.2 promoted wide profit-band defaults from calibration
+- **`tradinebotte-cex/orderbook_bot.py` — OBI scalping v2.3–v2.10**: v2.3 adds TFI (Trade Flow Imbalance) filter; v2.4 long-only direction; v2.5 wider TP/SL calibrated 2026-05-26; v2.7 TFI flat gate + removes `obi_exit_thresh`; v2.8 VWAP context gate; v2.9 volume profile gate; v2.10 macro OBI gate (multi-timeframe filter)
+- **`tradinebotte-indicators/indicators.py` — 4 new data sources**: Bitcoin liquidations (Coinalyze), open interest (OI), long/short ratio, funding rate; all published on the unified indicators ZMQ stream; HMAC auth added for liquidations endpoint to silence spam
+- **`analysis/backtest_swing_dca.py` — CEX strategy backtester**: simulates DCA, Swing, and SwingHold against 1-minute OHLCV SQLite databases; fill model: BUY fills when `candle_low ≤ limit_price`, SELL when `candle_high ≥ limit_price`, SL at `candle_low ≤ sl_price`; recovery lock prevents cascade re-entries during sharp moves through the support cluster; realized-PnL-only capital model; `--compare`, `--all-dbs`, `--sweep`, `--config` modes
+- **`analysis/backtest_orderbook.py`** — OBI scalping backtester against live order book snapshots
+- **`analysis/calibrate_obi_proxy.py`** — calibration script for OBI proxy parameters
+- **`scripts/backtest_accumulation.py`** — accumulation strategy backtester
+- **`tradinebotte-cex/scripts/deploy_accumulation_claude4.sh`** — accumulation bot deploy script
+- **`tradinebotte-polymarket/scripts/update_claude3.sh`** — deploy wrapper targeting the third test account
+- **Test suite expansion**: `tradinebotte-cex/tests/test_strategy_engines.py` (64 tests covering `SwingStrategy`, `DCAStrategy`, `SwingHoldStrategy` — init validation, pure calculation methods, async simulation fills via `IsolatedAsyncioTestCase`); `tradinetools/tests/test_zmq.py`, `test_schemas.py`, `test_math.py` (87 tests total); all 5 sub-service test directories now discovered by CI
+
+### Changed
+- **`.github/workflows/tests.yml`** — CI now runs `unittest discover` on all five test directories (`tests/`, `tradinetools/tests/`, `tradinebotte-cex/tests/`, `tradinebotte-polymarket/tests/`, `tradinebotte-indicators/tests/`) and installs `tradinetools` as editable package before the test run
+- **`tradinebotte-indicators/indicators.py`** — ZMQ publish layer replaced with tradinetools `make_pub`/`make_sub`/`make_rep`/`make_req` factories; all messages serialized as schema v1 dicts; `warn_if_external_bind` called on every bind address
+- **All deploy scripts** (`update_claude1.sh`, `deploy_scalping_claude4.sh`, `deploy_accumulation_claude4.sh`) updated to rsync `tradinetools/` to the remote install directory and install it in the remote `.venv`
+
+### Fixed
+- **`tradinebotte-polymarket/scripts/update_claude1.sh` — `--restart-feed`**: syncs `feed.py` and `tradinetools/` to the remote; installs tradinetools in `.venv`; patches the systemd unit file if `ExecStart` still points to the legacy `bot/feed.py` path
+- **`tradinebotte-polymarket/scripts/install_feed_service.sh`** — `BOT_DIR` corrected to point to the project root instead of the `bot/` subdirectory
+- **`tradinebotte-indicators/indicators.py`** — perpetual futures TFI switched from aggTrade WebSocket (unavailable) to REST polling; Binance futures depth keys fixed (`b`/`a` vs `bids`/`asks`)
+- **Pylint 10.00/10** across all new modules and scripts
+
+### Tests
+- Total: **1,148 passing tests** across five sub-service suites (340 + 87 + 170 + 415 + 136)
+
+---
+
 ## [0.47] — 2026-05-24
 
 ### Added
