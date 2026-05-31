@@ -119,6 +119,38 @@ bash tradinebotte-cex/scripts/update_swing.sh
 
 ---
 
+## v0.50 — Indicators service update notes
+
+v0.50 adds new streams and parameters to `tradinebotte-indicators/indicators.py`. When updating from v0.49:
+
+1. Restart the shared indicators service **before** restarting any dependent bots (accumulation, scalping, swing):
+
+```bash
+sudo systemctl restart tradinebotte-indicators
+# or, using the PID file:
+kill $(cat ~/tradinebotte/indicators.pid)
+bash tradinebotte-indicators/scripts/start_indicators.sh
+```
+
+2. To enable the shared SQLite orderbook database for a stream, add the following keys to the stream entry in the indicators JSON config (all are optional — omitting `db_path` or leaving it empty disables DB writes):
+
+```json
+{
+  "stream_id": "btc_full_depth_perp",
+  "market": "perp",
+  "db_path": "",
+  "bucket_size_usd": 50,
+  "db_write_every_n": 60,
+  "history_retention_h": 24
+}
+```
+
+The DB file is created with `0o644` permissions. Ensure the path's parent directory is writable by the indicators service user.
+
+3. No changes to `config.json`, `live.db`, or any bot strategy JSON files are required for this update.
+
+---
+
 ## Option B — Multi-bot update
 
 Update the shared repo and restart. Account dirs (`~/account-a`, etc.) are not touched.

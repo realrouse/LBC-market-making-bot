@@ -68,7 +68,7 @@ Usage:
       --config tradinebotte-indicators/strategies/indicators.json
 """
 
-import argparse, asyncio, json, logging, math, os, sys, time
+import argparse, asyncio, json, logging, math, os, sqlite3, sys, time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple
@@ -102,7 +102,8 @@ _BINANCE_FUTURES_URL          = "https://fapi.binance.com/fapi/v1/premiumIndex"
 _BINANCE_OI_HIST_URL      = "https://fapi.binance.com/futures/data/openInterestHist"
 _BINANCE_LS_RATIO_URL     = "https://fapi.binance.com/futures/data/topLongShortAccountRatio"
 _BINANCE_TICKER_PRICE_URL = "https://api.binance.com/api/v3/ticker/price"
-_BINANCE_SPOT_DEPTH_URL   = "https://api.binance.com/api/v3/depth"
+_BINANCE_SPOT_DEPTH_URL    = "https://api.binance.com/api/v3/depth"
+_BINANCE_FUTURES_DEPTH_URL = "https://fapi.binance.com/fapi/v1/depth"
 _DERIBIT_DVOL_URL         = "https://www.deribit.com/api/v2/public/get_volatility_index_data"
 _FEAR_GREED_URL           = "https://api.alternative.me/fng/"
 _WS_RECV_TIMEOUT_S        = 120   # force reconnect if no WS message in this many seconds
@@ -1081,30 +1082,105 @@ def _apply_depth_event(bids: dict[float, float], asks: dict[float, float],
 
 
 async def _fetch_depth_snapshot(session: aiohttp.ClientSession,
-                                 asset: str) -> dict[str, Any]:
-    """Fetch a full spot order book snapshot (5000 levels) from Binance REST."""
+                                 asset: str,
+                                 url: str = _BINANCE_SPOT_DEPTH_URL,
+                                 limit: int = 5000) -> dict[str, Any]:
+    """Fetch an order book snapshot from Binance REST (spot or futures)."""
     async with session.get(
-        _BINANCE_SPOT_DEPTH_URL,
-        params={"symbol": asset.upper(), "limit": 5000},
+        url,
+        params={"symbol": asset.upper(), "limit": limit},
         timeout=aiohttp.ClientTimeout(total=30),
     ) as resp:
         return await resp.json(content_type=None)
 
 
+def _init_depth_db(db_path: str) -> sqlite3.Connection:
+    """Open (or create) the shared orderbook SQLite DB.
+
+    Uses DELETE journal mode so cross-user read-only access works without needing
+    write permission on the directory (WAL requires directory write for -shm/-wal).
+    Readers should open with:  sqlite3.connect("file:path?mode=ro", uri=True)
+    """
+    conn = sqlite3.connect(db_path, check_same_thread=False, timeout=10.0)
+    conn.execute("PRAGMA journal_mode=DELETE")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS orderbook_current (
+            stream_id  TEXT,
+            side       TEXT,
+            price      REAL,
+            qty        REAL,
+            ts         INTEGER,
+            PRIMARY KEY (stream_id, side, price)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS orderbook_snapshots (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            stream_id  TEXT,
+            ts         INTEGER,
+            bids       TEXT,
+            asks       TEXT
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_snap_stream_ts "
+        "ON orderbook_snapshots (stream_id, ts)"
+    )
+    conn.commit()
+    os.chmod(db_path, 0o644)
+    return conn
+
+
+def _write_depth_to_db(conn: sqlite3.Connection, stream_id: str,
+                        sorted_bids: list[tuple[float, float]],
+                        sorted_asks: list[tuple[float, float]],
+                        bucket: float, ts_ms: int, retention_s: int) -> None:
+    """Bucket and persist the current order book to SQLite (blocking, run in executor)."""
+    def _bucket(levels: list[tuple[float, float]]) -> list[tuple[float, float]]:
+        d: dict[float, float] = {}
+        for price, qty in levels:
+            k = round(price / bucket) * bucket
+            d[k] = d.get(k, 0.0) + qty
+        return sorted(d.items())
+
+    b = _bucket(sorted_bids)
+    a = _bucket(sorted_asks)
+
+    cur = conn.cursor()
+    cur.execute("DELETE FROM orderbook_current WHERE stream_id=? AND side='bid'", (stream_id,))
+    cur.execute("DELETE FROM orderbook_current WHERE stream_id=? AND side='ask'", (stream_id,))
+    cur.executemany(
+        "INSERT INTO orderbook_current (stream_id, side, price, qty, ts) VALUES (?,?,?,?,?)",
+        [(stream_id, "bid", p, q, ts_ms) for p, q in b] +
+        [(stream_id, "ask", p, q, ts_ms) for p, q in a],
+    )
+    cur.execute(
+        "INSERT INTO orderbook_snapshots (stream_id, ts, bids, asks) VALUES (?,?,?,?)",
+        (stream_id, ts_ms, json.dumps(b), json.dumps(a)),
+    )
+    cutoff = ts_ms - retention_s * 1000
+    cur.execute(
+        "DELETE FROM orderbook_snapshots WHERE stream_id=? AND ts<?", (stream_id, cutoff)
+    )
+    conn.commit()
+
+
 async def _binance_full_depth_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> None:
-    """Maintain a full spot order book (up to 5000 levels) via REST snapshot + WS diffs.
+    """Maintain a full order book (spot or futures) via REST snapshot + WS diffs.
 
     Implements the Binance documented reconstruction algorithm:
       1. Connect to the diff WebSocket (btcusdt@depth@100ms).
-      2. Buffer incoming events while fetching a REST snapshot (GET /api/v3/depth?limit=5000).
+      2. Buffer incoming events while fetching a REST snapshot.
       3. Apply snapshot; replay buffered events discarding those with u <= lastUpdateId.
-      4. For each subsequent event validate U == lastUpdateId+1; break on gap → resync.
+      4. For each subsequent event validate sequence continuity; break on gap → resync.
+         Spot:    U == lastUpdateId + 1
+         Futures: ev["pu"] == lastUpdateId  (pu = previous event's u)
       5. On any error/gap: reconnect and re-snapshot from scratch.
 
     Publishes every publish_every_n depth updates:
       best_bid, best_ask, mid, spread_bps
       obi_N             — OBI at N levels for each N in obi_levels_list
-                          (multi-depth, harder to spoof than depth20)
       cum_bid_vol_Xpct  — cumulative bid qty within X% below mid
       cum_ask_vol_Xpct  — cumulative ask qty within X% above mid
       wall_bid_price, wall_bid_qty — largest single bid level within wall_range_pct of mid
@@ -1112,20 +1188,65 @@ async def _binance_full_depth_task(spec: StreamSpec, pub: zmq.asyncio.Socket) ->
       book_levels_bid, book_levels_ask — total maintained price levels
 
     Source params:
-      obi_levels_list   list[int] ([10, 100, 500]) — book depths for OBI
-      cum_vol_range_pct float     (1.0)   — cumulative vol within X% of mid
-      wall_range_pct    float     (2.0)   — wall search range (% from mid)
-      publish_every_n   int       (10)    — throttle: publish every N depth events
+      market             str       ("spot")          — "spot" or "perp"
+      bid_depth_pct      float     (0.0)             — trim bids below mid×(1-pct/100); 0=off
+      ask_depth_pct      float     (0.0)             — trim asks above mid×(1+pct/100); 0=off
+      obi_levels_list    list[int] ([10, 100, 500])  — book depths for OBI
+      cum_vol_range_pct  float     (1.0)             — cumulative vol within X% of mid
+      wall_range_pct     float     (2.0)             — wall search range (% from mid)
+      publish_every_n    int       (10)              — throttle: publish every N depth events
+      db_path            str       ("")              — shared SQLite path; empty = disabled
+      bucket_size_usd    float     (50.0)            — price bucket width for DB storage
+      db_write_every_n   int       (60)              — write DB every N publishes (~60s at 1pub/s)
+      history_retention_h float   (24.0)            — hours of snapshot history to keep
     """
-    p               = spec.params
-    obi_levels_list = [int(x) for x in p.get("obi_levels_list", [10, 100, 500])]
-    cum_pct         = float(p.get("cum_vol_range_pct", 1.0))
-    wall_pct        = float(p.get("wall_range_pct", 2.0))
-    publish_every_n = int(p.get("publish_every_n", 10))
+    p                   = spec.params
+    obi_levels_list     = [int(x) for x in p.get("obi_levels_list", [10, 100, 500])]
+    cum_pct             = float(p.get("cum_vol_range_pct", 1.0))
+    wall_pct            = float(p.get("wall_range_pct", 2.0))
+    publish_every_n     = int(p.get("publish_every_n", 10))
+    market              = str(p.get("market", "spot")).lower()
+    bid_depth_pct       = float(p.get("bid_depth_pct", 0.0))
+    ask_depth_pct       = float(p.get("ask_depth_pct", 0.0))
+    db_path             = str(p.get("db_path", ""))
+    bucket_size_usd     = float(p.get("bucket_size_usd", 50.0))
+    db_write_every_n    = int(p.get("db_write_every_n", 60))
+    history_retention_h = float(p.get("history_retention_h", 24.0))
+    retention_s         = int(history_retention_h * 3600)
 
-    symbol  = spec.asset.lower()
-    ws_url  = f"{_BINANCE_WS_BASE}/{symbol}@depth@100ms"
+    db_conn: sqlite3.Connection | None = None
+    if db_path:
+        try:
+            db_conn = _init_depth_db(db_path)
+            logger.info("[%s] orderbook DB opened → %s (bucket=$%.0f, retention=%.0fh)",
+                        spec.id, db_path, bucket_size_usd, history_retention_h)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("[%s] orderbook DB init failed (%s) — DB disabled", spec.id, exc)
+            db_conn = None
+
+    symbol = spec.asset.lower()
+    if market == "perp":
+        snap_url   = _BINANCE_FUTURES_DEPTH_URL
+        snap_limit = 1000
+        ws_url     = f"wss://fstream.binance.com/ws/{symbol}@depth@100ms"
+    else:
+        snap_url   = _BINANCE_SPOT_DEPTH_URL
+        snap_limit = 5000
+        ws_url     = f"{_BINANCE_WS_BASE}/{symbol}@depth@100ms"
     backoff = 5
+
+    def _trim_book(book_bids: dict[float, float], book_asks: dict[float, float],
+                   mid_price: float) -> None:
+        if bid_depth_pct > 0:
+            floor = mid_price * (1.0 - bid_depth_pct / 100.0)
+            for k in [kk for kk in book_bids if kk < floor]:
+                del book_bids[k]
+        if ask_depth_pct > 0:
+            ceil = mid_price * (1.0 + ask_depth_pct / 100.0)
+            for k in [kk for kk in book_asks if kk > ceil]:
+                del book_asks[k]
+
+    db_count = 0
 
     while True:
         bids:           dict[float, float] = {}
@@ -1142,7 +1263,7 @@ async def _binance_full_depth_task(spec: StreamSpec, pub: zmq.asyncio.Socket) ->
                 event_buffer: list[dict[str, Any]] = []
                 async with aiohttp.ClientSession() as session:
                     snap_task = asyncio.create_task(
-                        _fetch_depth_snapshot(session, spec.asset)
+                        _fetch_depth_snapshot(session, spec.asset, snap_url, snap_limit)
                     )
                     while not snap_task.done():
                         try:
@@ -1161,6 +1282,11 @@ async def _binance_full_depth_task(spec: StreamSpec, pub: zmq.asyncio.Socket) ->
                     q = float(qs)
                     if q > 0:
                         asks[float(ps)] = q
+
+                # Trim to configured price range right after snapshot
+                if bids and asks and (bid_depth_pct > 0 or ask_depth_pct > 0):
+                    _trim_book(bids, asks, (max(bids) + min(asks)) / 2.0)
+
                 logger.info("[%s] snapshot: %d bids / %d asks  lastUpdateId=%d",
                             spec.id, len(bids), len(asks), last_update_id)
 
@@ -1202,10 +1328,18 @@ async def _binance_full_depth_task(spec: StreamSpec, pub: zmq.asyncio.Socket) ->
 
                     if u <= last_update_id:
                         continue            # stale event
-                    if U != last_update_id + 1:
-                        logger.warning("[%s] sequence gap U=%d expected %d — resync",
-                                       spec.id, U, last_update_id + 1)
-                        break
+
+                    if market == "perp":
+                        pu = int(ev.get("pu", -1))
+                        if pu != last_update_id:
+                            logger.warning("[%s] futures pu=%d expected %d — resync",
+                                           spec.id, pu, last_update_id)
+                            break
+                    else:
+                        if U != last_update_id + 1:
+                            logger.warning("[%s] sequence gap U=%d expected %d — resync",
+                                           spec.id, U, last_update_id + 1)
+                            break
 
                     _apply_depth_event(bids, asks, ev)
                     last_update_id = u
@@ -1222,6 +1356,10 @@ async def _binance_full_depth_task(spec: StreamSpec, pub: zmq.asyncio.Socket) ->
                         continue
                     mid        = (best_bid + best_ask) / 2.0
                     spread_bps = (best_ask - best_bid) / mid * 10000.0
+
+                    # Trim book to configured price range (keeps memory bounded)
+                    if bid_depth_pct > 0 or ask_depth_pct > 0:
+                        _trim_book(bids, asks, mid)
 
                     sorted_bids = sorted(bids.items(), reverse=True)   # high → low
                     sorted_asks = sorted(asks.items())                  # low → high
@@ -1250,15 +1388,15 @@ async def _binance_full_depth_task(spec: StreamSpec, pub: zmq.asyncio.Socket) ->
                     bid_floor = mid * (1.0 - cum_pct / 100.0)
                     ask_ceil  = mid * (1.0 + cum_pct / 100.0)
                     out[f"cum_bid_vol_{cum_pct}pct"] = sum(
-                        q for p, q in sorted_bids if p >= bid_floor)
+                        q for pr, q in sorted_bids if pr >= bid_floor)
                     out[f"cum_ask_vol_{cum_pct}pct"] = sum(
-                        q for p, q in sorted_asks if p <= ask_ceil)
+                        q for pr, q in sorted_asks if pr <= ask_ceil)
 
                     # Largest single bid/ask wall within wall_pct% of mid
                     wall_bid_floor = mid * (1.0 - wall_pct / 100.0)
                     wall_ask_ceil  = mid * (1.0 + wall_pct / 100.0)
-                    bids_in_range  = [(p, q) for p, q in sorted_bids if p >= wall_bid_floor]
-                    asks_in_range  = [(p, q) for p, q in sorted_asks if p <= wall_ask_ceil]
+                    bids_in_range  = [(pr, q) for pr, q in sorted_bids if pr >= wall_bid_floor]
+                    asks_in_range  = [(pr, q) for pr, q in sorted_asks if pr <= wall_ask_ceil]
                     if bids_in_range:
                         wp, wq = max(bids_in_range, key=lambda x: x[1])
                         out["wall_bid_price"] = wp
@@ -1269,6 +1407,17 @@ async def _binance_full_depth_task(spec: StreamSpec, pub: zmq.asyncio.Socket) ->
                         out["wall_ask_qty"]   = wq
 
                     _publish(pub, out)
+
+                    # Persist bucketed book to shared SQLite (non-blocking)
+                    if db_conn is not None:
+                        db_count += 1
+                        if db_count % db_write_every_n == 0:
+                            loop = asyncio.get_event_loop()
+                            loop.run_in_executor(
+                                None, _write_depth_to_db,
+                                db_conn, spec.id, sorted_bids, sorted_asks,
+                                bucket_size_usd, int(time.time() * 1000), retention_s,
+                            )
 
         except Exception as exc:            # pylint: disable=broad-except
             logger.warning("[%s] full depth error (%s) — reconnect in %ds",

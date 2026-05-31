@@ -6,6 +6,14 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.50] — 2026-05-31
+
+### Added
+- **`tradinebotte-indicators/indicators.py` — full-depth futures stream (`btc_full_depth_perp`)**: new `_BINANCE_FUTURES_DEPTH_URL` constant (`https://fapi.binance.com/fapi/v1/depth`); `_fetch_depth_snapshot()` now accepts `url` and `limit` parameters (spot uses limit=5000, futures limit=1000); `_binance_full_depth_task` gains two new parameters — `market` (`"spot"` or `"perp"`) selects the correct WebSocket and REST endpoints, and `bid_depth_pct` / `ask_depth_pct` trim the book to a dynamic price window around mid-price (0=disabled), applied at snapshot load and on every publish cycle to keep memory bounded; futures sync validation uses `pu`-chaining (`ev["pu"] == last_update_id`) instead of `U == lastId+1` (the Binance futures diff protocol differs from spot); new stream `btc_full_depth_perp` deployed alongside the existing `btc_full_depth` spot stream
+- **`tradinebotte-indicators/indicators.py` — shared SQLite orderbook database**: new helper functions `_init_depth_db()` and `_write_depth_to_db()`; SQLite journal mode = DELETE (not WAL) so cross-user readers need only file read permissions — no directory write access required for `-shm`/`-wal` sidecars; two tables: `orderbook_current` (latest bucketed book — 1 row per stream/side/price bucket, replaced on each write) and `orderbook_snapshots` (ring-buffer of timestamped JSON snapshots with configurable retention); new stream parameters: `db_path` (default `""` = disabled), `bucket_size_usd` (default 50), `db_write_every_n` (default 60, approximately once per minute), `history_retention_h` (default 24); DB file created with `0o644` permissions — readable by all users; `run_in_executor` used so SQLite writes never stall the async event loop; the shared orderbook database path and bucket size are configurable per deployment
+
+---
+
 ## [0.49] — 2026-05-31
 
 ### Added

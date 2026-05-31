@@ -655,6 +655,18 @@ Fichiers de config prêts à l'emploi dans `tradinebotte-indicators/strategies/`
 | `tradinebotte-indicators/strategies/indicators_deribit_iv_bitcoin.json` | Volatilité implicite DVOL Deribit |
 | `tradinebotte-indicators/strategies/indicators_fear_greed.json` | Indice Fear & Greed d'Alternative.me |
 
+Les flux ajoutés en v0.50 (`btc_full_depth` et `btc_full_depth_perp`) sont configurés directement dans le JSON de flux avec les paramètres suivants :
+
+| Paramètre | Défaut | Description |
+|---|---|---|
+| `market` | `"spot"` | `"spot"` ou `"perp"` — sélectionne les endpoints Binance REST et WebSocket pour le carnet full-depth |
+| `bid_depth_pct` | `0` | Réduit les bids à cette fenêtre en pourcentage sous le mid-price ; `0` = désactivé |
+| `ask_depth_pct` | `0` | Réduit les asks à cette fenêtre en pourcentage au-dessus du mid-price ; `0` = désactivé |
+| `db_path` | `""` | Chemin vers la base de données SQLite partagée du carnet d'ordres ; chaîne vide = écritures désactivées |
+| `bucket_size_usd` | `50` | Largeur des buckets de prix en USD pour la table `orderbook_current` |
+| `db_write_every_n` | `60` | Écriture dans la DB tous les N cycles de publication (environ une fois par minute à 1 Hz) |
+| `history_retention_h` | `24` | Durée de rétention du ring-buffer `orderbook_snapshots`, en heures |
+
 
 ## Backtest grid trading
 

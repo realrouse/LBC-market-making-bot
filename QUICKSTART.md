@@ -13,10 +13,10 @@
 ## Install from official release (tar.gz)
 
 ```bash
-# Download the latest release (replace v0.49 with the current version)
-wget https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.49.tar.gz
-tar -xzf v0.49.tar.gz
-cd tradinebotte-0.49
+# Download the latest release (replace v0.50 with the current version)
+wget https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.50.tar.gz
+tar -xzf v0.50.tar.gz
+cd tradinebotte-0.50
 bash scripts/install.sh        # detects missing system packages; prompts for language (E/F)
 python3 scripts/setup.py       # prompts for language (saved to config.json); Enter = simulation mode
 bash scripts/start_bot.sh
