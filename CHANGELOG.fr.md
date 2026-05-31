@@ -6,6 +6,29 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.49] — 2026-05-31
+
+### Ajout
+- **`tradinebotte-cex/accumulation_bot.py` v1.4 — améliorations P1–P6 issues du document de conception** : cooldown adaptatif qui raccourcit l'attente de scale-in quand la pression OBI est forte ; trailing stop de rebuy avec expiration (supprime automatiquement les niveaux de rebuy obsolètes) ; buffer Earn configurable (`earn_buffer_usd`) pour conserver un minimum de USDT liquide en spot ; gate VWAP appliquée à l'achat initial uniquement (`vwap_gate_initial`), les entrées de scale-in restent non filtrées ; seuil OBI plus élevé requis pour la réduction du cooldown
+- **`tradinebotte-cex/accumulation_bot.py` v1.5 — quatre nouvelles gates de signal** :
+  - Gate Fear & Greed (`fear_greed_gate`) : bloque les achats quand l'indice > 80 (avidité extrême), booste la mise quand l'indice < 25 (peur extrême)
+  - Gate liquidations (`liq_gate`) : bloque l'entrée sur un pic de liquidations shorts importantes (signal de longs surchargés), booste la mise sur un pic de liquidations longs (vente forcée)
+  - Gate ratio Long/Short (`ls_ratio_gate`) : bloque les nouveaux achats quand le ratio dépasse 3,0 (longs sur-levés)
+  - Gate RSI 4h (`rsi4h_gate`) : bloque quand le RSI > 70 (sur-acheté), assouplit l'exigence VWAP quand le prix est sous le VWAP et le RSI < 35
+- **`tradinebotte-cex/orderbook_bot.py` v2.12 — gate liquidations** : paramètre `liq_gate` (désactivé par défaut, `"liq_gate": false`) et seuil `liq_long_block_usd` ; reprend la logique de la gate du bot d'accumulation
+- **`tradinebotte-cex/strategies/scalping/orderbook_btc.json` v2.12** — valeurs par défaut mises à jour
+- **`tradinebotte-cex/strategies/longterm/btc_accumulation.json` v1.5** — valeurs par défaut mises à jour avec tous les nouveaux paramètres de gates
+
+### Modifications
+- **Tous les paramètres de stratégie codés en dur sont désormais surchargeables via JSON** (`accumulation_bot.py`, `orderbook_bot.py` et bots Polymarket) : chaque constante Python qui nécessitait auparavant une modification du code peut maintenant être définie dans le fichier JSON de stratégie ; les constantes restent actives comme valeurs par défaut si la clé est absente du JSON
+
+### Correctifs
+- **`tradinebotte-indicators/indicators.py` — watchdog de timeout WebSocket** : les trois boucles WebSocket Binance (`_binance_kline_task`, `_binance_scalping_task`, `_binance_full_depth_task`) encapsulent désormais `ws.recv()` dans `asyncio.wait_for(..., timeout=120)` — empêche le blocage indéfini quand Binance maintient le keepalive TCP sans envoyer de données (incident observé : prix figé pendant 38 heures) ; nouvelle constante `_WS_RECV_TIMEOUT_S = 120`
+- **`tradinebotte-indicators/indicators.py` — flux de liquidations** : `_binance_liquidations_task` réécrit depuis un endpoint REST signé (nécessitait des credentials API, toujours désactivé en pratique) vers le WebSocket public `wss://fstream.binance.com/ws/{symbol}@forceOrder` ; aucun credential requis ; les données de liquidations sont désormais actives et disponibles pour tous les consommateurs de gates
+- **`tradinebotte-indicators/indicators.py` — nettoyage** : imports inutilisés supprimés (`hashlib`, `hmac`, `urllib.parse`) et constante inutilisée `_BINANCE_FORCE_ORDERS_URL` supprimée
+
+---
+
 ## [0.48] — 2026-05-30
 
 ### Ajout

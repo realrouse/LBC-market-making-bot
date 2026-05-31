@@ -68,7 +68,7 @@ Usage:
       --config tradinebotte-indicators/strategies/indicators.json
 """
 
-import argparse, asyncio, hashlib, hmac, json, logging, math, os, sys, time, urllib.parse
+import argparse, asyncio, json, logging, math, os, sys, time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple
@@ -101,11 +101,11 @@ _BINANCE_PERP_COMBINED_WS     = "wss://fstream.binance.com/stream"
 _BINANCE_FUTURES_URL          = "https://fapi.binance.com/fapi/v1/premiumIndex"
 _BINANCE_OI_HIST_URL      = "https://fapi.binance.com/futures/data/openInterestHist"
 _BINANCE_LS_RATIO_URL     = "https://fapi.binance.com/futures/data/topLongShortAccountRatio"
-_BINANCE_FORCE_ORDERS_URL = "https://fapi.binance.com/fapi/v1/forceOrders"
 _BINANCE_TICKER_PRICE_URL = "https://api.binance.com/api/v3/ticker/price"
 _BINANCE_SPOT_DEPTH_URL   = "https://api.binance.com/api/v3/depth"
 _DERIBIT_DVOL_URL         = "https://www.deribit.com/api/v2/public/get_volatility_index_data"
 _FEAR_GREED_URL           = "https://api.alternative.me/fng/"
+_WS_RECV_TIMEOUT_S        = 120   # force reconnect if no WS message in this many seconds
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 
 
@@ -573,7 +573,13 @@ async def _binance_kline_task(spec: StreamSpec, pub: zmq.asyncio.Socket,
             ) as ws:
                 logger.info("[%s] connected → %s", spec.id, ws_url)
                 backoff = 5
-                async for raw in ws:
+                while True:
+                    try:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=_WS_RECV_TIMEOUT_S)
+                    except asyncio.TimeoutError:
+                        logger.warning("[%s] WS stale — no data in %ds, reconnecting",
+                                       spec.id, _WS_RECV_TIMEOUT_S)
+                        break
                     msg   = json.loads(raw)
                     kline = msg.get("k", {})
                     if not kline.get("x"):    # only on closed candles
@@ -790,63 +796,64 @@ async def _binance_ls_ratio_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> N
 
 
 async def _binance_liquidations_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> None:
-    """Aggregate Binance forced liquidation orders over the last poll interval.
+    """Stream Binance forced liquidation orders via the public @forceOrder WebSocket.
 
-    Requires BINANCE_API_KEY and BINANCE_API_SECRET env vars (signed endpoint).
-    Exits immediately if credentials are absent.
+    No API credentials required — uses the public fstream endpoint.
+    Maintains a rolling window (poll_interval_s) and publishes on every event.
+    On quiet periods (no liquidations for _WS_RECV_TIMEOUT_S), publishes the current window
+    and continues (keeps the connection alive — quiet markets are normal).
     """
-    api_key = os.environ.get("BINANCE_API_KEY", "")
-    api_secret = os.environ.get("BINANCE_API_SECRET", "")
-    if not api_key or not api_secret:
-        logger.warning("[%s] BINANCE_API_KEY/SECRET not set — liquidations stream disabled", spec.id)
-        return
+    window_s = spec.poll_interval_s or _DEFAULT_POLL_INTERVALS["binance_liquidations"]
+    symbol   = (spec.asset or "BTCUSDT").lower()
+    ws_url   = f"wss://fstream.binance.com/ws/{symbol}@forceOrder"
+    backoff  = 5
+    events: deque[tuple[float, float, float]] = deque()  # (ts_ms, liq_long, liq_short)
 
-    interval = spec.poll_interval_s or _DEFAULT_POLL_INTERVALS["binance_liquidations"]
-    asset    = spec.asset or "BTCUSDT"
-    headers  = {"X-MBX-APIKEY": api_key}
+    def _publish_window(now_ms: float) -> None:
+        cutoff = now_ms - window_s * 1000
+        while events and events[0][0] < cutoff:
+            events.popleft()
+        liq_long  = sum(e[1] for e in events)
+        liq_short = sum(e[2] for e in events)
+        _publish(pub, {
+            "t":             "indicators",
+            "stream_id":     spec.id,
+            "liq_long_usd":  liq_long,
+            "liq_short_usd": liq_short,
+            "liq_net_usd":   liq_short - liq_long,
+            "liq_count":     len(events),
+            "ts":            int(now_ms),
+        })
 
-    async with aiohttp.ClientSession() as session:
-        while True:
-            try:
-                start_ms = int((time.time() - interval) * 1000)
-                params   = {
-                    "symbol":    asset.upper(),
-                    "startTime": start_ms,
-                    "limit":     1000,
-                    "timestamp": int(time.time() * 1000),
-                }
-                query = urllib.parse.urlencode(params)
-                params["signature"] = hmac.new(
-                    api_secret.encode(), query.encode(), hashlib.sha256
-                ).hexdigest()
-                async with session.get(
-                    _BINANCE_FORCE_ORDERS_URL,
-                    params=params,
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=10),
-                ) as resp:
-                    orders = await resp.json(content_type=None)
-                if not isinstance(orders, list):
-                    raise ValueError(orders)
-                liq_long = liq_short = 0.0
-                for o in orders:
-                    notional = float(o.get("executedQty", 0)) * float(o.get("averagePrice", 0))
-                    if o.get("side") == "SELL":
-                        liq_long += notional
-                    else:
-                        liq_short += notional
-                _publish(pub, {
-                    "t":             "indicators",
-                    "stream_id":     spec.id,
-                    "liq_long_usd":  liq_long,
-                    "liq_short_usd": liq_short,
-                    "liq_net_usd":   liq_short - liq_long,
-                    "liq_count":     len(orders),
-                    "ts":            int(time.time() * 1000),
-                })
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.warning("[%s] liquidations fetch failed (%s)", spec.id, exc)
-            await asyncio.sleep(interval)
+    while True:
+        try:
+            async with websockets.connect(ws_url, ping_interval=20, ping_timeout=10) as ws:
+                logger.info("[%s] liquidations WS connected → %s", spec.id, ws_url)
+                backoff = 5
+                _publish_window(time.time() * 1000)   # initial empty publish on connect
+                while True:
+                    try:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=_WS_RECV_TIMEOUT_S)
+                    except asyncio.TimeoutError:
+                        # quiet market — no liquidations; publish current window and keep alive
+                        _publish_window(time.time() * 1000)
+                        continue
+                    msg   = json.loads(raw)
+                    order = msg.get("o", {})
+                    side      = order.get("S", "")
+                    qty       = float(order.get("z", order.get("l", 0)))
+                    avg_price = float(order.get("ap", order.get("p", 0)))
+                    notional  = qty * avg_price
+                    ts_ms     = float(order.get("T", time.time() * 1000))
+                    liq_long_ev  = notional if side == "SELL" else 0.0
+                    liq_short_ev = notional if side == "BUY"  else 0.0
+                    events.append((ts_ms, liq_long_ev, liq_short_ev))
+                    _publish_window(ts_ms)
+        except Exception as exc:          # pylint: disable=broad-except
+            logger.warning("[%s] liquidations WS error (%s) — reconnect in %ds",
+                           spec.id, exc, backoff)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60)
 
 
 _BINANCE_FUTURES_AGG_TRADES_URL = "https://fapi.binance.com/fapi/v1/aggTrades"
@@ -947,7 +954,13 @@ async def _binance_scalping_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> N
             async with websockets.connect(ws_url, ping_interval=20, ping_timeout=10) as ws:
                 logger.info("[%s] scalping WS connected → %s", spec.id, ws_url)
                 backoff = 5
-                async for raw in ws:
+                while True:
+                    try:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=_WS_RECV_TIMEOUT_S)
+                    except asyncio.TimeoutError:
+                        logger.warning("[%s] scalping WS stale — no data in %ds, reconnecting",
+                                       spec.id, _WS_RECV_TIMEOUT_S)
+                        break
                     msg         = json.loads(raw)
                     stream_name = msg.get("stream", "")
                     data        = msg.get("data", {})
@@ -1176,7 +1189,13 @@ async def _binance_full_depth_task(spec: StreamSpec, pub: zmq.asyncio.Socket) ->
                     continue
 
                 # Live diff stream
-                async for raw in ws:
+                while True:
+                    try:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=_WS_RECV_TIMEOUT_S)
+                    except asyncio.TimeoutError:
+                        logger.warning("[%s] full depth WS stale — no data in %ds, reconnecting",
+                                       spec.id, _WS_RECV_TIMEOUT_S)
+                        break
                     ev = json.loads(raw)
                     u  = int(ev.get("u", 0))
                     U  = int(ev.get("U", 0))

@@ -62,8 +62,11 @@ MIN_SECS_REMAINING = 30.0   # was 45.0 — sweep: 30s gains ~+$7 PnL on liveweek
 MIN_ASK_VOL        = 10.0
 WIN_THRESHOLD      = 0.99
 LOSS_THRESHOLD     = 0.01
-OBI_REJECT_THRESH  = -0.25  # was -0.50 — sweep: -0.25 flips PnL positive on liveweek
+OBI_REJECT_THRESH  = -0.40  # calibrated 2026-05-30 on 874 15M live trades: MaxDD $10 vs $68, Sharpe 4.30 vs 2.23
 DAILY_STOP_LOSS    = 30.0
+API_FAIL_THRESHOLD        = 3           # consecutive CLOB failures before circuit-breaker trips
+API_COOLDOWN_SECS         = 300         # seconds to suspend entries after circuit-breaker
+RECENT_TRADE_LOOKBACK_MS  = 600_000     # ms back to exclude recently-resolved markets on restart
 
 # ─── HOUR FILTER DEFAULTS ─────────────────────────────────────────────────────
 HOUR_FILTER_ENABLED:    bool                  = False
@@ -220,6 +223,11 @@ class BotConfig:
     loss_threshold:     float = LOSS_THRESHOLD
     obi_reject_thresh:  float = OBI_REJECT_THRESH
     daily_stop_loss:    float = DAILY_STOP_LOSS
+
+    # Circuit-breaker
+    api_fail_threshold:       int = API_FAIL_THRESHOLD
+    api_cooldown_secs:        int = API_COOLDOWN_SECS
+    recent_trade_lookback_ms: int = RECENT_TRADE_LOOKBACK_MS
 
     # Hour filter
     hour_filter_enabled:  bool = HOUR_FILTER_ENABLED
@@ -422,6 +430,9 @@ def make_config(simulate: bool = False, no_log: bool = False,
     loss_threshold     = float(strat.get("loss_threshold",      LOSS_THRESHOLD))
     obi_reject_thresh  = float(strat.get("obi_reject_thresh",   OBI_REJECT_THRESH))
     daily_stop_loss    = float(strat.get("daily_stop_loss",     DAILY_STOP_LOSS))
+    api_fail_threshold       = int(strat.get("api_fail_threshold",       API_FAIL_THRESHOLD))
+    api_cooldown_secs        = int(strat.get("api_cooldown_secs",        API_COOLDOWN_SECS))
+    recent_trade_lookback_ms = int(strat.get("recent_trade_lookback_ms", RECENT_TRADE_LOOKBACK_MS))
 
     # Stake scaling — default stake_max to base stake so flat mode is unchanged.
     stake_bid_alpha       = float(strat.get("stake_bid_alpha",       STAKE_BID_ALPHA))
@@ -524,6 +535,9 @@ def make_config(simulate: bool = False, no_log: bool = False,
         loss_threshold=loss_threshold,
         obi_reject_thresh=obi_reject_thresh,
         daily_stop_loss=daily_stop_loss,
+        api_fail_threshold=api_fail_threshold,
+        api_cooldown_secs=api_cooldown_secs,
+        recent_trade_lookback_ms=recent_trade_lookback_ms,
         hour_filter_enabled=hour_filter_enabled,
         us_holiday_filter=us_holiday_filter,
         weekday_utc_ranges=weekday_utc_ranges,
@@ -1207,8 +1221,8 @@ async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[floa
     if state.session and cfg.private_key:
         if oid is None:
             state.api_fail_streak += 1
-            if state.api_fail_streak >= 3:
-                state.api_cooldown_until = time.time() + 300
+            if state.api_fail_streak >= cfg.api_fail_threshold:
+                state.api_cooldown_until = time.time() + cfg.api_cooldown_secs
                 logger.warning(
                     "CIRCUIT-BREAKER: %d consecutive CLOB failures — entries suspended 5 min",
                     state.api_fail_streak,
@@ -1517,7 +1531,7 @@ def restore_state_from_db(state: BotState) -> None:
     recent_rows = state.conn.execute(
         "SELECT DISTINCT market_id FROM trades "
         "WHERE resolved=1 AND signal_ts_ms>=?",
-        (now_ms - 600_000,)   # 10 minutes back
+        (now_ms - state.config.recent_trade_lookback_ms,)
     ).fetchall()
     for (mid,) in recent_rows:
         state.signalled.add(mid)

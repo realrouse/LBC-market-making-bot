@@ -538,7 +538,7 @@ When more than one file is processed, each file runs with capital reset to `capi
 
 ## Technical Indicator Service
 
-`tradinebotte-indicators/indicators.py` is a ZeroMQ pipeline stage that sits between feed.py and any consumer. It subscribes to the feed PUB socket, accumulates a price history per token, and republishes enriched indicator messages on a second PUB socket.
+`tradinebotte-indicators/indicators.py` is a ZeroMQ pipeline stage that sits between feed.py and any consumer. It subscribes to the feed PUB socket, accumulates a price history per token, and republishes enriched indicator messages on a second PUB socket. All three Binance WebSocket loops are protected by a 120-second recv watchdog — if Binance stops sending data while keeping the TCP connection alive, the service detects the stall and reconnects automatically.
 
 ```
 feed.py  PUB :5557  ──SUB──▶  indicators.py  ──PUB :5559──▶  consumers

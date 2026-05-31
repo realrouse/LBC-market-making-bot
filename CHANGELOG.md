@@ -6,6 +6,29 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.49] — 2026-05-31
+
+### Added
+- **`tradinebotte-cex/accumulation_bot.py` v1.4 — P1–P6 improvements from design doc**: adaptive cooldown that shortens the scale-in wait when OBI pressure is strong; rebuy trailing stop with expiry (removes stale rebuy levels automatically); configurable Earn buffer (`earn_buffer_usd`) to keep a minimum liquid USDT in spot; VWAP gate applied to the initial buy only (`vwap_gate_initial`), leaving scale-in entries unfiltered; stronger OBI threshold required for cooldown reduction
+- **`tradinebotte-cex/accumulation_bot.py` v1.5 — four new signal gates**:
+  - Fear & Greed gate (`fear_greed_gate`): blocks buys when index > 80 (extreme greed), boosts stake when index < 25 (extreme fear)
+  - Liquidations gate (`liq_gate`): blocks entry on a large short-liquidation spike (crowded long signal), boosts stake on a long-liquidation spike (forced selling)
+  - Long/Short Ratio gate (`ls_ratio_gate`): blocks new buys when the ratio exceeds 3.0 (over-leveraged longs)
+  - RSI 4h gate (`rsi4h_gate`): blocks when RSI > 70 (overbought), relaxes the VWAP requirement when price is below VWAP and RSI < 35
+- **`tradinebotte-cex/orderbook_bot.py` v2.12 — liquidations gate**: `liq_gate` parameter (disabled by default, `"liq_gate": false`) and `liq_long_block_usd` threshold; mirrors the accumulation bot gate logic
+- **`tradinebotte-cex/strategies/scalping/orderbook_btc.json` v2.12** — updated defaults
+- **`tradinebotte-cex/strategies/longterm/btc_accumulation.json` v1.5** — updated defaults with all new gate parameters
+
+### Changed
+- **All hardcoded strategy parameters now overridable via JSON** (`accumulation_bot.py`, `orderbook_bot.py`, and Polymarket bots): every Python constant that previously required a code edit can now be set in the strategy JSON file; constants remain as defaults when the key is absent from JSON
+
+### Fixed
+- **`tradinebotte-indicators/indicators.py` — WebSocket timeout watchdog**: all three Binance WebSocket loops (`_binance_kline_task`, `_binance_scalping_task`, `_binance_full_depth_task`) now wrap `ws.recv()` in `asyncio.wait_for(..., timeout=120)` — prevents indefinite hang when Binance maintains TCP keepalive but stops sending data (observed: 38-hour stale-price incident); new constant `_WS_RECV_TIMEOUT_S = 120`
+- **`tradinebotte-indicators/indicators.py` — liquidations stream**: `_binance_liquidations_task` rewritten from a signed REST polling endpoint (required API credentials, was always effectively disabled) to the public WebSocket `wss://fstream.binance.com/ws/{symbol}@forceOrder`; no credentials required; liquidations data is now live and available to all gate consumers
+- **`tradinebotte-indicators/indicators.py` — cleanup**: removed unused imports (`hashlib`, `hmac`, `urllib.parse`) and the unused constant `_BINANCE_FORCE_ORDERS_URL`
+
+---
+
 ## [0.48] — 2026-05-30
 
 ### Added
