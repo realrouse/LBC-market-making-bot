@@ -1,6 +1,6 @@
 {
-    "_comment": "BTC long-term accumulation v1.4 — macro OBI gate, VWAP gate, adaptive cooldown, rebuy trailing+expiry, configurable Earn buffer",
-    "_version": "1.4",
+    "_comment": "BTC long-term accumulation v1.5 — Fear&Greed gate, Liquidations gate, L/S Ratio gate, RSI 4h gate, macro OBI gate, VWAP gate, adaptive cooldown, rebuy trailing+expiry, configurable Earn buffer",
+    "_version": "1.5",
 
     "symbol":               "BTCUSDT",
 
@@ -49,5 +49,26 @@
     "scale_in_obi_strong_thresh": 0.80,
 
     "rebuy_max_age_days": 30,
-    "rebuy_trail_pct":    0.005
+    "rebuy_trail_pct":    0.005,
+
+    "fear_greed_gate":         true,
+    "fear_greed_stream_id":    "fear_greed",
+    "fear_greed_block_thresh": 80,
+    "fear_greed_boost_thresh": 25,
+    "fear_greed_boost_mult":   1.5,
+
+    "liq_gate":            true,
+    "liq_stream_id":       "btc_liquidations",
+    "liq_short_block_usd": 10000000,
+    "liq_long_spike_usd":   5000000,
+    "liq_long_boost_mult":  1.3,
+
+    "ls_ratio_gate":       true,
+    "ls_ratio_stream_id":  "btc_ls_ratio",
+    "ls_ratio_block_high": 3.0,
+
+    "rsi4h_gate":           true,
+    "rsi4h_stream_id":      "btc_4h",
+    "rsi4h_block_high":     70.0,
+    "rsi4h_relax_vwap_low": 35.0
 }

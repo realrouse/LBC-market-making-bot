@@ -31,6 +31,11 @@ Usage
 
 Refactor history
 ----------------
+  v2.12: Liquidations gate — block long entries when large long liquidation cascades
+         are active (liq_long_usd > liq_long_block_usd, default $5M/5min). Mass long
+         liquidations signal a falling market where contrarian longs face high adverse
+         selection. Consumes btc_liquidations ZMQ stream. Disabled by default
+         (liq_gate=false) for minimal disruption to existing deployments.
   v2.11: Funding rate gate — block long entries when the Binance perp funding rate
          exceeds a threshold (default 0.05%/8h). High positive funding means longs
          are crowded and paying carry; the ask-heavy contrarian OBI signal is weaker
@@ -133,6 +138,10 @@ DEFAULTS = {
     "funding_gate":        False,
     "funding_gate_thresh": 0.0005,   # 0.05%/8h — typical "crowded longs" threshold
     "funding_stream_id":   "btc_funding",
+    # Liquidations gate (v2.12)
+    "liq_gate":            False,
+    "liq_stream_id":       "btc_liquidations",
+    "liq_long_block_usd":  5_000_000,  # block longs during long cascade ($5M/5min)
     # Indicators service (ZMQ)
     "indicators_addr":     "tcp://127.0.0.1:5559",
     "spot_stream_id":      "btc_scalping_spot",
@@ -231,6 +240,8 @@ class StreamState:
         self.macro_obi       = 0.0        # EMA-smoothed macro OBI (-1 to +1)
         self.macro_obi_dir   = "neutral"  # "bullish" | "neutral" | "bearish"
         self.funding_rate    = 0.0        # Binance perp funding rate (decimal/8h)
+        self.liq_long_usd    = 0.0        # long liquidations last 5min (USD)
+        self.liq_short_usd   = 0.0        # short liquidations last 5min (USD)
         self.pending_dir     = None
         self.pending_count   = 0
         self.position        = None
@@ -373,6 +384,17 @@ def _handle_funding(state: StreamState, msg: dict) -> None:
     logger.debug("[%s] Funding: rate=%.6f (%.4f%%/8h)",
                  state.mode, state.funding_rate, state.funding_rate * 100)
 
+
+def _handle_liquidations(state: StreamState, msg: dict) -> None:
+    liq_long  = msg.get("liq_long_usd")
+    liq_short = msg.get("liq_short_usd")
+    if liq_long  is not None:
+        state.liq_long_usd  = float(liq_long)
+    if liq_short is not None:
+        state.liq_short_usd = float(liq_short)
+    logger.debug("[%s] Liq: long=$%.0f  short=$%.0f",
+                 state.mode, state.liq_long_usd, state.liq_short_usd)
+
 # ---------------------------------------------------------------------------
 # Indicator message handler
 # ---------------------------------------------------------------------------
@@ -479,6 +501,17 @@ async def _handle_indicator(state: StreamState, db: sqlite3.Connection,
             state.pending_count = 0
             return
 
+    # Liquidations gate: block longs during long liquidation cascades
+    # (mass long liquidations signal continued downside — avoid adverse selection)
+    if p.get("liq_gate", False):
+        liq_thresh = p.get("liq_long_block_usd", 5_000_000)
+        if state.liq_long_usd > liq_thresh and direction in ("long", "both"):
+            logger.debug("[%s] Liq gate: long blocked (liq_long=$%.0f > $%.0f)",
+                         state.mode, state.liq_long_usd, liq_thresh)
+            state.pending_dir   = None
+            state.pending_count = 0
+            return
+
     if tfi_thresh <= 0.0:
         tfi_ok_long  = True
         tfi_ok_short = True
@@ -537,11 +570,13 @@ async def _zmq_loop(states: list, db: sqlite3.Connection, p: dict) -> None:
     vol_sid      = p.get("vol_profile_stream_id","btc_volume_profile") if p.get("vol_profile_gate") else None
     macro_sid    = p.get("macro_obi_stream_id",  "btc_macro_obi")      if p.get("macro_obi_gate")   else None
     funding_sid  = p.get("funding_stream_id",    "btc_funding")         if p.get("funding_gate")     else None
+    liq_sid      = p.get("liq_stream_id",        "btc_liquidations")    if p.get("liq_gate")         else None
     all_streams = (list(stream_map.keys())
                    + ([vwap_sid]     if vwap_sid     else [])
                    + ([vol_sid]      if vol_sid      else [])
                    + ([macro_sid]    if macro_sid    else [])
-                   + ([funding_sid]  if funding_sid  else []))
+                   + ([funding_sid]  if funding_sid  else [])
+                   + ([liq_sid]      if liq_sid      else []))
 
     ctx = azmq.Context.instance()
     sub = ctx.socket(zmq.SUB)
@@ -576,6 +611,10 @@ async def _zmq_loop(states: list, db: sqlite3.Connection, p: dict) -> None:
             if sid == funding_sid and funding_sid:
                 for st in states:
                     _handle_funding(st, msg)
+                continue
+            if sid == liq_sid and liq_sid:
+                for st in states:
+                    _handle_liquidations(st, msg)
                 continue
 
             state = stream_map.get(sid)
@@ -625,7 +664,7 @@ async def _run(p: dict, db: sqlite3.Connection) -> None:
     else:
         vwap_mode = "disabled"
 
-    logger.info("OrderBook bot v2.11 — symbol=%s  modes=%s  direction=%s  paper=True",
+    logger.info("OrderBook bot v2.12 — symbol=%s  modes=%s  direction=%s  paper=True",
                 p["symbol"], modes, p.get("direction", "long"))
     logger.info("OBI: entry=%.2f  confirm=%d  alpha=%.2f (indicators)  levels=%d",
                 p["obi_entry_thresh"], p["obi_confirm_n"],
@@ -647,6 +686,10 @@ async def _run(p: dict, db: sqlite3.Connection) -> None:
     funding_mode = (f"enabled — block longs when funding_rate > {funding_thresh:.4%}/8h"
                     if p.get("funding_gate") else "disabled")
     logger.info("Funding gate: %s", funding_mode)
+    liq_thresh = p.get("liq_long_block_usd", 5_000_000)
+    liq_mode = (f"enabled — block longs when liq_long > ${liq_thresh:,.0f}/5min"
+                if p.get("liq_gate") else "disabled")
+    logger.info("Liq gate: %s", liq_mode)
 
     tasks = [
         asyncio.create_task(_zmq_loop(states, db, p)),
