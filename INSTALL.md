@@ -645,6 +645,18 @@ Ready-to-use config files in `tradinebotte-indicators/strategies/`:
 | `tradinebotte-indicators/strategies/indicators_deribit_iv_bitcoin.json` | Deribit DVOL implied volatility |
 | `tradinebotte-indicators/strategies/indicators_fear_greed.json` | Alternative.me Fear & Greed index |
 
+Streams added in v0.50 (`btc_full_depth` and `btc_full_depth_perp`) are configured inline with the following stream-level parameters:
+
+| Parameter | Default | Description |
+|---|---|---|
+| `market` | `"spot"` | `"spot"` or `"perp"` — selects the Binance REST and WebSocket endpoints for the full-depth book |
+| `bid_depth_pct` | `0` | Trim bids to this percentage window below mid-price; `0` = disabled |
+| `ask_depth_pct` | `0` | Trim asks to this percentage window above mid-price; `0` = disabled |
+| `db_path` | `""` | Path to the shared SQLite orderbook database; empty string disables DB writes |
+| `bucket_size_usd` | `50` | Price bucket width in USD for the `orderbook_current` table |
+| `db_write_every_n` | `60` | Write to the DB every N publish cycles (approximately once per minute at 1 Hz) |
+| `history_retention_h` | `24` | Retention period for the `orderbook_snapshots` ring-buffer, in hours |
+
 
 ## Grid Trading Backtest
 

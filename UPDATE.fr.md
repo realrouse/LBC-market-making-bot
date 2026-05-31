@@ -116,6 +116,38 @@ bash tradinebotte-cex/scripts/update_swing.sh
 
 ---
 
+## v0.50 — Notes de mise à jour du service d'indicateurs
+
+La v0.50 ajoute de nouveaux flux et paramètres à `tradinebotte-indicators/indicators.py`. Lors de la mise à jour depuis la v0.49 :
+
+1. Redémarrer le service d'indicateurs partagé **avant** de redémarrer les bots dépendants (accumulation, scalping, swing) :
+
+```bash
+sudo systemctl restart tradinebotte-indicators
+# ou via le fichier PID :
+kill $(cat ~/tradinebotte/indicators.pid)
+bash tradinebotte-indicators/scripts/start_indicators.sh
+```
+
+2. Pour activer la base de données SQLite partagée du carnet d'ordres sur un flux, ajouter les clés suivantes à l'entrée de flux dans le JSON de configuration des indicateurs (toutes optionnelles — omettre `db_path` ou le laisser vide désactive les écritures) :
+
+```json
+{
+  "stream_id": "btc_full_depth_perp",
+  "market": "perp",
+  "db_path": "",
+  "bucket_size_usd": 50,
+  "db_write_every_n": 60,
+  "history_retention_h": 24
+}
+```
+
+Le fichier DB est créé avec les droits `0o644`. Le répertoire parent du chemin doit être accessible en écriture par l'utilisateur du service d'indicateurs.
+
+3. Aucune modification de `config.json`, `live.db` ou des fichiers JSON de stratégie des bots n'est requise pour cette mise à jour.
+
+---
+
 ## Option B — Mise à jour multi-bot
 
 Mettre à jour le repo partagé et redémarrer. Les répertoires de comptes (`~/account-a`, etc.) ne sont pas touchés.

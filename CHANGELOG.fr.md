@@ -6,6 +6,14 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.50] — 2026-05-31
+
+### Ajout
+- **`tradinebotte-indicators/indicators.py` — flux full-depth futures (`btc_full_depth_perp`)** : nouvelle constante `_BINANCE_FUTURES_DEPTH_URL` (`https://fapi.binance.com/fapi/v1/depth`) ; `_fetch_depth_snapshot()` accepte désormais les paramètres `url` et `limit` (spot : limit=5000, futures : limit=1000) ; `_binance_full_depth_task` reçoit deux nouveaux paramètres — `market` (`"spot"` ou `"perp"`) sélectionne les bons endpoints WebSocket et REST, et `bid_depth_pct` / `ask_depth_pct` réduisent le carnet à une fenêtre de prix dynamique autour du mid-price (0=désactivé), appliquée au chargement du snapshot et à chaque cycle de publication pour borner la mémoire utilisée ; la validation de synchronisation futures utilise le chaînage `pu` (`ev["pu"] == last_update_id`) au lieu de `U == lastId+1` (le protocole diff Binance futures diffère du spot) ; nouveau flux `btc_full_depth_perp` déployé aux côtés du flux spot `btc_full_depth` existant
+- **`tradinebotte-indicators/indicators.py` — base de données SQLite partagée du carnet d'ordres** : nouvelles fonctions utilitaires `_init_depth_db()` et `_write_depth_to_db()` ; mode journal SQLite = DELETE (pas WAL) afin que les lecteurs multi-utilisateurs n'aient besoin que des droits de lecture sur le fichier — aucun accès en écriture au répertoire requis pour les fichiers `-shm`/`-wal` ; deux tables : `orderbook_current` (dernier carnet bucketisé — 1 ligne par stream/side/bucket de prix, remplacée à chaque écriture) et `orderbook_snapshots` (ring-buffer de snapshots JSON horodatés avec rétention configurable) ; nouveaux paramètres de flux : `db_path` (défaut `""` = désactivé), `bucket_size_usd` (défaut 50), `db_write_every_n` (défaut 60, soit environ une fois par minute), `history_retention_h` (défaut 24) ; fichier DB créé avec les droits `0o644` — lisible par tous les utilisateurs ; `run_in_executor` utilisé pour que les écritures SQLite ne bloquent jamais l'event loop async ; le chemin de la base de données du carnet d'ordres partagée et la taille des buckets sont configurables par déploiement
+
+---
+
 ## [0.49] — 2026-05-31
 
 ### Ajout
