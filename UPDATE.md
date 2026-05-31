@@ -110,7 +110,7 @@ Three deploy scripts cover the CEX sub-service strategies. Each rsync-copies the
 # Scalping bot (Binance OBI)
 bash tradinebotte-cex/scripts/deploy_scalping_claude4.sh
 
-# BTC accumulation bot v1.2
+# BTC accumulation bot v1.5
 bash tradinebotte-cex/scripts/deploy_accumulation_claude4.sh
 
 # Swing strategy

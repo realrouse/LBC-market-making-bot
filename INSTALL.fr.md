@@ -548,7 +548,7 @@ Quand plusieurs fichiers sont traités, chaque fichier tourne avec le capital r�
 
 ## Service d'indicateurs techniques
 
-`tradinebotte-indicators/indicators.py` est un étage pipeline ZeroMQ qui se place entre feed.py et n'importe quel consommateur. Il souscrit au socket PUB du feed, accumule un historique de prix par token, et republie des messages d'indicateurs enrichis sur un second socket PUB.
+`tradinebotte-indicators/indicators.py` est un étage pipeline ZeroMQ qui se place entre feed.py et n'importe quel consommateur. Il souscrit au socket PUB du feed, accumule un historique de prix par token, et republie des messages d'indicateurs enrichis sur un second socket PUB. Les trois boucles WebSocket Binance sont protégées par un watchdog de 120 secondes sur les recv — si Binance cesse d'envoyer des données tout en maintenant la connexion TCP active, le service détecte le blocage et reconnecte automatiquement.
 
 ```
 feed.py  PUB :5557  ──SUB──▶  indicators.py  ──PUB :5559──▶  consommateurs
