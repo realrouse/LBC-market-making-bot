@@ -45,7 +45,7 @@ TEST_SWING_USER_IDX=4
 
 # ─── Feed service auto-restart ─────────────────────────────────────────────────
 # When true: if feed.py changed since last deploy, the script attempts
-#   sudo -n systemctl restart tradinebotte-feed   (requires NOPASSWD sudo).
+#   sudo tradinebotte-ctl restart tradinebotte-feed   (NOPASSWD via /etc/sudoers.d/tradinebotte).
 # When false (default): the script prints the commands and leaves them to you.
 TEST_FEED_AUTO_RESTART=false
 

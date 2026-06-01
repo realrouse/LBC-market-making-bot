@@ -324,8 +324,8 @@ else
     info "feed.py was updated — feed service restart needed"
     RESTART_OK=false
     if [[ "$FEED_AUTO_RESTART" == "true" ]]; then
-        info "Attempting automatic restart via sudo -n systemctl restart..."
-        if run "$FEED_IDX" "sudo -n systemctl restart tradinebotte-feed 2>&1"; then
+        info "Attempting automatic restart via tradinebotte-ctl..."
+        if run "$FEED_IDX" "sudo tradinebotte-ctl restart tradinebotte-feed 2>&1"; then
             sleep 5
             NEW_STATUS=$(run "$FEED_IDX" \
                 "systemctl is-active tradinebotte-feed 2>/dev/null || echo inactive")
@@ -336,13 +336,13 @@ else
                 warn "Restart command ran but service status: $NEW_STATUS"
             fi
         else
-            warn "sudo -n systemctl failed (NOPASSWD sudo may not be configured)"
+            warn "sudo tradinebotte-ctl failed — check /etc/sudoers.d/tradinebotte"
         fi
     fi
     if [[ "$RESTART_OK" == "false" ]]; then
         warn "Manual restart required on ${ALL_USERS[$FEED_IDX]}:"
-        warn "  sudo systemctl restart tradinebotte-feed"
-        warn "  sudo systemctl status tradinebotte-feed"
+        warn "  sudo tradinebotte-ctl restart tradinebotte-feed"
+        warn "  systemctl status tradinebotte-feed"
         warn "Run these commands now, then re-run this script with --skip-deploy"
     fi
 fi
