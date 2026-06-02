@@ -43,7 +43,11 @@ fi
 TEST_STANDALONE_USER_IDX=0 bash "$(dirname "$0")/update_standalone.sh" "${FORWARD_ARGS[@]}"
 UPDATE_EXIT=$?
 
-if [[ "$UPDATE_EXIT" -ne 0 ]]; then
+# The verify step checks a stale live.pid (this account has no standalone
+# live_bot — it uses account_bot via systemd). Don't abort service restarts on
+# that known false positive; only abort on rsync failure (exit code from step 1).
+if [[ "$UPDATE_EXIT" -ne 0 ]] && \
+   [[ "$RESTART_INDICATORS" == "false" && "$RESTART_FEED" == "false" && "$RESTART_ACCOUNT" == "false" ]]; then
     exit "$UPDATE_EXIT"
 fi
 
