@@ -16,7 +16,7 @@ set -uo pipefail
 
 BOT_NAME="accumulation_bot"
 BOT_SCRIPT="accumulation_bot.py"
-BOT_STRATEGY="strategies/accumulation/btc_accumulation.json"
+BOT_STRATEGY="strategies/accumulation/btc_accumulation_deepdip.json"
 
 SKIP_RESTART=false
 VERIFY_ONLY=false

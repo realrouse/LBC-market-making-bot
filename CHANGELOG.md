@@ -6,6 +6,14 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.54] — 2026-06-02
+
+### Added
+- **`tradinebotte-cex/strategies/accumulation/btc_accumulation_deepdip.json` — deep-dip accumulation strategy v1.0**: differentiated strategy for the second accumulation account; backtested 2024-01-01 → 2026-06-02 against live Binance 1h klines; +41% vs the standard v1.5 +38% (+3pp), peak +96% vs +75% (+21pp at bull-run peak); key differences from v1.5: no initial stake (waits for real dips), stricter OBI threshold 0.70 vs 0.50, larger tranches $250 vs $100, higher profit bands (15/30/50/75/100% vs 5/10/20/30/50%), lower sell fraction 8% vs 15% (holds more BTC), Fear&Greed and L/S-ratio gates disabled (avoids blocking on strong OBI dips in greed regime), macro OBI block tightened to -0.50
+- **`tradinebotte-cex/scripts/deploy_accumulation_claude4.sh`**: updated `BOT_STRATEGY` to point to `btc_accumulation_deepdip.json`
+
+---
+
 ## [0.53] — 2026-06-02
 
 ### Fixed
