@@ -117,12 +117,13 @@
 - **[I-1] ZMQ without CURVE/ZAP authentication** — mitigated by loopback-only binding. Required
   before any external network exposure (see Roadmap v0.3 section below).
 
-- **[I-2] Move tracked `.db` files out of git** — `data/*.db` are simulation-only but binary blobs
-  complicate secret scanning and inflate repo size. Add `data/*.db` to `.gitignore` and distribute
-  sample databases separately.
+- **[I-2] DONE — Move tracked `.db` files out of git** — removed `!data/*.db` exceptions from
+  `.gitignore`; four sample databases untracked with `git rm --cached`; all `.db` files now
+  uniformly ignored. (branch `dev`, v0.55)
 
-- **[I-3] Pin GitHub Actions to SHA** — `anthropics/claude-code-action@v1` is used by tag, not SHA.
-  Pin to a specific commit SHA for supply-chain integrity.
+- **[I-3] DONE — Pin GitHub Actions to SHA** — all five workflow files (`claude.yml`, `tests.yml`,
+  `pylint.yml`, `mypy.yml`, `audit.yml`) now pin `actions/checkout`, `actions/setup-python`, and
+  `anthropics/claude-code-action` to their exact commit SHAs; tag kept as comment. (branch `dev`, v0.55)
 
 ---
 
@@ -134,10 +135,10 @@ These were scoped out of the log-system refactor session (priorities 1+2 + Engli
   (`{"ts":…,"level":…,"session":…,"msg":…}`) instead of plain text. Useful for ingestion into
   Elasticsearch / Loki / Datadog without a log parser.
 
-- **3b — Standardize tag prefixes**: Audit all `[TAG]` prefixes across the four bot modules
-  (`[LATENCY]`, `[REJECTIONS]`, `[PROBE]`, `[ENSURE_FEED]`, `[BOOK]`, `[FEED]`, `[MARKET]`, …)
-  and define a canonical list in `docs/logging.md`. Ensures log parsers can match on a stable
-  prefix vocabulary.
+- **3b — DONE — Standardize tag prefixes**: audited all `[TAG]` prefixes across the four bot
+  modules; standardized four unbracketed structured lines in `live_bot.py` (`[VOL_FILTER]`,
+  `[KELLY]`, `[CIRCUIT_BREAKER]`, `[GHOST_GUARD]`); removed spurious `[VERBOSE]` and `[WS ERROR]`
+  tags from `feed.py`; canonical vocabulary published in `docs/logging.md`. (branch `dev`, v0.52)
 
 - **4a — OBI + ask_vol in trade entry log**: Add `obi=%.3f ask_vol=%.0f` to the `▶ TRADE` line in
   `enter_live_trade()` (`live_bot.py`) so the entry log is self-contained without joining with snapshots.
