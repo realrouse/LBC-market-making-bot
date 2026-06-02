@@ -17,6 +17,14 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.55] — 2026-06-02
+
+### Correctifs
+- **`.gitignore` — suppression des exceptions `data/*.db` (I-2)** : les quatre bases de données de référence étaient explicitement dé-ignorées et committées comme blobs binaires ; suppression des exceptions `!data/*.db` afin que tous les fichiers `.db` soient ignorés ; fichiers retirés de l'index git avec `git rm --cached` (copies locales conservées)
+- **GitHub Actions — épinglage de toutes les actions au SHA de commit (I-3)** : `actions/checkout`, `actions/setup-python` et `anthropics/claude-code-action` étaient référencés par tag (`@v6`, `@v1`, etc.) ; un tag compromis pourrait silencieusement rediriger la CI vers du code malveillant ; les cinq fichiers de workflow sont désormais épinglés au SHA de commit exact avec le tag conservé en commentaire pour la lisibilité
+
+---
+
 ## [0.54] — 2026-06-02
 
 ### Ajout

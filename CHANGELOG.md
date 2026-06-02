@@ -6,6 +6,14 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.55] — 2026-06-02
+
+### Fixed
+- **`.gitignore` — remove `data/*.db` exceptions (I-2)**: the four sample databases (`backtest_sample_btc5m_range_2026.db`, `calmsaturday.db`, `basicsunday.db`, `liveweek.db`) were explicitly un-ignored and committed as binary blobs; removed the `!data/*.db` exceptions so all `.db` files are ignored; files removed from the git index with `git rm --cached` (local copies preserved)
+- **GitHub Actions — pin all actions to commit SHA (I-3)**: `actions/checkout`, `actions/setup-python`, and `anthropics/claude-code-action` were referenced by tag (`@v6`, `@v1`, etc.); a compromised tag could silently redirect CI to malicious code; all five workflow files now pin to the exact commit SHA with the tag kept as a comment for readability
+
+---
+
 ## [0.54] — 2026-06-02
 
 ### Added

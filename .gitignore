@@ -53,10 +53,6 @@ scripts/test_multibot.conf
 # Runtime artifacts
 *.log
 *.db
-!data/backtest_sample_btc5m_range_2026.db
-!data/calmsaturday.db
-!data/basicsunday.db
-!data/liveweek.db
 .coverage
 notes/audit170526.md
 tradinetools.egg-info/
