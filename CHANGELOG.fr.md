@@ -20,8 +20,8 @@ Toutes les modifications notables de ce projet sont documentées ici.
 ## [0.56] — 2026-06-02
 
 ### Modifications
-- **`live_bot.py` — ligne de log `▶ TRADE` enrichie du contexte du signal (item 4a)** : ajout de `obi=%.3f` et `ask_vol=%.0f` pour que la ligne d'entrée soit auto-suffisante ; aucune jointure DB nécessaire pour retrouver les valeurs OBI et ask-volume ayant déclenché le signal
-- **`live_bot.py` — ligne `✓ WIN` / `✗ LOSS` enrichie de la durée de hold (item 4b)** : ajout de `duration=%ds` calculé à partir de `resolution_ts_ms − signal_ts_ms` ; permet aux workflows grep-log de repérer les holds anormalement longs sans interroger la base de données
+- **`live_bot.py` — ligne de log `▶ TRADE` enrichie du contexte du signal** : ajout de `obi=%.3f` et `ask_vol=%.0f` pour que la ligne d'entrée soit auto-suffisante ; aucune jointure DB nécessaire pour retrouver les valeurs OBI et ask-volume ayant déclenché le signal
+- **`live_bot.py` — ligne `✓ WIN` / `✗ LOSS` enrichie de la durée de hold** : ajout de `duration=%ds` calculé à partir de `resolution_ts_ms − signal_ts_ms` ; permet aux workflows grep-log de repérer les holds anormalement longs sans interroger la base de données
 
 ---
 

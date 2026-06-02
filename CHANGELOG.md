@@ -9,8 +9,8 @@ All notable changes to this project are documented here.
 ## [0.56] — 2026-06-02
 
 ### Changed
-- **`live_bot.py` — `▶ TRADE` log line now includes signal context (item 4a)**: added `obi=%.3f` and `ask_vol=%.0f` so the entry log line is self-contained; no DB join needed to retrieve the OBI and ask-volume values that triggered the signal
-- **`live_bot.py` — `✓ WIN` / `✗ LOSS` log line now includes hold duration (item 4b)**: added `duration=%ds` computed from `resolution_ts_ms − signal_ts_ms`; lets log-grep workflows flag unusually long holds without querying the database
+- **`live_bot.py` — `▶ TRADE` log line now includes signal context**: added `obi=%.3f` and `ask_vol=%.0f` so the entry log line is self-contained; no DB join needed to retrieve the OBI and ask-volume values that triggered the signal
+- **`live_bot.py` — `✓ WIN` / `✗ LOSS` log line now includes hold duration**: added `duration=%ds` computed from `resolution_ts_ms − signal_ts_ms`; lets log-grep workflows flag unusually long holds without querying the database
 
 ---
 
