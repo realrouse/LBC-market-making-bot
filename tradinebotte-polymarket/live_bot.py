@@ -1249,9 +1249,9 @@ async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[floa
     state.traded_direction[ts.market_id] = ts.direction
     state.total_trades += 1
     logger.info(
-        "▶ TRADE #%d | %s %s | entry=%.4f  bid=%.4f  secs=%.0fs  stake=$%.2f | order=%s",
-        tid, ts.direction, ts.market_id[:12], ep, ts.best_bid, ts.secs_remaining, stake,
-        oid or "sim"
+        "▶ TRADE #%d | %s %s | entry=%.4f  bid=%.4f  secs=%.0fs  obi=%.3f  ask_vol=%.0f  stake=$%.2f | order=%s",
+        tid, ts.direction, ts.market_id[:12], ep, ts.best_bid, ts.secs_remaining,
+        ts.obi, ts.ask_vol, stake, oid or "sim"
     )
     if t_signal_ms is not None:
         # total_ms = signal latency + order RTT; these two intervals are
@@ -1290,10 +1290,11 @@ def close_trade(state: BotState, ts: TokenState, trade_id: int, outcome: str) ->
     """
     now_ms = int(time.time() * 1000)
     row = state.conn.execute(
-        "SELECT stake, tokens_bought, fee FROM trades WHERE id=?", (trade_id,)
+        "SELECT stake, tokens_bought, fee, signal_ts_ms FROM trades WHERE id=?", (trade_id,)
     ).fetchone()
     if not row: return
-    stake, tb, fee = row
+    stake, tb, fee, signal_ts_ms = row
+    duration_s = int((now_ms - signal_ts_ms) / 1000) if signal_ts_ms else 0
     won = (outcome == "WIN")
     pg = (tb - stake) if won else -stake
     pn = pg - fee - state.config.gas_fee_usd
@@ -1316,9 +1317,9 @@ def close_trade(state: BotState, ts: TokenState, trade_id: int, outcome: str) ->
     _icon    = "✓" if won else "✗"
     _outcome = "WIN " if won else "LOSS"
     logger.info(
-        "%s %s #%d | %s %s | pnl=$%+.2f (%.1f%%) | WR=%.1f%% | capital=$%.2f",
+        "%s %s #%d | %s %s | pnl=$%+.2f (%.1f%%) | WR=%.1f%% | capital=$%.2f | duration=%ds",
         _icon, _outcome, trade_id, ts.direction, ts.market_id[:12],
-        pn, roi, state.win_rate, state.capital
+        pn, roi, state.win_rate, state.capital, duration_s
     )
     write_web_status(state)
 
