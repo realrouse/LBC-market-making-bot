@@ -6,6 +6,17 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.51] — 2026-06-02
+
+### Correctifs
+- **`tradinebotte-polymarket/live_bot.py` — fuite des logs vers syslog** : `logging.basicConfig()` est sans effet quand des bibliothèques tierces (`aiohttp`, `websockets`) configurent le root logger avant l'exécution de `_setup_logging()` ; sans `force=True`, le root logger conserve un `StreamHandler` pointant vers stderr, tous les enregistrements du logger `"live"` y propagent, et systemd les capture dans le journal système/syslog ; ajout de `force=True` à l'appel `basicConfig()` dans `_setup_logging()` afin que les handlers existants du root logger soient toujours remplacés par le pipeline `FileHandler`-only voulu
+- **`tradinebotte-polymarket/feed.py` — logs vers fichier au lieu de stdout** : remplacement de `logging.basicConfig(handlers=[StreamHandler(stdout)])` par `tradinetools.setup_logger("feed", feed.log)` ; les logs vont désormais dans un fichier local rotatif ; la sortie stdout n'est conservée qu'en TTY interactif
+- **`tradinebotte-polymarket/account_bot.py` — logs vers fichier au lieu de stdout** : même migration de `basicConfig(stream=sys.stdout)` vers `tradinetools.setup_logger("account", account.log)`
+- **`tradinebotte-indicators/indicators.py` — logs vers fichier au lieu de stdout** : même migration vers `tradinetools.setup_logger("indicators", indicators.log)`
+- **Fichiers de service systemd — défense en profondeur** : ajout de `StandardOutput=null` et `StandardError=null` dans les six fichiers de service tradinebotte afin que le journal système ne capture plus jamais la sortie des bots, même en cas de régression future du système de logging
+
+---
+
 ## [0.50] — 2026-05-31
 
 ### Ajout

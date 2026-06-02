@@ -31,17 +31,16 @@ import aiohttp, websockets, zmq, zmq.asyncio
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import api_polymarket as api
 from tradinetools.zmq import warn_if_external_bind
+from tradinetools.logging import setup_logger
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────
 _PORT_BASE      = int(os.environ.get("TRADINEBOTTE_PORT_BASE", "5557"))
 FEED_ADDR       = os.environ.get("TRADINEBOTTE_FEED_ADDR", f"tcp://127.0.0.1:{_PORT_BASE}")
 MARKET_REFRESH  = 30   # seconds between Gamma API polls
 PING_INTERVAL   = 10   # seconds between keepalive pings to subscribers
-LOG_FORMAT      = "%(asctime)s [%(levelname)s] %(message)s"
+_INSTALL_DIR    = os.environ.get("TRADINEBOTTE_DIR", os.getcwd())
 
-logging.basicConfig(level=logging.INFO, format=LOG_FORMAT,
-                    handlers=[logging.StreamHandler(sys.stdout)])
-logger = logging.getLogger("feed")
+logger = setup_logger("feed", os.path.join(_INSTALL_DIR, "feed.log"))
 
 # Set by _parse_args() — used throughout for conditional debug logging.
 VERBOSE = False

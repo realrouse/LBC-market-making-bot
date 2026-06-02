@@ -78,6 +78,7 @@ import aiohttp, websockets, zmq, zmq.asyncio
 from tradinetools.zmq import make_pub, make_sub, make_rep
 from tradinetools.math import (atr_last, bollinger_last, vwap_last,
                                 vol_zscore_last, rolling_max_last)
+from tradinetools.logging import setup_logger
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────
 # TRADINEBOTTE_PORT_BASE shifts the entire default port layout uniformly.
@@ -107,7 +108,7 @@ _BINANCE_FUTURES_DEPTH_URL = "https://fapi.binance.com/fapi/v1/depth"
 _DERIBIT_DVOL_URL         = "https://www.deribit.com/api/v2/public/get_volatility_index_data"
 _FEAR_GREED_URL           = "https://api.alternative.me/fng/"
 _WS_RECV_TIMEOUT_S        = 120   # force reconnect if no WS message in this many seconds
-LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
+_INSTALL_DIR = os.environ.get("TRADINEBOTTE_DIR", os.getcwd())
 
 
 def _shift_addr(addr: str) -> str:
@@ -117,9 +118,7 @@ def _shift_addr(addr: str) -> str:
     host, port_str = addr.rsplit(":", 1)
     return f"{host}:{int(port_str) + _PORT_SHIFT}"
 
-logging.basicConfig(level=logging.INFO, format=LOG_FORMAT,
-                    handlers=[logging.StreamHandler(sys.stdout)])
-logger = logging.getLogger("indicators")
+logger = setup_logger("indicators", os.path.join(_INSTALL_DIR, "indicators.log"))
 
 VERBOSE = False
 

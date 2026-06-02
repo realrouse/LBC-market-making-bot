@@ -661,6 +661,7 @@ def _setup_logging(config: "BotConfig") -> Optional[logging.handlers.QueueListen
         format=_LOG_FMT,
         datefmt=_LOG_DATE,
         handlers=_log_handlers,
+        force=True,
     )
     _log_listener = listener
     return listener

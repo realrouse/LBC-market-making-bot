@@ -33,12 +33,6 @@ Message types consumed from feed.py:
 import argparse, asyncio, fcntl, logging, os, subprocess, sys, time
 import zmq, zmq.asyncio
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    stream=sys.stdout,
-)
-
 # Set by _parse_args() before live_bot import — used throughout for debug logs.
 VERBOSE = False
 
@@ -56,8 +50,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # live_bot no longer has module-level side effects — safe to import anywhere.
 import live_bot as bot
+from tradinetools.logging import setup_logger
 
-logger = logging.getLogger("account")
+_INSTALL_DIR = os.environ.get("TRADINEBOTTE_DIR", os.getcwd())
+logger = setup_logger("account", os.path.join(_INSTALL_DIR, "account.log"))
 
 # Reconnect timeout: if no message from the feed within this many seconds,
 # warn and keep waiting (feed may reconnect to the exchange automatically).
