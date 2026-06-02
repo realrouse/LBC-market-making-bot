@@ -1,0 +1,20 @@
+[Unit]
+Description=tradinebotte — Polymarket live bot
+# network.target is reachable from user service context (unlike network-online.target)
+After=network.target
+Wants=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/tradinebotte
+# ExecStart is set per-account by the install script (venv path varies: .venv vs venv)
+ExecStart=%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/live_bot.py
+Restart=on-failure
+RestartSec=30
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=default.target

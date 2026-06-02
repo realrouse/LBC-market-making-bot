@@ -3,15 +3,19 @@
 #
 # Lightweight update (no full reinstall, no venv rebuild):
 #   1. rsync   — push changed source files (excludes config.json, live.db, *.log, venv)
-#   2. restart — stop old bot + start new bot in ONE SSH session
-#   3. verify  — show first startup lines from live.log
+#   2. restart — detect systemd service → systemctl restart; else nohup + PID file
+#   3. verify  — check process is running + show first startup lines from live.log
+#
+# Restart modes (auto-detected, no flag needed):
+#   systemd  — tradinebotte-live-<user>.service exists → systemctl restart (no DB lock)
+#   nohup    — no service unit → nohup + live.pid (legacy standalone)
 #
 # Uses TEST_STANDALONE_USER_IDX from ~/.tradinebotte-test.conf (default: 2).
 #
 # Rules respected:
 #   - Maximum 4 SSH connections total (2× rsync + restart + verify).
-#   - Stop uses the PID file (kill $PID), never pkill — avoids hitting other users.
-#   - Bot started with </dev/null and disown — SSH session exits cleanly.
+#   - systemd path: deps updated then systemctl restart — no competing process.
+#   - nohup path: stop via PID file (kill $PID), never pkill — avoids other users.
 #   - No --simulate: absent API key is enough for simulated orders.
 #
 # Usage:
@@ -43,7 +47,7 @@ while [[ $# -gt 0 ]]; do
         --skip-restart) SKIP_RESTART=true ;;
         --verify-only)  VERIFY_ONLY=true; SKIP_RESTART=true ;;
         -h|--help)
-            grep '^#' "${BASH_SOURCE[0]}" | head -25 | sed 's/^# \?//'
+            grep '^#' "${BASH_SOURCE[0]}" | head -30 | sed 's/^# \?//'
             exit 0 ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
@@ -73,11 +77,9 @@ if [[ "$SA_IDX" -ge "${#ALL_USERS[@]}" ]]; then
 fi
 SA_USER="${ALL_USERS[$SA_IDX]}"
 SA_PASS="${ALL_PASSWORDS[$SA_IDX]}"
+SVC_NAME="tradinebotte-live-${SA_USER}.service"
 
 # ─── SSH helpers ───────────────────────────────────────────────────────────────
-# One helper per operation type — avoids per-call boilerplate and makes
-# the number of connections explicit.
-
 _ssh() {
     SSHPASS="$SA_PASS" /usr/bin/sshpass -e \
         ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
@@ -145,73 +147,118 @@ if [[ "$VERIFY_ONLY" == "false" ]]; then
     fi
 fi
 
-# ─── Step 2: stop + start (single SSH session) ─────────────────────────────────
+# ─── Step 2: restart ───────────────────────────────────────────────────────────
 if [[ "$SKIP_RESTART" == "false" ]]; then
     section "STEP 2 — RESTART"   # connection #3
     info "Stopping old bot and starting updated one..."
 
-    # PID-file approach — stop and start in ONE session, safely:
-    #   - Stop: kill by PID from live.pid → no regex, no self-match risk
-    #   - Start: nohup + write live.pid so future stops are also clean
     RESTART_OUT=$(_ssh "
-        PID_FILE=$INSTALL_DIR/live.pid
-        if [ -f \"\$PID_FILE\" ]; then
-            PID=\$(cat \"\$PID_FILE\")
-            if kill -0 \"\$PID\" 2>/dev/null; then
-                kill \"\$PID\" && echo \"stopped pid=\$PID\" || echo 'kill failed'
-            else
-                echo 'pid file found but process already gone'
-            fi
-            rm -f \"\$PID_FILE\"
-        else
-            echo 'no pid file — nothing to stop'
-        fi
-        sleep 2
-        cd $INSTALL_DIR
+        SVC=${SVC_NAME}
+        INSTALL=${INSTALL_DIR}
+        PASS='${SA_PASS}'
+
+        # Detect the active venv (prefer .venv, fall back to venv)
+        if   [ -d \"\$INSTALL/.venv\" ]; then VENV=.venv
+        elif [ -d \"\$INSTALL/venv\"  ]; then VENV=venv
+        else VENV=venv; fi
+
+        # Update dependencies before restart so the new process uses them
+        cd \"\$INSTALL\"
         echo 'updating dependencies...'
-        venv/bin/pip install --quiet -r $INSTALL_DIR/requirements.txt \
+        \"\$VENV/bin/pip\" install --quiet -r requirements.txt 2>/dev/null \
             && echo 'deps ok' || echo 'pip warning (non-fatal)'
-        venv/bin/pip install --quiet -e $INSTALL_DIR/tradinetools \
-            && echo 'tradinetools ok' || echo 'tradinetools install warning (non-fatal)'
-        nohup venv/bin/python3 live_bot.py </dev/null >>live.log 2>&1 &
-        BOT_PID=\$!
-        disown \$BOT_PID
-        echo \$BOT_PID > \"\$PID_FILE\"
-        echo \"started pid=\$BOT_PID\"
+        \"\$VENV/bin/pip\" install --quiet -e tradinetools 2>/dev/null \
+            && echo 'tradinetools ok' || echo 'tradinetools warning (non-fatal)'
+
+        # Prefer user service (no sudo) over system service
+        if systemctl --user is-active tradinebotte-live.service >/dev/null 2>&1 \
+           || systemctl --user is-enabled tradinebotte-live.service >/dev/null 2>&1; then
+            echo 'detected user service: tradinebotte-live.service'
+            systemctl --user restart tradinebotte-live.service \
+                && echo 'systemd restarted' \
+                || echo 'user service restart failed'
+        elif [ -f \"/etc/systemd/system/\$SVC\" ]; then
+            echo \"detected system service: \$SVC (consider migrating to user service)\"
+            # Kill the process (owned by this user — no sudo needed).
+            # systemd Restart=on-failure will relaunch automatically.
+            PIDS=\$(pgrep -u ${SA_USER} -f 'python3.*live_bot' 2>/dev/null || true)
+            if [ -n \"\$PIDS\" ]; then
+                for PID in \$PIDS; do
+                    kill \"\$PID\" 2>/dev/null && echo \"killed pid=\$PID\"
+                done
+            fi
+            echo 'systemd restarted'
+        else
+            # Legacy nohup path for accounts without a systemd unit
+            PID_FILE=\$INSTALL/live.pid
+            if [ -f \"\$PID_FILE\" ]; then
+                PID=\$(cat \"\$PID_FILE\")
+                if kill -0 \"\$PID\" 2>/dev/null; then
+                    kill \"\$PID\" && echo \"stopped pid=\$PID\" || echo 'kill failed'
+                else
+                    echo 'pid file found but process already gone'
+                fi
+                rm -f \"\$PID_FILE\"
+            else
+                echo 'no pid file — nothing to stop'
+            fi
+            sleep 2
+            nohup \"\$VENV/bin/python3\" live_bot.py </dev/null >>live.log 2>&1 &
+            BOT_PID=\$!
+            disown \$BOT_PID
+            echo \$BOT_PID > \"\$PID_FILE\"
+            echo \"started pid=\$BOT_PID\"
+        fi
     ")
     echo "$RESTART_OUT"
 
-    if echo "$RESTART_OUT" | grep -q "started pid="; then
+    if echo "$RESTART_OUT" | grep -qE 'systemd restarted|started pid=[0-9]+'; then
         ok "Bot restart command sent"
     else
         err "Restart command did not confirm start"
     fi
 
-    info "Waiting 6s for startup..."
-    sleep 6
+    if echo "$RESTART_OUT" | grep -q "systemd restarted"; then
+        info "Waiting 36s for systemd restart (RestartSec=30 + startup)..."
+        sleep 36
+    else
+        info "Waiting 6s for startup..."
+        sleep 6
+    fi
 fi
 
 # ─── Step 3: verify ────────────────────────────────────────────────────────────
 section "STEP 3 — VERIFY"   # connection #4
 VERIFY_OUT=$(_ssh "
+    SVC=${SVC_NAME}
     echo '=== process ==='
-    PID_FILE=$INSTALL_DIR/live.pid
-    if [ -f \"\$PID_FILE\" ]; then
-        PID=\$(cat \"\$PID_FILE\")
-        if kill -0 \"\$PID\" 2>/dev/null; then
-            echo \"PID=\$PID running\"
+    if [ -f \"/etc/systemd/system/\$SVC\" ]; then
+        STATE=\$(systemctl is-active \"\$SVC\" 2>/dev/null)
+        MPID=\$(systemctl show \"\$SVC\" --property=MainPID 2>/dev/null | cut -d= -f2)
+        if [ \"\$STATE\" = 'active' ] && kill -0 \"\$MPID\" 2>/dev/null; then
+            echo \"PID=\$MPID running (systemd)\"
         else
-            echo \"PID=\$PID NOT running (stale pid file)\"
+            echo \"PID=\$MPID NOT running — service state=\$STATE\"
         fi
     else
-        echo 'no pid file'
+        PID_FILE=${INSTALL_DIR}/live.pid
+        if [ -f \"\$PID_FILE\" ]; then
+            PID=\$(cat \"\$PID_FILE\")
+            if kill -0 \"\$PID\" 2>/dev/null; then
+                echo \"PID=\$PID running (nohup)\"
+            else
+                echo \"PID=\$PID NOT running (stale pid file)\"
+            fi
+        else
+            echo 'no pid file'
+        fi
     fi
     echo '=== startup log ==='
-    tail -20 $INSTALL_DIR/live.log
+    tail -20 ${INSTALL_DIR}/live.log
 ")
 echo "$VERIFY_OUT"
 
-if echo "$VERIFY_OUT" | grep -q "PID=.* running"; then
+if echo "$VERIFY_OUT" | grep -qE '^PID=[0-9]+ running'; then
     ok "$SA_USER: bot is running"
 else
     err "$SA_USER: bot is NOT running"

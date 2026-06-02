@@ -6,6 +6,17 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.53] — 2026-06-02
+
+### Fixed
+- **`scripts/update_standalone.sh` — eliminate DB lock on deploy**: replaced the nohup + PID file restart mechanism with `systemctl --user restart tradinebotte-live.service` for accounts that have migrated to user services; no sudo required since `systemctl --user` operates entirely within the account's own systemd instance; falls back to the kill-and-let-systemd-restart path for accounts still on system services
+
+### Added
+- **`scripts/migrate_to_user_services.sh` — migrate live bot services to user units**: phase 1 (SSH as the bot user, zero sudo) writes `~/.config/systemd/user/tradinebotte-live.service`, runs `systemctl --user enable` + `start`; phase 2 prints the two admin commands needed once per account: `loginctl enable-linger <user>` (makes the user's systemd instance persist across reboots — requires root because it writes to `/var/lib/systemd/linger/`) and `systemctl stop/disable tradinebotte-live-<user>.service` to remove the old system unit
+- **`scripts/systemd/tradinebotte-live.service` — user unit template**: identical to the former system unit minus `User=` (implicit for user services) and with `WantedBy=default.target` + `After=network.target` (user-accessible targets)
+
+---
+
 ## [0.52] — 2026-06-02
 
 ### Added
