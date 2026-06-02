@@ -10,26 +10,29 @@
 #   bash scripts/update_claude1.sh --verify-only      # check status only
 #   bash scripts/update_claude1.sh --restart-indicators  # rsync + restart tradinebotte-indicators (live_bot untouched)
 #   bash scripts/update_claude1.sh --restart-feed        # rsync + restart tradinebotte-feed (live_bot untouched)
-#   bash scripts/update_claude1.sh --restart-indicators --restart-feed  # rsync + restart both services
+#   bash scripts/update_claude1.sh --restart-account     # rsync + restart tradinebotte-account-tradinebotte (live_bot untouched)
+#   bash scripts/update_claude1.sh --restart-indicators --restart-feed --restart-account  # restart all three services
 
 set -uo pipefail
 
 RESTART_INDICATORS=false
 RESTART_FEED=false
+RESTART_ACCOUNT=false
 FORWARD_ARGS=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --restart-indicators) RESTART_INDICATORS=true ;;
         --restart-feed)       RESTART_FEED=true ;;
+        --restart-account)    RESTART_ACCOUNT=true ;;
         *) FORWARD_ARGS+=("$1") ;;
     esac
     shift
 done
 
-# --restart-indicators / --restart-feed imply --skip-restart (don't touch live_bot)
+# --restart-* flags imply --skip-restart (don't touch live_bot)
 # unless the caller explicitly passed --skip-restart themselves.
-if [[ "$RESTART_INDICATORS" == "true" || "$RESTART_FEED" == "true" ]]; then
+if [[ "$RESTART_INDICATORS" == "true" || "$RESTART_FEED" == "true" || "$RESTART_ACCOUNT" == "true" ]]; then
     # Only add --skip-restart if it wasn't already in FORWARD_ARGS
     if ! printf '%s\n' "${FORWARD_ARGS[@]}" | grep -q -- '--skip-restart\|--verify-only'; then
         FORWARD_ARGS+=(--skip-restart)
@@ -192,4 +195,60 @@ fi
         || echo -e "${RED}  ✗ tradinetools install failed${NC}"
 
     _restart_service "tradinebotte-feed.service" "FEED" "connected|bind|ERROR"
+fi
+
+# ─── Restart tradinebotte-account-tradinebotte if requested ───────────────────
+if [[ "$RESTART_ACCOUNT" == "true" ]]; then
+    RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; NC='\033[0m'
+    LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+    CONF="${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
+    source "$CONF"
+    _c1_user="${TEST_USERS[0]}"
+    _c1_pass="${TEST_PASSWORDS[0]}"
+    _server="${TEST_SERVER:?}"
+    _port="${TEST_PORT:-22}"
+    _install_dir="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
+    _ssh_opts="-p $_port -o StrictHostKeyChecking=yes"
+
+    echo -e "\n${BOLD}${YELLOW}═══ RSYNC account_bot + tradinetools ═══${NC}"
+
+    # Push account_bot.py to the flat install directory
+    SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
+        rsync -az \
+        -e "ssh $_ssh_opts" \
+        "$LOCAL_REPO/tradinebotte-polymarket/account_bot.py" \
+        "$_c1_user@$_server:$_install_dir/account_bot.py" 2>&1 \
+        && echo -e "${GREEN}  ✓ account_bot.py synced${NC}" \
+        || { echo -e "${RED}  ✗ rsync account_bot.py failed${NC}"; exit 1; }
+
+    # Push tradinetools
+    SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
+        rsync -az \
+        --exclude='__pycache__' --exclude='*.pyc' --exclude='*.egg-info' \
+        -e "ssh $_ssh_opts" \
+        "$LOCAL_REPO/tradinetools/" \
+        "$_c1_user@$_server:$_install_dir/tradinetools/" 2>&1 \
+        && echo -e "${GREEN}  ✓ tradinetools synced${NC}" \
+        || { echo -e "${RED}  ✗ rsync tradinetools failed${NC}"; exit 1; }
+
+    # Install tradinetools in .venv; fall back to direct copy if pip is absent
+    SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
+        ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+        -p "$_port" "$_c1_user@$_server" "
+VENV=$_install_dir/.venv
+PYVER=\$(\$VENV/bin/python3 -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')
+SITE=\$VENV/lib/python\${PYVER}/site-packages
+if \$VENV/bin/python3 -m pip install --quiet -e $_install_dir/tradinetools 2>/dev/null; then
+    echo 'tradinetools ok (pip)'
+else
+    mkdir -p \$SITE
+    cp -r $_install_dir/tradinetools/tradinetools \$SITE/tradinetools
+    echo 'tradinetools ok (copy)'
+fi
+\$VENV/bin/python3 -c 'from tradinetools.logging import setup_logger; print(\"import check ok\")' 2>&1
+" 2>&1 \
+        && echo -e "${GREEN}  ✓ tradinetools installed in .venv${NC}" \
+        || echo -e "${RED}  ✗ tradinetools install failed${NC}"
+
+    _restart_service "tradinebotte-account-tradinebotte.service" "ACCOUNT BOT" "ACCOUNT BOT|Connected to feed|ERROR"
 fi
