@@ -140,12 +140,11 @@ These were scoped out of the log-system refactor session (priorities 1+2 + Engli
   `[KELLY]`, `[CIRCUIT_BREAKER]`, `[GHOST_GUARD]`); removed spurious `[VERBOSE]` and `[WS ERROR]`
   tags from `feed.py`; canonical vocabulary published in `docs/logging.md`. (branch `dev`, v0.52)
 
-- **4a — OBI + ask_vol in trade entry log**: Add `obi=%.3f ask_vol=%.0f` to the `▶ TRADE` line in
-  `enter_live_trade()` (`live_bot.py`) so the entry log is self-contained without joining with snapshots.
+- **4a — DONE — OBI + ask_vol in trade entry log**: added `obi=%.3f ask_vol=%.0f` to the `▶ TRADE`
+  line in `enter_live_trade()`. (branch `dev`, v0.56)
 
-- **4b — Trade duration in resolution log**: Add `duration=%ds` (elapsed seconds from
-  `signal_ts_ms` to `resolution_ts_ms`) to the `✓ WIN` / `✗ LOSS` line in `close_trade()`
-  (`live_bot.py`). Lets log-grep workflows spot unusually long holds without a DB query.
+- **4b — DONE — Trade duration in resolution log**: added `duration=%ds` (from `signal_ts_ms` to
+  `resolution_ts_ms`) to `✓ WIN` / `✗ LOSS` lines in `close_trade()`. (branch `dev`, v0.56)
 
 ## Roadmap v0.3
 
