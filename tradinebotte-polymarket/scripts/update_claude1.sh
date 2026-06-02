@@ -212,14 +212,22 @@ if [[ "$RESTART_ACCOUNT" == "true" ]]; then
 
     echo -e "\n${BOLD}${YELLOW}═══ RSYNC account_bot + tradinetools ═══${NC}"
 
-    # Push account_bot.py to the flat install directory
+    # Push account_bot.py to both the flat install dir and bot/ subdir (service uses bot/)
     SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
         rsync -az \
         -e "ssh $_ssh_opts" \
         "$LOCAL_REPO/tradinebotte-polymarket/account_bot.py" \
         "$_c1_user@$_server:$_install_dir/account_bot.py" 2>&1 \
-        && echo -e "${GREEN}  ✓ account_bot.py synced${NC}" \
+        && echo -e "${GREEN}  ✓ account_bot.py synced (flat)${NC}" \
         || { echo -e "${RED}  ✗ rsync account_bot.py failed${NC}"; exit 1; }
+
+    SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
+        rsync -az \
+        -e "ssh $_ssh_opts" \
+        "$LOCAL_REPO/tradinebotte-polymarket/account_bot.py" \
+        "$_c1_user@$_server:$_install_dir/bot/account_bot.py" 2>&1 \
+        && echo -e "${GREEN}  ✓ account_bot.py synced (bot/)${NC}" \
+        || echo -e "${YELLOW}  ! bot/ subdir not present — skipping${NC}"
 
     # Push tradinetools
     SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
