@@ -6,6 +6,17 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.52] — 2026-06-02
+
+### Ajout
+- **`docs/logging.md` — vocabulaire canonique des tags de log** : documente chaque ligne de log structurée préfixée par `[TAG]` dans les quatre modules (`live_bot.py`, `feed.py`, `account_bot.py`, `indicators.py`) ; inclut les deux lignes visuelles (`▶ TRADE`, `✓ WIN`/`✗ LOSS`) avec leurs patterns grep ; définit la convention dynamique `[<stream_id>]` utilisée par `indicators.py` ; inclut des règles pour l'ajout de nouvelles lignes structurées
+
+### Modifications
+- **`live_bot.py` — standardisation des préfixes structurés sans crochets** : quatre lignes de log ne respectant pas le format `[TAG]` sont désormais cohérentes avec le reste du code : `VOL FILTER` → `[VOL_FILTER]`, `Kelly:` → `[KELLY]`, `CIRCUIT-BREAKER:` → `[CIRCUIT_BREAKER]`, `post_order returned None — aborting entry to prevent ghost trade` → `[GHOST_GUARD] post_order returned None — aborting entry`
+- **`feed.py` — suppression des tags parasites** : `[VERBOSE]` (pas un événement parseable — remplacé par du texte simple) et `[WS ERROR]` (redondant — fusionné dans la famille `[WS]` sous `[WS] traceback:`)
+
+---
+
 ## [0.51] — 2026-06-02
 
 ### Correctifs

@@ -1164,7 +1164,7 @@ async def check_signal(state: BotState, ts: TokenState, _t_ws: Optional[float] =
         mean_o    = sum(obis) / len(obis)
         obi_vol   = math.sqrt(sum((o - mean_o) ** 2 for o in obis) / len(obis))
         if vol_bid > cfg.vol_bid_max or range_bid > cfg.range_bid_max or obi_vol > cfg.obi_vol_max:
-            logger.debug("VOL FILTER bid_vol=%.3f range=%.3f obi_vol=%.3f — skip %s",
+            logger.debug("[VOL_FILTER] bid_vol=%.3f range=%.3f obi_vol=%.3f — skip %s",
                          vol_bid, range_bid, obi_vol, ts.market_id[:12])
             state.rejection_stats.vol_filter += 1
             return
@@ -1198,7 +1198,7 @@ async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[floa
         win_rate=state.win_rate / 100.0, n_trades=n_trades, ask=ep,
     )
     if stake <= 0:
-        logger.info("Kelly: f*≤0 — no edge at ask=%.4f wr=%.1f%% — skipping %s",
+        logger.info("[KELLY] f*≤0 — no edge at ask=%.4f wr=%.1f%% — skipping %s",
                     ep, state.win_rate, ts.market_id[:12])
         return
     tb    = stake / ep if ep > 0 else 0                         # tokens bought
@@ -1225,10 +1225,10 @@ async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[floa
             if state.api_fail_streak >= cfg.api_fail_threshold:
                 state.api_cooldown_until = time.time() + cfg.api_cooldown_secs
                 logger.warning(
-                    "CIRCUIT-BREAKER: %d consecutive CLOB failures — entries suspended 5 min",
+                    "[CIRCUIT_BREAKER] %d consecutive CLOB failures — entries suspended 5 min",
                     state.api_fail_streak,
                 )
-            logger.warning("post_order returned None — aborting entry to prevent ghost trade")
+            logger.warning("[GHOST_GUARD] post_order returned None — aborting entry")
             return
         state.api_fail_streak = 0
     cur = state.conn.execute(

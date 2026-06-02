@@ -267,7 +267,7 @@ async def main() -> None:
     sock.bind(FEED_ADDR)
     logger.info("Feed PUB bound on %s", FEED_ADDR)
     if VERBOSE:
-        logger.debug("[VERBOSE] diagnostic mode active")
+        logger.debug("Verbose mode active — full DEBUG logs enabled")
         logger.debug("[ZMQ] PUB socket bound on %s", FEED_ADDR)
     await asyncio.sleep(0.5)
 
@@ -281,7 +281,7 @@ async def main() -> None:
                 logger.warning("WS error — reconnecting in %ds", backoff, exc_info=True)
                 if VERBOSE:
                     import traceback
-                    logger.debug("[WS ERROR] %s", traceback.format_exc())
+                    logger.debug("[WS] traceback: %s", traceback.format_exc())
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 60)
 
