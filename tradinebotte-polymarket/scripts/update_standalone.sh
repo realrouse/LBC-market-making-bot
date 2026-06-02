@@ -170,6 +170,9 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
         \"\$VENV/bin/pip\" install --quiet -e tradinetools 2>/dev/null \
             && echo 'tradinetools ok' || echo 'tradinetools warning (non-fatal)'
 
+        # XDG_RUNTIME_DIR is required for systemctl --user in non-interactive SSH sessions
+        export XDG_RUNTIME_DIR=/run/user/\$(id -u)
+
         # Prefer user service (no sudo) over system service
         if systemctl --user is-active tradinebotte-live.service >/dev/null 2>&1 \
            || systemctl --user is-enabled tradinebotte-live.service >/dev/null 2>&1; then
@@ -230,9 +233,19 @@ fi
 # ─── Step 3: verify ────────────────────────────────────────────────────────────
 section "STEP 3 — VERIFY"   # connection #4
 VERIFY_OUT=$(_ssh "
+    export XDG_RUNTIME_DIR=/run/user/\$(id -u)
     SVC=${SVC_NAME}
     echo '=== process ==='
-    if [ -f \"/etc/systemd/system/\$SVC\" ]; then
+    if systemctl --user is-active tradinebotte-live.service >/dev/null 2>&1 \
+       || systemctl --user is-enabled tradinebotte-live.service >/dev/null 2>&1; then
+        STATE=\$(systemctl --user is-active tradinebotte-live.service 2>/dev/null)
+        MPID=\$(systemctl --user show tradinebotte-live.service --property=MainPID 2>/dev/null | cut -d= -f2)
+        if [ \"\$STATE\" = 'active' ] && [ -n \"\$MPID\" ] && [ \"\$MPID\" -gt 0 ] && kill -0 \"\$MPID\" 2>/dev/null; then
+            echo \"PID=\$MPID running (user service)\"
+        else
+            echo \"PID=\$MPID NOT running — user service state=\$STATE\"
+        fi
+    elif [ -f \"/etc/systemd/system/\$SVC\" ]; then
         STATE=\$(systemctl is-active \"\$SVC\" 2>/dev/null)
         MPID=\$(systemctl show \"\$SVC\" --property=MainPID 2>/dev/null | cut -d= -f2)
         if [ \"\$STATE\" = 'active' ] && kill -0 \"\$MPID\" 2>/dev/null; then
