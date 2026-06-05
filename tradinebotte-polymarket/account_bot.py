@@ -30,7 +30,7 @@ Message types consumed from feed.py:
    "spread": ..., "bid_vol": ..., "ask_vol": ..., "obi": ...}
   {"t": "ping",  "ts": ...}
 """
-import argparse, asyncio, fcntl, logging, os, subprocess, sys, time
+import argparse, asyncio, fcntl, hashlib, logging, os, subprocess, sys, time
 import zmq, zmq.asyncio
 
 # Set by _parse_args() before live_bot import — used throughout for debug logs.
@@ -64,9 +64,15 @@ FEED_TIMEOUT = 60  # seconds
 # sticky-bit + world-writable (1777) so every user can create lock/log files
 # inside it while the sticky bit prevents cross-user deletion.
 _FEED_TMP_DIR   = "/tmp/tradinebotte-feed"
-# Lock filename includes a hash of the feed address so multiple feed addresses
-# can coexist on the same machine without colliding.
-_FEED_LOCK_PATH = f"{_FEED_TMP_DIR}/feed-{abs(hash(_FEED_ADDR)) % 100000}.lock"
+# Lock/log filenames include a stable hash of the feed address so multiple feed
+# addresses can coexist on the same machine without colliding.
+# Uses MD5 (not Python's hash()) because hash() is randomised per process in
+# Python 3.3+ — two processes would compute different lock paths and the
+# exclusive-lock coordination would silently break.
+def _feed_id(addr: str) -> str:
+    return hashlib.md5(addr.encode()).hexdigest()[:8]
+
+_FEED_LOCK_PATH = f"{_FEED_TMP_DIR}/feed-{_feed_id(_FEED_ADDR)}.lock"
 _FEED_PROBE_MS  = 5_000   # ms to wait when probing for a live feed
 _FEED_READY_S   = 30      # max seconds to wait for feed to become ready
 
@@ -132,7 +138,7 @@ def _ensure_feed() -> None:
     # ── We hold the exclusive lock: start feed.py ──────────────────────────
     try:
         feed_py  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "feed.py")
-        log_path = f"{_FEED_TMP_DIR}/feed-{abs(hash(_FEED_ADDR)) % 100000}.log"
+        log_path = f"{_FEED_TMP_DIR}/feed-{_feed_id(_FEED_ADDR)}.log"
         _env_keep = {"PATH", "HOME", "LANG", "VIRTUAL_ENV", "PYTHONPATH", "LC_ALL", "LC_CTYPE"}
         env = {k: v for k, v in os.environ.items() if k in _env_keep}
         env["TRADINEBOTTE_FEED_ADDR"] = _FEED_ADDR
@@ -318,7 +324,7 @@ async def main() -> None:
     # config.json key "feed_addr" (or TRADINEBOTTE_FEED_ADDR env var) wins over
     # the module-level default that was resolved before config.json was read.
     _FEED_ADDR = config.feed_addr
-    _FEED_LOCK_PATH = f"{_FEED_TMP_DIR}/feed-{abs(hash(_FEED_ADDR)) % 100000}.lock"
+    _FEED_LOCK_PATH = f"{_FEED_TMP_DIR}/feed-{_feed_id(_FEED_ADDR)}.lock"
 
     logger.info("=" * 65)
     logger.info("  ACCOUNT BOT — dir=%s", config.install_dir)

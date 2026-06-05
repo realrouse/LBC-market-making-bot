@@ -6,6 +6,14 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.57] — 2026-06-05
+
+### Fixed
+- **`api_polymarket.py` — cache `ClobClient` across trades**: the authenticated CLOB client was being reconstructed on every order, triggering an EIP-712 key derivation on each trade; the client is now initialised once per process and cached by `(private_key, install_dir)`, eliminating the per-trade derivation overhead from the order hot path
+- **`account_bot.py` — stable feed lock path across processes**: `abs(hash(addr))` was used to build the exclusive lock file name for feed startup coordination; Python's `hash()` is randomised per process since Python 3.3+, so two account_bots computing the lock path for the same feed address would produce different filenames, silently breaking the coordination and potentially spawning two `feed.py` instances racing to bind the same port; replaced with `hashlib.md5(addr.encode()).hexdigest()[:8]`, which is deterministic across all processes
+
+---
+
 ## [0.56] — 2026-06-02
 
 ### Changed
