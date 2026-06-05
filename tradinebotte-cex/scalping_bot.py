@@ -240,10 +240,6 @@ CREATE TABLE IF NOT EXISTS trades (
     reason      TEXT    NOT NULL,
     capital     REAL    NOT NULL
 );
-CREATE TABLE IF NOT EXISTS candles (
-    ts_ms   INTEGER PRIMARY KEY,
-    open    REAL, high REAL, low REAL, close REAL, volume REAL
-);
 """
 
 
@@ -295,10 +291,13 @@ class ScalpingBot:
         signal.signal(signal.SIGTERM, self._handle_signal)
         signal.signal(signal.SIGINT,  self._handle_signal)
 
-        async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
-            await self._load_history(session)
+        try:
+            async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
+                await self._load_history(session)
 
-        await self._ws_loop()
+            await self._ws_loop()
+        finally:
+            self._db.close()
 
     def _handle_signal(self, signum, frame):
         self._log.info("Signal %d received — shutting down", signum)
@@ -394,11 +393,16 @@ class ScalpingBot:
                 "breakout":        self.p["bo_max_hold_minutes"],
             }.get(self.p["strategy_type"], 60)
 
-            if lo <= sl:
-                self._close_position(sl, "stop_loss", candle["ts_ms"])
+            if hi >= tp and lo <= sl:
+                # Both TP and SL touched in the same candle: TP is more likely
+                # to have been hit first on a long when the candle has upside.
+                self._close_position(tp, "take_profit", candle["ts_ms"])
                 return
             if hi >= tp:
                 self._close_position(tp, "take_profit", candle["ts_ms"])
+                return
+            if lo <= sl:
+                self._close_position(sl, "stop_loss", candle["ts_ms"])
                 return
             if hold >= max_hold:
                 self._close_position(cl, "timeout", candle["ts_ms"])
@@ -463,7 +467,7 @@ class ScalpingBot:
             atr = _atr_last(highs, lows, closes, self.p["bo_atr_period"])
             if rh is None or atr is None:
                 return
-            atr_pct = atr / closes[-2] if len(closes) >= 2 and closes[-2] > 0 else 0
+            atr_pct = atr / closes[-1] if closes and closes[-1] > 0 else 0
             if cl > rh and atr_pct >= self.p["bo_min_atr_pct"]:
                 tp = cl + self.p["bo_tp_atr_mult"] * atr
                 sl = cl - self.p["bo_sl_atr_mult"] * atr
@@ -500,7 +504,7 @@ class ScalpingBot:
         pos      = self._position
         gross    = pos["qty"] * exit_px * (1 - self.p["slippage_pct"])
         fee_out  = gross * self.p["fee_rate"]
-        pnl      = gross - fee_out - pos["cost"] - pos["cost"] * self.p["fee_rate"]
+        pnl      = gross - fee_out - pos["cost"]
         hold_min = (ts_ms - pos["ts_open_ms"]) / 60_000
         self._capital += pnl
         self._trades  += 1

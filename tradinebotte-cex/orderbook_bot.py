@@ -451,6 +451,14 @@ async def _handle_indicator(state: StreamState, db: sqlite3.Connection,
     tfi_gate_mode = p.get("tfi_gate_mode", "flat")
     direction     = p.get("direction", "long")
 
+    def _block_long(msg: str) -> bool:
+        """Clear long pending state. Return True to skip to short-only, False to abort."""
+        if state.pending_dir == "long":
+            state.pending_dir   = None
+            state.pending_count = 0
+        logger.debug(msg)
+        return direction == "both"
+
     # VWAP gate: suspend longs above VWAP; relax OBI thresh when deep below VWAP
     vwap_gate = p.get("vwap_gate", False)
     if vwap_gate:
@@ -459,11 +467,11 @@ async def _handle_indicator(state: StreamState, db: sqlite3.Connection,
         if dip < 0.0:
             # price above VWAP → entering into resistance, skip longs
             if direction in ("long", "both"):
-                logger.debug("[%s] VWAP gate: long blocked (dip_score=%.4f above VWAP)",
-                             state.mode, dip)
-                state.pending_dir   = None
-                state.pending_count = 0
-                return
+                if not _block_long(
+                    f"[{state.mode}] VWAP gate: long blocked (dip_score={dip:.4f} above VWAP)"
+                ):
+                    return
+                direction = "short"
         elif dip >= relax_min:
             # price ≥1% below VWAP → strong dip context, relax OBI threshold
             entry_thresh = p.get("vwap_obi_relax", entry_thresh)
@@ -472,11 +480,11 @@ async def _handle_indicator(state: StreamState, db: sqlite3.Connection,
     if p.get("vol_profile_gate", False):
         zone = state.vol_price_zone
         if zone == "sell_hvn" and direction in ("long", "both"):
-            logger.debug("[%s] VolProfile gate: long blocked (sell_hvn score=%.3f)",
-                         state.mode, state.vol_zone_score)
-            state.pending_dir   = None
-            state.pending_count = 0
-            return
+            if not _block_long(
+                f"[{state.mode}] VolProfile gate: long blocked (sell_hvn score={state.vol_zone_score:.3f})"
+            ):
+                return
+            direction = "short"
         if zone == "buy_hvn":
             confirm_n = p.get("vol_buy_confirm_n", confirm_n)
 
@@ -484,33 +492,33 @@ async def _handle_indicator(state: StreamState, db: sqlite3.Connection,
     # (ask-heavy micro OBI in a bullish macro is noise, not exhaustion)
     if p.get("macro_obi_gate", False):
         if state.macro_obi_dir == "bullish" and direction in ("long", "both"):
-            logger.debug("[%s] MacroOBI gate: long blocked (macro=%s obi=%.4f)",
-                         state.mode, state.macro_obi_dir, state.macro_obi)
-            state.pending_dir   = None
-            state.pending_count = 0
-            return
+            if not _block_long(
+                f"[{state.mode}] MacroOBI gate: long blocked (macro={state.macro_obi_dir} obi={state.macro_obi:.4f})"
+            ):
+                return
+            direction = "short"
 
     # Funding rate gate: block longs when perp funding is highly positive
     # (crowded longs paying carry weaken the contrarian ask-heavy OBI signal)
     if p.get("funding_gate", False):
         thresh = p.get("funding_gate_thresh", 0.0005)
         if state.funding_rate > thresh and direction in ("long", "both"):
-            logger.debug("[%s] Funding gate: long blocked (rate=%.6f > thresh=%.6f)",
-                         state.mode, state.funding_rate, thresh)
-            state.pending_dir   = None
-            state.pending_count = 0
-            return
+            if not _block_long(
+                f"[{state.mode}] Funding gate: long blocked (rate={state.funding_rate:.6f} > thresh={thresh:.6f})"
+            ):
+                return
+            direction = "short"
 
     # Liquidations gate: block longs during long liquidation cascades
     # (mass long liquidations signal continued downside — avoid adverse selection)
     if p.get("liq_gate", False):
         liq_thresh = p.get("liq_long_block_usd", 5_000_000)
         if state.liq_long_usd > liq_thresh and direction in ("long", "both"):
-            logger.debug("[%s] Liq gate: long blocked (liq_long=$%.0f > $%.0f)",
-                         state.mode, state.liq_long_usd, liq_thresh)
-            state.pending_dir   = None
-            state.pending_count = 0
-            return
+            if not _block_long(
+                f"[{state.mode}] Liq gate: long blocked (liq_long=${state.liq_long_usd:.0f} > ${liq_thresh:.0f})"
+            ):
+                return
+            direction = "short"
 
     if tfi_thresh <= 0.0:
         tfi_ok_long  = True
@@ -701,10 +709,19 @@ async def _run(p: dict, db: sqlite3.Connection) -> None:
         ts_ms = int(time.time() * 1000)
         for st in states:
             if st.position is not None:
+                pos = st.position
+                # Estimate PnL at mid-price; mark-to-market at shutdown.
+                mid = (pos.entry_price + pos.entry_price) / 2   # last known
+                if pos.direction == "long":
+                    pnl_net = (mid - pos.entry_price) * (pos.stake / pos.entry_price) - pos.fee_entry
+                else:
+                    pnl_net = (pos.entry_price - mid) * (pos.stake / pos.entry_price) - pos.fee_entry
+                capital_after = pos.capital_before + pnl_net
                 db.execute("""
-                    UPDATE ob_trades SET exit_ts_ms=?, exit_reason='shutdown'
+                    UPDATE ob_trades
+                    SET exit_ts_ms=?, exit_reason='shutdown', pnl_net=?, capital_after=?
                     WHERE id=? AND exit_ts_ms IS NULL""",
-                    (ts_ms, st.position.db_id))
+                    (ts_ms, pnl_net, capital_after, pos.db_id))
         db.commit()
         logger.info("Shutdown complete")
 

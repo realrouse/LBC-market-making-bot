@@ -297,6 +297,10 @@ class OHLCVSeries:
                 else:
                     result[key] = lower
             elif spec.type == "vwap":
+                # Uses close-price VWAP (close × volume weighted average).
+                # Note: _binance_vwap_context_task uses typical-price VWAP
+                # ((H+L+C)/3 × volume). Values differ slightly; consumers
+                # should pick one source and stick to it.
                 result[key] = vwap_last(closes, volumes, spec.period)
             elif spec.type == "vol_zscore":
                 result[key] = vol_zscore_last(volumes, spec.period)
@@ -1213,6 +1217,20 @@ async def _binance_full_depth_task(spec: StreamSpec, pub: zmq.asyncio.Socket) ->
     history_retention_h = float(p.get("history_retention_h", 24.0))
     retention_s         = int(history_retention_h * 3600)
 
+    # Restrict db_path to the install directory to prevent a subscriber from
+    # creating or chmoding arbitrary files via the REQ/REP registration socket.
+    if db_path:
+        import pathlib
+        _install = os.environ.get("TRADINEBOTTE_DIR", os.path.expanduser("~/tradinebotte"))
+        _resolved = str(pathlib.Path(db_path).resolve())
+        _base     = str(pathlib.Path(_install).resolve())
+        if not _resolved.startswith(_base + os.sep) and _resolved != _base:
+            logger.error(
+                "[%s] db_path %r is outside TRADINEBOTTE_DIR %r — rejected",
+                spec.id, db_path, _install,
+            )
+            db_path = ""
+
     db_conn: sqlite3.Connection | None = None
     if db_path:
         try:
@@ -1411,11 +1429,21 @@ async def _binance_full_depth_task(spec: StreamSpec, pub: zmq.asyncio.Socket) ->
                     if db_conn is not None:
                         db_count += 1
                         if db_count % db_write_every_n == 0:
-                            loop = asyncio.get_event_loop()
-                            loop.run_in_executor(
+                            loop = asyncio.get_running_loop()
+                            # Copy lists to avoid data race if next iteration
+                            # replaces sorted_bids/sorted_asks before the
+                            # executor thread finishes reading them.
+                            _bids_snap = list(sorted_bids)
+                            _asks_snap = list(sorted_asks)
+                            fut = loop.run_in_executor(
                                 None, _write_depth_to_db,
-                                db_conn, spec.id, sorted_bids, sorted_asks,
+                                db_conn, spec.id, _bids_snap, _asks_snap,
                                 bucket_size_usd, int(time.time() * 1000), retention_s,
+                            )
+                            fut.add_done_callback(
+                                lambda f: logger.warning(
+                                    "[%s] depth DB write error: %s", spec.id, f.exception()
+                                ) if f.exception() else None
                             )
 
         except Exception as exc:            # pylint: disable=broad-except
@@ -1692,8 +1720,17 @@ async def _start_stream(
     feed-source streams are not dispatchable here (they share one SUB task).
     """
     if spec.id in active:
-        logger.info("[reg] stream %r already active — skipping", spec.id)
-        return
+        _spec, _task = active[spec.id]
+        if _task.done():
+            exc = _task.exception() if not _task.cancelled() else None
+            logger.warning(
+                "[reg] stream %r task has exited (exc=%s) — restarting",
+                spec.id, exc,
+            )
+            del active[spec.id]
+        else:
+            logger.info("[reg] stream %r already active — skipping", spec.id)
+            return
     if spec.source == "binance_ws":
         coro = _binance_kline_task(spec, pub, min_ticks)
     elif spec.source == "binance_funding":
@@ -1811,7 +1848,11 @@ async def run(feed_addr: str, ind_addr: str, reg_addr: str,
 
     if config_path:
         cfg = load_config(config_path)
-        # env var overrides take precedence over config file addresses
+        # CLI flags (resolved from env vars at startup) override config file
+        # addresses only when they differ from the module-level defaults —
+        # i.e. when the caller passed an explicit --feed/--out/--reg flag.
+        # When no flag was given, the argparse default equals the env-var
+        # resolved module constant, so cfg.* wins (config file takes effect).
         actual_feed = feed_addr if feed_addr != _FEED_ADDR else cfg.feed_addr
         actual_out  = ind_addr  if ind_addr  != _IND_ADDR  else cfg.out_addr
         actual_reg  = reg_addr  if reg_addr  != _REG_ADDR  else cfg.reg_addr

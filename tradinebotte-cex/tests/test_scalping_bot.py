@@ -515,11 +515,12 @@ class TestExitLogic(unittest.TestCase):
                                                 offset_min=15))
         self.assertIsNone(self.bot._position)
 
-    def test_sl_takes_priority_over_tp(self):
-        # Candle spans both SL (lo < 49850) and TP (hi > 50300)
-        # SL is checked first → loss, not win
+    def test_tp_takes_priority_over_sl_when_both_touched(self):
+        # Candle spans both SL (lo < 49850) and TP (hi > 50300).
+        # When both are touched in the same candle, TP is assumed hit first
+        # (for a long: upside movement more likely before the reversal).
         self.bot._on_closed_candle(self._candle(51_000.0, 49_700.0, 50_000.0))
-        self.assertEqual(self.bot._wins, 0)   # SL hit first, not TP
+        self.assertEqual(self.bot._wins, 1)   # TP hit, not SL
 
 
 # ---------------------------------------------------------------------------

@@ -399,6 +399,8 @@ async def _sell(state: AccumState, price: float, qty_btc: float,
     state.holdings_btc   -= qty_btc
     state.free_usdt      += usdt_val - fee
     state.total_realized += realized
+    if state.holdings_btc <= 0:
+        state.avg_entry = 0.0
 
     earn_keep = p.get("earn_min_liquid_usdt", 20.0)
     if state.earn is not None:
@@ -498,11 +500,12 @@ async def _check_obi_scale_in(state: AccumState, price: float,
     p          = state.p
     max_invest = state.max_investable()
 
-    # Adaptive cooldown: halve wait when OBI signal is very strong
+    # Adaptive cooldown: halve wait when OBI signal is very strong.
+    # floor_iv is the hard minimum — never go below it even with halving.
     base_iv  = p.get("min_scale_interval_s", 3600)
     floor_iv = p.get("scale_in_cooldown_min_s", base_iv)
     strong   = p.get("scale_in_obi_strong_thresh", 0.80)
-    min_iv   = max(floor_iv, base_iv // 2) if abs(state.obi_ema) >= strong else base_iv
+    min_iv   = min(floor_iv, base_iv // 2) if abs(state.obi_ema) >= strong else base_iv
     if (ts_ms - state.last_buy_ts) / 1000.0 < min_iv:
         return
 

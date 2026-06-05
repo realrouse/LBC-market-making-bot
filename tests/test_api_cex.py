@@ -684,27 +684,27 @@ class TestBitstampPostOrderSimulated(unittest.IsolatedAsyncioTestCase):
         for k in ("BITSTAMP_API_KEY", "BITSTAMP_API_SECRET", "BITSTAMP_CUSTOMER_ID"):
             os.environ.pop(k, None)
 
-    async def test_returns_dict_without_credentials(self):
+    async def test_returns_str_without_credentials(self):
         self._clear_creds()
-        result = await bitstamp.post_order(None, "BTCUSD", "buy", 0.001, price=65000.0)
+        result = await bitstamp.post_order(None, "BTCUSD", 65000.0, 65.0, side="BUY")
         self.assertIsNotNone(result)
-        self.assertIsInstance(result, dict)
+        self.assertIsInstance(result, str)
 
-    async def test_status_is_simulated(self):
+    async def test_sim_id_starts_with_sim(self):
         self._clear_creds()
-        result = await bitstamp.post_order(None, "BTCUSD", "buy", 0.001, price=65000.0)
-        self.assertEqual(result.get("status"), "simulated")
+        result = await bitstamp.post_order(None, "BTCUSD", 65000.0, 65.0, side="BUY")
+        self.assertTrue(result.startswith("sim_"))
 
     async def test_sim_id_unique(self):
         self._clear_creds()
-        r1 = await bitstamp.post_order(None, "BTCUSD", "buy", 0.001, price=65000.0)
-        r2 = await bitstamp.post_order(None, "BTCUSD", "buy", 0.001, price=65000.0)
-        self.assertNotEqual(r1.get("id"), r2.get("id"))
+        r1 = await bitstamp.post_order(None, "BTCUSD", 65000.0, 65.0, side="BUY")
+        r2 = await bitstamp.post_order(None, "BTCUSD", 65000.0, 65.0, side="BUY")
+        self.assertNotEqual(r1, r2)
 
     async def test_sell_suffix_accepted(self):
         self._clear_creds()
-        result = await bitstamp.post_order(None, "BTCUSD:SELL", "sell", 0.001, price=65000.0)
-        self.assertEqual(result.get("status"), "simulated")
+        result = await bitstamp.post_order(None, "BTCUSD:SELL", 65000.0, 65.0, side="SELL")
+        self.assertTrue(result.startswith("sim_"))
 
 
 if __name__ == "__main__":

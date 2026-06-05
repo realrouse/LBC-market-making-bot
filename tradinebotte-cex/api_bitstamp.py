@@ -57,11 +57,17 @@ _has_creds = bool(
 
 
 def _auth_headers(method: str, path: str, body: str = "") -> dict:
-    """Build Bitstamp v2 HMAC-SHA256 authentication headers."""
-    api_key    = os.environ.get("BITSTAMP_API_KEY", "")
-    api_secret = os.environ.get("BITSTAMP_API_SECRET", "").encode()
-    timestamp  = str(int(time.time() * 1000))
-    nonce      = uuid.uuid4().hex
+    """Build Bitstamp v2 HMAC-SHA256 authentication headers.
+
+    Message format per Bitstamp v2 spec:
+      "BITSTAMP " + api_key + method + host + path + query + content_type
+      + nonce + timestamp + "v2" + body
+    Note: nonce comes BEFORE timestamp; "v2" version string is required.
+    """
+    api_key      = os.environ.get("BITSTAMP_API_KEY", "")
+    api_secret   = os.environ.get("BITSTAMP_API_SECRET", "").encode()
+    timestamp    = str(int(time.time() * 1000))
+    nonce        = uuid.uuid4().hex
     content_type = "application/x-www-form-urlencoded" if body else ""
     message = (
         f"BITSTAMP {api_key}"
@@ -70,8 +76,9 @@ def _auth_headers(method: str, path: str, body: str = "") -> dict:
         f"{path}"
         f""
         f"{content_type}"
-        f"{timestamp}"
         f"{nonce}"
+        f"{timestamp}"
+        f"v2"
         f"{body}"
     ).encode()
     signature = hmac.new(api_secret, message, hashlib.sha256).hexdigest().upper()
@@ -253,37 +260,31 @@ async def get_order_book(session, symbol=DEFAULT_SYMBOL, depth=5):
 
 
 # ─── ORDER MANAGEMENT ────────────────────────────────────────────────────────
-async def post_order(session, symbol, side, quantity, price=None,
-                     order_type="limit", api_key=None, api_secret=None, **_):
+async def post_order(session, symbol, price, size_usdc, *, side="BUY", **_):
     """
-    Place a limit or market order on Bitstamp.
+    Place a limit order on Bitstamp.
 
-    side        : 'buy' | 'sell'
-    quantity    : base asset amount (BTC for btcusd)
-    price       : required for limit orders; None → market order
-    order_type  : 'limit' | 'market'
+    Implements the unified connector interface used by all strategy engines:
+      post_order(session, symbol, price, size_usdc, *, side="BUY"|"SELL")
 
-    Returns the Bitstamp order dict on success, or None on failure.
+    price     : limit price in quote currency
+    size_usdc : order size in USDT/USD → converted to base quantity (BTC)
+
+    Returns the order ID string on success, "sim_..." in no-credential mode,
+    or None on failure.
     """
+    bs_side = side.lower()   # "BUY" → "buy", "SELL" → "sell"
+    quantity = size_usdc / price if price > 0 else 0.0
+
     if not _has_creds:
-        logger.info("Bitstamp sim-mode: %s %s %s @ %s (no credentials)",
-                    order_type, side, quantity, price)
-        return {
-            "id":     f"sim_{uuid.uuid4().hex[:8]}",
-            "status": "simulated",
-            "side":   side,
-            "amount": str(quantity),
-            "price":  str(price or 0),
-        }
+        oid = f"sim_{uuid.uuid4().hex[:8]}"
+        logger.info("Bitstamp sim: %s %s qty=%.6f @ %.2f  [%s]",
+                    bs_side, symbol, quantity, price, oid)
+        return oid
 
-    clean = symbol.lower().split(":")[0]
-    if order_type == "market":
-        endpoint = f"/api/v2/{side}/market/{clean}/"
-        body_dict = {"amount": str(quantity)}
-    else:
-        endpoint = f"/api/v2/{side}/{clean}/"
-        body_dict = {"amount": str(quantity), "price": str(price)}
-
+    clean    = symbol.lower().split(":")[0]
+    endpoint = f"/api/v2/{bs_side}/{clean}/"
+    body_dict = {"amount": f"{quantity:.6f}", "price": f"{price:.2f}"}
     body = urlencode(body_dict)
     headers = _auth_headers("POST", endpoint, body)
 
@@ -296,10 +297,11 @@ async def post_order(session, symbol, side, quantity, price=None,
         ) as resp:
             data = await resp.json(content_type=None)
             if resp.status != 200 or data.get("status") == "error":
-                logger.error("Bitstamp order error %s: %s", resp.status, data)
+                logger.error("Bitstamp order error %s: %.300s", resp.status, data)
                 return None
-            logger.info("Bitstamp order placed: %s", data.get("id"))
-            return data
+            oid = str(data.get("id", ""))
+            logger.info("Bitstamp order placed: %s", oid)
+            return oid or None
     except Exception as exc:
         logger.error("Bitstamp post_order exception: %s", exc)
         return None
@@ -350,7 +352,11 @@ async def cancel_order(session, symbol, order_id):
 
 
 async def get_open_orders(session, symbol=DEFAULT_SYMBOL):
-    """Return list of open orders for the given symbol."""
+    """Return normalized open orders for the given symbol.
+
+    Normalized format (matches api_binance/api_mexc contract):
+      {"order_id": str, "side": str, "price": float, "qty": float, "status": str}
+    """
     if not _has_creds:
         return []
     clean = symbol.lower().split(":")[0]
@@ -362,10 +368,41 @@ async def get_open_orders(session, symbol=DEFAULT_SYMBOL):
             headers=headers,
             timeout=aiohttp.ClientTimeout(total=10),
         ) as resp:
-            return await resp.json(content_type=None)
+            raw = await resp.json(content_type=None)
+        # Bitstamp type: "0"=buy, "1"=sell (may also be int 0/1)
+        return [
+            {
+                "order_id": str(o.get("id", "")),
+                "side":     "BUY" if str(o.get("type", "1")) == "0" else "SELL",
+                "price":    float(o.get("price", 0)),
+                "qty":      float(o.get("amount", 0)),
+                "status":   "open",
+            }
+            for o in (raw if isinstance(raw, list) else [])
+        ]
     except Exception as exc:
         logger.warning("Bitstamp get_open_orders: %s", exc)
         return []
+
+
+# ─── USER STREAM STUBS ───────────────────────────────────────────────────────
+# Bitstamp does not support a Binance-style user data stream (listen key).
+# Grid strategy falls back to REST polling for fills when these return None.
+
+async def get_listen_key(session, symbol=None) -> str | None:
+    return None
+
+
+async def keepalive_listen_key(session, listen_key: str) -> None:
+    return
+
+
+def make_user_stream_url(listen_key: str) -> str:
+    return ""
+
+
+def parse_user_stream_msg(msg: dict) -> dict | None:
+    return None
 
 
 # ─── OHLCV HISTORY (for backtesting / cycle analysis) ─────────────────────────

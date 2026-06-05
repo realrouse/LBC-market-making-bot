@@ -239,7 +239,7 @@ async def post_order(session, symbol, price, size_usdc, *,
     _side = "SELL" if str(symbol).endswith(":SELL") else side.upper()
 
     if not _key or not _secret:
-        logger.warning("MEXC — ordre simule (MEXC_API_KEY/SECRET absents)")
+        logger.warning("MEXC — order simulated (MEXC_API_KEY/SECRET not set)")
         return f"sim_{uuid.uuid4().hex[:12]}"
 
     try:

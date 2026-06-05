@@ -6,6 +6,37 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.58] — 2026-06-05
+
+### Fixed
+- **`scalping_bot.py` — double fee deduction**: entry fee was deducted twice (once at open via `self._capital -= fee_in`, once embedded in the PnL formula at close as `pos["cost"] * fee_rate`); all historical PnL figures were understated by approximately one entry-fee per trade; removed the redundant term from `_close_position`
+- **`scalping_bot.py` — TP evaluated before SL when both touched in same candle**: for long positions, TP is now checked before SL when a candle spans both levels; also removed the dead `candles` table DDL that was created but never written to
+- **`scalping_bot.py` — ATR denominator used stale close price**: breakout strategy divided ATR by `closes[-2]` (one candle behind) instead of `closes[-1]`; changed to current close
+- **`dca.py` — `"orderId"` key mismatch**: `_check_rest_fills` used `o["orderId"]` to build the open-orders set, but `api_binance.get_open_orders` normalizes to `o["order_id"]`; the set was always empty, causing every BUY order to appear filled and duplicate TP SELLs to be placed on every poll cycle
+- **`dca.py` — unconditional `_on_tp_hit` for `"long"` status**: REST path called `_on_tp_hit` on every poll for positions with `status="long"` even if a TP sell was already outstanding; added `pos.sell_order_id is None` guard
+- **`orderbook_bot.py` — long-only gates blocked shorts in `direction="both"` mode**: all five entry gates (VWAP, vol_profile, macro_obi, funding, liq) called `return` unconditionally when a long condition fired, blocking short entries too; each gate now switches `direction` to `"short"` rather than aborting when `direction="both"`
+- **`orderbook_bot.py` — shutdown path left `pnl_net`/`capital_after` NULL**: graceful-shutdown handler now writes mark-to-market PnL estimate for open positions
+- **`swinghold.py` — `qty_held` persisted before actual fill**: BUY positions were created with a pre-calculated `qty_held` before the order filled; both `_initialise` and `_rearm` now create positions with `qty_held=0.0` and let `_on_buy_filled` set the correct value from the real fill price
+- **`swinghold.py` — intermediate partial sell state not persisted**: `_on_partial_sell_filled` now calls `_save_state` before placing the next partial sell for positions that are still open; a crash between partial sells previously lost the updated `qty_held`, `res_idx`, and `sell_order_id`
+- **`swinghold.py` — `_close_sl` silently swallowed cancel errors**: phantom sell orders could remain open on the exchange; the exception is now logged with a clear warning
+- **`accumulation_bot.py` — adaptive cooldown floor ignored**: `max(floor_iv, base_iv // 2)` always produced `base_iv // 2` when floor was set below that value; changed to `min(floor_iv, base_iv // 2)` so `scale_in_cooldown_min_s` is respected as the true minimum
+- **`accumulation_bot.py` — `avg_entry` not reset after full sell**: cost basis was stale on the next buy cycle after all BTC was sold; `avg_entry` is now cleared to `0.0` when `holdings_btc` reaches zero
+- **`grid.py` — user stream task re-spawned every tick while no orders active**: `is_sim` evaluated to `False` for an empty `active` list, causing a new `_user_stream_loop` task (and a new `listenKey`) on every book update; guard now requires at least one active order
+- **`grid.py` — user stream task cancellation not awaited on halt**: `_cancel_all_orders` now awaits the cancelled task before setting `grid.halted = True`, preventing in-flight fill handlers from placing orders after the halt
+- **`api_bitstamp.py` — `post_order` signature incompatible with connector interface**: Bitstamp's `(session, symbol, side, quantity, price)` did not match the Binance/MEXC `(session, symbol, price, size_usdc, *, side)` contract; all strategy engines would have passed arguments in the wrong positions; fixed to match the unified interface
+- **`api_bitstamp.py` — sim mode returned `dict` instead of `str`**: `sim_` prefix detection in all strategy engines uses `str.startswith("sim_")` which would fail on a dict; sim mode now returns `f"sim_..."` matching all other connectors
+- **`api_bitstamp.py` — `get_open_orders` returned raw Bitstamp format**: strategies expected `{"order_id", "side", "price", "qty", "status"}` but received Bitstamp's `{"id", "type", "amount", "price"}` — `KeyError` in every strategy; normalized in-place
+- **`api_bitstamp.py` — HMAC signature had wrong nonce/timestamp order and missing `"v2"` version field**: Bitstamp v2 spec requires nonce before timestamp and a literal `"v2"` string in the signed message; both were missing; all authenticated requests would have returned HTTP 403
+- **`api_mexc.py` — French log message**: translated to English per project language policy
+
+### Added
+- **`api_bitstamp.py` — user-stream stubs**: added `get_listen_key`, `keepalive_listen_key`, `make_user_stream_url`, `parse_user_stream_msg` returning `None`/`""` so grid strategy falls back to REST polling; adapter is now loadable via `connector="bitstamp"`
+- **`connectors/__init__.py` — `bitstamp` registered**: `api_bitstamp` added to `_REGISTRY`; `swinghold` and `dca` added to `_STRATEGY_REQUIREMENTS` for connector validation
+- **`indicators.py` — dead dynamic streams can now be restarted**: `_start_stream` detects finished/crashed tasks in `active` before the `"already active"` guard and removes them, allowing re-subscribe requests to restart the stream
+- **`indicators.py` — `db_path` in full-depth registration restricted to `TRADINEBOTTE_DIR`**: prevents a subscriber from using the REP socket to create or chmod arbitrary files on the host
+
+---
+
 ## [0.57] — 2026-06-05
 
 ### Fixed

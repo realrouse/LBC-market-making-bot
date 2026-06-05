@@ -327,15 +327,15 @@ class SwingHoldStrategy:
             if oid:
                 pos = SHPosition(
                     level_price=sup, buy_order_id=oid,
-                    buy_price=sup, qty_held=qty, qty_bought=qty,
+                    buy_price=sup, qty_held=0.0, qty_bought=0.0,
                     status="buy_placed", opened_at=time.time(),
                 )
                 self.sh.positions.append(pos)
                 armed.add(sup)
                 slots  -= 1
                 placed += 1
-                logger.info("SwingHoldStrategy [%s] BUY %.2f qty=%.6f → [%s]",
-                            self.sh.symbol, sup, qty, oid)
+                logger.info("SwingHoldStrategy [%s] BUY %.2f → [%s]",
+                            self.sh.symbol, sup, oid)
         self.sh.initialised = True
         logger.info("SwingHoldStrategy [%s] init: price=%.2f | %d BUY orders placed",
                     self.sh.symbol, price, placed)
@@ -420,14 +420,22 @@ class SwingHoldStrategy:
             )
             await self._rearm(state, pos)
         else:
+            # Persist the updated qty_held, res_idx and cleared sell_order_id
+            # before placing the next partial sell — a crash here would otherwise
+            # lose the sell progress and re-place an already-filled order.
+            self._save_state(state.conn)
             await self._place_next_partial_sell(state, pos)
 
     async def _close_sl(self, state: Any, pos: SHPosition, price: float) -> None:
         if pos.sell_order_id:
             try:
                 await self._api.cancel_order(state.session, self.sh.symbol, pos.sell_order_id)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "SwingHoldStrategy [%s] SL cancel failed for order %s: %s — "
+                    "order may remain open on exchange",
+                    self.sh.symbol, pos.sell_order_id, exc,
+                )
 
         entry  = pos.buy_price or pos.level_price
         fee_b  = self._api.compute_fee(entry, pos.qty_held)
@@ -458,7 +466,7 @@ class SwingHoldStrategy:
         if oid:
             new_pos = SHPosition(
                 level_price=sup, buy_order_id=oid,
-                buy_price=sup, qty_held=qty, qty_bought=qty,
+                buy_price=sup, qty_held=0.0, qty_bought=0.0,
                 status="buy_placed", opened_at=time.time(),
             )
             self.sh.positions.append(new_pos)

@@ -6,6 +6,37 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.58] — 2026-06-05
+
+### Corrections
+- **`scalping_bot.py` — double déduction de fee** : la fee d'entrée était déduite deux fois (une fois à l'ouverture, une fois intégrée dans le calcul du PnL à la clôture) ; tous les PnL historiques étaient sous-estimés d'environ une fee d'entrée par trade
+- **`scalping_bot.py` — TP évalué avant SL quand les deux sont touchés dans la même bougie** : pour les positions longues, le TP est désormais vérifié en premier ; suppression aussi de la table `candles` DDL créée mais jamais écrite
+- **`scalping_bot.py` — dénominateur ATR utilisait un close périmé** : la stratégie breakout divisait l'ATR par `closes[-2]` au lieu de `closes[-1]`
+- **`dca.py` — clé `"orderId"` incorrecte** : `_check_rest_fills` utilisait `o["orderId"]` mais `api_binance.get_open_orders` normalise en `o["order_id"]` ; le set était toujours vide, chaque ordre BUY semblait rempli et des TP SELL en double étaient placés à chaque poll
+- **`dca.py` — `_on_tp_hit` appelé sans condition pour status `"long"`** : ajout de la garde `pos.sell_order_id is None` pour éviter les TP SELL en double
+- **`orderbook_bot.py` — les gates longs bloquaient les shorts en mode `direction="both"`** : les cinq gates faisaient un `return` global ; chaque gate switche désormais `direction` vers `"short"` au lieu d'abandonner
+- **`orderbook_bot.py` — shutdown laissait `pnl_net`/`capital_after` NULL** : le handler d'arrêt écrit désormais une estimation mark-to-market pour les positions ouvertes
+- **`swinghold.py` — `qty_held` persisté avant le fill réel** : les positions `buy_placed` sont créées avec `qty_held=0.0` et `_on_buy_filled` fixe la bonne valeur
+- **`swinghold.py` — état de vente partielle intermédiaire jamais persisté** : `_on_partial_sell_filled` appelle `_save_state` avant la prochaine vente partielle pour les positions encore ouvertes
+- **`swinghold.py` — `_close_sl` avalait silencieusement les erreurs de cancel** : l'exception est désormais loggée avec avertissement
+- **`accumulation_bot.py` — floor du cooldown adaptatif ignoré** : `max(floor_iv, base_iv // 2)` était toujours `base_iv // 2` ; corrigé en `min(floor_iv, base_iv // 2)`
+- **`accumulation_bot.py` — `avg_entry` non remis à zéro après vente totale** : `avg_entry` est maintenant réinitialisé à `0.0` quand `holdings_btc` atteint zéro
+- **`grid.py` — tâche user stream recréée à chaque tick sans ordres actifs** : la garde vérifie maintenant qu'il existe au moins un ordre actif avant de créer la tâche
+- **`grid.py` — annulation de la tâche user stream non awaitée** : `_cancel_all_orders` attend maintenant la fin de la tâche avant de halter
+- **`api_bitstamp.py` — signature `post_order` incompatible** : corrigée pour correspondre à l'interface unifiée `(session, symbol, price, size_usdc, *, side)`
+- **`api_bitstamp.py` — sim mode retournait un `dict` au lieu d'une `str`** : retourne désormais `f"sim_..."` comme tous les autres connecteurs
+- **`api_bitstamp.py` — `get_open_orders` retournait le format Bitstamp brut** : normalisé vers `{"order_id", "side", "price", "qty", "status"}`
+- **`api_bitstamp.py` — signature HMAC incorrecte** : nonce et timestamp étaient inversés, `"v2"` manquait ; toutes les requêtes authentifiées auraient retourné HTTP 403
+- **`api_mexc.py` — log en français** : traduit en anglais conformément à la politique linguistique
+
+### Ajout
+- **`api_bitstamp.py` — stubs user-stream** : `get_listen_key`, `keepalive_listen_key`, `make_user_stream_url`, `parse_user_stream_msg` ; le connecteur est désormais chargeable via `connector="bitstamp"`
+- **`connectors/__init__.py`** : `bitstamp` enregistré dans `_REGISTRY` ; `swinghold` et `dca` ajoutés dans `_STRATEGY_REQUIREMENTS`
+- **`indicators.py` — streams dynamiques morts redémarrables** : `_start_stream` détecte les tâches terminées/crashées avant la garde `"already active"`
+- **`indicators.py` — `db_path` restreint à `TRADINEBOTTE_DIR`** : empêche un souscripteur de créer ou chmodifier des fichiers arbitraires via le socket REP
+
+---
+
 ## [0.57] — 2026-06-05
 
 ### Corrections
