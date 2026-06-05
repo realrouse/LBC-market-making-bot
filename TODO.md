@@ -127,6 +127,80 @@
 
 ---
 
+## Audit 2026-06-05 — Findings to fix
+
+### HIGH — Done
+
+- **[A05-H1] DONE — Cache `ClobClient` across trades** (`api_polymarket.py`)
+  `post_order` was rebuilding an authenticated ClobClient on every order, triggering EIP-712 key
+  derivation each time. The client is now initialised once via `_init_clob_client()` and cached in
+  `_clob_clients` by `(private_key, install_dir)`. `sys.path` injection moved inside the one-time
+  init block. (v0.57)
+
+- **[A05-H2] DONE — Stable feed lock path across processes** (`account_bot.py`)
+  `abs(hash(addr))` is randomised per process since Python 3.3+; two concurrent account_bots
+  computed different lock paths for the same feed address, silently breaking coordination.
+  Replaced with `_feed_id(addr) = hashlib.md5(addr.encode()).hexdigest()[:8]`. (v0.57)
+
+### MEDIUM — Done
+
+- **[A05-M3] DONE — Remove dead `warn_if_external_bind` from `bot_utils`**
+  Duplicate of `tradinetools.zmq.warn_if_external_bind`; no callers remained in production code
+  (all callers import from tradinetools directly). Function deleted. (v0.57)
+
+### MEDIUM — Open
+
+- **[A05-M1] `TokenState` deque size hardcoded to module constant `VOL_WINDOW`**
+  `live_bot.py` — `bid_history` and `obi_history` use `deque(maxlen=VOL_WINDOW)` (always 12)
+  regardless of `config.vol_window`. Setting `vol_filter.window` in the strategy JSON has no
+  effect on the actual rolling window. Fix: pass `config.vol_window` to `TokenState.__init__`
+  and use it as the `maxlen`. No deployed config exercises this today (no JSON sets `window`).
+
+- **[A05-M2] Capital guard uses base stake, ignores dynamic stake scaling**
+  `live_bot.py:1171` — `state.capital - len(state.open_trades) * cfg.stake` assumes the base
+  stake per trade, but with `stake_bid_alpha` / Kelly the effective stake can be significantly
+  larger. Harmless with the current live params (max $15 vs guard's $10 assumption), but
+  logically wrong. Fix: replace `cfg.stake` with `min(cfg.stake_max, cfg.stake_max_pct_capital
+  * capital)` (or `cfg.stake_max` as a conservative upper bound).
+
+- **[A05-M4] `tradinetools/schemas.py` has no production callers**
+  `MarketMessage`, `BookMessage`, `IndicatorsMessage` etc. are tested but never imported in
+  `feed.py`, `account_bot.py`, or `indicators.py` (all use raw dicts). Version field `"v": 1`
+  is never enforced. Either migrate callers to use the typed schemas (gaining `from_dict` safety
+  and version checking) or remove the module to avoid confusion.
+
+- **[A05-M5] Weekly stop-loss period boundary not calendar-aligned**
+  `live_bot.py:1127` — `int(time.time() // (7 * 86400))` counts 7-day windows since the Unix
+  epoch (1970-01-01 = Thursday), so "week" boundaries fall on Thursdays. With `weekly_stop_loss`
+  active in `piste3.json`, halts may occur at counter-intuitive times. Fix: use ISO week number
+  or anchor to the last Monday midnight UTC.
+
+- **[A05-M6] `sys.path.insert` inside `post_order` — already mitigated by H-1 cache**
+  The `if _site not in sys.path` guard in `_init_clob_client` prevents duplicate inserts.
+  Residual concern: `sysconfig` / `sys` are now top-level imports in `api_polymarket.py` (added
+  with H-1). No further action required unless the lazy-import approach is revisited.
+
+### LOW — Open
+
+- **[A05-L1] `make_config()` mutates `bot_utils` module state**
+  `live_bot.py:597` — `bot_utils.WEBSTATUS_ENABLED = …` etc. are injected after config load.
+  Creates an implicit call-order dependency that hinders test isolation. Clean fix: pass a
+  config object to `write_web_status` / `print_dashboard` instead of global side effects.
+
+- **[A05-L2] Status HTML timestamps in local time, not UTC**
+  `bot_utils.py` — `datetime.fromtimestamp(ts_ms / 1000)` without `tz=timezone.utc`.
+  Inconsistent with the rest of the codebase. Fix: add `tz=timezone.utc` or label the column.
+
+- **[A05-L3] `account_bot.py` error message suggests wrong `systemctl` command**
+  The hardcoded `(sudo systemctl start tradinebotte-feed)` hint is incorrect for accounts
+  running feed as a user service. Remove the hardcoded command or make it conditional.
+
+- **[A05-L4] `BotConfig` hour-filter range annotations are untyped bare `list`**
+  `live_bot.py` — `weekday_utc_ranges: list` and `weekend_utc_ranges: list` should be
+  `list[tuple[int, int]]` for mypy correctness.
+
+---
+
 ## Logging system — deferred items (priorities 3–4)
 
 These were scoped out of the log-system refactor session (priorities 1+2 + English unification were implemented):

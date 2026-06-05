@@ -9,6 +9,7 @@ Toutes les modifications notables de ce projet sont documentées ici.
 ## [0.57] — 2026-06-05
 
 ### Corrections
+- **`bot_utils.py` — suppression de la fonction `warn_if_external_bind` morte** : la fonction était un doublon de `tradinetools.zmq.warn_if_external_bind` ; tous ses appelants avaient déjà migré vers la version `tradinetools` ; la copie dans `bot_utils` n'était plus atteignable
 - **`api_polymarket.py` — mise en cache du `ClobClient` entre les trades** : le client CLOB authentifié était reconstruit à chaque ordre, déclenchant une dérivation de clé EIP-712 à chaque trade ; le client est désormais initialisé une seule fois par processus et mis en cache par `(private_key, install_dir)`, éliminant ce surcoût de la boucle critique des ordres
 - **`account_bot.py` — chemin de verrou du feed stable entre les processus** : `abs(hash(addr))` servait à construire le nom du fichier de verrou exclusif pour la coordination du démarrage du feed ; `hash()` de Python étant aléatoire par processus depuis Python 3.3+, deux account_bots calculant ce chemin pour la même adresse de feed obtenaient des noms différents, cassant silencieusement la coordination et risquant de lancer deux instances `feed.py` qui se disputent le même port ; remplacé par `hashlib.md5(addr.encode()).hexdigest()[:8]`, déterministe entre tous les processus
 
