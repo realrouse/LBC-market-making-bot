@@ -6,6 +6,15 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.59] — 2026-06-06
+
+### Fixed
+- **Deploy scripts — SSH password auth broken by installed key**: `ssh-copy-id` had installed a passphrase-protected local key into the deployment accounts' `authorized_keys`; SSH tried key auth first and sshpass injected the account password as the key passphrase, consuming it before the password-auth challenge fired; added `-o PreferredAuthentications=password` to all `_ssh()` and `_rsync()` helpers in all six deploy scripts so key auth is bypassed entirely (`update_standalone.sh`, `update_claude1.sh`, `deploy_accumulation_claude3.sh`, `deploy_accumulation_claude4.sh`, `deploy_scalping_claude4.sh`, `update_swing.sh`)
+- **Deploy scripts — stale orphan processes not killed on deploy**: when a bot process died outside of a managed restart its PID file became stale; the next deploy started a new instance without stopping the old one, leaving two bots sharing the same SQLite database and producing DB lock errors; added `pgrep -u $(whoami) -f "<bot_script>"` orphan detection before each restart in all deploy scripts
+- **Deploy scripts — `pgrep -f` matched the deployer bash process and killed itself**: `pgrep -f "python.*bot_script.py"` matched the SSH bash process executing the deploy command because the full script text (including the literal string `python3 bot_script.py` from the `nohup` line) appears in the bash process cmdline; killing it aborted the deploy silently before `nohup` ran, producing no PID file and no running bot; fixed by checking `readlink /proc/$P/exe | grep python` before killing so only actual python processes are targeted, not the deployer shell
+
+---
+
 ## [0.58] — 2026-06-05
 
 ### Fixed

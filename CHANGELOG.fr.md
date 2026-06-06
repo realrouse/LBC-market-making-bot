@@ -6,6 +6,15 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.59] — 2026-06-06
+
+### Correctifs
+- **Scripts de déploiement — authentification SSH par mot de passe cassée par une clé installée** : `ssh-copy-id` avait installé une clé locale protégée par passphrase dans les `authorized_keys` des comptes de déploiement ; SSH tentait l'auth par clé en premier et sshpass injectait le mot de passe du compte comme passphrase de la clé, le consommant avant le défi d'auth par mot de passe ; ajout de `-o PreferredAuthentications=password` dans tous les helpers `_ssh()` et `_rsync()` des six scripts de déploiement afin que l'auth par clé soit entièrement contournée (`update_standalone.sh`, `update_claude1.sh`, `deploy_accumulation_claude3.sh`, `deploy_accumulation_claude4.sh`, `deploy_scalping_claude4.sh`, `update_swing.sh`)
+- **Scripts de déploiement — processus orphelins périmés non tués au déploiement** : quand un processus bot mourait en dehors d'un redémarrage géré son fichier PID devenait périmé ; le déploiement suivant démarrait une nouvelle instance sans arrêter l'ancienne, laissant deux bots partager la même base de données SQLite et produisant des erreurs de verrou DB ; ajout de la détection d'orphelins via `pgrep -u $(whoami) -f "<bot_script>"` avant chaque redémarrage dans tous les scripts de déploiement
+- **Scripts de déploiement — `pgrep -f` correspondait au processus bash du déployeur et se tuait lui-même** : `pgrep -f "python.*bot_script.py"` correspondait au processus bash SSH exécutant la commande de déploiement car le texte complet du script (incluant la chaîne littérale `python3 bot_script.py` de la ligne `nohup`) apparaît dans le cmdline du processus bash ; le tuer abandonnait silencieusement le déploiement avant l'exécution de `nohup`, ne produisant ni fichier PID ni bot en cours d'exécution ; corrigé en vérifiant `readlink /proc/$P/exe | grep python` avant de tuer afin que seuls les vrais processus python soient ciblés, pas le shell déployeur
+
+---
+
 ## [0.58] — 2026-06-05
 
 ### Corrections
