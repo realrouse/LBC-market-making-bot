@@ -86,38 +86,40 @@ LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 _ssh() {
     SSHPASS="$SC_PASS" /usr/bin/sshpass -e \
         ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
+        -o PreferredAuthentications=password \
         -p "$PORT" "$SC_USER@$SERVER" "$@" 2>&1
 }
 
 _rsync() {
+    local ssh_opts="-p $PORT -o StrictHostKeyChecking=yes -o PreferredAuthentications=password"
     SSHPASS="$SC_PASS" /usr/bin/sshpass -e \
         rsync -az \
         --exclude='__pycache__' --exclude='*.pyc' \
         --exclude='config.json' --exclude='live.db' --exclude='live_ob.db' --exclude='*.log' \
         --exclude='scripts' --exclude='tests' \
-        -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
+        -e "ssh $ssh_opts" \
         "$LOCAL_REPO/tradinebotte-polymarket/" "$SC_USER@$SERVER:$INSTALL_DIR/" 2>&1
     SSHPASS="$SC_PASS" /usr/bin/sshpass -e \
         rsync -az \
         --exclude='__pycache__' --exclude='*.pyc' \
         --exclude='scripts' --exclude='tests' \
-        -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
+        -e "ssh $ssh_opts" \
         "$LOCAL_REPO/tradinebotte-cex/" "$SC_USER@$SERVER:$INSTALL_DIR/" 2>&1
     SSHPASS="$SC_PASS" /usr/bin/sshpass -e \
         rsync -az \
-        -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
+        -e "ssh $ssh_opts" \
         "$LOCAL_REPO/requirements.txt" "$SC_USER@$SERVER:$INSTALL_DIR/" 2>&1
 
     SSHPASS="$SC_PASS" /usr/bin/sshpass -e \
         rsync -az \
         --filter='+ **/' --filter='+ *.json' --filter='- *' \
-        -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
+        -e "ssh $ssh_opts" \
         "$LOCAL_REPO/tradinebotte-cex/strategies/" "$SC_USER@$SERVER:$INSTALL_DIR/strategies/" 2>&1
 
     SSHPASS="$SC_PASS" /usr/bin/sshpass -e \
         rsync -az \
         --exclude='__pycache__' --exclude='*.pyc' --exclude='*.egg-info' \
-        -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
+        -e "ssh $ssh_opts" \
         "$LOCAL_REPO/tradinetools/" "$SC_USER@$SERVER:$INSTALL_DIR/tradinetools/" 2>&1
 }
 

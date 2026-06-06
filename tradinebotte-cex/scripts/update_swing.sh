@@ -80,11 +80,12 @@ STRATEGY_PATH="${TEST_SWING_STRATEGY:-strategies/swing/swing_BTCUSDT.json}"
 _ssh() {
     SSHPASS="$SW_PASS" /usr/bin/sshpass -e \
         ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
+        -o PreferredAuthentications=password \
         -p "$PORT" "$SW_USER@$SERVER" "$@" 2>&1
 }
 
 _rsync() {
-    local ssh_opts="-p $PORT -o StrictHostKeyChecking=yes"
+    local ssh_opts="-p $PORT -o StrictHostKeyChecking=yes -o PreferredAuthentications=password"
 
     # tradinebotte-polymarket/ contents → $INSTALL_DIR/ (flat layout)
     SSHPASS="$SW_PASS" /usr/bin/sshpass -e \

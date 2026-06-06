@@ -66,6 +66,8 @@ _restart_service() {
     local out
     out=$(SSHPASS="$c1_pass" /usr/bin/sshpass -e \
         ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
+        -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
+        -o PreferredAuthentications=password \
         -p "$port" "$c1_user@$server" \
         "echo '$c1_pass' | sudo -S systemctl reset-failed ${svc} 2>/dev/null; \
          echo '$c1_pass' | sudo -S systemctl restart ${svc} 2>/dev/null \
@@ -93,7 +95,7 @@ if [[ "$RESTART_INDICATORS" == "true" ]]; then
     _server="${TEST_SERVER:?}"
     _port="${TEST_PORT:-22}"
     _install_dir="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
-    _ssh_opts="-p $_port -o StrictHostKeyChecking=yes"
+    _ssh_opts="-p $_port -o StrictHostKeyChecking=yes -o PreferredAuthentications=password"
 
     echo -e "\n${BOLD}${YELLOW}═══ RSYNC indicators + tradinetools ═══${NC}"
 
@@ -120,6 +122,7 @@ if [[ "$RESTART_INDICATORS" == "true" ]]; then
     # .venv may have no pip script — fall back to direct site-packages copy.
     SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
         ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+        -o PreferredAuthentications=password \
         -p "$_port" "$_c1_user@$_server" "
 VENV=$_install_dir/.venv
 PYVER=\$(\$VENV/bin/python3 -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')
@@ -150,7 +153,7 @@ if [[ "$RESTART_FEED" == "true" ]]; then
     _server="${TEST_SERVER:?}"
     _port="${TEST_PORT:-22}"
     _install_dir="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
-    _ssh_opts="-p $_port -o StrictHostKeyChecking=yes"
+    _ssh_opts="-p $_port -o StrictHostKeyChecking=yes -o PreferredAuthentications=password"
 
     echo -e "\n${BOLD}${YELLOW}═══ RSYNC feed + tradinetools ═══${NC}"
 
@@ -176,6 +179,7 @@ if [[ "$RESTART_FEED" == "true" ]]; then
     # Install tradinetools in .venv; fall back to direct copy if pip is absent
     SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
         ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+        -o PreferredAuthentications=password \
         -p "$_port" "$_c1_user@$_server" "
 VENV=$_install_dir/.venv
 PYVER=\$(\$VENV/bin/python3 -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')
@@ -212,7 +216,7 @@ if [[ "$RESTART_ACCOUNT" == "true" ]]; then
     _server="${TEST_SERVER:?}"
     _port="${TEST_PORT:-22}"
     _install_dir="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
-    _ssh_opts="-p $_port -o StrictHostKeyChecking=yes"
+    _ssh_opts="-p $_port -o StrictHostKeyChecking=yes -o PreferredAuthentications=password"
 
     echo -e "\n${BOLD}${YELLOW}═══ RSYNC account_bot + tradinetools ═══${NC}"
 
@@ -246,6 +250,7 @@ if [[ "$RESTART_ACCOUNT" == "true" ]]; then
     # Install tradinetools in .venv; fall back to direct copy if pip is absent
     SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
         ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+        -o PreferredAuthentications=password \
         -p "$_port" "$_c1_user@$_server" "
 VENV=$_install_dir/.venv
 PYVER=\$(\$VENV/bin/python3 -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')

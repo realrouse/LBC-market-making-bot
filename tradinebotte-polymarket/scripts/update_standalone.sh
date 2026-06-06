@@ -83,11 +83,13 @@ SVC_NAME="tradinebotte-live-${SA_USER}.service"
 _ssh() {
     SSHPASS="$SA_PASS" /usr/bin/sshpass -e \
         ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
+        -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
+        -o PreferredAuthentications=password \
         -p "$PORT" "$SA_USER@$SERVER" "$@" 2>&1
 }
 
 _rsync() {
-    local ssh_opts="-p $PORT -o StrictHostKeyChecking=yes"
+    local ssh_opts="-p $PORT -o StrictHostKeyChecking=yes -o PreferredAuthentications=password"
 
     # tradinebotte-polymarket/ contents → $INSTALL_DIR/ (flat deploy layout)
     SSHPASS="$SA_PASS" /usr/bin/sshpass -e \
@@ -236,35 +238,16 @@ VERIFY_OUT=$(_ssh "
     export XDG_RUNTIME_DIR=/run/user/\$(id -u)
     SVC=${SVC_NAME}
     echo '=== process ==='
-    if systemctl --user is-active tradinebotte-live.service >/dev/null 2>&1 \
-       || systemctl --user is-enabled tradinebotte-live.service >/dev/null 2>&1; then
-        STATE=\$(systemctl --user is-active tradinebotte-live.service 2>/dev/null)
-        MPID=\$(systemctl --user show tradinebotte-live.service --property=MainPID 2>/dev/null | cut -d= -f2)
-        if [ \"\$STATE\" = 'active' ] && [ -n \"\$MPID\" ] && [ \"\$MPID\" -gt 0 ] && kill -0 \"\$MPID\" 2>/dev/null; then
-            echo \"PID=\$MPID running (user service)\"
-        else
-            echo \"PID=\$MPID NOT running — user service state=\$STATE\"
-        fi
-    elif [ -f \"/etc/systemd/system/\$SVC\" ]; then
-        STATE=\$(systemctl is-active \"\$SVC\" 2>/dev/null)
-        MPID=\$(systemctl show \"\$SVC\" --property=MainPID 2>/dev/null | cut -d= -f2)
-        if [ \"\$STATE\" = 'active' ] && kill -0 \"\$MPID\" 2>/dev/null; then
-            echo \"PID=\$MPID running (systemd)\"
-        else
-            echo \"PID=\$MPID NOT running — service state=\$STATE\"
-        fi
+    # Use pgrep to find the live_bot process — avoids D-Bus dependency of
+    # 'systemctl show --property=MainPID' which hangs in non-interactive SSH.
+    MPID=\$(pgrep -u \"\$(whoami)\" -f 'python.*live_bot' 2>/dev/null | head -1)
+    if [ -n \"\$MPID\" ]; then
+        echo \"PID=\$MPID running\"
     else
-        PID_FILE=${INSTALL_DIR}/live.pid
-        if [ -f \"\$PID_FILE\" ]; then
-            PID=\$(cat \"\$PID_FILE\")
-            if kill -0 \"\$PID\" 2>/dev/null; then
-                echo \"PID=\$PID running (nohup)\"
-            else
-                echo \"PID=\$PID NOT running (stale pid file)\"
-            fi
-        else
-            echo 'no pid file'
-        fi
+        # Fallback: check user service state without querying MainPID via D-Bus
+        export XDG_RUNTIME_DIR=/run/user/\$(id -u)
+        STATE=\$(systemctl --user is-active tradinebotte-live.service 2>/dev/null || echo unknown)
+        echo \"PID=0 NOT running — user service state=\$STATE\"
     fi
     echo '=== startup log ==='
     tail -20 ${INSTALL_DIR}/live.log
