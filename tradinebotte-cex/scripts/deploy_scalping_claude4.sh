@@ -184,21 +184,19 @@ fi
 "
     done
 
-    # Stop current orderbook_bot if running
+    # Stop current orderbook_bot if running (PID file + any stale instances)
     REMOTE_CMD+="
-PF=$INSTALL_DIR/${BOT_NAME}.pid
-if [ -f \"\$PF\" ]; then
-    PID=\$(cat \"\$PF\")
-    if kill -0 \"\$PID\" 2>/dev/null; then
-        kill \"\$PID\" && echo \"stopped ${BOT_NAME} pid=\$PID\" || echo 'kill failed ${BOT_NAME}'
-    else
-        echo \"${BOT_NAME}: stale pid file (was \$PID)\"
-    fi
-    rm -f \"\$PF\"
-else
-    echo \"${BOT_NAME}: not running (no pid file)\"
+STALE=\$(pgrep -u \"\$(whoami)\" -f \"python.*${BOT_SCRIPT}\" 2>/dev/null || true)
+if [ -n \"\$STALE\" ]; then
+    for P in \$STALE; do
+        kill \"\$P\" 2>/dev/null && echo \"killed stale ${BOT_NAME} pid=\$P\"
+    done
+    sleep 1
 fi
-sleep 2
+
+PF=$INSTALL_DIR/${BOT_NAME}.pid
+rm -f \"\$PF\"
+sleep 1
 
 nohup venv/bin/python3 ${BOT_SCRIPT} \
     --strategy $INSTALL_DIR/${BOT_STRATEGY} \

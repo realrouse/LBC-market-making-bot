@@ -172,6 +172,16 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
         \"\$VENV/bin/pip\" install --quiet -e tradinetools 2>/dev/null \
             && echo 'tradinetools ok' || echo 'tradinetools warning (non-fatal)'
 
+        # Kill any stale live_bot instances not tracked by the PID file
+        # (e.g. processes started by a previous session whose PID file is now stale)
+        STALE=\$(pgrep -u "\$(whoami)" -f "python.*live_bot" 2>/dev/null || true)
+        if [ -n "\$STALE" ]; then
+            for P in \$STALE; do
+                kill "\$P" 2>/dev/null && echo "killed stale live_bot pid=\$P"
+            done
+            sleep 1
+        fi
+
         # XDG_RUNTIME_DIR is required for systemctl --user in non-interactive SSH sessions
         export XDG_RUNTIME_DIR=/run/user/\$(id -u)
 

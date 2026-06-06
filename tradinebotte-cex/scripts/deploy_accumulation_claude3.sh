@@ -130,19 +130,17 @@ venv/bin/pip install --quiet -r $INSTALL_DIR/requirements.txt \
 venv/bin/pip install --quiet -e $INSTALL_DIR/tradinetools \
     && echo 'tradinetools ok' || echo 'tradinetools install warning (non-fatal)'
 
-PF=$INSTALL_DIR/${BOT_NAME}.pid
-if [ -f \"\$PF\" ]; then
-    PID=\$(cat \"\$PF\")
-    if kill -0 \"\$PID\" 2>/dev/null; then
-        kill \"\$PID\" && echo \"stopped ${BOT_NAME} pid=\$PID\"
-    else
-        echo \"${BOT_NAME}: stale pid (was \$PID)\"
-    fi
-    rm -f \"\$PF\"
-else
-    echo \"${BOT_NAME}: not running\"
+STALE=\$(pgrep -u "\$(whoami)" -f "python.*${BOT_SCRIPT}" 2>/dev/null || true)
+if [ -n "\$STALE" ]; then
+    for P in \$STALE; do
+        kill "\$P" 2>/dev/null && echo "killed stale ${BOT_NAME} pid=\$P"
+    done
+    sleep 1
 fi
-sleep 2
+
+PF=$INSTALL_DIR/${BOT_NAME}.pid
+rm -f "\$PF"
+sleep 1
 
 nohup venv/bin/python3 ${BOT_SCRIPT} \
     --strategy $INSTALL_DIR/${BOT_STRATEGY} \

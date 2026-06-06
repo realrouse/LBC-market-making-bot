@@ -180,18 +180,15 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
 
     RESTART_OUT=$(_ssh "
         PID_FILE=$INSTALL_DIR/live.pid
-        if [ -f \"\$PID_FILE\" ]; then
-            PID=\$(cat \"\$PID_FILE\")
-            if kill -0 \"\$PID\" 2>/dev/null; then
-                kill \"\$PID\" && echo \"stopped pid=\$PID\" || echo 'kill failed'
-            else
-                echo 'pid file found but process already gone'
-            fi
-            rm -f \"\$PID_FILE\"
-        else
-            echo 'no pid file — nothing to stop'
+        STALE=\$(pgrep -u \"\$(whoami)\" -f \"python.*live_bot\" 2>/dev/null || true)
+        if [ -n \"\$STALE\" ]; then
+            for P in \$STALE; do
+                kill \"\$P\" 2>/dev/null && echo \"killed stale live_bot pid=\$P\"
+            done
+            sleep 1
         fi
-        sleep 2
+        rm -f \"\$PID_FILE\"
+        sleep 1
         cd $INSTALL_DIR
         echo 'updating dependencies...'
         venv/bin/pip install --quiet -r $INSTALL_DIR/requirements.txt \
