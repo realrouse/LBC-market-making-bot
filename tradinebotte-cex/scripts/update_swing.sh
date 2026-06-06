@@ -180,13 +180,12 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
 
     RESTART_OUT=$(_ssh "
         PID_FILE=$INSTALL_DIR/live.pid
-        STALE=\$(pgrep -u \"\$(whoami)\" -f \"python.*live_bot\" 2>/dev/null || true)
-        if [ -n \"\$STALE\" ]; then
-            for P in \$STALE; do
+        for P in \$(pgrep -u \"\$(whoami)\" -f \"live_bot\" 2>/dev/null || true); do
+            if readlink /proc/\"\$P\"/exe 2>/dev/null | grep -q python; then
                 kill \"\$P\" 2>/dev/null && echo \"killed stale live_bot pid=\$P\"
-            done
-            sleep 1
-        fi
+            fi
+        done
+        sleep 1
         rm -f \"\$PID_FILE\"
         sleep 1
         cd $INSTALL_DIR

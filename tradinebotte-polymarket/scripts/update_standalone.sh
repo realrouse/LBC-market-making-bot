@@ -172,16 +172,6 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
         \"\$VENV/bin/pip\" install --quiet -e tradinetools 2>/dev/null \
             && echo 'tradinetools ok' || echo 'tradinetools warning (non-fatal)'
 
-        # Kill any stale live_bot instances not tracked by the PID file
-        # (e.g. processes started by a previous session whose PID file is now stale)
-        STALE=\$(pgrep -u "\$(whoami)" -f "python.*live_bot" 2>/dev/null || true)
-        if [ -n "\$STALE" ]; then
-            for P in \$STALE; do
-                kill "\$P" 2>/dev/null && echo "killed stale live_bot pid=\$P"
-            done
-            sleep 1
-        fi
-
         # XDG_RUNTIME_DIR is required for systemctl --user in non-interactive SSH sessions
         export XDG_RUNTIME_DIR=/run/user/\$(id -u)
 
@@ -189,13 +179,18 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
         if systemctl --user is-active tradinebotte-live.service >/dev/null 2>&1 \
            || systemctl --user is-enabled tradinebotte-live.service >/dev/null 2>&1; then
             echo 'detected user service: tradinebotte-live.service'
+            # Kill any nohup orphans before restarting so no stale process holds the DB
+            for P in \$(pgrep -u \"\$(whoami)\" -f \"live_bot\" 2>/dev/null || true); do
+                if readlink /proc/\"\$P\"/exe 2>/dev/null | grep -q python; then
+                    kill \"\$P\" 2>/dev/null && echo \"killed stale live_bot pid=\$P\"
+                fi
+            done
+            sleep 2
             systemctl --user restart tradinebotte-live.service \
                 && echo 'systemd restarted' \
                 || echo 'user service restart failed'
         elif [ -f \"/etc/systemd/system/\$SVC\" ]; then
             echo \"detected system service: \$SVC (consider migrating to user service)\"
-            # Kill the process (owned by this user — no sudo needed).
-            # systemd Restart=on-failure will relaunch automatically.
             PIDS=\$(pgrep -u ${SA_USER} -f 'python3.*live_bot' 2>/dev/null || true)
             if [ -n \"\$PIDS\" ]; then
                 for PID in \$PIDS; do
@@ -204,20 +199,16 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
             fi
             echo 'systemd restarted'
         else
-            # Legacy nohup path for accounts without a systemd unit
+            # Nohup path — kill ALL stale instances (PID file + orphans from prior sessions)
             PID_FILE=\$INSTALL/live.pid
-            if [ -f \"\$PID_FILE\" ]; then
-                PID=\$(cat \"\$PID_FILE\")
-                if kill -0 \"\$PID\" 2>/dev/null; then
-                    kill \"\$PID\" && echo \"stopped pid=\$PID\" || echo 'kill failed'
-                else
-                    echo 'pid file found but process already gone'
+            for P in \$(pgrep -u \"\$(whoami)\" -f \"live_bot\" 2>/dev/null || true); do
+                if readlink /proc/\"\$P\"/exe 2>/dev/null | grep -q python; then
+                    kill \"\$P\" 2>/dev/null && echo \"killed stale live_bot pid=\$P\"
                 fi
-                rm -f \"\$PID_FILE\"
-            else
-                echo 'no pid file — nothing to stop'
-            fi
-            sleep 2
+            done
+            sleep 1
+            rm -f \"\$PID_FILE\"
+            sleep 1
             nohup \"\$VENV/bin/python3\" live_bot.py </dev/null >>live.log 2>&1 &
             BOT_PID=\$!
             disown \$BOT_PID

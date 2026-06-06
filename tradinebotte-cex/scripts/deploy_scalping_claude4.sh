@@ -157,7 +157,7 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
     section "STEP 2 — RESTART (3 bots)"
     info "Stopping legacy and current bots, starting orderbook_bot..."
 
-    REMOTE_CMD="set -e; cd $INSTALL_DIR; mkdir -p strategies"$'\n'
+    REMOTE_CMD="cd $INSTALL_DIR; mkdir -p strategies"$'\n'
     REMOTE_CMD+="
 if [ ! -x venv/bin/python3 ]; then
     echo 'Creating venv...'
@@ -186,16 +186,14 @@ fi
 
     # Stop current orderbook_bot if running (PID file + any stale instances)
     REMOTE_CMD+="
-STALE=\$(pgrep -u \"\$(whoami)\" -f \"python.*${BOT_SCRIPT}\" 2>/dev/null || true)
-if [ -n \"\$STALE\" ]; then
-    for P in \$STALE; do
-        kill \"\$P\" 2>/dev/null && echo \"killed stale ${BOT_NAME} pid=\$P\"
-    done
-    sleep 1
-fi
+for P in \$(pgrep -u \"\$(whoami)\" -f \"${BOT_SCRIPT}\" 2>/dev/null || true); do
+    if readlink /proc/\"\$P\"/exe 2>/dev/null | grep -q python; then
+        if kill \"\$P\" 2>/dev/null; then echo \"killed stale ${BOT_NAME} pid=\$P\"; fi
+    fi
+done
+sleep 1
 
-PF=$INSTALL_DIR/${BOT_NAME}.pid
-rm -f \"\$PF\"
+rm -f $INSTALL_DIR/${BOT_NAME}.pid || true
 sleep 1
 
 nohup venv/bin/python3 ${BOT_SCRIPT} \
@@ -203,7 +201,7 @@ nohup venv/bin/python3 ${BOT_SCRIPT} \
     --dir $INSTALL_DIR \
     </dev/null >>$INSTALL_DIR/${BOT_NAME}.log 2>&1 &
 BOT_PID=\$!
-disown \$BOT_PID
+disown \$BOT_PID 2>/dev/null || true
 echo \$BOT_PID > $INSTALL_DIR/${BOT_NAME}.pid
 echo \"started ${BOT_NAME} pid=\$BOT_PID\"
 "
