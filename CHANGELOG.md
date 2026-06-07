@@ -6,6 +6,16 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.64] — 2026-06-07
+
+### Fixed
+- **`scripts/install.sh` — generated `run.sh` pointed to wrong `start_bot.sh` path**: `run.sh` was generated with `exec bash "$REPO_DIR/scripts/start_bot.sh"` but `start_bot.sh` lives at `tradinebotte-polymarket/scripts/start_bot.sh`, not in the repo root `scripts/`; corrected to `$REPO_DIR/tradinebotte-polymarket/scripts/start_bot.sh`; the NEXT STEPS message now points to the generated `$INSTALL_DIR/run.sh` wrapper directly instead of the raw script path
+- **Documentation — all script path references corrected across all 10 doc files**: `bash scripts/start_bot.sh` replaced with `~/tradinebotte/run.sh` in all scenarios (INSTALL.md, INSTALL.fr.md, UPDATE.md, UPDATE.fr.md, QUICKSTART.md, QUICKSTART.fr.md); `bash scripts/monitor.sh` replaced with `bash tradinebotte-polymarket/scripts/monitor.sh`; `bash scripts/start_feed.sh` and `bash scripts/start_account.sh` replaced with their `tradinebotte-polymarket/scripts/` counterparts; root `scripts/` contains only generic scripts (`install.sh`, `setup.py`, `run_tests.sh`, etc.) — the polymarket-specific launch scripts were never there
+- **Documentation — test count corrected in INSTALL.md, INSTALL.fr.md, README.md, README.fr.md**: `1,148 tests across 5 suites` updated to `733 tests across 4 suites` following the removal of `scalping_bot.py` and its 415-test suite in v0.63; scalping strategy mentions removed from the Tests section prose
+- **QUICKSTART.md, QUICKSTART.fr.md — stale version reference updated**: example commands referenced `v0.50`; updated to `v0.63`
+
+---
+
 ## [0.63] — 2026-06-07
 
 ### Changed

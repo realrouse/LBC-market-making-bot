@@ -21,7 +21,7 @@ git pull
 bash scripts/install.sh      # reuses ~/tradinebotte/venv, upgrades packages only
 
 kill $(cat ~/tradinebotte/live.pid)
-bash scripts/start_bot.sh
+~/tradinebotte/run.sh
 # or: sudo systemctl restart tradinebotte
 ```
 
@@ -39,7 +39,7 @@ git pull
 bash scripts/install.sh
 
 kill $(cat ~/tradinebotte/live.pid)
-bash scripts/start_bot.sh
+~/tradinebotte/run.sh
 ```
 
 Same guarantees — `config.json` and `live.db` are safe.
@@ -57,7 +57,7 @@ rsync -az --delete \
     /path/to/tradinebotte/ user@server:~/tradinebotte/
 
 ssh user@server 'cd ~/tradinebotte && bash scripts/install.sh'
-ssh user@server 'kill $(cat ~/tradinebotte/live.pid); bash ~/tradinebotte/scripts/start_bot.sh'
+ssh user@server 'kill $(cat ~/tradinebotte/live.pid); ~/tradinebotte/run.sh'
 ```
 
 **Critical exclusions:**
@@ -164,8 +164,8 @@ kill $(cat ~/tradinebotte/feed.pid)
 kill $(cat ~/account-a/account.pid)
 kill $(cat ~/account-b/account.pid)
 
-TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
-TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
+TRADINEBOTTE_DIR=~/account-a bash tradinebotte-polymarket/scripts/start_account.sh
+TRADINEBOTTE_DIR=~/account-b bash tradinebotte-polymarket/scripts/start_account.sh
 ```
 
 ---

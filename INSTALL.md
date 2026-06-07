@@ -264,7 +264,7 @@ bash scripts/install.sh [install_dir] [--lang EN|FR] [--with-tests]
   Without this flag the script prompts at startup as before.
 - `--with-tests` — Also copy `tests/`, `analysis/backtest.py`, and
   `data/backtest_sample_btc5m_range_2026.db`, then run the
-  full test suite (1,148 tests across 5 suites) immediately after installation.
+  full test suite (733 tests across 4 suites) immediately after installation.
   The backtest uses `live.db` only if it contains ≥ 100 snapshots;
   otherwise it falls back to the bundled sample dataset automatically.
 
@@ -388,7 +388,7 @@ your web server is configured to serve that directory.
 ## Running
 
 ```bash
-TRADINEBOTTE_DIR=~/tradinebotte bash scripts/start_bot.sh
+~/tradinebotte/run.sh
 ```
 
 ### Auto-start with systemd (recommended for dedicated servers)
@@ -894,18 +894,18 @@ TRADINEBOTTE_DIR=~/account-b python3 scripts/setup.py   # enter account B key
 
 ```bash
 # 1. Start the shared feed (one instance, any TRADINEBOTTE_DIR for the venv path)
-bash scripts/start_feed.sh
+bash tradinebotte-polymarket/scripts/start_feed.sh
 
 # 2. Start each account bot in a separate shell
-TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
-TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
+TRADINEBOTTE_DIR=~/account-a bash tradinebotte-polymarket/scripts/start_account.sh
+TRADINEBOTTE_DIR=~/account-b bash tradinebotte-polymarket/scripts/start_account.sh
 ```
 
 Custom feed address (useful when running on different ports or hosts):
 
 ```bash
-TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash scripts/start_feed.sh
-TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
+TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash tradinebotte-polymarket/scripts/start_feed.sh
+TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-a bash tradinebotte-polymarket/scripts/start_account.sh
 ```
 
 **Feed flags** (`scripts/start_feed.sh` passes these through to `tradinebotte-polymarket/feed.py`):
@@ -984,7 +984,7 @@ bash scripts/test_multibot_deploy.sh --skip-deploy --duration 300
 Live dashboard:
 
 ```bash
-TRADINEBOTTE_DIR=~/tradinebotte bash scripts/monitor.sh
+bash tradinebotte-polymarket/scripts/monitor.sh
 ```
 
 Follow logs in real time:

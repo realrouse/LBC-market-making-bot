@@ -145,7 +145,7 @@ fi
 # coexist silently, which corrupts the SQLite database.
 cat > "$INSTALL_DIR/run.sh" << EOF
 #!/bin/bash
-exec bash "$REPO_DIR/scripts/start_bot.sh" "\$@"
+exec bash "$REPO_DIR/tradinebotte-polymarket/scripts/start_bot.sh" "\$@"
 EOF
 chmod +x "$INSTALL_DIR/run.sh"
 
@@ -189,7 +189,7 @@ echo "$(_t "NEXT STEPS:" "ÉTAPES SUIVANTES :")"
 echo "1. $(_t "Configure    :" "Configurer       :") ${_TD}python3 \"$REPO_DIR/scripts/setup.py\""
 echo "   ($(_t "enter the wallet private key, or Enter without key for simulation mode" \
                "saisir la clé privée du wallet, ou Entrée sans clé pour le mode simulation"))"
-echo "2. $(_t "Start the bot:" "Lancer le bot    :") ${_TD}bash \"$REPO_DIR/scripts/start_bot.sh\""
+echo "2. $(_t "Start the bot:" "Lancer le bot    :") ${_TD}$INSTALL_DIR/run.sh"
 if [ "$WITH_TESTS" = "1" ]; then
     echo ""
     echo "$(_t "Tests   " "Tests   ") : cd \"$INSTALL_DIR\" && ${_TD}venv/bin/python3 -W ignore::ResourceWarning -m unittest discover tests/ -v"

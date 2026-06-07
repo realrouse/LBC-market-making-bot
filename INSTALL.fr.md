@@ -272,7 +272,7 @@ bash scripts/install.sh [répertoire_installation] [--lang EN|FR] [--with-tests]
   Sans ce flag, le script propose le choix au démarrage comme avant.
 - `--with-tests` — Copie aussi `tests/`, `analysis/backtest.py` et
   `data/backtest_sample_btc5m_range_2026.db`, puis lance
-  la suite complète de tests (1 148 tests en 5 suites) juste après l'installation.
+  la suite complète de tests (733 tests en 4 suites) juste après l'installation.
   Le backtest utilise `live.db` uniquement s'il contient ≥ 100 snapshots ;
   sinon il bascule automatiquement sur le dataset embarqué.
 
@@ -398,7 +398,7 @@ que le serveur web est configuré pour servir ce répertoire.
 ## Lancement
 
 ```bash
-TRADINEBOTTE_DIR=~/tradinebotte bash scripts/start_bot.sh
+~/tradinebotte/run.sh
 ```
 
 ### Démarrage automatique avec systemd (recommandé pour les serveurs dédiés)
@@ -905,18 +905,18 @@ TRADINEBOTTE_DIR=~/account-b python3 scripts/setup.py   # clé compte B
 
 ```bash
 # 1. Lancer le feed partagé (une seule instance)
-bash scripts/start_feed.sh
+bash tradinebotte-polymarket/scripts/start_feed.sh
 
 # 2. Lancer chaque account bot dans un terminal séparé
-TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
-TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
+TRADINEBOTTE_DIR=~/account-a bash tradinebotte-polymarket/scripts/start_account.sh
+TRADINEBOTTE_DIR=~/account-b bash tradinebotte-polymarket/scripts/start_account.sh
 ```
 
 Adresse personnalisée (port ou hôte différent) :
 
 ```bash
-TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash scripts/start_feed.sh
-TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
+TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash tradinebotte-polymarket/scripts/start_feed.sh
+TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-a bash tradinebotte-polymarket/scripts/start_account.sh
 ```
 
 **Flags du feed** (`scripts/start_feed.sh` les transmet à `tradinebotte-polymarket/feed.py`) :
@@ -995,7 +995,7 @@ bash scripts/test_multibot_deploy.sh --skip-deploy --duration 300
 Dashboard en temps réel :
 
 ```bash
-TRADINEBOTTE_DIR=~/tradinebotte bash scripts/monitor.sh
+bash tradinebotte-polymarket/scripts/monitor.sh
 ```
 
 Suivre les logs en direct :
