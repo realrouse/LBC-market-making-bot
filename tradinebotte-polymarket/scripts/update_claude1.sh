@@ -265,5 +265,5 @@ fi
         && echo -e "${GREEN}  ✓ tradinetools installed in .venv${NC}" \
         || echo -e "${RED}  ✗ tradinetools install failed${NC}"
 
-    _restart_service "tradinebotte-account-tradinebotte.service" "ACCOUNT BOT" "ACCOUNT BOT|Connected to feed|ERROR"
+    _restart_service "tradinebotte-account-${_c1_user}.service" "ACCOUNT BOT" "ACCOUNT BOT|Connected to feed|ERROR"
 fi
