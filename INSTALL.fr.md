@@ -434,6 +434,8 @@ max 5 redémarrages par 5 minutes). Au reboot, le bot revient dès que le résea
 disponible (`After=network-online.target`).
 
 > **Multi-bot (Option B)** : utilisez `scripts/install_feed_service.sh`, `tradinebotte-indicators/scripts/install_indicators_service.sh` (indicateurs partagés, optionnel) et `scripts/install_account_service.sh`. Voir [docs/multi.md](docs/multi.md).
+>
+> **Déploiements multi-comptes** : les déploiements sur plusieurs comptes d'un même serveur utilisent des unités `~/.config/systemd/user/` (`systemctl --user`) — aucun sudo requis au déploiement. Voir `tradinebotte-polymarket/scripts/migrate_to_user_services.sh` et `tradinebotte-cex/scripts/migrate_cex_bots.sh`.
 
 **Flags :**
 - *(aucun flag)* — mode normal : les écritures de logs sont asynchrones (thread daemon, ne bloque jamais le event loop)

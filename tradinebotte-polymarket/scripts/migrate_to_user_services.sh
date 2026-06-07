@@ -63,8 +63,8 @@ INSTALL_DIR="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
 PORT="${TEST_PORT:-22}"
 SERVER="${TEST_SERVER:?}"
 
-# Indices of live-bot accounts in TEST_USERS (accounts 1, 2, 4 in the conf)
-LIVE_IDXS=(1 2 4)
+# Indices of live-bot accounts in TEST_USERS (accounts 1, 2, 3, 4 in the conf)
+LIVE_IDXS=(1 2 3 4)
 
 # ─── Phase 1: install user unit + enable (no sudo) ────────────────────────────
 if [[ "$PHASE2_ONLY" == "false" ]]; then
@@ -79,6 +79,8 @@ if [[ "$PHASE2_ONLY" == "false" ]]; then
 
         OUT=$(SSHPASS="$PASS" /usr/bin/sshpass -e \
             ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
+            -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
+            -o PreferredAuthentications=password \
             -p "$PORT" "$USER@$SERVER" "
 INSTALL=${INSTALL_DIR}
 # Detect actual venv
@@ -112,6 +114,14 @@ echo 'unit file written'
 
 systemctl --user daemon-reload && echo 'daemon-reload ok'
 systemctl --user enable tradinebotte-live.service 2>&1 && echo 'enabled'
+if ! systemctl --user is-active tradinebotte-live.service >/dev/null 2>&1; then
+    for P in \$(pgrep -u \"\$(whoami)\" -f 'live_bot' 2>/dev/null || true); do
+        if readlink /proc/\"\$P\"/exe 2>/dev/null | grep -q python; then
+            kill \"\$P\" 2>/dev/null && echo \"killed nohup live_bot pid=\$P\"
+        fi
+    done
+    sleep 1
+fi
 systemctl --user start  tradinebotte-live.service 2>&1 && echo 'started' || echo 'start failed (linger not yet set?)'
 systemctl --user is-active tradinebotte-live.service 2>&1
 " 2>&1)

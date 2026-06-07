@@ -95,7 +95,7 @@ Pour le compte de déploiement dédié à la stratégie swing, utiliser le scrip
 bash tradinebotte-cex/scripts/update_swing.sh
 ```
 
-Ce script copie en rsync le moteur de stratégie swing et sa configuration vers le répertoire d'installation du compte swing, écrit son `config.json`, redémarre le bot via le fichier PID et vérifie que le processus tourne — le tout dans une seule session SSH. Il suit le même schéma que `update_standalone.sh`, mais cible la structure du compte swing.
+Ce script copie en rsync le moteur de stratégie swing et sa configuration vers le répertoire d'installation du compte swing, écrit son `config.json`, puis redémarre le bot — en préférant `systemctl --user restart tradinebotte-live.service` si le service user est actif ou activé, avec bascule automatique sur nohup sinon. L'étape de vérification utilise le filtrage `pgrep`/`/proc/$P/exe`, comme `update_standalone.sh`.
 
 ---
 

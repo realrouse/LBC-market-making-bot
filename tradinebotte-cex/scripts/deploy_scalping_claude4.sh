@@ -153,25 +153,24 @@ if [[ "$VERIFY_ONLY" == "false" ]]; then
     fi
 fi
 
-# ─── Step 2: stop + start all three bots (single SSH session) ──────────────────
+# ─── Step 2: stop + start orderbook_bot (single SSH session) ───────────────────
 if [[ "$SKIP_RESTART" == "false" ]]; then
-    section "STEP 2 — RESTART (3 bots)"
+    section "STEP 2 — RESTART"
     info "Stopping legacy and current bots, starting orderbook_bot..."
 
     REMOTE_CMD="cd $INSTALL_DIR; mkdir -p strategies"$'\n'
     REMOTE_CMD+="
-if [ ! -x venv/bin/python3 ]; then
+if [ ! -x venv/bin/python3 ] && [ ! -x .venv/bin/python3 ]; then
     echo 'Creating venv...'
     python3 -m venv venv
     echo 'Venv ready'
 fi
 echo 'updating dependencies...'
-venv/bin/pip install --quiet -r $INSTALL_DIR/requirements.txt \
-    && echo 'deps ok' || echo 'pip warning (non-fatal)'
-venv/bin/pip install --quiet -e $INSTALL_DIR/tradinetools \
-    && echo 'tradinetools ok' || echo 'tradinetools install warning (non-fatal)'
+if [ -d $INSTALL_DIR/.venv ]; then VENV=$INSTALL_DIR/.venv/bin; else VENV=$INSTALL_DIR/venv/bin; fi
+\$VENV/pip install --quiet -r $INSTALL_DIR/requirements.txt 2>/dev/null && echo 'deps ok' || echo 'pip warning (non-fatal)'
+\$VENV/pip install --quiet -e $INSTALL_DIR/tradinetools 2>/dev/null && echo 'tradinetools ok' || echo 'tradinetools warning (non-fatal)'
 "
-    # Stop legacy candle/meanrev/breakout bots if still running
+    # Stop legacy candle/meanrev/breakout bots if still running (always)
     for LEGACY in scalping_candle_momentum scalping_meanrev scalping_breakout; do
         REMOTE_CMD+="
 PF=$INSTALL_DIR/${LEGACY}.pid
@@ -185,57 +184,75 @@ fi
 "
     done
 
-    # Stop current orderbook_bot if running (PID file + any stale instances)
     REMOTE_CMD+="
-for P in \$(pgrep -u \"\$(whoami)\" -f \"${BOT_SCRIPT}\" 2>/dev/null || true); do
-    if readlink /proc/\"\$P\"/exe 2>/dev/null | grep -q python; then
-        if kill \"\$P\" 2>/dev/null; then echo \"killed stale ${BOT_NAME} pid=\$P\"; fi
-    fi
-done
-sleep 1
-
-rm -f $INSTALL_DIR/${BOT_NAME}.pid || true
-sleep 1
-
-nohup venv/bin/python3 ${BOT_SCRIPT} \
-    --strategy $INSTALL_DIR/${BOT_STRATEGY} \
-    --dir $INSTALL_DIR \
-    </dev/null >>$INSTALL_DIR/${BOT_NAME}.log 2>&1 &
-BOT_PID=\$!
-disown \$BOT_PID 2>/dev/null || true
-echo \$BOT_PID > $INSTALL_DIR/${BOT_NAME}.pid
-echo \"started ${BOT_NAME} pid=\$BOT_PID\"
+export XDG_RUNTIME_DIR=/run/user/\$(id -u)
+if systemctl --user is-active tradinebotte-orderbook.service >/dev/null 2>&1 \
+   || systemctl --user is-enabled tradinebotte-orderbook.service >/dev/null 2>&1; then
+    echo 'detected user service: tradinebotte-orderbook.service'
+    for P in \$(pgrep -u \"\$(whoami)\" -f \"${BOT_SCRIPT}\" 2>/dev/null || true); do
+        if readlink /proc/\"\$P\"/exe 2>/dev/null | grep -q python; then
+            kill \"\$P\" 2>/dev/null && echo \"killed stale ${BOT_NAME} pid=\$P\"
+        fi
+    done
+    sleep 2
+    systemctl --user restart tradinebotte-orderbook.service \
+        && echo 'systemd restarted' \
+        || echo 'user service restart failed'
+else
+    for P in \$(pgrep -u \"\$(whoami)\" -f \"${BOT_SCRIPT}\" 2>/dev/null || true); do
+        if readlink /proc/\"\$P\"/exe 2>/dev/null | grep -q python; then
+            if kill \"\$P\" 2>/dev/null; then echo \"killed stale ${BOT_NAME} pid=\$P\"; fi
+        fi
+    done
+    sleep 1
+    rm -f $INSTALL_DIR/${BOT_NAME}.pid || true
+    sleep 1
+    nohup \$VENV/python3 ${BOT_SCRIPT} \
+        --strategy $INSTALL_DIR/${BOT_STRATEGY} \
+        --dir $INSTALL_DIR \
+        </dev/null >>$INSTALL_DIR/${BOT_NAME}.log 2>&1 &
+    BOT_PID=\$!
+    disown \$BOT_PID 2>/dev/null || true
+    echo \$BOT_PID > $INSTALL_DIR/${BOT_NAME}.pid
+    echo \"started ${BOT_NAME} pid=\$BOT_PID\"
+fi
 "
 
     RESTART_OUT=$(_ssh "$REMOTE_CMD")
     echo "$RESTART_OUT"
 
-    STARTED=$(echo "$RESTART_OUT" | grep -c "^started" || true)
-    if [[ "$STARTED" -eq 1 ]]; then
+    if echo "$RESTART_OUT" | grep -qE 'systemd restarted|^started'; then
         ok "${BOT_NAME} started"
     else
         err "${BOT_NAME} did not start (check log above)"
     fi
 
-    info "Waiting 8s for startup and WebSocket connection..."
-    sleep 8
+    if echo "$RESTART_OUT" | grep -q "systemd restarted"; then
+        info "Waiting 36s for systemd restart (RestartSec=30 + startup)..."
+        sleep 36
+    else
+        info "Waiting 8s for startup and WebSocket connection..."
+        sleep 8
+    fi
 fi
 
 # ─── Step 3: verify ────────────────────────────────────────────────────────────
 section "STEP 3 — VERIFY"
 
 VERIFY_CMD="
+export XDG_RUNTIME_DIR=/run/user/\$(id -u)
 echo '--- ${BOT_NAME} ---'
-PF=$INSTALL_DIR/${BOT_NAME}.pid
-if [ -f \"\$PF\" ]; then
-    PID=\$(cat \"\$PF\")
-    if kill -0 \"\$PID\" 2>/dev/null; then
-        echo \"  PID=\$PID running\"
-    else
-        echo \"  PID=\$PID NOT running (stale)\"
+MPID=\"\"
+for P in \$(pgrep -u \"\$(whoami)\" -f '${BOT_SCRIPT}' 2>/dev/null || true); do
+    if readlink /proc/\"\$P\"/exe 2>/dev/null | grep -q python; then
+        MPID=\$P; break
     fi
+done
+if [ -n \"\$MPID\" ]; then
+    echo \"  PID=\$MPID running\"
 else
-    echo '  no pid file'
+    STATE=\$(systemctl --user is-active tradinebotte-orderbook.service 2>/dev/null || echo unknown)
+    echo \"  PID=0 NOT running — user service state=\$STATE\"
 fi
 tail -8 $INSTALL_DIR/${BOT_NAME}.log 2>/dev/null || echo '  (no log yet)'
 "
@@ -243,7 +260,7 @@ tail -8 $INSTALL_DIR/${BOT_NAME}.log 2>/dev/null || echo '  (no log yet)'
 VERIFY_OUT=$(_ssh "$VERIFY_CMD")
 echo "$VERIFY_OUT"
 
-if echo "$VERIFY_OUT" | grep -qP "PID=\d+ running"; then
+if echo "$VERIFY_OUT" | grep -qE 'PID=[1-9][0-9]* running'; then
     ok "${BOT_NAME}: running"
 else
     err "${BOT_NAME}: NOT running"

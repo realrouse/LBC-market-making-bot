@@ -6,6 +6,21 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.62] — 2026-06-07
+
+### Ajouts
+- **Migration des services user étendue à tous les comptes restants** : live_bot migré vers des unités user `tradinebotte-live.service` sur les quatre comptes restants (compte-2 : unité installée mais inactive ; compte-4 : aucune unité ; compte-5 : process nohup actif ; compte-3 : déjà actif) ; `migrate_to_user_services.sh` mis à jour pour couvrir les quatre comptes, ajout du kill nohup avant le démarrage (ignoré si le service est déjà actif), et ajout des options SSH manquantes `-o PreferredAuthentications=password -o ServerAliveInterval=10 -o ServerAliveCountMax=3` qui provoquaient un blocage indéfini sur les serveurs en auth par mot de passe
+- **Unités user `tradinebotte-accumulation.service` sur deux comptes** : `accumulation_bot` sur le compte standalone (stratégie btc_accumulation) et sur le compte scalping (stratégie btc_accumulation_deepdip) migrés de nohup vers des unités user ; processus nohup stoppés proprement avant le démarrage ; chemin de stratégie intégré dans l'unité à l'installation
+- **Unité user `tradinebotte-orderbook.service` sur le compte scalping** : `orderbook_bot` migré de nohup vers une unité user ; processus nohup stoppé proprement avant le démarrage
+- **`migrate_cex_bots.sh` — script de migration en une seule passe pour les comptes CEX** : installe et démarre les trois unités user CEX (accumulation ×2, orderbook ×1) en une seule exécution ; détecte `.venv` vs `venv` à l'installation ; affiche les instructions Phase 2 `loginctl enable-linger` pour root ; modèles d'unités stockés dans `tradinebotte-cex/scripts/systemd/`
+
+### Modifications
+- **`update_swing.sh` — redémarrage dual-path remplace le chemin nohup-only** : détecte `tradinebotte-live.service` actif/activé et utilise `systemctl --user restart` si présent ; bascule sur nohup sinon ; étape VERIFY mise à jour du contrôle PID-file vers l'approche `pgrep`/filtre-exe des autres scripts ; attend 36s après un redémarrage systemd (RestartSec=30) contre 6s après nohup
+- **`deploy_scalping_claude4.sh` — redémarrage dual-path pour orderbook_bot** : détecte `tradinebotte-orderbook.service` actif/activé ; chemin systemd préféré, fallback nohup conservé ; étape VERIFY mise à jour vers pgrep/filtre-exe
+- **`deploy_accumulation.sh` — redémarrage dual-path pour accumulation_bot** : détecte `tradinebotte-accumulation.service` actif/activé ; chemin systemd préféré, fallback nohup conservé ; détection venv utilise le fallback `.venv` → `venv` au lieu du chemin `venv/` codé en dur ; étape VERIFY mise à jour vers pgrep/filtre-exe
+
+---
+
 ## [0.61] — 2026-06-07
 
 ### Correctifs

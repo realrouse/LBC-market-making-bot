@@ -98,7 +98,7 @@ For the dedicated swing trading deployment account, use the swing-specific deplo
 bash tradinebotte-cex/scripts/update_swing.sh
 ```
 
-This script rsync-copies the swing strategy engine and config to the swing account's install directory, writes its `config.json`, restarts the bot via the PID file, and verifies that the process is running — all in a single SSH session. It mirrors the approach of `update_standalone.sh` but targets the swing account layout.
+This script rsync-copies the swing strategy engine and config to the swing account's install directory, writes its `config.json`, then restarts the bot — preferring `systemctl --user restart tradinebotte-live.service` if the user service is active or enabled, falling back to nohup otherwise. Verify step uses `pgrep`/`/proc/$P/exe` filtering, matching the approach of `update_standalone.sh`.
 
 ---
 

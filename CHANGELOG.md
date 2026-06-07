@@ -6,6 +6,21 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.62] — 2026-06-07
+
+### Added
+- **User service migration extended to all remaining accounts**: live_bot migrated to `tradinebotte-live.service` user units on all four remaining accounts (account-2 unit was installed but inactive; account-4 had no unit; account-5 was running via nohup; account-3 was already active); `migrate_to_user_services.sh` updated to cover all four accounts, adds nohup kill before start (skipped if service already active), and adds missing `-o PreferredAuthentications=password -o ServerAliveInterval=10 -o ServerAliveCountMax=3` SSH options that caused the script to hang indefinitely on password-auth servers
+- **`tradinebotte-accumulation.service` user units on two accounts**: `accumulation_bot` on the standalone account (btc_accumulation strategy) and on the scalping account (btc_accumulation_deepdip strategy) migrated from nohup to user units; nohup processes stopped cleanly before start; strategy path baked into the unit at install time
+- **`tradinebotte-orderbook.service` user unit on scalping account**: `orderbook_bot` migrated from nohup to user unit; nohup process stopped cleanly before start
+- **`migrate_cex_bots.sh` — one-shot migration script for CEX bot accounts**: installs and starts all three CEX bot user units (accumulation ×2, orderbook ×1) in a single run; detects `.venv` vs `venv` at install time; prints `loginctl enable-linger` Phase 2 instructions for root; unit file templates stored in `tradinebotte-cex/scripts/systemd/`
+
+### Changed
+- **`update_swing.sh` — dual-path restart replaces nohup-only path**: detects `tradinebotte-live.service` active/enabled and uses `systemctl --user restart` if present; falls back to nohup otherwise; verify step upgraded from PID-file check to `pgrep`/exe-filter approach matching other deploy scripts; waits 36s after systemd restart (RestartSec=30) vs 6s after nohup
+- **`deploy_scalping_claude4.sh` — dual-path restart for orderbook_bot**: detects `tradinebotte-orderbook.service` active/enabled; systemd path preferred, nohup fallback retained; verify step upgraded to pgrep/exe-filter
+- **`deploy_accumulation.sh` — dual-path restart for accumulation_bot**: detects `tradinebotte-accumulation.service` active/enabled; systemd path preferred, nohup fallback retained; venv detection uses `.venv` → `venv` fallback instead of hard-coded `venv/`; verify step upgraded to pgrep/exe-filter
+
+---
+
 ## [0.61] — 2026-06-07
 
 ### Fixed

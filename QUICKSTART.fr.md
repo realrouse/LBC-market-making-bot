@@ -26,7 +26,7 @@ tail -f ~/tradinebotte/live.log
 Monitoring : `bash scripts/monitor.sh`  
 Redémarrage automatique au reboot : voir [INSTALL.fr.md — configuration systemd](INSTALL.fr.md#démarrage-automatique-avec-systemd-recommandé-pour-les-serveurs-dédiés)
 
-**Arrêt :** `kill $(cat ~/tradinebotte/live.pid)` · ou `sudo systemctl stop tradinebotte` si systemd
+**Arrêt :** `kill $(cat ~/tradinebotte/live.pid)` · ou `sudo systemctl stop tradinebotte` (unité système) · ou `systemctl --user stop tradinebotte-live.service` (unité user, sans sudo)
 
 ---
 
