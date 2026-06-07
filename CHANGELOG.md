@@ -11,6 +11,9 @@ All notable changes to this project are documented here.
 ### Changed
 - **Deploy scripts — rsync excludes added to prevent re-deploying unused files**: `update_standalone.sh`, `deploy_accumulation.sh`, `deploy_scalping_claude4.sh`, and `update_swing.sh` now exclude `account_bot.py` and `feed.py` from the polymarket rsync (not needed on live-only or CEX accounts); `deploy_accumulation.sh`, `deploy_scalping_claude4.sh`, and `update_swing.sh` exclude `scalping_bot.py`, `scalping_math.py`, `api_bitstamp.py`, and `api_mexc.py` from the CEX rsync (unused by running bots)
 
+### Removed
+- **`tradinebotte-cex/scalping_bot.py` and `tradinebotte-cex/tests/test_scalping_bot.py`** — OHLCV 1-minute scalping bot and its 415-test suite removed from the source tree; the bot was not deployed to any account and not imported by any running module; `analysis/backtest_scalping.py` and `tests/test_scalping.py` (which test the backtest engine, not the live bot) are retained; `api_binance.py`, `api_bitstamp.py`, `api_mexc.py`, and the `connectors/` registry remain as they serve other deployed bots
+
 ### Maintenance
 - **Server cleanup — removed stale files from all deployment accounts**: deleted duplicate `venv/` directories (108 MB × 3 accounts; running services use `.venv`); removed git-clone residues (`scripts/`, `tests/`, `.github/`, `.git-hooks/`, `.mypy_cache/`, `reports/` dirs and doc/notes files) from the three accounts originally deployed via git clone; removed old flat strategy JSON files and obsolete Python strategy modules (`strategies/base.py`, `strategies/grid.py`, `strategies/__init__.py`) superseded by `strategy_engines/` and JSON config layout; removed stale PID files, orphaned scalping DBs/logs, and a corrupted DB backup; removed nine old system service unit files from `/etc/systemd/system/` including three that were still `enabled` and would have started at next reboot (disabled before removal)
 
