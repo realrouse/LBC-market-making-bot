@@ -14,8 +14,12 @@
 #   - Write ~/.config/systemd/user/<service>.service with full paths
 #   - daemon-reload, enable, kill nohup orphan, start
 #
-# ─── Phase 2 (printed for admin, requires sudo once per account) ─────────────────
-#   loginctl enable-linger <user>   — persist user services across reboots/logouts
+# ─── Phase 2 (printed for admin, requires root/sudo once per account) ────────────
+#   loginctl enable-linger <user>
+#   MUST be run as root — cannot be automated from a user SSH session.
+#   Without linger, all user services stop when the SSH session that started them
+#   ends. Services will not restart until linger is enabled and systemd re-reads
+#   the enabled units.
 #
 # Usage:
 #   bash scripts/migrate_cex_bots.sh              # migrate all CEX bot accounts

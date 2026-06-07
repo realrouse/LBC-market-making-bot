@@ -10,11 +10,12 @@
 # can be started/stopped/restarted by the owning user without any privilege.
 # This is the correct model for per-account bots that only affect one user.
 #
-# ─── One-time admin step (sudo required, done once per account) ──────────────
+# ─── One-time admin step (root/sudo required, done once per account) ─────────
 # loginctl enable-linger <user>
+#   MUST be run as root — cannot be automated from a user SSH session.
 #   Allows the user's systemd instance to start at boot and persist without
-#   an active login session. Without linger, user services only run while
-#   the user has an open session.
+#   an active login session. Without linger, all user services stop when the
+#   SSH session that started them ends — bots go down silently at logout.
 #
 # ─── This script does ────────────────────────────────────────────────────────
 # Phase 1 (SSH as user, no sudo):
