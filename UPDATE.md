@@ -53,7 +53,7 @@ rsync -az --delete \
     --exclude='config.json' \
     --exclude='live.db' \
     --exclude='*.log' \
-    --exclude='venv/' \
+    --exclude='venv/' --exclude='.venv/' \
     /path/to/tradinebotte/ user@server:~/tradinebotte/
 
 ssh user@server 'cd ~/tradinebotte && bash scripts/install.sh'
@@ -63,7 +63,7 @@ ssh user@server 'kill $(cat ~/tradinebotte/live.pid); ~/tradinebotte/run.sh'
 **Critical exclusions:**
 - `--exclude='config.json'` — prevents wiping live credentials **and language preference** (`"lang"` field set by `setup.py` / `install.sh`)
 - `--exclude='live.db'` — preserves trade history
-- `--exclude='venv/'` — avoids transferring hundreds of MB over the network
+- `--exclude='venv/' --exclude='.venv/'` — avoids transferring hundreds of MB over the network (covers both `venv/` and `.venv/` layouts)
 
 Without `--exclude='config.json'`, `rsync --delete` will delete the file and
 `start_bot.sh` will refuse to start. Re-run `setup.py` if that happens (it will
@@ -164,6 +164,7 @@ kill $(cat ~/tradinebotte/feed.pid)
 kill $(cat ~/account-a/account.pid)
 kill $(cat ~/account-b/account.pid)
 
+bash tradinebotte-polymarket/scripts/start_feed.sh
 TRADINEBOTTE_DIR=~/account-a bash tradinebotte-polymarket/scripts/start_account.sh
 TRADINEBOTTE_DIR=~/account-b bash tradinebotte-polymarket/scripts/start_account.sh
 ```

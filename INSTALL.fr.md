@@ -99,7 +99,7 @@ bash scripts/install.sh
 Depuis votre machine locale où le dépôt est déjà cloné :
 
 ```bash
-rsync -a --exclude='*.db' --exclude='__pycache__' --exclude='.git' --exclude='venv' \
+rsync -a --exclude='*.db' --exclude='__pycache__' --exclude='.git' --exclude='venv' --exclude='.venv' \
   /chemin/vers/tradinebotte/ user@serveur:~/tradinebotte/
 ssh user@serveur "cd ~/tradinebotte && bash scripts/install.sh"
 ```
@@ -107,7 +107,7 @@ ssh user@serveur "cd ~/tradinebotte && bash scripts/install.sh"
 Pour mettre à jour une installation existante (préserve `config.json`) :
 
 ```bash
-rsync -a --exclude='*.db' --exclude='__pycache__' --exclude='.git' --exclude='venv' \
+rsync -a --exclude='*.db' --exclude='__pycache__' --exclude='.git' --exclude='venv' --exclude='.venv' \
   --exclude='config.json' \
   /chemin/vers/tradinebotte/ user@serveur:~/tradinebotte/
 ssh user@serveur "cd ~/tradinebotte && bash scripts/install.sh"

@@ -6,6 +6,14 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.66] — 2026-06-07
+
+### Corrections
+- **`UPDATE.md`, `UPDATE.fr.md` — Option B manquait le redémarrage de `start_feed.sh`** : la séquence de mise à jour multi-bot tuait les trois processus (feed + 2 comptes) mais ne redémarrait que les account bots ; le feed n'était jamais relancé, laissant les deux account bots sans données ; `bash tradinebotte-polymarket/scripts/start_feed.sh` ajouté avant les lignes `start_account.sh`
+- **`INSTALL.md`, `INSTALL.fr.md`, `UPDATE.md`, `UPDATE.fr.md` — exclusions rsync manquantes pour `.venv/`** : `--exclude='venv/'` n'exclut pas les répertoires cachés `.venv/` ; la racine du repo contient un virtualenv de développement `.venv/` qui était silencieusement rsynced vers le serveur ; ajout de `--exclude='.venv/'` (UPDATE.md) et `--exclude='.venv'` (INSTALL.md) dans les quatre commandes rsync des quatre fichiers
+
+---
+
 ## [0.65] — 2026-06-07
 
 ### Corrections

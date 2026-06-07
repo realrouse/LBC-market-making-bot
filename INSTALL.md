@@ -98,7 +98,7 @@ bash scripts/install.sh
 From your local machine where the repo is already cloned:
 
 ```bash
-rsync -a --exclude='*.db' --exclude='__pycache__' --exclude='.git' --exclude='venv' \
+rsync -a --exclude='*.db' --exclude='__pycache__' --exclude='.git' --exclude='venv' --exclude='.venv' \
   /path/to/tradinebotte/ user@server:~/tradinebotte/
 ssh user@server "cd ~/tradinebotte && bash scripts/install.sh"
 ```
@@ -106,7 +106,7 @@ ssh user@server "cd ~/tradinebotte && bash scripts/install.sh"
 To update an existing install (preserves `config.json`):
 
 ```bash
-rsync -a --exclude='*.db' --exclude='__pycache__' --exclude='.git' --exclude='venv' \
+rsync -a --exclude='*.db' --exclude='__pycache__' --exclude='.git' --exclude='venv' --exclude='.venv' \
   --exclude='config.json' \
   /path/to/tradinebotte/ user@server:~/tradinebotte/
 ssh user@server "cd ~/tradinebotte && bash scripts/install.sh"
