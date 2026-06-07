@@ -121,7 +121,8 @@ if [[ "$RESTART_INDICATORS" == "true" ]]; then
     # Install tradinetools in the .venv used by the systemd service.
     # .venv may have no pip script — fall back to direct site-packages copy.
     SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
-        ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+        ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
+        -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
         -o PreferredAuthentications=password \
         -p "$_port" "$_c1_user@$_server" "
 VENV=$_install_dir/.venv
@@ -178,7 +179,8 @@ if [[ "$RESTART_FEED" == "true" ]]; then
 
     # Install tradinetools in .venv; fall back to direct copy if pip is absent
     SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
-        ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+        ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
+        -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
         -o PreferredAuthentications=password \
         -p "$_port" "$_c1_user@$_server" "
 VENV=$_install_dir/.venv
@@ -249,7 +251,8 @@ if [[ "$RESTART_ACCOUNT" == "true" ]]; then
 
     # Install tradinetools in .venv; fall back to direct copy if pip is absent
     SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
-        ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+        ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
+        -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
         -o PreferredAuthentications=password \
         -p "$_port" "$_c1_user@$_server" "
 VENV=$_install_dir/.venv

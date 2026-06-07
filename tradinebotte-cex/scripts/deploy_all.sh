@@ -34,9 +34,11 @@ STEP_RESULTS=()
 run_step() {
     local label="$1"
     local script="$2"
+    shift 2
+    local extra_args=("$@")
     STEP_LABELS+=("$label")
     echo -e "\n${BOLD}${YELLOW}▶▶▶ $label ▶▶▶${NC}"
-    if bash "$script" "${ARGS[@]}"; then
+    if bash "$script" "${extra_args[@]}" "${ARGS[@]}"; then
         STEP_RESULTS+=("OK")
     else
         STEP_RESULTS+=("FAILED")
@@ -44,7 +46,7 @@ run_step() {
     fi
 }
 
-run_step "account-1 — live_bot (Polymarket)"            "$PM/update_claude1.sh"
+run_step "account-1 — rsync (Polymarket)"                "$PM/update_claude1.sh" --skip-restart
 run_step "account-2 — live_bot (Polymarket)"            "$PM/update_claude2.sh"
 run_step "account-3 — live_bot (Polymarket)"            "$PM/update_claude3.sh"
 run_step "account-3 — accumulation_bot"                 "$CEX/deploy_accumulation_claude3.sh"
