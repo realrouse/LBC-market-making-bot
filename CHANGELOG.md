@@ -6,6 +6,16 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.63] — 2026-06-07
+
+### Changed
+- **Deploy scripts — rsync excludes added to prevent re-deploying unused files**: `update_standalone.sh`, `deploy_accumulation.sh`, `deploy_scalping_claude4.sh`, and `update_swing.sh` now exclude `account_bot.py` and `feed.py` from the polymarket rsync (not needed on live-only or CEX accounts); `deploy_accumulation.sh`, `deploy_scalping_claude4.sh`, and `update_swing.sh` exclude `scalping_bot.py`, `scalping_math.py`, `api_bitstamp.py`, and `api_mexc.py` from the CEX rsync (unused by running bots)
+
+### Maintenance
+- **Server cleanup — removed stale files from all deployment accounts**: deleted duplicate `venv/` directories (108 MB × 3 accounts; running services use `.venv`); removed git-clone residues (`scripts/`, `tests/`, `.github/`, `.git-hooks/`, `.mypy_cache/`, `reports/` dirs and doc/notes files) from the three accounts originally deployed via git clone; removed old flat strategy JSON files and obsolete Python strategy modules (`strategies/base.py`, `strategies/grid.py`, `strategies/__init__.py`) superseded by `strategy_engines/` and JSON config layout; removed stale PID files, orphaned scalping DBs/logs, and a corrupted DB backup; removed nine old system service unit files from `/etc/systemd/system/` including three that were still `enabled` and would have started at next reboot (disabled before removal)
+
+---
+
 ## [0.62] — 2026-06-07
 
 ### Added

@@ -6,6 +6,16 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.63] — 2026-06-07
+
+### Modifications
+- **Scripts de déploiement — exclusions rsync pour éviter le redéploiement de fichiers inutiles** : `update_standalone.sh`, `deploy_accumulation.sh`, `deploy_scalping_claude4.sh` et `update_swing.sh` excluent désormais `account_bot.py` et `feed.py` du rsync polymarket (inutiles sur les comptes live-only ou CEX) ; `deploy_accumulation.sh`, `deploy_scalping_claude4.sh` et `update_swing.sh` excluent `scalping_bot.py`, `scalping_math.py`, `api_bitstamp.py` et `api_mexc.py` du rsync CEX (non utilisés par les bots en cours d'exécution)
+
+### Maintenance
+- **Nettoyage serveur — suppression des fichiers obsolètes sur tous les comptes** : suppression des répertoires `venv/` dupliqués (108 Mo × 3 comptes ; les services actifs utilisent `.venv`) ; suppression des résidus de git clone (`scripts/`, `tests/`, `.github/`, `.git-hooks/`, `.mypy_cache/`, `reports/` et fichiers de documentation/notes) sur les trois comptes initialement déployés par git clone ; suppression des anciens fichiers JSON de stratégie en layout plat et des modules Python de stratégie obsolètes (`strategies/base.py`, `strategies/grid.py`, `strategies/__init__.py`) remplacés par `strategy_engines/` et le layout JSON ; suppression des fichiers PID obsolètes, des bases de données et logs scalping orphelins, et d'une sauvegarde de base de données corrompue ; suppression de neuf anciens fichiers d'unité système dans `/etc/systemd/system/` dont trois encore `enabled` qui auraient démarré au prochain reboot (désactivés avant suppression)
+
+---
+
 ## [0.62] — 2026-06-07
 
 ### Ajouts

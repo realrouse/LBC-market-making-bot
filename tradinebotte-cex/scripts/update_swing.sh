@@ -94,6 +94,7 @@ _rsync() {
         --exclude='__pycache__' --exclude='*.pyc' \
         --exclude='live.db' --exclude='*.log' --exclude='venv' --exclude='.venv' \
         --exclude='scripts' --exclude='tests' \
+        --exclude='account_bot.py' --exclude='feed.py' \
         -e "ssh $ssh_opts" \
         "$LOCAL_REPO/tradinebotte-polymarket/" "$SW_USER@$SERVER:$INSTALL_DIR/" 2>&1 || return 1
 
@@ -102,6 +103,8 @@ _rsync() {
         rsync -az \
         --exclude='__pycache__' --exclude='*.pyc' \
         --exclude='scripts' --exclude='tests' \
+        --exclude='scalping_bot.py' --exclude='scalping_math.py' \
+        --exclude='api_bitstamp.py' --exclude='api_mexc.py' \
         -e "ssh $ssh_opts" \
         "$LOCAL_REPO/tradinebotte-cex/" "$SW_USER@$SERVER:$INSTALL_DIR/" 2>&1 || return 1
 

@@ -80,12 +80,15 @@ _rsync() {
         rsync -az --exclude='__pycache__' --exclude='*.pyc' \
         --exclude='config.json' --exclude='live*.db' --exclude='*.log' \
         --exclude='scripts' --exclude='tests' \
+        --exclude='account_bot.py' --exclude='feed.py' \
         -e "ssh $ssh_opts" \
         "$LOCAL_REPO/tradinebotte-polymarket/" "$SC_USER@$SERVER:$INSTALL_DIR/" 2>&1
     SSHPASS="$SC_PASS" /usr/bin/sshpass -e \
         rsync -az \
         --exclude='__pycache__' --exclude='*.pyc' \
         --exclude='scripts' --exclude='tests' \
+        --exclude='scalping_bot.py' --exclude='scalping_math.py' \
+        --exclude='api_bitstamp.py' --exclude='api_mexc.py' \
         -e "ssh $ssh_opts" \
         "$LOCAL_REPO/tradinebotte-cex/" "$SC_USER@$SERVER:$INSTALL_DIR/" 2>&1
 
