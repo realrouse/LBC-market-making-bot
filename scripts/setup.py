@@ -170,7 +170,7 @@ if not PRIVATE_KEY:
     print(t("sim_config") + CONFIG_PATH)
     print(t("sim_key"))
     print(f"\n{t('sim_launch_title')}")
-    print("  bash scripts/start_bot.sh")
+    print(f"  {INSTALL_DIR}/run.sh")
     print(f"  tail -f {os.path.join(INSTALL_DIR, 'live.log')}")
     sys.exit(0)
 

@@ -6,6 +6,15 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.65] — 2026-06-07
+
+### Corrections
+- **`tradinebotte-polymarket/scripts/start_account.sh` — lookup du venv échouait pour le layout multi-bot Option B** : le script cherchait le venv dans `$TRADINEBOTTE_DIR/venv` (ex. `~/account-a/venv`) alors que le layout Option B maintient un venv partagé unique dans `~/tradinebotte/venv` ; `install.sh` ne tourne qu'une seule fois pour le répertoire partagé, pas par compte ; corrigé en vérifiant `$INSTALL_DIR/venv` en premier puis en basculant sur `$HOME/tradinebotte/venv` ; message d'erreur mis à jour avec la commande de correction correcte
+- **`scripts/setup.py` — message de mode simulation montrait une mauvaise commande de démarrage** : le message « Launch the bot: » affichait `bash scripts/start_bot.sh` (inexistant à la racine du repo) ; corrigé pour afficher `$INSTALL_DIR/run.sh` (le wrapper généré par `install.sh`)
+- **`INSTALL.md`, `INSTALL.fr.md` — Méthode 1 (git clone) et Méthode 3 (tar.gz) référençaient encore `v0.5.0`** : mis à jour en `v0.63`
+
+---
+
 ## [0.64] — 2026-06-07
 
 ### Corrections

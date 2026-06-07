@@ -7,12 +7,12 @@
 #  (default: tcp://127.0.0.1:5557).
 #
 #  Start BEFORE account bots:
-#    bash scripts/start_feed.sh
-#    TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
-#    TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
+#    bash tradinebotte-polymarket/scripts/start_feed.sh
+#    TRADINEBOTTE_DIR=~/account-a bash tradinebotte-polymarket/scripts/start_account.sh
+#    TRADINEBOTTE_DIR=~/account-b bash tradinebotte-polymarket/scripts/start_account.sh
 #
 #  Custom address:
-#    TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash scripts/start_feed.sh
+#    TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash tradinebotte-polymarket/scripts/start_feed.sh
 # ═══════════════════════════════════════════════════════════════════
 
 INSTALL_DIR="${TRADINEBOTTE_DIR:-$HOME/tradinebotte}"

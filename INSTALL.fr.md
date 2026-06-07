@@ -89,7 +89,7 @@ bash scripts/install.sh
 Pour installer une version précise :
 
 ```bash
-git clone --branch v0.5.0 https://github.com/neofutur/tradinebotte.git
+git clone --branch v0.63 https://github.com/neofutur/tradinebotte.git
 cd tradinebotte
 bash scripts/install.sh
 ```
@@ -132,9 +132,9 @@ Télécharger la dernière archive de release depuis la
 [page Releases](https://github.com/neofutur/tradinebotte/releases) :
 
 ```bash
-# Remplacer v0.5.0 par la version souhaitée
-wget https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.5.0.tar.gz
-tar -xzf v0.5.0.tar.gz
+# Remplacer v0.63 par la version souhaitée
+wget https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.63.tar.gz
+tar -xzf v0.63.tar.gz
 cd tradinebotte-0.5.0
 bash scripts/install.sh
 ```
@@ -142,7 +142,7 @@ bash scripts/install.sh
 Ou avec `curl` :
 
 ```bash
-curl -L https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.5.0.tar.gz \
+curl -L https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.63.tar.gz \
   | tar -xz
 cd tradinebotte-0.5.0
 bash scripts/install.sh
