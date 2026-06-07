@@ -75,7 +75,8 @@ if [[ "$PHASE2_ONLY" == "false" ]]; then
         -o PreferredAuthentications=password \
         -p "$PORT" "$c1_user@$SERVER" "
 set -e
-SVC_ACCOUNT=\"tradinebotte-account-\$(whoami).service\"
+# Account service name uses the bot project name as suffix (not the OS username).
+SVC_ACCOUNT=\"tradinebotte-account-tradinebotte.service\"
 mkdir -p ~/.config/systemd/user
 
 cat > ~/.config/systemd/user/tradinebotte-indicators.service << 'UNITEOF'
@@ -182,16 +183,16 @@ echo "  # 1. Enable linger so user services persist across reboots (no active se
 echo "  loginctl enable-linger $c1_user"
 echo ""
 echo "  # 2. Stop and disable system services (releases ZeroMQ ports 5557, 5559, 5561)"
-echo "  systemctl stop    tradinebotte-indicators tradinebotte-feed tradinebotte-account-${c1_user}"
-echo "  systemctl disable tradinebotte-indicators tradinebotte-feed tradinebotte-account-${c1_user}"
+echo "  systemctl stop    tradinebotte-indicators tradinebotte-feed tradinebotte-account-tradinebotte"
+echo "  systemctl disable tradinebotte-indicators tradinebotte-feed tradinebotte-account-tradinebotte"
 echo ""
 echo "  # 3. Start user services (run as account-1 user, in order)"
 echo "  UID_C1=\$(id -u $c1_user)"
 echo "  su -l $c1_user -c \"XDG_RUNTIME_DIR=/run/user/\$UID_C1 systemctl --user start tradinebotte-indicators\""
 echo "  su -l $c1_user -c \"XDG_RUNTIME_DIR=/run/user/\$UID_C1 systemctl --user start tradinebotte-feed\""
-echo "  su -l $c1_user -c \"XDG_RUNTIME_DIR=/run/user/\$UID_C1 systemctl --user start tradinebotte-account-${c1_user}\""
+echo "  su -l $c1_user -c \"XDG_RUNTIME_DIR=/run/user/\$UID_C1 systemctl --user start tradinebotte-account-tradinebotte\""
 echo ""
 echo "  # 4. Verify all three are active"
-echo "  su -l $c1_user -c \"XDG_RUNTIME_DIR=/run/user/\$UID_C1 systemctl --user status tradinebotte-indicators tradinebotte-feed tradinebotte-account-${c1_user}\""
+echo "  su -l $c1_user -c \"XDG_RUNTIME_DIR=/run/user/\$UID_C1 systemctl --user status tradinebotte-indicators tradinebotte-feed tradinebotte-account-tradinebotte\""
 echo ""
 warn "Do NOT start user services before stopping system services — ports 5557/5559/5561 must be free."
