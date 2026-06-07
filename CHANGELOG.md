@@ -6,6 +6,17 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.61] — 2026-06-07
+
+### Fixed
+- **`update_claude1.sh` — account password piped through `sudo -S` over SSH to restart services**: `_restart_service()` constructed remote commands of the form `echo '$password' | sudo -S systemctl restart <svc>` — exposing the account credential in the process argument list visible to any user running `ps aux` on the server; root cause: indicators, feed, and account-bot were system services (`/etc/systemd/system/`) requiring root privileges to restart; migrated all three to user units (`~/.config/systemd/user/`) so `systemctl --user restart` works with no sudo and no credential exposure
+
+### Added
+- **`migrate_claude1_services.sh` — migration script for account-1 system → user units**: Phase 1 (SSH, no sudo) writes the three user service units and enables them; Phase 2 prints the admin steps to run on the server (linger + stop/disable system services + start user services in the correct order); user services must not start while system services hold ZeroMQ ports 5557, 5559, and 5561 — stopping system services first is mandatory
+- **`systemd/tradinebotte-indicators.user.service`**, **`systemd/tradinebotte-feed.user.service`**, **`systemd/tradinebotte-account.user.service`** — user service unit templates for the three account-1 services; use `%h` home-dir specifier, `WantedBy=default.target`, `After=network.target`; `ExecStart` and environment variables copied verbatim from the live system units
+
+---
+
 ## [0.60] — 2026-06-07
 
 ### Fixed

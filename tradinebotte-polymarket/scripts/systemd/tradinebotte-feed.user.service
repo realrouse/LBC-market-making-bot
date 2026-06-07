@@ -1,0 +1,20 @@
+[Unit]
+Description=tradinebotte — Shared WebSocket feed (ZeroMQ broadcaster)
+Documentation=https://github.com/neofutur/tradinebotte/blob/main/docs/multi.md
+After=network.target
+Wants=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+Environment=TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5557
+WorkingDirectory=%h/tradinebotte
+ExecStart=%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/feed.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=default.target

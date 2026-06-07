@@ -69,11 +69,12 @@ _restart_service() {
         -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
         -o PreferredAuthentications=password \
         -p "$port" "$c1_user@$server" \
-        "echo '$c1_pass' | sudo -S systemctl reset-failed ${svc} 2>/dev/null; \
-         echo '$c1_pass' | sudo -S systemctl restart ${svc} 2>/dev/null \
+        "export XDG_RUNTIME_DIR=/run/user/\$(id -u); \
+         systemctl --user reset-failed ${svc} 2>/dev/null; \
+         systemctl --user restart ${svc} 2>/dev/null \
          && echo 'restarted' \
          && sleep 4 \
-         && journalctl -u ${svc} --no-pager -n 8 2>/dev/null | grep -E '${grep_pat}'" 2>&1)
+         && journalctl --user -u ${svc} --no-pager -n 8 2>/dev/null | grep -E '${grep_pat}'" 2>&1)
 
     echo "$out"
     if echo "$out" | grep -q "restarted"; then
@@ -194,12 +195,6 @@ else
     echo 'tradinetools ok (copy)'
 fi
 \$VENV/bin/python3 -c 'from tradinetools.zmq import warn_if_external_bind; print(\"import check ok\")' 2>&1
-# Ensure ExecStart in the unit file points to the flat feed.py, not bot/feed.py
-if grep -q 'bot/feed\.py' /etc/systemd/system/tradinebotte-feed.service 2>/dev/null; then
-    echo '$_c1_pass' | sudo -S sed -i 's|bot/feed\.py|feed.py|g' /etc/systemd/system/tradinebotte-feed.service
-    echo '$_c1_pass' | sudo -S systemctl daemon-reload
-    echo 'unit file path fixed'
-fi
 " 2>&1 \
         && echo -e "${GREEN}  ✓ tradinetools installed in .venv${NC}" \
         || echo -e "${RED}  ✗ tradinetools install failed${NC}"

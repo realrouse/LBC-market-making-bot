@@ -6,6 +6,17 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.61] — 2026-06-07
+
+### Correctifs
+- **`update_claude1.sh` — mot de passe du compte pipé via `sudo -S` en SSH pour redémarrer les services** : `_restart_service()` construisait des commandes distantes de la forme `echo '$password' | sudo -S systemctl restart <svc>` — exposant le credential du compte dans la liste des arguments de processus visible par n'importe quel utilisateur via `ps aux` ; cause racine : les services indicateurs, feed et account-bot étaient des services système (`/etc/systemd/system/`) nécessitant des privilèges root pour redémarrer ; les trois ont été migrés vers des unités user (`~/.config/systemd/user/`) pour que `systemctl --user restart` fonctionne sans sudo ni exposition de credential
+
+### Ajouts
+- **`migrate_claude1_services.sh` — script de migration des services système → services user pour le compte 1** : la phase 1 (SSH, sans sudo) écrit les trois unités user et les active ; la phase 2 affiche les étapes admin à exécuter sur le serveur (linger + stop/disable des services système + démarrage des services user dans le bon ordre) ; les services user ne doivent pas démarrer pendant que les services système occupent les ports ZeroMQ 5557, 5559 et 5561 — arrêter les services système en premier est obligatoire
+- **`systemd/tradinebotte-indicators.user.service`**, **`systemd/tradinebotte-feed.user.service`**, **`systemd/tradinebotte-account.user.service`** — modèles d'unités user pour les trois services du compte 1 ; utilisent le spécificateur `%h` pour le répertoire home, `WantedBy=default.target`, `After=network.target` ; `ExecStart` et variables d'environnement copiés verbatim depuis les unités système actives
+
+---
+
 ## [0.60] — 2026-06-07
 
 ### Correctifs
