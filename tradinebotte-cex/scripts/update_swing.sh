@@ -80,6 +80,7 @@ STRATEGY_PATH="${TEST_SWING_STRATEGY:-strategies/swing/swing_BTCUSDT.json}"
 _ssh() {
     SSHPASS="$SW_PASS" /usr/bin/sshpass -e \
         ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
+        -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
         -o PreferredAuthentications=password \
         -p "$PORT" "$SW_USER@$SERVER" "$@" 2>&1
 }

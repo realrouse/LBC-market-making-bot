@@ -6,6 +6,20 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.60] — 2026-06-07
+
+### Fixed
+- **`update_standalone.sh` — verify step reported "running" on a dead bot**: the verify SSH session's bash cmdline contains the literal string `live_bot` (from the pgrep pattern); `pgrep -f 'python.*live_bot'` self-matched the bash process, making `MPID` non-empty even when the actual bot was not running; `grep -qE '^PID=[0-9]+ running'` then returned success for a dead bot; replaced with a `/proc/$P/exe` filtered loop matching all other deploy scripts
+- **`update_standalone.sh` — dead system-service branch: bare pgrep + no actual restart**: the `elif [ -f "/etc/systemd/system/$SVC" ]` branch used `pgrep -u $SA_USER -f 'python3.*live_bot'` without exe-check (same self-match bug), and the restart body only echoed `systemd restarted` without running any `systemctl` command; a bot killed by this path would never come back up; branch removed (all accounts are on user services)
+- **Deploy scripts — `ServerAliveInterval` missing from four of five scripts**: `update_standalone.sh` had `-o ServerAliveInterval=10 -o ServerAliveCountMax=3` in `_ssh()` but `deploy_scalping_claude4.sh`, `update_swing.sh`, and the new `deploy_accumulation.sh` base were missing it; SSH connections to these scripts could hang indefinitely on network interruption
+
+### Added
+- **`deploy_accumulation.sh` — parameterized base script replaces 191-line duplicates**: `deploy_accumulation_claude3.sh` and `deploy_accumulation_claude4.sh` were near-identical copies (4 variable differences in 191 lines); both are now thin wrappers (`ACCUM_USER_IDX` + `BOT_STRATEGY` env vars) delegating to the new base script; a single fix now propagates to both accounts instead of requiring two edits
+- **`update_claude4.sh` — missing thin wrapper for the scalping account (index 3)**: all other accounts had `update_claudeN.sh` wrappers around `update_standalone.sh`; the scalping account lacked one, requiring manual `TEST_STANDALONE_USER_IDX=3` invocations; added following the same pattern as `update_claude2.sh`, `update_claude3.sh`, `update_claude5.sh`
+- **`deploy_all.sh` — sequential deploy-all script**: deploys all eight bots across all accounts in the required order (same server — never parallel); prints a per-account OK/FAILED summary at the end; passes `--skip-restart` and `--verify-only` flags through to all sub-scripts
+
+---
+
 ## [0.59] — 2026-06-06
 
 ### Fixed

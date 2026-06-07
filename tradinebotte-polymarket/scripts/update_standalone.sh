@@ -189,15 +189,6 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
             systemctl --user restart tradinebotte-live.service \
                 && echo 'systemd restarted' \
                 || echo 'user service restart failed'
-        elif [ -f \"/etc/systemd/system/\$SVC\" ]; then
-            echo \"detected system service: \$SVC (consider migrating to user service)\"
-            PIDS=\$(pgrep -u ${SA_USER} -f 'python3.*live_bot' 2>/dev/null || true)
-            if [ -n \"\$PIDS\" ]; then
-                for PID in \$PIDS; do
-                    kill \"\$PID\" 2>/dev/null && echo \"killed pid=\$PID\"
-                done
-            fi
-            echo 'systemd restarted'
         else
             # Nohup path — kill ALL stale instances (PID file + orphans from prior sessions)
             PID_FILE=\$INSTALL/live.pid
@@ -241,11 +232,15 @@ VERIFY_OUT=$(_ssh "
     echo '=== process ==='
     # Use pgrep to find the live_bot process — avoids D-Bus dependency of
     # 'systemctl show --property=MainPID' which hangs in non-interactive SSH.
-    MPID=\$(pgrep -u \"\$(whoami)\" -f 'python.*live_bot' 2>/dev/null | head -1)
+    MPID=\"\"
+    for P in \$(pgrep -u \"\$(whoami)\" -f 'live_bot' 2>/dev/null || true); do
+        if readlink /proc/\"\$P\"/exe 2>/dev/null | grep -q python; then
+            MPID=\$P; break
+        fi
+    done
     if [ -n \"\$MPID\" ]; then
         echo \"PID=\$MPID running\"
     else
-        # Fallback: check user service state without querying MainPID via D-Bus
         export XDG_RUNTIME_DIR=/run/user/\$(id -u)
         STATE=\$(systemctl --user is-active tradinebotte-live.service 2>/dev/null || echo unknown)
         echo \"PID=0 NOT running — user service state=\$STATE\"

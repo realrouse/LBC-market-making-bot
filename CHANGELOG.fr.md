@@ -6,6 +6,20 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.60] — 2026-06-07
+
+### Correctifs
+- **`update_standalone.sh` — l'étape VERIFY signalait "running" sur un bot mort** : le cmdline bash de la session SSH de vérification contient la chaîne littérale `live_bot` (issue du pattern pgrep) ; `pgrep -f 'python.*live_bot'` s'auto-correspondait au processus bash, rendant `MPID` non-vide même quand le bot réel n'était pas en cours d'exécution ; `grep -qE '^PID=[0-9]+ running'` retournait succès pour un bot mort ; remplacé par une boucle filtrée par `/proc/$P/exe` comme dans tous les autres scripts de déploiement
+- **`update_standalone.sh` — branche "system service" morte : pgrep nu + pas de vrai redémarrage** : la branche `elif [ -f "/etc/systemd/system/$SVC" ]` utilisait `pgrep -u $SA_USER -f 'python3.*live_bot'` sans filtre exe (même bug d'auto-correspondance), et le corps de redémarrage se contentait d'afficher `systemd restarted` sans exécuter aucune commande `systemctl` ; un bot tué par ce chemin ne redémarrait jamais ; branche supprimée (tous les comptes sont sur des services user)
+- **Scripts de déploiement — `ServerAliveInterval` manquant dans quatre scripts sur cinq** : `update_standalone.sh` avait `-o ServerAliveInterval=10 -o ServerAliveCountMax=3` dans `_ssh()` mais `deploy_scalping_claude4.sh`, `update_swing.sh` et le nouveau script base `deploy_accumulation.sh` en étaient dépourvus ; les connexions SSH de ces scripts pouvaient rester bloquées indéfiniment en cas d'interruption réseau
+
+### Ajouts
+- **`deploy_accumulation.sh` — script base paramétrable remplace 191 lignes dupliquées** : `deploy_accumulation_claude3.sh` et `deploy_accumulation_claude4.sh` étaient des copies quasi-identiques (4 variables différentes sur 191 lignes) ; les deux sont désormais de fins wrappers (variables d'environnement `ACCUM_USER_IDX` et `BOT_STRATEGY`) délégant au nouveau script base ; un seul correctif se propage maintenant aux deux comptes au lieu de nécessiter deux modifications
+- **`update_claude4.sh` — wrapper manquant pour le compte scalping (index 3)** : tous les autres comptes avaient des wrappers `update_claudeN.sh` autour de `update_standalone.sh` ; le compte scalping n'en avait pas, nécessitant des invocations manuelles `TEST_STANDALONE_USER_IDX=3` ; ajouté suivant le même modèle que `update_claude2.sh`, `update_claude3.sh`, `update_claude5.sh`
+- **`deploy_all.sh` — script de déploiement séquentiel global** : déploie les huit bots sur tous les comptes dans l'ordre requis (même serveur — jamais en parallèle) ; affiche un résumé OK/FAILED par compte en fin d'exécution ; transmet les flags `--skip-restart` et `--verify-only` à tous les sous-scripts
+
+---
+
 ## [0.59] — 2026-06-06
 
 ### Correctifs
