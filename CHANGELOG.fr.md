@@ -6,6 +6,13 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.68] — 2026-06-08
+
+### Corrections
+- **`tradinebotte-polymarket/scripts/update_standalone.sh` — `connectors/` et `strategy_engines/` jamais synchronisés** : les quatre scripts de déploiement (`update_claude2.sh` à `update_claude5.sh`) sont des wrappers autour de `update_standalone.sh` ; sa fonction `_rsync()` synchronisait `tradinebotte-polymarket/`, `strategies/`, `requirements.txt` et `tradinetools/` mais omettait `tradinebotte-cex/connectors/` et `tradinebotte-cex/strategy_engines/` ; après une mise à jour de code, `live_bot.py` démarrait et plantait immédiatement avec `ModuleNotFoundError: No module named 'connectors'` ; les deux répertoires ajoutés à la séquence rsync
+
+---
+
 ## [0.67] — 2026-06-07
 
 ### Changements

@@ -120,6 +120,20 @@ _rsync() {
         --exclude='__pycache__' --exclude='*.pyc' --exclude='*.egg-info' \
         -e "ssh $ssh_opts" \
         "$LOCAL_REPO/tradinetools/" "$SA_USER@$SERVER:$INSTALL_DIR/tradinetools/" 2>&1 || return 1
+
+    # CEX connector adapters (used by live_bot.py via `from connectors import load`)
+    SSHPASS="$SA_PASS" /usr/bin/sshpass -e \
+        rsync -az \
+        --exclude='__pycache__' --exclude='*.pyc' \
+        -e "ssh $ssh_opts" \
+        "$LOCAL_REPO/tradinebotte-cex/connectors/" "$SA_USER@$SERVER:$INSTALL_DIR/connectors/" 2>&1 || return 1
+
+    # CEX strategy engines (grid, swing, dca, etc.)
+    SSHPASS="$SA_PASS" /usr/bin/sshpass -e \
+        rsync -az \
+        --exclude='__pycache__' --exclude='*.pyc' \
+        -e "ssh $ssh_opts" \
+        "$LOCAL_REPO/tradinebotte-cex/strategy_engines/" "$SA_USER@$SERVER:$INSTALL_DIR/strategy_engines/" 2>&1 || return 1
 }
 
 # ─── Pre-flight ─────────────────────────────────────────────────────────────────
