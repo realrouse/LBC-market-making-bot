@@ -49,11 +49,12 @@ def compute_fee(price, quantity):
 
 
 # ─── CREDENTIALS ──────────────────────────────────────────────────────────────
-_has_creds = bool(
-    os.environ.get("BITSTAMP_API_KEY")
-    and os.environ.get("BITSTAMP_API_SECRET")
-    and os.environ.get("BITSTAMP_CUSTOMER_ID")
-)
+def _has_creds() -> bool:
+    return bool(
+        os.environ.get("BITSTAMP_API_KEY")
+        and os.environ.get("BITSTAMP_API_SECRET")
+        and os.environ.get("BITSTAMP_CUSTOMER_ID")
+    )
 
 
 def _auth_headers(method: str, path: str, body: str = "") -> dict:
@@ -276,7 +277,7 @@ async def post_order(session, symbol, price, size_usdc, *, side="BUY", **_):
     bs_side = side.lower()   # "BUY" → "buy", "SELL" → "sell"
     quantity = size_usdc / price if price > 0 else 0.0
 
-    if not _has_creds:
+    if not _has_creds():
         oid = f"sim_{uuid.uuid4().hex[:8]}"
         logger.info("Bitstamp sim: %s %s qty=%.6f @ %.2f  [%s]",
                     bs_side, symbol, quantity, price, oid)
@@ -309,7 +310,7 @@ async def post_order(session, symbol, price, size_usdc, *, side="BUY", **_):
 
 async def get_order_status(session, symbol, order_id):
     """Return Bitstamp order status string or None."""
-    if not _has_creds:
+    if not _has_creds():
         return "simulated"
     endpoint = "/api/v2/order_status/"
     body_dict = {"id": str(order_id)}
@@ -331,7 +332,7 @@ async def get_order_status(session, symbol, order_id):
 
 async def cancel_order(session, symbol, order_id):
     """Cancel an open order. Returns True on success."""
-    if not _has_creds:
+    if not _has_creds():
         return True
     endpoint = "/api/v2/cancel_order/"
     body_dict = {"id": str(order_id)}
@@ -357,7 +358,7 @@ async def get_open_orders(session, symbol=DEFAULT_SYMBOL):
     Normalized format (matches api_binance/api_mexc contract):
       {"order_id": str, "side": str, "price": float, "qty": float, "status": str}
     """
-    if not _has_creds:
+    if not _has_creds():
         return []
     clean = symbol.lower().split(":")[0]
     endpoint = f"/api/v2/open_orders/{clean}/"

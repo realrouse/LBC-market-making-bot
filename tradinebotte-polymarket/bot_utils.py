@@ -74,14 +74,10 @@ def print_dashboard(state: Any) -> None:
 # ─── WEB STATUS PAGE ─────────────────────────────────────────────────────────
 
 def _htpasswd(password: str) -> str:
-    """Return an Apache-compatible htpasswd hash. Uses bcrypt ($2y$) when available,
-    falls back to unsalted SHA-1 with a warning when bcrypt is not installed."""
-    if _BCRYPT_AVAILABLE:
-        return _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
-    logger.warning(
-        "bcrypt not installed — htpasswd falls back to SHA-1 (weak). Run: pip install bcrypt"
-    )
-    return "{SHA}" + base64.b64encode(hashlib.sha1(password.encode()).digest()).decode()
+    """Return an Apache-compatible htpasswd hash using bcrypt ($2y$)."""
+    if not _BCRYPT_AVAILABLE:
+        raise ImportError("bcrypt is required for web status auth — run: uv pip install bcrypt")
+    return _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
 
 
 def setup_htaccess(html_path: str) -> None:

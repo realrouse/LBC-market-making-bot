@@ -172,7 +172,6 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
     RESTART_OUT=$(_ssh "
         SVC=${SVC_NAME}
         INSTALL=${INSTALL_DIR}
-        PASS='${SA_PASS}'
 
         # Detect the active venv (prefer .venv, fall back to venv)
         if   [ -d \"\$INSTALL/.venv\" ]; then VENV=.venv

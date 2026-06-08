@@ -108,7 +108,7 @@ _BINANCE_FUTURES_DEPTH_URL = "https://fapi.binance.com/fapi/v1/depth"
 _DERIBIT_DVOL_URL         = "https://www.deribit.com/api/v2/public/get_volatility_index_data"
 _FEAR_GREED_URL           = "https://api.alternative.me/fng/"
 _WS_RECV_TIMEOUT_S        = 120   # force reconnect if no WS message in this many seconds
-_INSTALL_DIR = os.environ.get("TRADINEBOTTE_DIR", os.getcwd())
+_INSTALL_DIR = os.environ.get("TRADINEBOTTE_DIR", os.path.dirname(os.path.abspath(__file__)))
 
 
 def _shift_addr(addr: str) -> str:

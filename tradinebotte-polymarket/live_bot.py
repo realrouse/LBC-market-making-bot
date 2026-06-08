@@ -514,6 +514,9 @@ def make_config(simulate: bool = False, no_log: bool = False,
 
     # Ensure the install directory exists before any file handle is opened.
     os.makedirs(install_dir, exist_ok=True)
+    for _fpath in (log_path, db_path):
+        open(_fpath, "a").close()
+        os.chmod(_fpath, 0o640)
 
     config = BotConfig(
         simulate=simulate,
@@ -1389,8 +1392,8 @@ async def ws_loop(state: BotState, session: aiohttp.ClientSession) -> None:
         try:
             await _run_ws(state, session)
             backoff = 1
-        except Exception:
-            logger.warning("WS error — reconnecting in %ds", backoff, exc_info=True)
+        except Exception as e:
+            logger.warning("WS error — reconnecting in %ds: %s", backoff, e)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60)
 

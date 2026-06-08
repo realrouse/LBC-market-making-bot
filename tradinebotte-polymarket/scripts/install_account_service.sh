@@ -46,11 +46,11 @@ fi
 _FA=$(python3 -c "
 import json, sys
 try:
-    cfg = json.load(open('$ACCOUNT_DIR/config.json'))
+    cfg = json.load(open(sys.argv[1]))
     print(str(cfg.get('feed_auto_start', True)).lower())
 except Exception:
     print('unknown')
-" 2>/dev/null)
+" "$ACCOUNT_DIR/config.json" 2>/dev/null)
 if [[ "$_FA" != "false" ]]; then
     echo "WARNING: config.json does not have feed_auto_start=false." >&2
     echo "  When using systemd, the feed is managed externally; set:" >&2
@@ -87,6 +87,14 @@ SERVICE_NAME="tradinebotte-account-${USER_NAME}"
 ENV_FILE="$ACCOUNT_DIR/credentials"
 OUTPUT="${HOME}/tmp/${SERVICE_NAME}.service"
 mkdir -p "${HOME}/tmp"
+
+# Guard against '|' in any value used as a sed substitution — it is the delimiter.
+for _v in "$USER_NAME" "$ACCOUNT_NAME" "$ACCOUNT_DIR" "$INSTALL_DIR" "$VENV" "$BOT_DIR" "$FEED_ADDR" "$ENV_FILE"; do
+    if [[ "$_v" == *'|'* ]]; then
+        echo "ERROR: a path or variable contains '|', which conflicts with the sed delimiter: $_v" >&2
+        exit 1
+    fi
+done
 
 # ── Generate unit file ────────────────────────────────────────────────────────
 sed \

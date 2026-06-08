@@ -277,8 +277,8 @@ async def main() -> None:
             try:
                 await _run_ws(sock, session)
                 backoff = 1
-            except Exception:
-                logger.warning("WS error — reconnecting in %ds", backoff, exc_info=True)
+            except Exception as e:
+                logger.warning("WS error — reconnecting in %ds: %s", backoff, e)
                 if VERBOSE:
                     import traceback
                     logger.debug("[WS] traceback: %s", traceback.format_exc())

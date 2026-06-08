@@ -192,6 +192,7 @@ def init_db(db_path: Path) -> sqlite3.Connection:
         )""")
     conn.commit()
     for table, col in (("ob_snapshots", "tfi"), ("ob_trades", "entry_tfi")):
+        assert table in {"ob_snapshots", "ob_trades"} and col in {"tfi", "entry_tfi"}
         try:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} REAL")
             conn.commit()
