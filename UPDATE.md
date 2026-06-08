@@ -18,7 +18,7 @@ Typical layout: repo cloned to `~/src/tradinebotte`, bot installed to `~/tradine
 ```bash
 cd ~/src/tradinebotte
 git pull
-bash scripts/install.sh      # reuses ~/tradinebotte/venv, upgrades packages only
+bash scripts/install.sh      # reuses ~/tradinebotte/.venv, upgrades packages only
 
 kill $(cat ~/tradinebotte/live.pid)
 ~/tradinebotte/run.sh
@@ -79,10 +79,12 @@ For deploying only the bot files (no full repo sync), use the dedicated script:
 bash tradinebotte-polymarket/scripts/update_standalone.sh
 ```
 
-This rsync-copies `tradinebotte-polymarket/` contents flat to the install directory, `tradinebotte-polymarket/strategies/*.json`, and
-`requirements.txt`, then runs `pip install -r requirements.txt` to update Python
-dependencies before stopping the running bot (via `live.pid`) and starting the new version
-in a single SSH session. Useful when working from a dev machine without pushing to git first.
+This rsync-copies `tradinebotte-polymarket/` contents flat to the install directory,
+`tradinebotte-polymarket/strategies/*.json`, `tradinebotte-cex/connectors/`,
+`tradinebotte-cex/strategy_engines/`, `requirements.txt`, and `tradinetools/`, then runs
+`pip install -r requirements.txt` to update Python dependencies before stopping the running
+bot (via `live.pid`) and starting the new version in a single SSH session. Useful when
+working from a dev machine without pushing to git first.
 
 **Options:**
 - `--skip-restart` — rsync only, do not stop/start the bot

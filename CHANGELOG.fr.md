@@ -6,6 +6,14 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.70] — 2026-06-08
+
+### Corrections
+- **`UPDATE.md`, `UPDATE.fr.md` — commentaire Scénario 1 référençait encore `~/tradinebotte/venv`** : mis à jour en `~/tradinebotte/.venv`
+- **`UPDATE.md`, `UPDATE.fr.md` — description Scénario 4 incomplète depuis la v0.68** : `update_standalone.sh` synchronise désormais aussi `tradinebotte-cex/connectors/`, `tradinebotte-cex/strategy_engines/` et `tradinetools/` ; description mise à jour pour lister tous les répertoires synchronisés
+
+---
+
 ## [0.69] — 2026-06-08
 
 ### Corrections

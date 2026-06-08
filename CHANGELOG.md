@@ -6,6 +6,14 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.70] — 2026-06-08
+
+### Fixed
+- **`UPDATE.md`, `UPDATE.fr.md` — Scenario 1 comment still referenced `~/tradinebotte/venv`**: updated to `~/tradinebotte/.venv`
+- **`UPDATE.md`, `UPDATE.fr.md` — Scenario 4 description incomplete after v0.68**: `update_standalone.sh` now also rsyncs `tradinebotte-cex/connectors/`, `tradinebotte-cex/strategy_engines/`, and `tradinetools/`; description updated to list all synced directories
+
+---
+
 ## [0.69] — 2026-06-08
 
 ### Fixed
