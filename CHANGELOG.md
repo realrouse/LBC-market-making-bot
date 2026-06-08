@@ -6,6 +6,13 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.69] — 2026-06-08
+
+### Fixed
+- **`INSTALL.md`, `INSTALL.fr.md` — five stale `venv/` references replaced with `.venv/`**: (1) sqlite3 alternative one-liner used `~/tradinebotte/venv/bin/python3`; (2) Dependencies section listed the virtualenv path as `~/tradinebotte/venv/`; (3) Installation bullet listed `<TRADINEBOTTE_DIR>/venv/`; (4–5) Method 3 tar.gz examples used `cd tradinebotte-0.5.0` instead of `cd tradinebotte-0.63`; (6) Multi-bot directory layout diagram showed `venv/` instead of `.venv/`
+
+---
+
 ## [0.68] — 2026-06-08
 
 ### Fixed

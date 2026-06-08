@@ -15,7 +15,7 @@
   Installation Debian/Ubuntu : `sudo apt install sqlite3`
   Sans sudo, utiliser l'alternative Python :
   ```bash
-  ~/tradinebotte/venv/bin/python3 -c \
+  ~/tradinebotte/.venv/bin/python3 -c \
     "import sqlite3; c=sqlite3.connect('live.db'); \
      print(c.execute('SELECT COUNT(*) FROM snapshots').fetchone()[0])"
   ```
@@ -51,7 +51,7 @@ venv isolé et **ne touche plus jamais au Python système**.
 ## Dépendances
 
 Les packages Python suivants sont installés automatiquement par `scripts/install.sh`
-dans un virtualenv situé dans `~/tradinebotte/venv/` :
+dans un virtualenv situé dans `~/tradinebotte/.venv/` :
 
 - `aiohttp`
 - `websockets`
@@ -135,7 +135,7 @@ Télécharger la dernière archive de release depuis la
 # Remplacer v0.63 par la version souhaitée
 wget https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.63.tar.gz
 tar -xzf v0.63.tar.gz
-cd tradinebotte-0.5.0
+cd tradinebotte-0.63
 bash scripts/install.sh
 ```
 
@@ -144,7 +144,7 @@ Ou avec `curl` :
 ```bash
 curl -L https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.63.tar.gz \
   | tar -xz
-cd tradinebotte-0.5.0
+cd tradinebotte-0.63
 bash scripts/install.sh
 ```
 
@@ -281,7 +281,7 @@ Ce script va :
 - Créer le répertoire d'installation
 - Copier `tradinebotte-polymarket/live_bot.py` et `tradinebotte-polymarket/api_polymarket.py` vers `<TRADINEBOTTE_DIR>/`
 - Copier `tradinebotte-polymarket/strategies/*.json` vers `<TRADINEBOTTE_DIR>/strategies/`
-- Créer un virtualenv dans `<TRADINEBOTTE_DIR>/venv/`
+- Créer un virtualenv dans `<TRADINEBOTTE_DIR>/.venv/`
 - Installer les dépendances Python dans le virtualenv
 - Générer `<TRADINEBOTTE_DIR>/run.sh` (wrapper avec `TRADINEBOTTE_DIR` pré-défini)
 - Vérifier la syntaxe du bot
@@ -882,7 +882,7 @@ bash scripts/install.sh
 
 ```
 ~/tradinebotte/          ← venv partagé + log du feed
-  venv/
+  .venv/
   feed.log
 ~/account-a/             ← compte A : DB, log, config propres
   config.json

@@ -6,6 +6,13 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.69] — 2026-06-08
+
+### Corrections
+- **`INSTALL.md`, `INSTALL.fr.md` — cinq références obsolètes `venv/` remplacées par `.venv/`** : (1) commande alternative sqlite3 utilisait `~/tradinebotte/venv/bin/python3` ; (2) section Dépendances listait le chemin du virtualenv comme `~/tradinebotte/venv/` ; (3) bullet Installation mentionnait `<TRADINEBOTTE_DIR>/venv/` ; (4–5) exemples Méthode 3 tar.gz utilisaient `cd tradinebotte-0.5.0` au lieu de `cd tradinebotte-0.63` ; (6) diagramme d'arborescence multi-bot affichait `venv/` au lieu de `.venv/`
+
+---
+
 ## [0.68] — 2026-06-08
 
 ### Corrections
