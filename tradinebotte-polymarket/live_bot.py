@@ -661,6 +661,7 @@ def _setup_logging(config: "BotConfig") -> Optional[logging.handlers.QueueListen
         format=_LOG_FMT,
         datefmt=_LOG_DATE,
         handlers=_log_handlers,
+        force=True,
     )
     _log_listener = listener
     return listener
@@ -1163,7 +1164,7 @@ async def check_signal(state: BotState, ts: TokenState, _t_ws: Optional[float] =
         mean_o    = sum(obis) / len(obis)
         obi_vol   = math.sqrt(sum((o - mean_o) ** 2 for o in obis) / len(obis))
         if vol_bid > cfg.vol_bid_max or range_bid > cfg.range_bid_max or obi_vol > cfg.obi_vol_max:
-            logger.debug("VOL FILTER bid_vol=%.3f range=%.3f obi_vol=%.3f — skip %s",
+            logger.debug("[VOL_FILTER] bid_vol=%.3f range=%.3f obi_vol=%.3f — skip %s",
                          vol_bid, range_bid, obi_vol, ts.market_id[:12])
             state.rejection_stats.vol_filter += 1
             return
@@ -1197,7 +1198,7 @@ async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[floa
         win_rate=state.win_rate / 100.0, n_trades=n_trades, ask=ep,
     )
     if stake <= 0:
-        logger.info("Kelly: f*≤0 — no edge at ask=%.4f wr=%.1f%% — skipping %s",
+        logger.info("[KELLY] f*≤0 — no edge at ask=%.4f wr=%.1f%% — skipping %s",
                     ep, state.win_rate, ts.market_id[:12])
         return
     tb    = stake / ep if ep > 0 else 0                         # tokens bought
@@ -1224,10 +1225,10 @@ async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[floa
             if state.api_fail_streak >= cfg.api_fail_threshold:
                 state.api_cooldown_until = time.time() + cfg.api_cooldown_secs
                 logger.warning(
-                    "CIRCUIT-BREAKER: %d consecutive CLOB failures — entries suspended 5 min",
+                    "[CIRCUIT_BREAKER] %d consecutive CLOB failures — entries suspended 5 min",
                     state.api_fail_streak,
                 )
-            logger.warning("post_order returned None — aborting entry to prevent ghost trade")
+            logger.warning("[GHOST_GUARD] post_order returned None — aborting entry")
             return
         state.api_fail_streak = 0
     cur = state.conn.execute(
@@ -1248,9 +1249,9 @@ async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[floa
     state.traded_direction[ts.market_id] = ts.direction
     state.total_trades += 1
     logger.info(
-        "▶ TRADE #%d | %s %s | entry=%.4f  bid=%.4f  secs=%.0fs  stake=$%.2f | order=%s",
-        tid, ts.direction, ts.market_id[:12], ep, ts.best_bid, ts.secs_remaining, stake,
-        oid or "sim"
+        "▶ TRADE #%d | %s %s | entry=%.4f  bid=%.4f  secs=%.0fs  obi=%.3f  ask_vol=%.0f  stake=$%.2f | order=%s",
+        tid, ts.direction, ts.market_id[:12], ep, ts.best_bid, ts.secs_remaining,
+        ts.obi, ts.ask_vol, stake, oid or "sim"
     )
     if t_signal_ms is not None:
         # total_ms = signal latency + order RTT; these two intervals are
@@ -1289,10 +1290,11 @@ def close_trade(state: BotState, ts: TokenState, trade_id: int, outcome: str) ->
     """
     now_ms = int(time.time() * 1000)
     row = state.conn.execute(
-        "SELECT stake, tokens_bought, fee FROM trades WHERE id=?", (trade_id,)
+        "SELECT stake, tokens_bought, fee, signal_ts_ms FROM trades WHERE id=?", (trade_id,)
     ).fetchone()
     if not row: return
-    stake, tb, fee = row
+    stake, tb, fee, signal_ts_ms = row
+    duration_s = int((now_ms - signal_ts_ms) / 1000) if signal_ts_ms else 0
     won = (outcome == "WIN")
     pg = (tb - stake) if won else -stake
     pn = pg - fee - state.config.gas_fee_usd
@@ -1315,9 +1317,9 @@ def close_trade(state: BotState, ts: TokenState, trade_id: int, outcome: str) ->
     _icon    = "✓" if won else "✗"
     _outcome = "WIN " if won else "LOSS"
     logger.info(
-        "%s %s #%d | %s %s | pnl=$%+.2f (%.1f%%) | WR=%.1f%% | capital=$%.2f",
+        "%s %s #%d | %s %s | pnl=$%+.2f (%.1f%%) | WR=%.1f%% | capital=$%.2f | duration=%ds",
         _icon, _outcome, trade_id, ts.direction, ts.market_id[:12],
-        pn, roi, state.win_rate, state.capital
+        pn, roi, state.win_rate, state.capital, duration_s
     )
     write_web_status(state)
 

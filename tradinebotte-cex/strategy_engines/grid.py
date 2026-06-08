@@ -502,6 +502,10 @@ class GridStrategy:
             lvl.status        = "idle"
         if self._user_stream_task is not None and not self._user_stream_task.done():
             self._user_stream_task.cancel()
+            try:
+                await self._user_stream_task
+            except asyncio.CancelledError:
+                pass
             self._user_stream_task = None
         self.grid.halted = True
         logger.warning(
@@ -753,8 +757,10 @@ class GridStrategy:
         if (not self._no_credentials and
                 (self._user_stream_task is None or self._user_stream_task.done())):
             # Only start for real orders — sim_ IDs have no matching exchange stream.
+            # Guard: require at least one active order to avoid re-spawning on
+            # every tick while the grid is uninitialised (active=[]).
             active = [l for l in self.grid.levels if l.is_active]
-            is_sim = any(
+            is_sim = not active or any(
                 (l.buy_order_id  or "").startswith("sim_") or
                 (l.sell_order_id or "").startswith("sim_")
                 for l in active

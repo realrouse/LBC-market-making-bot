@@ -6,19 +6,28 @@
 #  TRADINEBOTTE_DIR containing config.json and private key.
 #
 #  Prerequisites:
-#    1. feed.py running (bash scripts/start_feed.sh)
+#    1. feed.py running (bash tradinebotte-polymarket/scripts/start_feed.sh)
 #    2. account config.json present in TRADINEBOTTE_DIR
 #
 #  Examples:
-#    TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
-#    TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
+#    TRADINEBOTTE_DIR=~/account-a bash tradinebotte-polymarket/scripts/start_account.sh
+#    TRADINEBOTTE_DIR=~/account-b bash tradinebotte-polymarket/scripts/start_account.sh
 #    TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 \
-#      TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
+#      TRADINEBOTTE_DIR=~/account-a bash tradinebotte-polymarket/scripts/start_account.sh
 # ═══════════════════════════════════════════════════════════════════
 
 INSTALL_DIR="${TRADINEBOTTE_DIR:-$HOME/tradinebotte}"
 INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
-VENV="$INSTALL_DIR/venv"
+# Venv lookup: account dir first (.venv preferred), then shared ~/tradinebotte (Option B layout).
+if [ -x "$INSTALL_DIR/.venv/bin/python3" ]; then
+    VENV="$INSTALL_DIR/.venv"
+elif [ -x "$INSTALL_DIR/venv/bin/python3" ]; then
+    VENV="$INSTALL_DIR/venv"
+elif [ -x "$HOME/tradinebotte/.venv/bin/python3" ]; then
+    VENV="$HOME/tradinebotte/.venv"
+else
+    VENV="$HOME/tradinebotte/venv"
+fi
 CONFIG="$INSTALL_DIR/config.json"
 BOT_LOG="$INSTALL_DIR/account.log"
 ACCOUNT_PID_FILE="$INSTALL_DIR/account.pid"
@@ -30,8 +39,8 @@ if [ ! -f "$CONFIG" ]; then
 fi
 
 if [ ! -d "$VENV" ]; then
-    echo "ERROR: venv not found in $INSTALL_DIR"
-    echo "Run first: TRADINEBOTTE_DIR=\"$INSTALL_DIR\" bash scripts/install.sh"
+    echo "ERROR: venv not found in $INSTALL_DIR or $HOME/tradinebotte"
+    echo "Run first: bash scripts/install.sh"
     exit 1
 fi
 

@@ -117,12 +117,87 @@
 - **[I-1] ZMQ without CURVE/ZAP authentication** — mitigated by loopback-only binding. Required
   before any external network exposure (see Roadmap v0.3 section below).
 
-- **[I-2] Move tracked `.db` files out of git** — `data/*.db` are simulation-only but binary blobs
-  complicate secret scanning and inflate repo size. Add `data/*.db` to `.gitignore` and distribute
-  sample databases separately.
+- **[I-2] DONE — Move tracked `.db` files out of git** — removed `!data/*.db` exceptions from
+  `.gitignore`; four sample databases untracked with `git rm --cached`; all `.db` files now
+  uniformly ignored. (branch `dev`, v0.55)
 
-- **[I-3] Pin GitHub Actions to SHA** — `anthropics/claude-code-action@v1` is used by tag, not SHA.
-  Pin to a specific commit SHA for supply-chain integrity.
+- **[I-3] DONE — Pin GitHub Actions to SHA** — all five workflow files (`claude.yml`, `tests.yml`,
+  `pylint.yml`, `mypy.yml`, `audit.yml`) now pin `actions/checkout`, `actions/setup-python`, and
+  `anthropics/claude-code-action` to their exact commit SHAs; tag kept as comment. (branch `dev`, v0.55)
+
+---
+
+## Audit 2026-06-05 — Findings to fix
+
+### HIGH — Done
+
+- **[A05-H1] DONE — Cache `ClobClient` across trades** (`api_polymarket.py`)
+  `post_order` was rebuilding an authenticated ClobClient on every order, triggering EIP-712 key
+  derivation each time. The client is now initialised once via `_init_clob_client()` and cached in
+  `_clob_clients` by `(private_key, install_dir)`. `sys.path` injection moved inside the one-time
+  init block. (v0.57)
+
+- **[A05-H2] DONE — Stable feed lock path across processes** (`account_bot.py`)
+  `abs(hash(addr))` is randomised per process since Python 3.3+; two concurrent account_bots
+  computed different lock paths for the same feed address, silently breaking coordination.
+  Replaced with `_feed_id(addr) = hashlib.md5(addr.encode()).hexdigest()[:8]`. (v0.57)
+
+### MEDIUM — Done
+
+- **[A05-M3] DONE — Remove dead `warn_if_external_bind` from `bot_utils`**
+  Duplicate of `tradinetools.zmq.warn_if_external_bind`; no callers remained in production code
+  (all callers import from tradinetools directly). Function deleted. (v0.57)
+
+### MEDIUM — Open
+
+- **[A05-M1] `TokenState` deque size hardcoded to module constant `VOL_WINDOW`**
+  `live_bot.py` — `bid_history` and `obi_history` use `deque(maxlen=VOL_WINDOW)` (always 12)
+  regardless of `config.vol_window`. Setting `vol_filter.window` in the strategy JSON has no
+  effect on the actual rolling window. Fix: pass `config.vol_window` to `TokenState.__init__`
+  and use it as the `maxlen`. No deployed config exercises this today (no JSON sets `window`).
+
+- **[A05-M2] Capital guard uses base stake, ignores dynamic stake scaling**
+  `live_bot.py:1171` — `state.capital - len(state.open_trades) * cfg.stake` assumes the base
+  stake per trade, but with `stake_bid_alpha` / Kelly the effective stake can be significantly
+  larger. Harmless with the current live params (max $15 vs guard's $10 assumption), but
+  logically wrong. Fix: replace `cfg.stake` with `min(cfg.stake_max, cfg.stake_max_pct_capital
+  * capital)` (or `cfg.stake_max` as a conservative upper bound).
+
+- **[A05-M4] `tradinetools/schemas.py` has no production callers**
+  `MarketMessage`, `BookMessage`, `IndicatorsMessage` etc. are tested but never imported in
+  `feed.py`, `account_bot.py`, or `indicators.py` (all use raw dicts). Version field `"v": 1`
+  is never enforced. Either migrate callers to use the typed schemas (gaining `from_dict` safety
+  and version checking) or remove the module to avoid confusion.
+
+- **[A05-M5] Weekly stop-loss period boundary not calendar-aligned**
+  `live_bot.py:1127` — `int(time.time() // (7 * 86400))` counts 7-day windows since the Unix
+  epoch (1970-01-01 = Thursday), so "week" boundaries fall on Thursdays. With `weekly_stop_loss`
+  active in `piste3.json`, halts may occur at counter-intuitive times. Fix: use ISO week number
+  or anchor to the last Monday midnight UTC.
+
+- **[A05-M6] `sys.path.insert` inside `post_order` — already mitigated by H-1 cache**
+  The `if _site not in sys.path` guard in `_init_clob_client` prevents duplicate inserts.
+  Residual concern: `sysconfig` / `sys` are now top-level imports in `api_polymarket.py` (added
+  with H-1). No further action required unless the lazy-import approach is revisited.
+
+### LOW — Open
+
+- **[A05-L1] `make_config()` mutates `bot_utils` module state**
+  `live_bot.py:597` — `bot_utils.WEBSTATUS_ENABLED = …` etc. are injected after config load.
+  Creates an implicit call-order dependency that hinders test isolation. Clean fix: pass a
+  config object to `write_web_status` / `print_dashboard` instead of global side effects.
+
+- **[A05-L2] Status HTML timestamps in local time, not UTC**
+  `bot_utils.py` — `datetime.fromtimestamp(ts_ms / 1000)` without `tz=timezone.utc`.
+  Inconsistent with the rest of the codebase. Fix: add `tz=timezone.utc` or label the column.
+
+- **[A05-L3] `account_bot.py` error message suggests wrong `systemctl` command**
+  The hardcoded `(sudo systemctl start tradinebotte-feed)` hint is incorrect for accounts
+  running feed as a user service. Remove the hardcoded command or make it conditional.
+
+- **[A05-L4] `BotConfig` hour-filter range annotations are untyped bare `list`**
+  `live_bot.py` — `weekday_utc_ranges: list` and `weekend_utc_ranges: list` should be
+  `list[tuple[int, int]]` for mypy correctness.
 
 ---
 
@@ -134,17 +209,16 @@ These were scoped out of the log-system refactor session (priorities 1+2 + Engli
   (`{"ts":…,"level":…,"session":…,"msg":…}`) instead of plain text. Useful for ingestion into
   Elasticsearch / Loki / Datadog without a log parser.
 
-- **3b — Standardize tag prefixes**: Audit all `[TAG]` prefixes across the four bot modules
-  (`[LATENCY]`, `[REJECTIONS]`, `[PROBE]`, `[ENSURE_FEED]`, `[BOOK]`, `[FEED]`, `[MARKET]`, …)
-  and define a canonical list in `docs/logging.md`. Ensures log parsers can match on a stable
-  prefix vocabulary.
+- **3b — DONE — Standardize tag prefixes**: audited all `[TAG]` prefixes across the four bot
+  modules; standardized four unbracketed structured lines in `live_bot.py` (`[VOL_FILTER]`,
+  `[KELLY]`, `[CIRCUIT_BREAKER]`, `[GHOST_GUARD]`); removed spurious `[VERBOSE]` and `[WS ERROR]`
+  tags from `feed.py`; canonical vocabulary published in `docs/logging.md`. (branch `dev`, v0.52)
 
-- **4a — OBI + ask_vol in trade entry log**: Add `obi=%.3f ask_vol=%.0f` to the `▶ TRADE` line in
-  `enter_live_trade()` (`live_bot.py`) so the entry log is self-contained without joining with snapshots.
+- **4a — DONE — OBI + ask_vol in trade entry log**: added `obi=%.3f ask_vol=%.0f` to the `▶ TRADE`
+  line in `enter_live_trade()`. (branch `dev`, v0.56)
 
-- **4b — Trade duration in resolution log**: Add `duration=%ds` (elapsed seconds from
-  `signal_ts_ms` to `resolution_ts_ms`) to the `✓ WIN` / `✗ LOSS` line in `close_trade()`
-  (`live_bot.py`). Lets log-grep workflows spot unusually long holds without a DB query.
+- **4b — DONE — Trade duration in resolution log**: added `duration=%ds` (from `signal_ts_ms` to
+  `resolution_ts_ms`) to `✓ WIN` / `✗ LOSS` lines in `close_trade()`. (branch `dev`, v0.56)
 
 ## Roadmap v0.3
 

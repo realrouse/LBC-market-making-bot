@@ -13,20 +13,20 @@
 ## Install from official release (tar.gz)
 
 ```bash
-# Download the latest release (replace v0.50 with the current version)
-wget https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.50.tar.gz
-tar -xzf v0.50.tar.gz
-cd tradinebotte-0.50
+# Download the latest release (replace v0.63 with the current version)
+wget https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.63.tar.gz
+tar -xzf v0.63.tar.gz
+cd tradinebotte-0.63
 bash scripts/install.sh        # detects missing system packages; prompts for language (E/F)
 python3 scripts/setup.py       # prompts for language (saved to config.json); Enter = simulation mode
-bash scripts/start_bot.sh
+~/tradinebotte/run.sh
 tail -f ~/tradinebotte/live.log
 ```
 
-Monitor: `bash scripts/monitor.sh`  
+Monitor: `bash tradinebotte-polymarket/scripts/monitor.sh`  
 Auto-restart on reboot: see [INSTALL.md — systemd setup](INSTALL.md#auto-start-with-systemd-recommended-for-dedicated-servers)
 
-**Stop:** `kill $(cat ~/tradinebotte/live.pid)` · or `sudo systemctl stop tradinebotte` if using systemd
+**Stop:** `kill $(cat ~/tradinebotte/live.pid)` · or `sudo systemctl stop tradinebotte` (system unit) · or `systemctl --user stop tradinebotte-live.service` (user unit, no sudo)
 
 ---
 

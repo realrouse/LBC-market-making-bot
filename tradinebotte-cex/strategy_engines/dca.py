@@ -283,7 +283,7 @@ class DCAStrategy:
     async def _check_rest_fills(self, state: Any, ts: Any) -> None:
         try:
             open_oids = {
-                o["orderId"]
+                o["order_id"]
                 for o in await self._api.get_open_orders(state.session, self.dca.symbol)
             }
         except Exception as exc:
@@ -302,7 +302,7 @@ class DCAStrategy:
             elif pos.status == "long":
                 if pos.sl_price and bid <= pos.sl_price:
                     await self._on_sl_hit(state, pos, bid)
-                else:
+                elif pos.sell_order_id is None:
                     await self._on_tp_hit(state, pos, pos.tp_price)
             elif pos.status == "tp_placed" and pos.sell_order_id not in open_oids:
                 await self._on_tp_filled(state, pos, pos.tp_price)

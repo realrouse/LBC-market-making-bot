@@ -18,10 +18,10 @@ Layout type : repo cloné dans `~/src/tradinebotte`, bot installé dans `~/tradi
 ```bash
 cd ~/src/tradinebotte
 git pull
-bash scripts/install.sh      # réutilise ~/tradinebotte/venv, upgrade packages seulement
+bash scripts/install.sh      # réutilise ~/tradinebotte/.venv, upgrade packages seulement
 
 kill $(cat ~/tradinebotte/live.pid)
-bash scripts/start_bot.sh
+~/tradinebotte/run.sh
 # ou : sudo systemctl restart tradinebotte
 ```
 
@@ -39,7 +39,7 @@ git pull
 bash scripts/install.sh
 
 kill $(cat ~/tradinebotte/live.pid)
-bash scripts/start_bot.sh
+~/tradinebotte/run.sh
 ```
 
 Mêmes garanties — `config.json` et `live.db` sont préservés.
@@ -53,17 +53,17 @@ rsync -az --delete \
     --exclude='config.json' \
     --exclude='live.db' \
     --exclude='*.log' \
-    --exclude='venv/' \
+    --exclude='venv/' --exclude='.venv/' \
     /chemin/vers/tradinebotte/ user@serveur:~/tradinebotte/
 
 ssh user@serveur 'cd ~/tradinebotte && bash scripts/install.sh'
-ssh user@serveur 'kill $(cat ~/tradinebotte/live.pid); bash ~/tradinebotte/scripts/start_bot.sh'
+ssh user@serveur 'kill $(cat ~/tradinebotte/live.pid); ~/tradinebotte/run.sh'
 ```
 
 **Exclusions critiques :**
 - `--exclude='config.json'` — empêche d'effacer les credentials live **et la langue choisie** (champ `"lang"` défini par `setup.py` / `install.sh`)
 - `--exclude='live.db'` — préserve l'historique des trades
-- `--exclude='venv/'` — évite de transférer des centaines de Mo sur le réseau
+- `--exclude='venv/' --exclude='.venv/'` — évite de transférer des centaines de Mo sur le réseau (couvre les deux layouts `venv/` et `.venv/`)
 
 Sans `--exclude='config.json'`, `rsync --delete` supprime le fichier et
 `start_bot.sh` refusera de démarrer. Relancer `setup.py` si c'est le cas (il
@@ -79,7 +79,7 @@ Pour déployer uniquement les fichiers du bot (sans synchronisation complète du
 bash tradinebotte-polymarket/scripts/update_standalone.sh
 ```
 
-Ce script copie en rsync le contenu de `tradinebotte-polymarket/` à plat dans le répertoire d'installation, les fichiers `tradinebotte-polymarket/strategies/*.json` et `requirements.txt`, puis exécute `pip install -r requirements.txt` pour mettre à jour les dépendances Python avant de stopper le bot en cours d'exécution (via `live.pid`) et de relancer la nouvelle version dans une seule session SSH. Pratique pour déployer depuis une machine de développement sans passer par git.
+Ce script copie en rsync le contenu de `tradinebotte-polymarket/` à plat dans le répertoire d'installation, les fichiers `tradinebotte-polymarket/strategies/*.json`, `tradinebotte-cex/connectors/`, `tradinebotte-cex/strategy_engines/`, `requirements.txt` et `tradinetools/`, puis exécute `pip install -r requirements.txt` pour mettre à jour les dépendances Python avant de stopper le bot en cours d'exécution (via `live.pid`) et de relancer la nouvelle version dans une seule session SSH. Pratique pour déployer depuis une machine de développement sans passer par git.
 
 **Options :**
 - `--skip-restart` — rsync uniquement, sans stop/start du bot
@@ -95,7 +95,7 @@ Pour le compte de déploiement dédié à la stratégie swing, utiliser le scrip
 bash tradinebotte-cex/scripts/update_swing.sh
 ```
 
-Ce script copie en rsync le moteur de stratégie swing et sa configuration vers le répertoire d'installation du compte swing, écrit son `config.json`, redémarre le bot via le fichier PID et vérifie que le processus tourne — le tout dans une seule session SSH. Il suit le même schéma que `update_standalone.sh`, mais cible la structure du compte swing.
+Ce script copie en rsync le moteur de stratégie swing et sa configuration vers le répertoire d'installation du compte swing, écrit son `config.json`, puis redémarre le bot — en préférant `systemctl --user restart tradinebotte-live.service` si le service user est actif ou activé, avec bascule automatique sur nohup sinon. L'étape de vérification utilise le filtrage `pgrep`/`/proc/$P/exe`, comme `update_standalone.sh`.
 
 ---
 
@@ -161,8 +161,9 @@ kill $(cat ~/tradinebotte/feed.pid)
 kill $(cat ~/account-a/account.pid)
 kill $(cat ~/account-b/account.pid)
 
-TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
-TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
+bash tradinebotte-polymarket/scripts/start_feed.sh
+TRADINEBOTTE_DIR=~/account-a bash tradinebotte-polymarket/scripts/start_account.sh
+TRADINEBOTTE_DIR=~/account-b bash tradinebotte-polymarket/scripts/start_account.sh
 ```
 
 ---

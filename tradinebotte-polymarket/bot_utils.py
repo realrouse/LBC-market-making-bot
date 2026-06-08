@@ -23,16 +23,6 @@ except ImportError:
 logger = logging.getLogger("live")
 
 
-def warn_if_external_bind(addr: str, name: str) -> None:
-    """Warn when a ZMQ socket is bound to a non-loopback address."""
-    if addr.startswith("tcp://") and "127.0.0.1" not in addr and "localhost" not in addr:
-        logging.warning(
-            "SECURITY: %s (%s) is bound to a non-loopback address — "
-            "ensure ZMQ CURVE auth is active before exposing to the network.",
-            name, addr,
-        )
-
-
 def setup_bot_logger(name: str, log_path: str) -> logging.Logger:
     """Create a named logger with rotating file output and optional TTY console."""
     log = logging.getLogger(name)

@@ -7,25 +7,27 @@
 #  (default: tcp://127.0.0.1:5557).
 #
 #  Start BEFORE account bots:
-#    bash scripts/start_feed.sh
-#    TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
-#    TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
+#    bash tradinebotte-polymarket/scripts/start_feed.sh
+#    TRADINEBOTTE_DIR=~/account-a bash tradinebotte-polymarket/scripts/start_account.sh
+#    TRADINEBOTTE_DIR=~/account-b bash tradinebotte-polymarket/scripts/start_account.sh
 #
 #  Custom address:
-#    TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash scripts/start_feed.sh
+#    TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash tradinebotte-polymarket/scripts/start_feed.sh
 # ═══════════════════════════════════════════════════════════════════
 
 INSTALL_DIR="${TRADINEBOTTE_DIR:-$HOME/tradinebotte}"
 INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
-VENV="$INSTALL_DIR/venv"
-FEED_LOG="$INSTALL_DIR/feed.log"
-FEED_PID_FILE="$INSTALL_DIR/feed.pid"
-
-if [ ! -d "$VENV" ]; then
-    echo "ERROR: venv not found in $INSTALL_DIR"
+if [ -x "$INSTALL_DIR/.venv/bin/python3" ]; then
+    VENV="$INSTALL_DIR/.venv"
+elif [ -x "$INSTALL_DIR/venv/bin/python3" ]; then
+    VENV="$INSTALL_DIR/venv"
+else
+    echo "ERROR: virtualenv not found in $INSTALL_DIR/{.venv,venv}"
     echo "Run first: bash scripts/install.sh"
     exit 1
 fi
+FEED_LOG="$INSTALL_DIR/feed.log"
+FEED_PID_FILE="$INSTALL_DIR/feed.pid"
 
 if [ -f "$FEED_PID_FILE" ]; then
     _pid=$(cat "$FEED_PID_FILE")

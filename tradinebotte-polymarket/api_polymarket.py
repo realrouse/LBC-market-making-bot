@@ -7,7 +7,7 @@ To add a new exchange in the future, create api_<exchange>.py with the same
 public API surface and change the single import line in live_bot.py.
 """
 
-import json, logging, os, uuid
+import json, logging, os, sysconfig, sys, uuid
 from datetime import datetime, timezone, timedelta
 import aiohttp
 
@@ -235,13 +235,37 @@ async def get_markets(session, *, tag_id: int = GAMMA_TAG_5M, window_minutes: in
 
 # ─── ORDER PLACEMENT ──────────────────────────────────────────────────────────
 
+# Keyed by (private_key, install_dir) — built once on first order, reused thereafter.
+# Avoids EIP-712 key derivation (create_or_derive_api_creds) on every trade call.
+_clob_clients: dict = {}
+
+
+def _init_clob_client(private_key: str, install_dir: str) -> tuple:
+    """
+    Build an authenticated ClobClient + import OrderArgs, inject the venv
+    site-packages once, and cache the result.  Called only on the first order
+    for a given (private_key, install_dir) pair.
+    """
+    _venv = os.path.join(install_dir, "venv")
+    _site = sysconfig.get_path("purelib", vars={"platbase": _venv, "base": _venv})
+    if _site and _site not in sys.path:
+        sys.path.insert(0, _site)
+    from py_clob_client.client import ClobClient          # noqa: PLC0415
+    from py_clob_client.constants import POLYGON          # noqa: PLC0415
+    from py_clob_client.clob_types import OrderArgs       # noqa: PLC0415
+    client = ClobClient(CLOB_URL, key=private_key, chain_id=POLYGON, signature_type=0)
+    client.set_api_creds(client.create_or_derive_api_creds())
+    logger.info("CLOB client initialized (install_dir=%s)", install_dir)
+    return client, OrderArgs
+
+
 async def post_order(session, token_id, price, size_usdc, *, private_key, install_dir):
     """
     Submit a LIMIT BUY order to the Polymarket CLOB.
 
-    py_clob_client is imported lazily: the library is only installed inside
-    the venv, not system Python, and its import forces an sysconfig path
-    injection that should happen as late as possible.
+    py_clob_client is imported lazily (only installed inside the venv).
+    The ClobClient is cached per (private_key, install_dir) so EIP-712 key
+    derivation runs only once per process, not on every trade.
 
     Returns the order ID string on success, a "sim_..." string in dry-run
     mode (no private key), or None on error.
@@ -250,16 +274,10 @@ async def post_order(session, token_id, price, size_usdc, *, private_key, instal
         logger.warning("POLY_PRIVATE_KEY not set — order simulated")
         return f"sim_{uuid.uuid4().hex[:12]}"
     try:
-        import sys as _sys, sysconfig as _sc
-        _venv = os.path.join(install_dir, "venv")
-        # Resolve site-packages dynamically to support any Python minor version.
-        _site = _sc.get_path("purelib", vars={"platbase": _venv, "base": _venv})
-        _sys.path.insert(0, _site)
-        from py_clob_client.client import ClobClient
-        from py_clob_client.constants import POLYGON
-        from py_clob_client.clob_types import OrderArgs
-        _client = ClobClient(CLOB_URL, key=private_key, chain_id=POLYGON, signature_type=0)
-        _client.set_api_creds(_client.create_or_derive_api_creds())
+        cache_key = (private_key, install_dir)
+        if cache_key not in _clob_clients:
+            _clob_clients[cache_key] = _init_clob_client(private_key, install_dir)
+        _client, OrderArgs = _clob_clients[cache_key]
         size_tokens = round(size_usdc / price, 4)
         _order = _client.create_order(OrderArgs(
             token_id=token_id, price=round(price, 4),

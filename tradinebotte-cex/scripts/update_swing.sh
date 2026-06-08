@@ -80,11 +80,13 @@ STRATEGY_PATH="${TEST_SWING_STRATEGY:-strategies/swing/swing_BTCUSDT.json}"
 _ssh() {
     SSHPASS="$SW_PASS" /usr/bin/sshpass -e \
         ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
+        -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
+        -o PreferredAuthentications=password \
         -p "$PORT" "$SW_USER@$SERVER" "$@" 2>&1
 }
 
 _rsync() {
-    local ssh_opts="-p $PORT -o StrictHostKeyChecking=yes"
+    local ssh_opts="-p $PORT -o StrictHostKeyChecking=yes -o PreferredAuthentications=password"
 
     # tradinebotte-polymarket/ contents → $INSTALL_DIR/ (flat layout)
     SSHPASS="$SW_PASS" /usr/bin/sshpass -e \
@@ -92,6 +94,7 @@ _rsync() {
         --exclude='__pycache__' --exclude='*.pyc' \
         --exclude='live.db' --exclude='*.log' --exclude='venv' --exclude='.venv' \
         --exclude='scripts' --exclude='tests' \
+        --exclude='account_bot.py' --exclude='feed.py' \
         -e "ssh $ssh_opts" \
         "$LOCAL_REPO/tradinebotte-polymarket/" "$SW_USER@$SERVER:$INSTALL_DIR/" 2>&1 || return 1
 
@@ -100,6 +103,8 @@ _rsync() {
         rsync -az \
         --exclude='__pycache__' --exclude='*.pyc' \
         --exclude='scripts' --exclude='tests' \
+        --exclude='scalping_bot.py' --exclude='scalping_math.py' \
+        --exclude='api_bitstamp.py' --exclude='api_mexc.py' \
         -e "ssh $ssh_opts" \
         "$LOCAL_REPO/tradinebotte-cex/" "$SW_USER@$SERVER:$INSTALL_DIR/" 2>&1 || return 1
 
@@ -178,67 +183,85 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
     info "Stopping old bot and starting updated one..."
 
     RESTART_OUT=$(_ssh "
-        PID_FILE=$INSTALL_DIR/live.pid
-        if [ -f \"\$PID_FILE\" ]; then
-            PID=\$(cat \"\$PID_FILE\")
-            if kill -0 \"\$PID\" 2>/dev/null; then
-                kill \"\$PID\" && echo \"stopped pid=\$PID\" || echo 'kill failed'
-            else
-                echo 'pid file found but process already gone'
-            fi
-            rm -f \"\$PID_FILE\"
-        else
-            echo 'no pid file — nothing to stop'
-        fi
-        sleep 2
-        cd $INSTALL_DIR
+        INSTALL=$INSTALL_DIR
+        export XDG_RUNTIME_DIR=/run/user/\$(id -u)
+        cd \$INSTALL
+
         echo 'updating dependencies...'
-        venv/bin/pip install --quiet -r $INSTALL_DIR/requirements.txt \
-            2>/dev/null && echo 'deps ok' || \
-        .venv/bin/pip install --quiet -r $INSTALL_DIR/requirements.txt \
-            && echo 'deps ok (.venv)' || echo 'pip warning (non-fatal)'
-        venv/bin/pip install --quiet -e $INSTALL_DIR/tradinetools \
-            && echo 'tradinetools ok' || echo 'tradinetools install warning (non-fatal)'
-        PYTHON=\$(ls $INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/.venv/bin/python3 2>/dev/null | head -1)
-        nohup \$PYTHON live_bot.py </dev/null >>live.log 2>&1 &
-        BOT_PID=\$!
-        disown \$BOT_PID
-        echo \$BOT_PID > \"\$PID_FILE\"
-        echo \"started pid=\$BOT_PID\"
+        if [ -d \$INSTALL/.venv ]; then VENV=\$INSTALL/.venv/bin; else VENV=\$INSTALL/venv/bin; fi
+        \$VENV/pip install --quiet -r \$INSTALL/requirements.txt 2>/dev/null && echo 'deps ok' || echo 'pip warning (non-fatal)'
+        \$VENV/pip install --quiet -e \$INSTALL/tradinetools 2>/dev/null && echo 'tradinetools ok' || echo 'tradinetools warning (non-fatal)'
+
+        if systemctl --user is-active tradinebotte-live.service >/dev/null 2>&1 \
+           || systemctl --user is-enabled tradinebotte-live.service >/dev/null 2>&1; then
+            echo 'detected user service: tradinebotte-live.service'
+            for P in \$(pgrep -u \"\$(whoami)\" -f \"live_bot\" 2>/dev/null || true); do
+                if readlink /proc/\"\$P\"/exe 2>/dev/null | grep -q python; then
+                    kill \"\$P\" 2>/dev/null && echo \"killed stale live_bot pid=\$P\"
+                fi
+            done
+            sleep 2
+            systemctl --user restart tradinebotte-live.service \
+                && echo 'systemd restarted' \
+                || echo 'user service restart failed'
+        else
+            PID_FILE=\$INSTALL/live.pid
+            for P in \$(pgrep -u \"\$(whoami)\" -f \"live_bot\" 2>/dev/null || true); do
+                if readlink /proc/\"\$P\"/exe 2>/dev/null | grep -q python; then
+                    kill \"\$P\" 2>/dev/null && echo \"killed stale live_bot pid=\$P\"
+                fi
+            done
+            sleep 1
+            rm -f \"\$PID_FILE\"
+            sleep 1
+            PYTHON=\$(ls \$INSTALL/.venv/bin/python3 \$INSTALL/venv/bin/python3 2>/dev/null | head -1)
+            nohup \$PYTHON live_bot.py </dev/null >>live.log 2>&1 &
+            BOT_PID=\$!
+            disown \$BOT_PID
+            echo \$BOT_PID > \"\$PID_FILE\"
+            echo \"started pid=\$BOT_PID\"
+        fi
     ")
     echo "$RESTART_OUT"
 
-    if echo "$RESTART_OUT" | grep -q "started pid="; then
+    if echo "$RESTART_OUT" | grep -qE 'systemd restarted|started pid='; then
         ok "Bot restart command sent"
     else
         err "Restart command did not confirm start"
     fi
 
-    info "Waiting 6s for startup..."
-    sleep 6
+    if echo "$RESTART_OUT" | grep -q "systemd restarted"; then
+        info "Waiting 36s for systemd restart (RestartSec=30 + startup)..."
+        sleep 36
+    else
+        info "Waiting 6s for startup..."
+        sleep 6
+    fi
 fi
 
 # ─── Step 4: verify ────────────────────────────────────────────────────────────
 section "STEP 4 — VERIFY"
 VERIFY_OUT=$(_ssh "
+    export XDG_RUNTIME_DIR=/run/user/\$(id -u)
     echo '=== process ==='
-    PID_FILE=$INSTALL_DIR/live.pid
-    if [ -f \"\$PID_FILE\" ]; then
-        PID=\$(cat \"\$PID_FILE\")
-        if kill -0 \"\$PID\" 2>/dev/null; then
-            echo \"PID=\$PID running\"
-        else
-            echo \"PID=\$PID NOT running (stale pid file)\"
+    MPID=\"\"
+    for P in \$(pgrep -u \"\$(whoami)\" -f 'live_bot' 2>/dev/null || true); do
+        if readlink /proc/\"\$P\"/exe 2>/dev/null | grep -q python; then
+            MPID=\$P; break
         fi
+    done
+    if [ -n \"\$MPID\" ]; then
+        echo \"PID=\$MPID running\"
     else
-        echo 'no pid file'
+        STATE=\$(systemctl --user is-active tradinebotte-live.service 2>/dev/null || echo unknown)
+        echo \"PID=0 NOT running — user service state=\$STATE\"
     fi
     echo '=== startup log ==='
     tail -25 $INSTALL_DIR/live.log
 ")
 echo "$VERIFY_OUT"
 
-if echo "$VERIFY_OUT" | grep -q "PID=.* running"; then
+if echo "$VERIFY_OUT" | grep -qE '^PID=[1-9][0-9]* running'; then
     ok "$SW_USER: bot is running"
 else
     err "$SW_USER: bot is NOT running"

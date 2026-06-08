@@ -15,7 +15,7 @@
   Installation Debian/Ubuntu : `sudo apt install sqlite3`
   Sans sudo, utiliser l'alternative Python :
   ```bash
-  ~/tradinebotte/venv/bin/python3 -c \
+  ~/tradinebotte/.venv/bin/python3 -c \
     "import sqlite3; c=sqlite3.connect('live.db'); \
      print(c.execute('SELECT COUNT(*) FROM snapshots').fetchone()[0])"
   ```
@@ -51,7 +51,7 @@ venv isolé et **ne touche plus jamais au Python système**.
 ## Dépendances
 
 Les packages Python suivants sont installés automatiquement par `scripts/install.sh`
-dans un virtualenv situé dans `~/tradinebotte/venv/` :
+dans un virtualenv situé dans `~/tradinebotte/.venv/` :
 
 - `aiohttp`
 - `websockets`
@@ -89,7 +89,7 @@ bash scripts/install.sh
 Pour installer une version précise :
 
 ```bash
-git clone --branch v0.5.0 https://github.com/neofutur/tradinebotte.git
+git clone --branch v0.63 https://github.com/neofutur/tradinebotte.git
 cd tradinebotte
 bash scripts/install.sh
 ```
@@ -99,7 +99,7 @@ bash scripts/install.sh
 Depuis votre machine locale où le dépôt est déjà cloné :
 
 ```bash
-rsync -a --exclude='*.db' --exclude='__pycache__' --exclude='.git' --exclude='venv' \
+rsync -a --exclude='*.db' --exclude='__pycache__' --exclude='.git' --exclude='venv' --exclude='.venv' \
   /chemin/vers/tradinebotte/ user@serveur:~/tradinebotte/
 ssh user@serveur "cd ~/tradinebotte && bash scripts/install.sh"
 ```
@@ -107,7 +107,7 @@ ssh user@serveur "cd ~/tradinebotte && bash scripts/install.sh"
 Pour mettre à jour une installation existante (préserve `config.json`) :
 
 ```bash
-rsync -a --exclude='*.db' --exclude='__pycache__' --exclude='.git' --exclude='venv' \
+rsync -a --exclude='*.db' --exclude='__pycache__' --exclude='.git' --exclude='venv' --exclude='.venv' \
   --exclude='config.json' \
   /chemin/vers/tradinebotte/ user@serveur:~/tradinebotte/
 ssh user@serveur "cd ~/tradinebotte && bash scripts/install.sh"
@@ -132,19 +132,19 @@ Télécharger la dernière archive de release depuis la
 [page Releases](https://github.com/neofutur/tradinebotte/releases) :
 
 ```bash
-# Remplacer v0.5.0 par la version souhaitée
-wget https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.5.0.tar.gz
-tar -xzf v0.5.0.tar.gz
-cd tradinebotte-0.5.0
+# Remplacer v0.63 par la version souhaitée
+wget https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.63.tar.gz
+tar -xzf v0.63.tar.gz
+cd tradinebotte-0.63
 bash scripts/install.sh
 ```
 
 Ou avec `curl` :
 
 ```bash
-curl -L https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.5.0.tar.gz \
+curl -L https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.63.tar.gz \
   | tar -xz
-cd tradinebotte-0.5.0
+cd tradinebotte-0.63
 bash scripts/install.sh
 ```
 
@@ -272,7 +272,7 @@ bash scripts/install.sh [répertoire_installation] [--lang EN|FR] [--with-tests]
   Sans ce flag, le script propose le choix au démarrage comme avant.
 - `--with-tests` — Copie aussi `tests/`, `analysis/backtest.py` et
   `data/backtest_sample_btc5m_range_2026.db`, puis lance
-  la suite complète de tests (1 148 tests en 5 suites) juste après l'installation.
+  la suite complète de tests (733 tests en 4 suites) juste après l'installation.
   Le backtest utilise `live.db` uniquement s'il contient ≥ 100 snapshots ;
   sinon il bascule automatiquement sur le dataset embarqué.
 
@@ -281,7 +281,7 @@ Ce script va :
 - Créer le répertoire d'installation
 - Copier `tradinebotte-polymarket/live_bot.py` et `tradinebotte-polymarket/api_polymarket.py` vers `<TRADINEBOTTE_DIR>/`
 - Copier `tradinebotte-polymarket/strategies/*.json` vers `<TRADINEBOTTE_DIR>/strategies/`
-- Créer un virtualenv dans `<TRADINEBOTTE_DIR>/venv/`
+- Créer un virtualenv dans `<TRADINEBOTTE_DIR>/.venv/`
 - Installer les dépendances Python dans le virtualenv
 - Générer `<TRADINEBOTTE_DIR>/run.sh` (wrapper avec `TRADINEBOTTE_DIR` pré-défini)
 - Vérifier la syntaxe du bot
@@ -398,7 +398,7 @@ que le serveur web est configuré pour servir ce répertoire.
 ## Lancement
 
 ```bash
-TRADINEBOTTE_DIR=~/tradinebotte bash scripts/start_bot.sh
+~/tradinebotte/run.sh
 ```
 
 ### Démarrage automatique avec systemd (recommandé pour les serveurs dédiés)
@@ -434,6 +434,8 @@ max 5 redémarrages par 5 minutes). Au reboot, le bot revient dès que le résea
 disponible (`After=network-online.target`).
 
 > **Multi-bot (Option B)** : utilisez `scripts/install_feed_service.sh`, `tradinebotte-indicators/scripts/install_indicators_service.sh` (indicateurs partagés, optionnel) et `scripts/install_account_service.sh`. Voir [docs/multi.md](docs/multi.md).
+>
+> **Déploiements multi-comptes** : les déploiements sur plusieurs comptes d'un même serveur utilisent des unités `~/.config/systemd/user/` (`systemctl --user`) — aucun sudo requis au déploiement. Voir `tradinebotte-polymarket/scripts/migrate_to_user_services.sh` et `tradinebotte-cex/scripts/migrate_cex_bots.sh`.
 
 **Flags :**
 - *(aucun flag)* — mode normal : les écritures de logs sont asynchrones (thread daemon, ne bloque jamais le event loop)
@@ -880,7 +882,7 @@ bash scripts/install.sh
 
 ```
 ~/tradinebotte/          ← venv partagé + log du feed
-  venv/
+  .venv/
   feed.log
 ~/account-a/             ← compte A : DB, log, config propres
   config.json
@@ -903,18 +905,18 @@ TRADINEBOTTE_DIR=~/account-b python3 scripts/setup.py   # clé compte B
 
 ```bash
 # 1. Lancer le feed partagé (une seule instance)
-bash scripts/start_feed.sh
+bash tradinebotte-polymarket/scripts/start_feed.sh
 
 # 2. Lancer chaque account bot dans un terminal séparé
-TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
-TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
+TRADINEBOTTE_DIR=~/account-a bash tradinebotte-polymarket/scripts/start_account.sh
+TRADINEBOTTE_DIR=~/account-b bash tradinebotte-polymarket/scripts/start_account.sh
 ```
 
 Adresse personnalisée (port ou hôte différent) :
 
 ```bash
-TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash scripts/start_feed.sh
-TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
+TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash tradinebotte-polymarket/scripts/start_feed.sh
+TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-a bash tradinebotte-polymarket/scripts/start_account.sh
 ```
 
 **Flags du feed** (`scripts/start_feed.sh` les transmet à `tradinebotte-polymarket/feed.py`) :
@@ -993,7 +995,7 @@ bash scripts/test_multibot_deploy.sh --skip-deploy --duration 300
 Dashboard en temps réel :
 
 ```bash
-TRADINEBOTTE_DIR=~/tradinebotte bash scripts/monitor.sh
+bash tradinebotte-polymarket/scripts/monitor.sh
 ```
 
 Suivre les logs en direct :

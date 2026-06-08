@@ -6,6 +6,226 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.70] — 2026-06-08
+
+### Corrections
+- **`UPDATE.md`, `UPDATE.fr.md` — commentaire Scénario 1 référençait encore `~/tradinebotte/venv`** : mis à jour en `~/tradinebotte/.venv`
+- **`UPDATE.md`, `UPDATE.fr.md` — description Scénario 4 incomplète depuis la v0.68** : `update_standalone.sh` synchronise désormais aussi `tradinebotte-cex/connectors/`, `tradinebotte-cex/strategy_engines/` et `tradinetools/` ; description mise à jour pour lister tous les répertoires synchronisés
+
+---
+
+## [0.69] — 2026-06-08
+
+### Corrections
+- **`INSTALL.md`, `INSTALL.fr.md` — cinq références obsolètes `venv/` remplacées par `.venv/`** : (1) commande alternative sqlite3 utilisait `~/tradinebotte/venv/bin/python3` ; (2) section Dépendances listait le chemin du virtualenv comme `~/tradinebotte/venv/` ; (3) bullet Installation mentionnait `<TRADINEBOTTE_DIR>/venv/` ; (4–5) exemples Méthode 3 tar.gz utilisaient `cd tradinebotte-0.5.0` au lieu de `cd tradinebotte-0.63` ; (6) diagramme d'arborescence multi-bot affichait `venv/` au lieu de `.venv/`
+
+---
+
+## [0.68] — 2026-06-08
+
+### Corrections
+- **`tradinebotte-polymarket/scripts/update_standalone.sh` — `connectors/` et `strategy_engines/` jamais synchronisés** : les quatre scripts de déploiement (`update_claude2.sh` à `update_claude5.sh`) sont des wrappers autour de `update_standalone.sh` ; sa fonction `_rsync()` synchronisait `tradinebotte-polymarket/`, `strategies/`, `requirements.txt` et `tradinetools/` mais omettait `tradinebotte-cex/connectors/` et `tradinebotte-cex/strategy_engines/` ; après une mise à jour de code, `live_bot.py` démarrait et plantait immédiatement avec `ModuleNotFoundError: No module named 'connectors'` ; les deux répertoires ajoutés à la séquence rsync
+
+---
+
+## [0.67] — 2026-06-07
+
+### Changements
+- **`scripts/install.sh` — virtualenv standardisé en `.venv`** : création et toutes les références passées de `venv/` à `.venv/` ; le bloc de détection vérifie `.venv` en premier (nouvelles installations), puis bascule sur `venv` pour les installations existantes ; section runtime-paths de `CLAUDE.md` mise à jour pour refléter `.venv/`
+- **`tradinebotte-polymarket/scripts/start_feed.sh` — détection dual venv** : vérifie `.venv/bin/python3` en premier, puis bascule sur `venv/bin/python3` pour la compatibilité descendante ; était précédemment codé en dur sur `venv` uniquement, ce qui échouait sur les comptes où `install.sh` avait déjà créé `.venv`
+- **`tradinebotte-polymarket/scripts/start_account.sh` — chaîne complète de fallback venv pour Option B** : vérifie `.venv` puis `venv` dans le répertoire du compte, puis `~/tradinebotte/.venv`, puis `~/tradinebotte/venv` en dernier recours ; vérifiait précédemment uniquement le `venv` du répertoire de compte, ce qui échouait avec le layout venv partagé Option B
+
+### Corrections
+- **Tous les comptes de déploiement migrés de `venv/` vers `.venv/`** : unités de service `systemd --user` existantes mises à jour (chemins `ExecStart` patchés de `venv/bin/python3` vers `.venv/bin/python3`), anciens répertoires `venv/` supprimés ; répertoires `connectors/` et `strategy_engines/` synchronisés vers les comptes à layout plat qui en manquaient après les mises à jour rsync
+
+---
+
+## [0.66] — 2026-06-07
+
+### Corrections
+- **`UPDATE.md`, `UPDATE.fr.md` — Option B manquait le redémarrage de `start_feed.sh`** : la séquence de mise à jour multi-bot tuait les trois processus (feed + 2 comptes) mais ne redémarrait que les account bots ; le feed n'était jamais relancé, laissant les deux account bots sans données ; `bash tradinebotte-polymarket/scripts/start_feed.sh` ajouté avant les lignes `start_account.sh`
+- **`INSTALL.md`, `INSTALL.fr.md`, `UPDATE.md`, `UPDATE.fr.md` — exclusions rsync manquantes pour `.venv/`** : `--exclude='venv/'` n'exclut pas les répertoires cachés `.venv/` ; la racine du repo contient un virtualenv de développement `.venv/` qui était silencieusement rsynced vers le serveur ; ajout de `--exclude='.venv/'` (UPDATE.md) et `--exclude='.venv'` (INSTALL.md) dans les quatre commandes rsync des quatre fichiers
+
+---
+
+## [0.65] — 2026-06-07
+
+### Corrections
+- **`tradinebotte-polymarket/scripts/start_account.sh` — lookup du venv échouait pour le layout multi-bot Option B** : le script cherchait le venv dans `$TRADINEBOTTE_DIR/venv` (ex. `~/account-a/venv`) alors que le layout Option B maintient un venv partagé unique dans `~/tradinebotte/venv` ; `install.sh` ne tourne qu'une seule fois pour le répertoire partagé, pas par compte ; corrigé en vérifiant `$INSTALL_DIR/venv` en premier puis en basculant sur `$HOME/tradinebotte/venv` ; message d'erreur mis à jour avec la commande de correction correcte
+- **`scripts/setup.py` — message de mode simulation montrait une mauvaise commande de démarrage** : le message « Launch the bot: » affichait `bash scripts/start_bot.sh` (inexistant à la racine du repo) ; corrigé pour afficher `$INSTALL_DIR/run.sh` (le wrapper généré par `install.sh`)
+- **`INSTALL.md`, `INSTALL.fr.md` — Méthode 1 (git clone) et Méthode 3 (tar.gz) référençaient encore `v0.5.0`** : mis à jour en `v0.63`
+
+---
+
+## [0.64] — 2026-06-07
+
+### Corrections
+- **`scripts/install.sh` — `run.sh` généré avec un mauvais chemin vers `start_bot.sh`** : `run.sh` était généré avec `exec bash "$REPO_DIR/scripts/start_bot.sh"` mais `start_bot.sh` se trouve dans `tradinebotte-polymarket/scripts/start_bot.sh`, pas dans `scripts/` à la racine du dépôt ; corrigé en `$REPO_DIR/tradinebotte-polymarket/scripts/start_bot.sh` ; le message NEXT STEPS pointe désormais directement vers le wrapper `$INSTALL_DIR/run.sh` généré plutôt que vers le chemin brut du script
+- **Documentation — tous les chemins de scripts corrigés dans les 10 fichiers** : `bash scripts/start_bot.sh` remplacé par `~/tradinebotte/run.sh` dans tous les scénarios (INSTALL.md, INSTALL.fr.md, UPDATE.md, UPDATE.fr.md, QUICKSTART.md, QUICKSTART.fr.md) ; `bash scripts/monitor.sh` remplacé par `bash tradinebotte-polymarket/scripts/monitor.sh` ; `bash scripts/start_feed.sh` et `bash scripts/start_account.sh` remplacés par leurs équivalents dans `tradinebotte-polymarket/scripts/` ; `scripts/` à la racine ne contient que les scripts génériques (`install.sh`, `setup.py`, `run_tests.sh`, etc.) — les scripts de lancement spécifiques à polymarket n'y ont jamais été
+- **Documentation — compteur de tests corrigé dans INSTALL.md, INSTALL.fr.md, README.md, README.fr.md** : `1 148 tests en 5 suites` mis à jour en `733 tests en 4 suites` suite à la suppression de `scalping_bot.py` et de ses 415 tests en v0.63 ; mentions des stratégies de scalping supprimées de la prose de la section Tests
+- **QUICKSTART.md, QUICKSTART.fr.md — référence de version obsolète mise à jour** : les exemples de commandes référençaient `v0.50` ; mis à jour en `v0.63`
+
+---
+
+## [0.63] — 2026-06-07
+
+### Modifications
+- **Scripts de déploiement — exclusions rsync pour éviter le redéploiement de fichiers inutiles** : `update_standalone.sh`, `deploy_accumulation.sh`, `deploy_scalping_claude4.sh` et `update_swing.sh` excluent désormais `account_bot.py` et `feed.py` du rsync polymarket (inutiles sur les comptes live-only ou CEX) ; `deploy_accumulation.sh`, `deploy_scalping_claude4.sh` et `update_swing.sh` excluent `scalping_bot.py`, `scalping_math.py`, `api_bitstamp.py` et `api_mexc.py` du rsync CEX (non utilisés par les bots en cours d'exécution)
+
+### Supprimé
+- **`tradinebotte-cex/scalping_bot.py` et `tradinebotte-cex/tests/test_scalping_bot.py`** — bot de scalping OHLCV 1 minute et sa suite de 415 tests supprimés du dépôt source ; le bot n'était déployé sur aucun compte et n'était importé par aucun module en cours d'exécution ; `analysis/backtest_scalping.py` et `tests/test_scalping.py` (qui testent le moteur de backtest, pas le bot live) sont conservés ; `api_binance.py`, `api_bitstamp.py`, `api_mexc.py` et le registre `connectors/` sont maintenus car ils servent d'autres bots déployés
+
+### Maintenance
+- **Nettoyage serveur — suppression des fichiers obsolètes sur tous les comptes** : suppression des répertoires `venv/` dupliqués (108 Mo × 3 comptes ; les services actifs utilisent `.venv`) ; suppression des résidus de git clone (`scripts/`, `tests/`, `.github/`, `.git-hooks/`, `.mypy_cache/`, `reports/` et fichiers de documentation/notes) sur les trois comptes initialement déployés par git clone ; suppression des anciens fichiers JSON de stratégie en layout plat et des modules Python de stratégie obsolètes (`strategies/base.py`, `strategies/grid.py`, `strategies/__init__.py`) remplacés par `strategy_engines/` et le layout JSON ; suppression des fichiers PID obsolètes, des bases de données et logs scalping orphelins, et d'une sauvegarde de base de données corrompue ; suppression de neuf anciens fichiers d'unité système dans `/etc/systemd/system/` dont trois encore `enabled` qui auraient démarré au prochain reboot (désactivés avant suppression)
+
+---
+
+## [0.62] — 2026-06-07
+
+### Ajouts
+- **Migration des services user étendue à tous les comptes restants** : live_bot migré vers des unités user `tradinebotte-live.service` sur les quatre comptes restants (compte-2 : unité installée mais inactive ; compte-4 : aucune unité ; compte-5 : process nohup actif ; compte-3 : déjà actif) ; `migrate_to_user_services.sh` mis à jour pour couvrir les quatre comptes, ajout du kill nohup avant le démarrage (ignoré si le service est déjà actif), et ajout des options SSH manquantes `-o PreferredAuthentications=password -o ServerAliveInterval=10 -o ServerAliveCountMax=3` qui provoquaient un blocage indéfini sur les serveurs en auth par mot de passe
+- **Unités user `tradinebotte-accumulation.service` sur deux comptes** : `accumulation_bot` sur le compte standalone (stratégie btc_accumulation) et sur le compte scalping (stratégie btc_accumulation_deepdip) migrés de nohup vers des unités user ; processus nohup stoppés proprement avant le démarrage ; chemin de stratégie intégré dans l'unité à l'installation
+- **Unité user `tradinebotte-orderbook.service` sur le compte scalping** : `orderbook_bot` migré de nohup vers une unité user ; processus nohup stoppé proprement avant le démarrage
+- **`migrate_cex_bots.sh` — script de migration en une seule passe pour les comptes CEX** : installe et démarre les trois unités user CEX (accumulation ×2, orderbook ×1) en une seule exécution ; détecte `.venv` vs `venv` à l'installation ; affiche les instructions Phase 2 `loginctl enable-linger` pour root ; modèles d'unités stockés dans `tradinebotte-cex/scripts/systemd/`
+
+### Modifications
+- **`update_swing.sh` — redémarrage dual-path remplace le chemin nohup-only** : détecte `tradinebotte-live.service` actif/activé et utilise `systemctl --user restart` si présent ; bascule sur nohup sinon ; étape VERIFY mise à jour du contrôle PID-file vers l'approche `pgrep`/filtre-exe des autres scripts ; attend 36s après un redémarrage systemd (RestartSec=30) contre 6s après nohup
+- **`deploy_scalping_claude4.sh` — redémarrage dual-path pour orderbook_bot** : détecte `tradinebotte-orderbook.service` actif/activé ; chemin systemd préféré, fallback nohup conservé ; étape VERIFY mise à jour vers pgrep/filtre-exe
+- **`deploy_accumulation.sh` — redémarrage dual-path pour accumulation_bot** : détecte `tradinebotte-accumulation.service` actif/activé ; chemin systemd préféré, fallback nohup conservé ; détection venv utilise le fallback `.venv` → `venv` au lieu du chemin `venv/` codé en dur ; étape VERIFY mise à jour vers pgrep/filtre-exe
+
+---
+
+## [0.61] — 2026-06-07
+
+### Correctifs
+- **`update_claude1.sh` — mot de passe du compte pipé via `sudo -S` en SSH pour redémarrer les services** : `_restart_service()` construisait des commandes distantes de la forme `echo '$password' | sudo -S systemctl restart <svc>` — exposant le credential du compte dans la liste des arguments de processus visible par n'importe quel utilisateur via `ps aux` ; cause racine : les services indicateurs, feed et account-bot étaient des services système (`/etc/systemd/system/`) nécessitant des privilèges root pour redémarrer ; les trois ont été migrés vers des unités user (`~/.config/systemd/user/`) pour que `systemctl --user restart` fonctionne sans sudo ni exposition de credential
+
+### Ajouts
+- **`migrate_claude1_services.sh` — script de migration des services système → services user pour le compte 1** : la phase 1 (SSH, sans sudo) écrit les trois unités user et les active ; la phase 2 affiche les étapes admin à exécuter sur le serveur (linger + stop/disable des services système + démarrage des services user dans le bon ordre) ; les services user ne doivent pas démarrer pendant que les services système occupent les ports ZeroMQ 5557, 5559 et 5561 — arrêter les services système en premier est obligatoire
+- **`systemd/tradinebotte-indicators.user.service`**, **`systemd/tradinebotte-feed.user.service`**, **`systemd/tradinebotte-account.user.service`** — modèles d'unités user pour les trois services du compte 1 ; utilisent le spécificateur `%h` pour le répertoire home, `WantedBy=default.target`, `After=network.target` ; `ExecStart` et variables d'environnement copiés verbatim depuis les unités système actives
+
+---
+
+## [0.60] — 2026-06-07
+
+### Correctifs
+- **`update_standalone.sh` — l'étape VERIFY signalait "running" sur un bot mort** : le cmdline bash de la session SSH de vérification contient la chaîne littérale `live_bot` (issue du pattern pgrep) ; `pgrep -f 'python.*live_bot'` s'auto-correspondait au processus bash, rendant `MPID` non-vide même quand le bot réel n'était pas en cours d'exécution ; `grep -qE '^PID=[0-9]+ running'` retournait succès pour un bot mort ; remplacé par une boucle filtrée par `/proc/$P/exe` comme dans tous les autres scripts de déploiement
+- **`update_standalone.sh` — branche "system service" morte : pgrep nu + pas de vrai redémarrage** : la branche `elif [ -f "/etc/systemd/system/$SVC" ]` utilisait `pgrep -u $SA_USER -f 'python3.*live_bot'` sans filtre exe (même bug d'auto-correspondance), et le corps de redémarrage se contentait d'afficher `systemd restarted` sans exécuter aucune commande `systemctl` ; un bot tué par ce chemin ne redémarrait jamais ; branche supprimée (tous les comptes sont sur des services user)
+- **Scripts de déploiement — `ServerAliveInterval` manquant dans quatre scripts sur cinq** : `update_standalone.sh` avait `-o ServerAliveInterval=10 -o ServerAliveCountMax=3` dans `_ssh()` mais `deploy_scalping_claude4.sh`, `update_swing.sh` et le nouveau script base `deploy_accumulation.sh` en étaient dépourvus ; les connexions SSH de ces scripts pouvaient rester bloquées indéfiniment en cas d'interruption réseau
+
+### Ajouts
+- **`deploy_accumulation.sh` — script base paramétrable remplace 191 lignes dupliquées** : `deploy_accumulation_claude3.sh` et `deploy_accumulation_claude4.sh` étaient des copies quasi-identiques (4 variables différentes sur 191 lignes) ; les deux sont désormais de fins wrappers (variables d'environnement `ACCUM_USER_IDX` et `BOT_STRATEGY`) délégant au nouveau script base ; un seul correctif se propage maintenant aux deux comptes au lieu de nécessiter deux modifications
+- **`update_claude4.sh` — wrapper manquant pour le compte scalping (index 3)** : tous les autres comptes avaient des wrappers `update_claudeN.sh` autour de `update_standalone.sh` ; le compte scalping n'en avait pas, nécessitant des invocations manuelles `TEST_STANDALONE_USER_IDX=3` ; ajouté suivant le même modèle que `update_claude2.sh`, `update_claude3.sh`, `update_claude5.sh`
+- **`deploy_all.sh` — script de déploiement séquentiel global** : déploie les huit bots sur tous les comptes dans l'ordre requis (même serveur — jamais en parallèle) ; affiche un résumé OK/FAILED par compte en fin d'exécution ; transmet les flags `--skip-restart` et `--verify-only` à tous les sous-scripts
+
+---
+
+## [0.59] — 2026-06-06
+
+### Correctifs
+- **Scripts de déploiement — authentification SSH par mot de passe cassée par une clé installée** : `ssh-copy-id` avait installé une clé locale protégée par passphrase dans les `authorized_keys` des comptes de déploiement ; SSH tentait l'auth par clé en premier et sshpass injectait le mot de passe du compte comme passphrase de la clé, le consommant avant le défi d'auth par mot de passe ; ajout de `-o PreferredAuthentications=password` dans tous les helpers `_ssh()` et `_rsync()` des six scripts de déploiement afin que l'auth par clé soit entièrement contournée (`update_standalone.sh`, `update_claude1.sh`, `deploy_accumulation_claude3.sh`, `deploy_accumulation_claude4.sh`, `deploy_scalping_claude4.sh`, `update_swing.sh`)
+- **Scripts de déploiement — processus orphelins périmés non tués au déploiement** : quand un processus bot mourait en dehors d'un redémarrage géré son fichier PID devenait périmé ; le déploiement suivant démarrait une nouvelle instance sans arrêter l'ancienne, laissant deux bots partager la même base de données SQLite et produisant des erreurs de verrou DB ; ajout de la détection d'orphelins via `pgrep -u $(whoami) -f "<bot_script>"` avant chaque redémarrage dans tous les scripts de déploiement
+- **Scripts de déploiement — `pgrep -f` correspondait au processus bash du déployeur et se tuait lui-même** : `pgrep -f "python.*bot_script.py"` correspondait au processus bash SSH exécutant la commande de déploiement car le texte complet du script (incluant la chaîne littérale `python3 bot_script.py` de la ligne `nohup`) apparaît dans le cmdline du processus bash ; le tuer abandonnait silencieusement le déploiement avant l'exécution de `nohup`, ne produisant ni fichier PID ni bot en cours d'exécution ; corrigé en vérifiant `readlink /proc/$P/exe | grep python` avant de tuer afin que seuls les vrais processus python soient ciblés, pas le shell déployeur
+
+---
+
+## [0.58] — 2026-06-05
+
+### Corrections
+- **`scalping_bot.py` — double déduction de fee** : la fee d'entrée était déduite deux fois (une fois à l'ouverture, une fois intégrée dans le calcul du PnL à la clôture) ; tous les PnL historiques étaient sous-estimés d'environ une fee d'entrée par trade
+- **`scalping_bot.py` — TP évalué avant SL quand les deux sont touchés dans la même bougie** : pour les positions longues, le TP est désormais vérifié en premier ; suppression aussi de la table `candles` DDL créée mais jamais écrite
+- **`scalping_bot.py` — dénominateur ATR utilisait un close périmé** : la stratégie breakout divisait l'ATR par `closes[-2]` au lieu de `closes[-1]`
+- **`dca.py` — clé `"orderId"` incorrecte** : `_check_rest_fills` utilisait `o["orderId"]` mais `api_binance.get_open_orders` normalise en `o["order_id"]` ; le set était toujours vide, chaque ordre BUY semblait rempli et des TP SELL en double étaient placés à chaque poll
+- **`dca.py` — `_on_tp_hit` appelé sans condition pour status `"long"`** : ajout de la garde `pos.sell_order_id is None` pour éviter les TP SELL en double
+- **`orderbook_bot.py` — les gates longs bloquaient les shorts en mode `direction="both"`** : les cinq gates faisaient un `return` global ; chaque gate switche désormais `direction` vers `"short"` au lieu d'abandonner
+- **`orderbook_bot.py` — shutdown laissait `pnl_net`/`capital_after` NULL** : le handler d'arrêt écrit désormais une estimation mark-to-market pour les positions ouvertes
+- **`swinghold.py` — `qty_held` persisté avant le fill réel** : les positions `buy_placed` sont créées avec `qty_held=0.0` et `_on_buy_filled` fixe la bonne valeur
+- **`swinghold.py` — état de vente partielle intermédiaire jamais persisté** : `_on_partial_sell_filled` appelle `_save_state` avant la prochaine vente partielle pour les positions encore ouvertes
+- **`swinghold.py` — `_close_sl` avalait silencieusement les erreurs de cancel** : l'exception est désormais loggée avec avertissement
+- **`accumulation_bot.py` — floor du cooldown adaptatif ignoré** : `max(floor_iv, base_iv // 2)` était toujours `base_iv // 2` ; corrigé en `min(floor_iv, base_iv // 2)`
+- **`accumulation_bot.py` — `avg_entry` non remis à zéro après vente totale** : `avg_entry` est maintenant réinitialisé à `0.0` quand `holdings_btc` atteint zéro
+- **`grid.py` — tâche user stream recréée à chaque tick sans ordres actifs** : la garde vérifie maintenant qu'il existe au moins un ordre actif avant de créer la tâche
+- **`grid.py` — annulation de la tâche user stream non awaitée** : `_cancel_all_orders` attend maintenant la fin de la tâche avant de halter
+- **`api_bitstamp.py` — signature `post_order` incompatible** : corrigée pour correspondre à l'interface unifiée `(session, symbol, price, size_usdc, *, side)`
+- **`api_bitstamp.py` — sim mode retournait un `dict` au lieu d'une `str`** : retourne désormais `f"sim_..."` comme tous les autres connecteurs
+- **`api_bitstamp.py` — `get_open_orders` retournait le format Bitstamp brut** : normalisé vers `{"order_id", "side", "price", "qty", "status"}`
+- **`api_bitstamp.py` — signature HMAC incorrecte** : nonce et timestamp étaient inversés, `"v2"` manquait ; toutes les requêtes authentifiées auraient retourné HTTP 403
+- **`api_mexc.py` — log en français** : traduit en anglais conformément à la politique linguistique
+
+### Ajout
+- **`api_bitstamp.py` — stubs user-stream** : `get_listen_key`, `keepalive_listen_key`, `make_user_stream_url`, `parse_user_stream_msg` ; le connecteur est désormais chargeable via `connector="bitstamp"`
+- **`connectors/__init__.py`** : `bitstamp` enregistré dans `_REGISTRY` ; `swinghold` et `dca` ajoutés dans `_STRATEGY_REQUIREMENTS`
+- **`indicators.py` — streams dynamiques morts redémarrables** : `_start_stream` détecte les tâches terminées/crashées avant la garde `"already active"`
+- **`indicators.py` — `db_path` restreint à `TRADINEBOTTE_DIR`** : empêche un souscripteur de créer ou chmodifier des fichiers arbitraires via le socket REP
+
+---
+
+## [0.57] — 2026-06-05
+
+### Corrections
+- **`bot_utils.py` — suppression de la fonction `warn_if_external_bind` morte** : la fonction était un doublon de `tradinetools.zmq.warn_if_external_bind` ; tous ses appelants avaient déjà migré vers la version `tradinetools` ; la copie dans `bot_utils` n'était plus atteignable
+- **`api_polymarket.py` — mise en cache du `ClobClient` entre les trades** : le client CLOB authentifié était reconstruit à chaque ordre, déclenchant une dérivation de clé EIP-712 à chaque trade ; le client est désormais initialisé une seule fois par processus et mis en cache par `(private_key, install_dir)`, éliminant ce surcoût de la boucle critique des ordres
+- **`account_bot.py` — chemin de verrou du feed stable entre les processus** : `abs(hash(addr))` servait à construire le nom du fichier de verrou exclusif pour la coordination du démarrage du feed ; `hash()` de Python étant aléatoire par processus depuis Python 3.3+, deux account_bots calculant ce chemin pour la même adresse de feed obtenaient des noms différents, cassant silencieusement la coordination et risquant de lancer deux instances `feed.py` qui se disputent le même port ; remplacé par `hashlib.md5(addr.encode()).hexdigest()[:8]`, déterministe entre tous les processus
+
+---
+
+## [0.52] — 2026-06-02
+
+### Ajout
+- **`docs/logging.md` — vocabulaire canonique des tags de log** : documente chaque ligne de log structurée préfixée par `[TAG]` dans les quatre modules (`live_bot.py`, `feed.py`, `account_bot.py`, `indicators.py`) ; inclut les deux lignes visuelles (`▶ TRADE`, `✓ WIN`/`✗ LOSS`) avec leurs patterns grep ; définit la convention dynamique `[<stream_id>]` utilisée par `indicators.py` ; inclut des règles pour l'ajout de nouvelles lignes structurées
+
+### Modifications
+- **`live_bot.py` — standardisation des préfixes structurés sans crochets** : quatre lignes de log ne respectant pas le format `[TAG]` sont désormais cohérentes avec le reste du code : `VOL FILTER` → `[VOL_FILTER]`, `Kelly:` → `[KELLY]`, `CIRCUIT-BREAKER:` → `[CIRCUIT_BREAKER]`, `post_order returned None — aborting entry to prevent ghost trade` → `[GHOST_GUARD] post_order returned None — aborting entry`
+- **`feed.py` — suppression des tags parasites** : `[VERBOSE]` (pas un événement parseable — remplacé par du texte simple) et `[WS ERROR]` (redondant — fusionné dans la famille `[WS]` sous `[WS] traceback:`)
+
+---
+
+## [0.56] — 2026-06-02
+
+### Modifications
+- **`live_bot.py` — ligne de log `▶ TRADE` enrichie du contexte du signal** : ajout de `obi=%.3f` et `ask_vol=%.0f` pour que la ligne d'entrée soit auto-suffisante ; aucune jointure DB nécessaire pour retrouver les valeurs OBI et ask-volume ayant déclenché le signal
+- **`live_bot.py` — ligne `✓ WIN` / `✗ LOSS` enrichie de la durée de hold** : ajout de `duration=%ds` calculé à partir de `resolution_ts_ms − signal_ts_ms` ; permet aux workflows grep-log de repérer les holds anormalement longs sans interroger la base de données
+
+---
+
+## [0.55] — 2026-06-02
+
+### Correctifs
+- **`.gitignore` — suppression des exceptions `data/*.db`** : les quatre bases de données de référence étaient explicitement dé-ignorées et committées comme blobs binaires ; suppression des exceptions `!data/*.db` afin que tous les fichiers `.db` soient ignorés ; fichiers retirés de l'index git avec `git rm --cached` (copies locales conservées)
+- **GitHub Actions — épinglage de toutes les actions au SHA de commit** : `actions/checkout`, `actions/setup-python` et `anthropics/claude-code-action` étaient référencés par tag (`@v6`, `@v1`, etc.) ; un tag compromis pourrait silencieusement rediriger la CI vers du code malveillant ; les cinq fichiers de workflow sont désormais épinglés au SHA de commit exact avec le tag conservé en commentaire pour la lisibilité
+
+---
+
+## [0.54] — 2026-06-02
+
+### Ajout
+- **`tradinebotte-cex/strategies/accumulation/btc_accumulation_deepdip.json` — stratégie d'accumulation deep-dip v1.0** : stratégie différenciée pour le second compte d'accumulation ; backtesté 2024-01-01 → 2026-06-02 sur klines Binance 1h live ; +41% contre +38% pour la v1.5 standard (+3pp), pic à +96% vs +75% (+21pp au sommet du marché haussier) ; différences clés par rapport à la v1.5 : pas de mise initiale (attend les vrais dips), seuil OBI plus strict 0.70 vs 0.50, tranches plus larges $250 vs $100, bandes de profit plus hautes (15/30/50/75/100% vs 5/10/20/30/50%), fraction de vente réduite à 8% vs 15% (conserve plus de BTC), gates Fear&Greed et ratio L/S désactivées (évite le blocage lors de forts dips OBI en régime greed), seuil macro OBI resserré à -0.50
+- **`tradinebotte-cex/scripts/deploy_accumulation_claude4.sh`** : `BOT_STRATEGY` mis à jour vers `btc_accumulation_deepdip.json`
+
+---
+
+## [0.53] — 2026-06-02
+
+### Correctifs
+- **`scripts/update_standalone.sh` — suppression du DB lock au déploiement** : le mécanisme nohup + fichier PID est remplacé par `systemctl --user restart tradinebotte-live.service` pour les comptes migrés vers les services utilisateur ; aucun sudo requis car `systemctl --user` opère entièrement dans l'instance systemd du compte ; retombe sur le kill + redémarrage par systemd pour les comptes encore sur des services système
+
+### Ajout
+- **`scripts/migrate_to_user_services.sh` — migration des services live bot vers les units utilisateur** : phase 1 (SSH en tant que l'utilisateur bot, zéro sudo) écrit `~/.config/systemd/user/tradinebotte-live.service`, exécute `systemctl --user enable` + `start` ; la phase 2 affiche les deux commandes admin nécessaires une fois par compte : `loginctl enable-linger <user>` (rend l'instance systemd de l'utilisateur persistante après reboot — nécessite root car écrit dans `/var/lib/systemd/linger/`) et `systemctl stop/disable tradinebotte-live-<user>.service` pour supprimer l'ancienne unit système
+- **`scripts/systemd/tradinebotte-live.service` — template d'unit utilisateur** : identique à l'ancienne unit système sans `User=` (implicite pour les services utilisateur) et avec `WantedBy=default.target` + `After=network.target` (cibles accessibles sans sudo)
+
+---
+
+## [0.51] — 2026-06-02
+
+### Correctifs
+- **`tradinebotte-polymarket/live_bot.py` — fuite des logs vers syslog** : `logging.basicConfig()` est sans effet quand des bibliothèques tierces (`aiohttp`, `websockets`) configurent le root logger avant l'exécution de `_setup_logging()` ; sans `force=True`, le root logger conserve un `StreamHandler` pointant vers stderr, tous les enregistrements du logger `"live"` y propagent, et systemd les capture dans le journal système/syslog ; ajout de `force=True` à l'appel `basicConfig()` dans `_setup_logging()` afin que les handlers existants du root logger soient toujours remplacés par le pipeline `FileHandler`-only voulu
+- **`tradinebotte-polymarket/feed.py` — logs vers fichier au lieu de stdout** : remplacement de `logging.basicConfig(handlers=[StreamHandler(stdout)])` par `tradinetools.setup_logger("feed", feed.log)` ; les logs vont désormais dans un fichier local rotatif ; la sortie stdout n'est conservée qu'en TTY interactif
+- **`tradinebotte-polymarket/account_bot.py` — logs vers fichier au lieu de stdout** : même migration de `basicConfig(stream=sys.stdout)` vers `tradinetools.setup_logger("account", account.log)`
+- **`tradinebotte-indicators/indicators.py` — logs vers fichier au lieu de stdout** : même migration vers `tradinetools.setup_logger("indicators", indicators.log)`
+- **Fichiers de service systemd — défense en profondeur** : ajout de `StandardOutput=null` et `StandardError=null` dans les six fichiers de service tradinebotte afin que le journal système ne capture plus jamais la sortie des bots, même en cas de régression future du système de logging
+
+---
+
 ## [0.50] — 2026-05-31
 
 ### Ajout
@@ -17,7 +237,7 @@ Toutes les modifications notables de ce projet sont documentées ici.
 ## [0.49] — 2026-05-31
 
 ### Ajout
-- **`tradinebotte-cex/accumulation_bot.py` v1.4 — améliorations P1–P6 issues du document de conception** : cooldown adaptatif qui raccourcit l'attente de scale-in quand la pression OBI est forte ; trailing stop de rebuy avec expiration (supprime automatiquement les niveaux de rebuy obsolètes) ; buffer Earn configurable (`earn_buffer_usd`) pour conserver un minimum de USDT liquide en spot ; gate VWAP appliquée à l'achat initial uniquement (`vwap_gate_initial`), les entrées de scale-in restent non filtrées ; seuil OBI plus élevé requis pour la réduction du cooldown
+- **`tradinebotte-cex/accumulation_bot.py` v1.4 — six améliorations** : cooldown adaptatif qui raccourcit l'attente de scale-in quand la pression OBI est forte ; trailing stop de rebuy avec expiration (supprime automatiquement les niveaux de rebuy obsolètes) ; buffer Earn configurable (`earn_buffer_usd`) pour conserver un minimum de USDT liquide en spot ; gate VWAP appliquée à l'achat initial uniquement (`vwap_gate_initial`), les entrées de scale-in restent non filtrées ; seuil OBI plus élevé requis pour la réduction du cooldown
 - **`tradinebotte-cex/accumulation_bot.py` v1.5 — quatre nouvelles gates de signal** :
   - Gate Fear & Greed (`fear_greed_gate`) : bloque les achats quand l'indice > 80 (avidité extrême), booste la mise quand l'indice < 25 (peur extrême)
   - Gate liquidations (`liq_gate`) : bloque l'entrée sur un pic de liquidations shorts importantes (signal de longs surchargés), booste la mise sur un pic de liquidations longs (vente forcée)
@@ -160,7 +380,7 @@ Toutes les modifications notables de ce projet sont documentées ici.
 - **`scripts/analyze_cycle_volatility.py` — analyse étendue de la volatilité par cycle** : gain glissant sur 730j, pente 200DMA, analyse frontrunning C3, table de fiabilité des indicateurs
 - **`scripts/backtest_cycle_strategy.py` — backtest de stratégie cycle long terme** : options `--top-mm`, `--rebound`, `--drawback`, `--tranche`, `--prudence`, `--compare`
 - **`scripts/download_btc_daily_extended.py` — téléchargement OHLCV journalier BTC étendu** : récupère l'historique pluriannuel pour l'analyse de cycles
-- **`scripts/backtest.py` — sizing Kelly fractionnel, ratios Sharpe/Sortino, optimisation walk-forward, filtre de volatilité par jour de semaine (P1), sizing de mise par paliers (P2)**
+- **`scripts/backtest.py` — sizing Kelly fractionnel, ratios Sharpe/Sortino, optimisation walk-forward, filtre de volatilité par jour de semaine, sizing de mise par paliers**
 
 ### Modifié
 - **`strategies/grid_BTCUSDT_bear_trailing.json`** — bornes de grid mises à jour à 60 000 $–100 000 $ avec ±30 %/40 niveaux
@@ -179,23 +399,23 @@ Toutes les modifications notables de ce projet sont documentées ici.
 - **`scripts/update_standalone.sh` — script de déploiement allégé** : rsync du contenu de `bot/` à plat dans `$INSTALL_DIR/` (correspondant à la structure de install.sh) + rsync de `strategies/*.json` ; session SSH unique pour stop + start via fichier PID ; session SSH unique pour la vérification ; options : `--skip-restart`, `--verify-only`
 
 ### Correction
-- **`scripts/profile_compare.py` — f-string SQL PRAGMA éliminé (audit L-7)** : `c.execute(f"PRAGMA mmap_size = {MMAP_MB * 1024 * 1024};")` remplacé par `c.execute("PRAGMA mmap_size = ?", (MMAP_MB * 1024 * 1024,))` ; aucun risque d'injection réel (valeur constante), mais le pattern f-string SQL est éliminé du codebase
-- **`bot/live_bot.py`, `bot/feed.py`, `bot/account_bot.py` — `ClientTimeout` session ajouté (audit L-5)** : les trois instanciations `aiohttp.ClientSession()` passent désormais `timeout=aiohttp.ClientTimeout(total=30)` ; les timeouts par requête dans les modules `api_*` couvrent déjà les appels actuels, mais le timeout session-level empêche toute future omission de bloquer l'event loop indéfiniment
-- **`bot/api_binance.py`, `bot/api_mexc.py` — corps de réponses d'erreur tronqués dans les logs (audit L-4)** : 8 appels logger qui transmettaient le corps HTTP complet (`data`) utilisent désormais `%.300s` au lieu de `%s`, limitant la représentation loguée à 300 caractères ; appels concernés : `order error`, `get_order_status error`, `cancel_order error`, `get_open_orders error` dans les deux modules
-- **`bot/indicators.py` — docstring RSI corrigée en Cutler (audit L-3)** : docstring de `compute_rsi` changée de `"Wilder RSI(n)"` en `"Cutler RSI(n): simple-mean gains/losses over the last n bars"` ; l'implémentation utilise `sum(...) / n` sur une fenêtre fixe (méthode de Cutler), non la moyenne lissée EMA de Wilder
-- **`CLAUDE.md` — nombre de lignes de `live_bot.py` corrigé (audit L-2)** : `~617 lignes` mis à jour en `~1530 lignes` (réel : 1531) ; le chiffre périmé datait d'avant l'expansion majeure du code
-- **`scripts/install.sh` — packages grid/connecteur ajoutés à l'installation (audit L-1)** : "Copie du bot" inclut désormais `api_binance.py`, `api_mexc.py` (copies à plat) + `bot/connectors/__init__.py` → `connectors/` + `bot/strategies/__init__.py` et `bot/strategies/grid.py` → `strategies/` (aux côtés des fichiers JSON) ; une installation fraîche suivie de `connector=binance strategy_type=grid` ne lève plus `ModuleNotFoundError` ; la boucle de vérification syntaxe étendue pour couvrir les 8 fichiers Python
-- **`bot/live_bot.py` — commits des snapshots regroupés toutes les 30 s (audit M-7)** : `save_snapshot()` n'appelle désormais que `conn.execute()` (chemin rapide) ; `handle_book_update()` flush avec `conn.commit()` au plus une fois toutes les `SNAPSHOT_COMMIT_SECS = 30` secondes, réduisant les commits bloquants de 50 fois par fenêtre de 5 secondes à un par 30 secondes ; toutes les opérations SQLite restent sur le thread de l'event loop — aucun executor, aucun problème de thread-safety ; 3 tests ajoutés
-- **`bot/strategies/grid.py` — flag sticky `_no_credentials` empêche la re-création infinie de la task user-stream (audit M-6)** : `_user_stream_loop` positionne désormais `self._no_credentials = True` après `MAX_KEY_FAILURES` (3) échecs consécutifs de `get_listen_key` ; le garde de création de task dans `on_book_update()` vérifie `not self._no_credentials` en premier, évitant toute recréation une fois l'absence de credentials confirmée ; 3 tests ajoutés dans `TestNoCredentialsFlag`
-- **`bot/account_bot.py` — correction TOCTOU symlink sur le log feed dans `/tmp` (audit M-2)** : le fichier log du feed est désormais ouvert avec `os.open(O_CREAT|O_WRONLY|O_APPEND|O_NOFOLLOW)` au lieu de `open()` ; empêche un symlink malveillant placé dans le répertoire `/tmp` accessible en écriture par tous de rediriger les écritures du log vers un fichier arbitraire (ex. `authorized_keys`) ; le parent ferme son fd après `Popen`, le processus enfant le conserve ouvert ; cohérent avec le fichier de verrou qui utilisait déjà `O_NOFOLLOW`
-- **`scripts/test_multibot.conf.example` + `.git-hooks/pre-commit` — noms d'utilisateurs OS génériques (audit M-1)** : les vrais noms de comptes OS remplacés par des placeholders génériques (`user1 user2 user3`) dans l'exemple de config et son commentaire de rôle ; le hook pre-commit étendu pour que chaque nom d'utilisateur du fichier de test génère deux patterns grep — `$u@` (avec `@`, existant) et `\b$u\b` (mot entier, nouveau) — bloquant les deux formes dans les diffs stagés
-- **`bot/live_bot.py` — protection contre les trades fantômes dans `enter_live_trade()` (audit H-1)** : en mode live (`session + private_key`), si `post_order` retourne `None` (échec de l'API CLOB), la fonction retourne désormais prématurément après incrémentation de `api_fail_streak`, empêchant la création d'une ligne fantôme avec `order_id=NULL` qui bloquerait définitivement le capital ; le mode simulation (sans `private_key`) n'est pas affecté — l'INSERT continue de s'exécuter avec `oid=None` ; trois tests de non-régression ajoutés dans `TestEnterLiveTrade`
-- **`requirements.txt` — `bcrypt` ajouté (audit M-3)** : `bcrypt` était absent de `requirements.txt` ; une installation fraîche laissait `bot/bot_utils.py` se rabattre sur SHA-1 non salé pour le mot de passe de la page de statut web ; `bcrypt` est désormais une dépendance déclarée, installée automatiquement par `pip install -r requirements.txt`
+- **`scripts/profile_compare.py` — f-string SQL PRAGMA éliminé** : `c.execute(f"PRAGMA mmap_size = {MMAP_MB * 1024 * 1024};")` remplacé par `c.execute("PRAGMA mmap_size = ?", (MMAP_MB * 1024 * 1024,))` ; aucun risque d'injection réel (valeur constante), mais le pattern f-string SQL est éliminé du codebase
+- **`bot/live_bot.py`, `bot/feed.py`, `bot/account_bot.py` — `ClientTimeout` session ajouté** : les trois instanciations `aiohttp.ClientSession()` passent désormais `timeout=aiohttp.ClientTimeout(total=30)` ; les timeouts par requête dans les modules `api_*` couvrent déjà les appels actuels, mais le timeout session-level empêche toute future omission de bloquer l'event loop indéfiniment
+- **`bot/api_binance.py`, `bot/api_mexc.py` — corps de réponses d'erreur tronqués dans les logs** : 8 appels logger qui transmettaient le corps HTTP complet (`data`) utilisent désormais `%.300s` au lieu de `%s`, limitant la représentation loguée à 300 caractères ; appels concernés : `order error`, `get_order_status error`, `cancel_order error`, `get_open_orders error` dans les deux modules
+- **`bot/indicators.py` — docstring RSI corrigée en Cutler** : docstring de `compute_rsi` changée de `"Wilder RSI(n)"` en `"Cutler RSI(n): simple-mean gains/losses over the last n bars"` ; l'implémentation utilise `sum(...) / n` sur une fenêtre fixe (méthode de Cutler), non la moyenne lissée EMA de Wilder
+- **`CLAUDE.md` — nombre de lignes de `live_bot.py` corrigé** : `~617 lignes` mis à jour en `~1530 lignes` (réel : 1531) ; le chiffre périmé datait d'avant l'expansion majeure du code
+- **`scripts/install.sh` — packages grid/connecteur ajoutés à l'installation** : "Copie du bot" inclut désormais `api_binance.py`, `api_mexc.py` (copies à plat) + `bot/connectors/__init__.py` → `connectors/` + `bot/strategies/__init__.py` et `bot/strategies/grid.py` → `strategies/` (aux côtés des fichiers JSON) ; une installation fraîche suivie de `connector=binance strategy_type=grid` ne lève plus `ModuleNotFoundError` ; la boucle de vérification syntaxe étendue pour couvrir les 8 fichiers Python
+- **`bot/live_bot.py` — commits des snapshots regroupés toutes les 30 s** : `save_snapshot()` n'appelle désormais que `conn.execute()` (chemin rapide) ; `handle_book_update()` flush avec `conn.commit()` au plus une fois toutes les `SNAPSHOT_COMMIT_SECS = 30` secondes, réduisant les commits bloquants de 50 fois par fenêtre de 5 secondes à un par 30 secondes ; toutes les opérations SQLite restent sur le thread de l'event loop — aucun executor, aucun problème de thread-safety ; 3 tests ajoutés
+- **`bot/strategies/grid.py` — flag sticky `_no_credentials` empêche la re-création infinie de la task user-stream** : `_user_stream_loop` positionne désormais `self._no_credentials = True` après `MAX_KEY_FAILURES` (3) échecs consécutifs de `get_listen_key` ; le garde de création de task dans `on_book_update()` vérifie `not self._no_credentials` en premier, évitant toute recréation une fois l'absence de credentials confirmée ; 3 tests ajoutés dans `TestNoCredentialsFlag`
+- **`bot/account_bot.py` — correction TOCTOU symlink sur le log feed dans `/tmp`** : le fichier log du feed est désormais ouvert avec `os.open(O_CREAT|O_WRONLY|O_APPEND|O_NOFOLLOW)` au lieu de `open()` ; empêche un symlink malveillant placé dans le répertoire `/tmp` accessible en écriture par tous de rediriger les écritures du log vers un fichier arbitraire (ex. `authorized_keys`) ; le parent ferme son fd après `Popen`, le processus enfant le conserve ouvert ; cohérent avec le fichier de verrou qui utilisait déjà `O_NOFOLLOW`
+- **`scripts/test_multibot.conf.example` + `.git-hooks/pre-commit` — noms d'utilisateurs OS génériques** : les vrais noms de comptes OS remplacés par des placeholders génériques (`user1 user2 user3`) dans l'exemple de config et son commentaire de rôle ; le hook pre-commit étendu pour que chaque nom d'utilisateur du fichier de test génère deux patterns grep — `$u@` (avec `@`, existant) et `\b$u\b` (mot entier, nouveau) — bloquant les deux formes dans les diffs stagés
+- **`bot/live_bot.py` — protection contre les trades fantômes dans `enter_live_trade()`** : en mode live (`session + private_key`), si `post_order` retourne `None` (échec de l'API CLOB), la fonction retourne désormais prématurément après incrémentation de `api_fail_streak`, empêchant la création d'une ligne fantôme avec `order_id=NULL` qui bloquerait définitivement le capital ; le mode simulation (sans `private_key`) n'est pas affecté — l'INSERT continue de s'exécuter avec `oid=None` ; trois tests de non-régression ajoutés dans `TestEnterLiveTrade`
+- **`requirements.txt` — `bcrypt` ajouté** : `bcrypt` était absent de `requirements.txt` ; une installation fraîche laissait `bot/bot_utils.py` se rabattre sur SHA-1 non salé pour le mot de passe de la page de statut web ; `bcrypt` est désormais une dépendance déclarée, installée automatiquement par `pip install -r requirements.txt`
 - **`scripts/start_bot.sh`, `scripts/start_feed.sh`, `scripts/start_account.sh`, `scripts/start_indicators.sh`, `scripts/update_standalone.sh`, `scripts/collect_db.sh` — approche fichier PID pour tous les stop/start/restart** : cause racine : `pkill -f 'pattern'` intégré dans une commande SSH tue le shell distant lui-même — le `/proc/PID/cmdline` du shell contient le texte complet du script passé via `ssh "..."`, qui inclut le nom littéral du processus de la ligne `nohup` ; nouveau motif : le démarrage écrit `_pid=$!` → `disown "$_pid"` → `echo "$_pid" > live.pid` ; l'arrêt utilise `kill $(cat live.pid)` — sans regex, sans correspondance de motif, sans risque d'auto-correspondance ; la vérification de vivacité utilise `kill -0 $(cat live.pid)` ; les fichiers PID périmés (processus mort) sont nettoyés automatiquement au prochain démarrage ; fichiers PID : `live.pid`, `feed.pid`, `account.pid`, `indicators.pid`
 - **`scripts/test_standalone_deploy.sh`, `scripts/test_multibot_deploy.sh` — scripts de test mis à jour pour l'arrêt par fichier PID** : les commandes de lancement écrivent désormais `indicators.pid` et `account.pid` immédiatement après nohup ; le nettoyage et le teardown utilisent les fichiers PID pour un arrêt gracieux ; `pkill -9` conservé en dernier recours pour les sessions kill-only
 - **`scripts/test_multibot_deploy.sh`, `scripts/test_all_accounts.sh` — portée utilisateur des `pkill`** : ajout de `-u $(id -u)` à tous les appels `pkill` restants pour limiter les kills à l'utilisateur courant et éviter d'interrompre les processus d'autres utilisateurs
 - **`scripts/start_bot.sh`, `scripts/start_feed.sh`, `scripts/start_account.sh`, `scripts/start_indicators.sh` — daemonisation `nohup` renforcée** : ajout de `</dev/null` sur toutes les lignes `nohup` pour que la session SSH puisse se terminer proprement ; `disown` ajouté là où il manquait
-- **`bot/api_polymarket.py`, `bot/feed.py`, `bot/bot_utils.py`, `bot/api_mexc.py` — code en anglais uniquement (audit H-2 + M-4)** : messages de log en français traduits en anglais dans 4 fichiers (19 chaînes au total) ; `api_mexc.py` — 13 occurrences de `erreur` → `error` ; `bot/api_polymarket.py:271` — le warning CLOB logue désormais `keys=%s` au lieu du corps complet de la réponse (clôture également l'audit M-4)
+- **`bot/api_polymarket.py`, `bot/feed.py`, `bot/bot_utils.py`, `bot/api_mexc.py` — code en anglais uniquement** : messages de log en français traduits en anglais dans 4 fichiers (19 chaînes au total) ; `api_mexc.py` — 13 occurrences de `erreur` → `error` ; `bot/api_polymarket.py:271` — le warning CLOB logue désormais `keys=%s` au lieu du corps complet de la réponse
 - **`bot/api_binance.py`, `bot/strategies/grid.py` — code en anglais uniquement** : messages de log restants en français traduits en anglais
 - **`bot/api_binance.py` — compatibilité `get_markets(**_)`** : ajout de `**kwargs` pour accepter les arguments nommés spécifiques à Polymarket (`tag_id`, `window_minutes`) transmis par `_run_ws` quel que soit le type de connecteur
 - **`scripts/collect_db.sh` — correction syntaxe `--rotate`** : erreur de syntaxe préexistante où `"\$(id -u)"` dans une chaîne SSH entre guillemets doubles fermait la chaîne externe prématurément ; corrigé en `\$(id -u)`

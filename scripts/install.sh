@@ -59,13 +59,13 @@ _t() { [ "$LANG" = "FR" ] && printf '%s' "$2" || printf '%s' "$1"; }
 # ── Helpers ───────────────────────────────────────────────────────
 _check_syntax() {
     local file="$1"
-    "$INSTALL_DIR/venv/bin/python3" -c \
+    "$INSTALL_DIR/.venv/bin/python3" -c \
         "import ast, sys; ast.parse(open(sys.argv[1]).read()); print(sys.argv[2])" \
         "$file" "$(basename "$file") : $(_t 'SYNTAX OK' 'SYNTAXE OK')"
 }
 
 _pip_install() {
-    local pip="$INSTALL_DIR/venv/bin/pip"
+    local pip="$INSTALL_DIR/.venv/bin/pip"
     "$pip" install --quiet --upgrade pip
     "$pip" install --quiet "$@" -r "$REPO_DIR/requirements.txt"
     "$pip" install --quiet -e "$REPO_DIR/tradinetools"
@@ -130,12 +130,12 @@ if [ "$_STRAT_SRC" != "$_STRAT_DST" ]; then
 fi
 
 # ── Python virtual environment ────────────────────────────────────
-if [ -d "$INSTALL_DIR/venv" ]; then
-    echo "=== $(_t "Updating Python packages (existing venv)" "Mise à jour des packages Python (venv existant)") ==="
+if [ -d "$INSTALL_DIR/.venv" ]; then
+    echo "=== $(_t "Updating Python packages (existing .venv)" "Mise à jour des packages Python (.venv existant)") ==="
     _pip_install --upgrade
 else
     echo "=== $(_t "Creating virtual environment" "Création de l'environnement virtuel") ==="
-    python3 -m venv "$INSTALL_DIR/venv"
+    python3 -m venv "$INSTALL_DIR/.venv"
     echo "=== $(_t "Installing Python packages" "Installation des packages Python") ==="
     _pip_install
 fi
@@ -145,7 +145,7 @@ fi
 # coexist silently, which corrupts the SQLite database.
 cat > "$INSTALL_DIR/run.sh" << EOF
 #!/bin/bash
-exec bash "$REPO_DIR/scripts/start_bot.sh" "\$@"
+exec bash "$REPO_DIR/tradinebotte-polymarket/scripts/start_bot.sh" "\$@"
 EOF
 chmod +x "$INSTALL_DIR/run.sh"
 
@@ -171,7 +171,7 @@ if [ "$WITH_TESTS" = "1" ]; then
            "$INSTALL_DIR/data/backtest_sample_btc5m_range_2026.db"
     fi
     echo "=== $(_t "Running tests" "Lancement des tests") ==="
-    TRADINEBOTTE_DIR="$INSTALL_DIR" "$INSTALL_DIR/venv/bin/python3" \
+    TRADINEBOTTE_DIR="$INSTALL_DIR" "$INSTALL_DIR/.venv/bin/python3" \
         -W ignore::ResourceWarning -m unittest discover "$INSTALL_DIR/tests/" -v
 fi
 
@@ -189,7 +189,7 @@ echo "$(_t "NEXT STEPS:" "ÉTAPES SUIVANTES :")"
 echo "1. $(_t "Configure    :" "Configurer       :") ${_TD}python3 \"$REPO_DIR/scripts/setup.py\""
 echo "   ($(_t "enter the wallet private key, or Enter without key for simulation mode" \
                "saisir la clé privée du wallet, ou Entrée sans clé pour le mode simulation"))"
-echo "2. $(_t "Start the bot:" "Lancer le bot    :") ${_TD}bash \"$REPO_DIR/scripts/start_bot.sh\""
+echo "2. $(_t "Start the bot:" "Lancer le bot    :") ${_TD}$INSTALL_DIR/run.sh"
 if [ "$WITH_TESTS" = "1" ]; then
     echo ""
     echo "$(_t "Tests   " "Tests   ") : cd \"$INSTALL_DIR\" && ${_TD}venv/bin/python3 -W ignore::ResourceWarning -m unittest discover tests/ -v"

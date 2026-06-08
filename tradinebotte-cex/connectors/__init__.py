@@ -24,6 +24,7 @@ _REGISTRY: dict[str, str] = {
     "polymarket": "api_polymarket",
     "binance":    "api_binance",
     "mexc":       "api_mexc",
+    "bitstamp":   "api_bitstamp",
 }
 
 _STRATEGY_REQUIREMENTS: dict[str, list[str]] = {
@@ -40,6 +41,17 @@ _STRATEGY_REQUIREMENTS: dict[str, list[str]] = {
         "post_order",
         "get_open_orders",
         "cancel_order",
+        "compute_fee",
+    ],
+    "swinghold": [
+        "post_order",
+        "get_open_orders",
+        "cancel_order",
+        "compute_fee",
+    ],
+    "dca": [
+        "post_order",
+        "get_open_orders",
         "compute_fee",
     ],
 }
