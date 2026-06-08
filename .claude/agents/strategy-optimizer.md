@@ -44,12 +44,12 @@ The script saves its output to `reports/strategy_compare_YYYYMMDD_HHMMSS.txt`.
 
 Read the generated report file. Focus on:
 1. **Top-10 table (Section 1)**: rank by PnL/MaxDD ratio. Identify the best configuration and note what changed vs the current active strategy.
-2. **Per-DB comparison (Section 2)**: check whether the current strategy (v2: thr=0.95/secs=45/obi=-0.75/dsl=30) is still optimal, or whether actual bot behaviour (stake, threshold) diverges from defaults.
+2. **Per-DB comparison (Section 2)**: check whether the current strategy (piste3: thr=0.95/secs=30/obi=-0.65/dsl=30) is still optimal, or whether actual bot behaviour (stake, threshold) diverges from defaults.
 
 ### Step 3 — Interpret results
 
 For the **sweep table** (Section 1), check:
-- Does the current active strategy (`strategies/polymarket/polymarket_BTC5M_v2.json`) match the top-ranked config?
+- Does the current active strategy (`strategies/polymarket_BTC5M_piste3.json`) match the top-ranked config?
 - What is the PnL/MaxDD ratio of the current config vs the best found?
 - Are there configurations with meaningfully better ratio (>0.3 improvement) AND trades within ±30%?
 - PnL% values: sweep uses `capital_start=$100` and `stake=$10`, so PnL% = PnL per $100 invested.
@@ -69,8 +69,8 @@ Output a structured summary:
 STRATEGY OPTIMISATION REPORT — <date>
 ======================================
 
-ACTIVE STRATEGY (v2):
-  threshold=0.95  min_secs=45  obi=-0.75  dsl=30
+ACTIVE STRATEGY (piste3):
+  threshold=0.95  min_secs=30  obi=-0.65  dsl=30
   Ratio: <ratio>  WR: <WR>%  PnL: <PnL> (<PnL%>)
 
 BEST FOUND CONFIG:
@@ -99,12 +99,12 @@ Verdicts:
 
 If verdict is UPDATE, create a new strategy version:
 
-1. Read `strategies/polymarket/polymarket_BTC5M_v2.json` to get the current file structure.
-2. Write `strategies/polymarket/polymarket_BTC5M_v3.json` with:
+1. Read `strategies/polymarket_BTC5M_piste3.json` to get the current file structure.
+2. Write `strategies/polymarket_BTC5M_piste4.json` with:
    - Updated `signal_threshold`, `min_secs_remaining`, `obi_reject_thresh`, `daily_stop_loss`
    - Updated `_description` field with today's date and the new ratio
    - All other fields unchanged
-3. Update `bot/live_bot.py` line that sets the default strategy path (`polymarket_BTC5M_v2.json` → `polymarket_BTC5M_v3.json`).
+3. Update `tradinebotte-polymarket/live_bot.py` line that sets the default strategy path (`polymarket_BTC5M_piste3.json` → `polymarket_BTC5M_piste4.json`).
 4. Run `bash scripts/run_tests.sh` to confirm all tests still pass.
 
 ---
@@ -145,11 +145,11 @@ Key rows to examine:
 
 ## File paths
 
-- Active strategy: `strategies/polymarket/polymarket_BTC5M_v2.json`
-- Previous strategy: `strategies/polymarket/polymarket_BTC5M.json` (v1, kept for reference)
+- Active strategy: `strategies/polymarket_BTC5M_piste3.json`
+- Previous strategy: `strategies/polymarket_BTC5M.json` (v1, kept for reference)
 - Databases: `data/*.db`, `~/tradinebotte/live.db`
 - Reports output: `reports/strategy_compare_YYYYMMDD_HHMMSS.txt`
-- Backtest script: `scripts/backtest.py`
+- Backtest script: `analysis/backtest.py`
 - Comparison script: `scripts/strategy_compare.sh`
 
 ## Constraints

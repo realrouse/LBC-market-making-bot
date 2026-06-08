@@ -192,6 +192,6 @@ echo "   ($(_t "enter the wallet private key, or Enter without key for simulatio
 echo "2. $(_t "Start the bot:" "Lancer le bot    :") ${_TD}$INSTALL_DIR/run.sh"
 if [ "$WITH_TESTS" = "1" ]; then
     echo ""
-    echo "$(_t "Tests   " "Tests   ") : cd \"$INSTALL_DIR\" && ${_TD}venv/bin/python3 -W ignore::ResourceWarning -m unittest discover tests/ -v"
-    echo "Backtest: cd \"$INSTALL_DIR\" && ${_TD}venv/bin/python3 \"$REPO_DIR/analysis/backtest.py\""
+    echo "$(_t "Tests   " "Tests   ") : cd \"$INSTALL_DIR\" && ${_TD}.venv/bin/python3 -W ignore::ResourceWarning -m unittest discover tests/ -v"
+    echo "Backtest: cd \"$INSTALL_DIR\" && ${_TD}.venv/bin/python3 \"$REPO_DIR/analysis/backtest.py\""
 fi

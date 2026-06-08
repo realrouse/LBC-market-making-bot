@@ -5,11 +5,11 @@ POLYMARKET LIVE BOT v0.41 — BTC Up/Down 5-minute markets
 
 Strategy:
   Watch active "Bitcoin Up or Down — 5 minutes" markets via the Polymarket
-  WebSocket order book feed. When a token's best_bid reaches 0.96, the market
-  is pricing that outcome at 96% probability — statistically near-certain with
-  ~45 seconds until resolution. We buy at best_ask and wait for settlement.
+  WebSocket order book feed. When a token's best_bid reaches 0.95, the market
+  is pricing that outcome at 95% probability — statistically near-certain with
+  ~30 seconds until resolution. We buy at best_ask and wait for settlement.
 
-  Signal:     best_bid >= 0.96  (token priced at 96 cents, pays $1 on win)
+  Signal:     best_bid >= 0.95  (token priced at 95 cents, pays $1 on win)
   Entry:      LIMIT BUY at best_ask via py_clob_client (EIP-712 + HMAC auth)
   Resolution: bid >= 0.99 → WIN  |  bid <= 0.01 → LOSS
 
@@ -398,7 +398,7 @@ def make_config(simulate: bool = False, no_log: bool = False,
 
     cfg   = load_config(config_path)
     strat_path = cfg.get("strategy",
-                         os.path.join(install_dir, "strategies", "polymarket",
+                         os.path.join(install_dir, "strategies",
                                       "polymarket_BTC5M_piste3.json"))
     strat_path = os.path.expanduser(strat_path)
     if not os.path.isabs(strat_path):

@@ -52,7 +52,7 @@ CREATE INDEX idx_snap_ts ON snapshots(ts_ms);
 | `token_id` | TEXT | Gamma API → `TokenState.token_id` | Identifies the YES/NO outcome token |
 | `direction` | TEXT | Derived from market title | `"UP"` or `"DOWN"` |
 | `secs_remaining` | REAL | Computed from market `end_date_ts` | Decreases to 0; negative after close |
-| `best_bid` | REAL | WebSocket order book | The entry signal fires when `best_bid >= 0.96` |
+| `best_bid` | REAL | WebSocket order book | The entry signal fires when `best_bid >= 0.95` |
 | `best_ask` | REAL | WebSocket order book | Guard: if `best_ask >= 1.0` the market is resolved |
 | `spread` | REAL | `max(0, best_ask − best_bid)` | High spread → thin book, slippage risk |
 | `ask_vol` | REAL | Top-of-book ask quantity | Used in OBI computation (see below) |
@@ -171,7 +171,7 @@ The backtest engine replays the `snapshots` table to simulate the strategy:
 | Column | Backtest use |
 |---|---|
 | `ts_ms` | Chronological ordering; compute `secs_remaining` drift |
-| `best_bid` | Entry signal: `best_bid >= SIGNAL_THRESHOLD (0.96)` |
+| `best_bid` | Entry signal: `best_bid >= SIGNAL_THRESHOLD (0.95)` |
 | `best_ask` | Resolved-market guard: `best_ask >= 1.0` → skip |
 | `secs_remaining` | Entry gate: must be `>= MIN_SECS_REMAINING (45 s)` |
 | `obi` | Filter: positive OBI confirms directional momentum |
@@ -256,7 +256,7 @@ ORDER BY bucket DESC;
 
 | File | Purpose |
 |---|---|
-| `bot/live_bot.py` | `save_snapshot()`, `SNAPSHOT_INTERVAL`, `--snapshot-interval` flag |
+| `tradinebotte-polymarket/live_bot.py` | `save_snapshot()`, `SNAPSHOT_INTERVAL`, `--snapshot-interval` flag |
 | `bot/api_polymarket.py` | `parse_book_message()` — OBI + volume computation |
 | `scripts/collect_db.sh` | Download / rotate the remote `live.db` |
 | `scripts/start_collector.sh` | Deploy the data-collection bot |

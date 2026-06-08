@@ -263,8 +263,7 @@ bash scripts/install.sh [install_dir] [--lang EN|FR] [--with-tests]
 - `--lang EN|FR` — Set language non-interactively (useful for CI or automated deploys).
   Without this flag the script prompts at startup as before.
 - `--with-tests` — Also copy `tests/`, `analysis/backtest.py`, and
-  `data/backtest_sample_btc5m_range_2026.db`, then run the
-  full test suite (733 tests across 4 suites) immediately after installation.
+  run the test suite immediately after installation.
   The backtest uses `live.db` only if it contains ≥ 100 snapshots;
   otherwise it falls back to the bundled sample dataset automatically.
 
@@ -396,14 +395,14 @@ your web server is configured to serve that directory.
 Run the generator script once after installation:
 
 ```bash
-TRADINEBOTTE_DIR=~/tradinebotte bash scripts/install_service.sh
+TRADINEBOTTE_DIR=~/tradinebotte bash tradinebotte-polymarket/scripts/install_service.sh
 ```
 
-It validates the install, writes a ready-to-use unit file to `/tmp/tradinebotte.service`,
+It validates the install, writes a ready-to-use unit file to `~/tmp/tradinebotte.service`,
 and prints the exact commands to enable it:
 
 ```bash
-sudo cp /tmp/tradinebotte.service /etc/systemd/system/tradinebotte.service
+sudo cp ~/tmp/tradinebotte.service /etc/systemd/system/tradinebotte.service
 sudo systemctl daemon-reload
 sudo systemctl enable tradinebotte   # start on boot
 sudo systemctl start tradinebotte    # start now
@@ -423,7 +422,7 @@ The service restarts automatically on failure (`Restart=on-failure`, 30 s delay,
 max 5 restarts per 5 minutes). On reboot the bot comes back up once the network
 is online (`After=network-online.target`).
 
-> **Multi-bot (Option B)**: use `scripts/install_feed_service.sh`, `tradinebotte-indicators/scripts/install_indicators_service.sh` (optional shared indicators), and `scripts/install_account_service.sh` instead. See [docs/multi.md](docs/multi.md).
+> **Multi-bot (Option B)**: use `tradinebotte-polymarket/scripts/install_feed_service.sh`, `tradinebotte-indicators/scripts/install_indicators_service.sh` (optional shared indicators), and `tradinebotte-polymarket/scripts/install_account_service.sh` instead. See [docs/multi.md](docs/multi.md).
 >
 > **Multi-account server deployments** use `~/.config/systemd/user/` units (`systemctl --user`) instead of system units — no sudo required at deploy time. See `tradinebotte-polymarket/scripts/migrate_to_user_services.sh` and `tradinebotte-cex/scripts/migrate_cex_bots.sh`.
 
@@ -974,7 +973,7 @@ bash scripts/run_integration_tests.sh --multibot   # Option B only
 
 ```bash
 # Individual runs with options:
-bash scripts/test_standalone_deploy.sh --skip-deploy
+bash tradinebotte-polymarket/scripts/test_standalone_deploy.sh --skip-deploy
 bash scripts/test_multibot_deploy.sh --skip-deploy --duration 300
 ```
 
@@ -1022,7 +1021,7 @@ The first deployment account runs the bot in simulate mode with 1-second snapsho
 
 ### Collector scripts
 
-**`scripts/start_collector.sh`** — deploy and manage the data-collection process:
+**`tradinebotte-polymarket/scripts/start_collector.sh`** — deploy and manage the data-collection process:
 
 | Flag | Description |
 |---|---|
@@ -1031,12 +1030,12 @@ The first deployment account runs the bot in simulate mode with 1-second snapsho
 | `--stop` | Stop the running collector process |
 
 ```bash
-bash scripts/start_collector.sh           # deploy + launch
-bash scripts/start_collector.sh --status  # check if running
-bash scripts/start_collector.sh --stop    # stop
+bash tradinebotte-polymarket/scripts/start_collector.sh           # deploy + launch
+bash tradinebotte-polymarket/scripts/start_collector.sh --status  # check if running
+bash tradinebotte-polymarket/scripts/start_collector.sh --stop    # stop
 ```
 
-**`scripts/collect_db.sh`** — download and archive the weekly snapshot database:
+**`tradinebotte-polymarket/scripts/collect_db.sh`** — download and archive the weekly snapshot database:
 
 | Flag | Description |
 |---|---|
@@ -1044,13 +1043,13 @@ bash scripts/start_collector.sh --stop    # stop
 | `--rotate` | Download `live.db` from the collector, archive it to `data/` with a datestamp, then restart the collector with a fresh database |
 
 ```bash
-bash scripts/collect_db.sh --status    # remote row counts
-bash scripts/collect_db.sh --rotate    # download + archive + restart
+bash tradinebotte-polymarket/scripts/collect_db.sh --status    # remote row counts
+bash tradinebotte-polymarket/scripts/collect_db.sh --rotate    # download + archive + restart
 ```
 
 The downloaded file is archived to `data/collect_YYYYMMDD.db`. Collector log: `~/tradinebotte/collect.log`.
 
-**`scripts/schedule_collect.sh`** — automate the weekly rotation with cron:
+**`tradinebotte-polymarket/scripts/schedule_collect.sh`** — automate the weekly rotation with cron:
 
 | Flag | Description |
 |---|---|
@@ -1059,9 +1058,9 @@ The downloaded file is archived to `data/collect_YYYYMMDD.db`. Collector log: `~
 | `--run-now` | Run the rotation immediately (same as `collect_db.sh --rotate`) |
 
 ```bash
-bash scripts/schedule_collect.sh --install    # every Sunday 03:00 UTC
-bash scripts/schedule_collect.sh --status     # show cron entry
-bash scripts/schedule_collect.sh --run-now    # run immediately
+bash tradinebotte-polymarket/scripts/schedule_collect.sh --install    # every Sunday 03:00 UTC
+bash tradinebotte-polymarket/scripts/schedule_collect.sh --status     # show cron entry
+bash tradinebotte-polymarket/scripts/schedule_collect.sh --run-now    # run immediately
 ```
 
 
@@ -1114,7 +1113,7 @@ Expected output (printed directly to the terminal):
 
 ```
 [WARNING]  MODE SIMULATION — donnees isolees dans ~/tradinebotte-sim
-[INFO]     LIVE BOT v3 — Threshold=0.96 Stake=$10 MinAskVol=10
+[INFO]     LIVE BOT v3 — Threshold=0.95 Stake=$10 MinAskVol=10
 [WARNING]  POLY_PRIVATE_KEY non definie — ordres SIMULES
 [INFO]     DB initialisee : ~/tradinebotte-sim/live.db
 [INFO]     State : capital=$100.00 | 0 trades | WR=0.0%
@@ -1185,7 +1184,7 @@ import api_mexc as api
 import api_bitstamp as api
 ```
 
-**Important**: the Polymarket signal (`best_bid >= 0.96`) operates on a 0–1 probability
+**Important**: the Polymarket signal (`best_bid >= 0.95`) operates on a 0–1 probability
 scale. Binance/MEXC prices are absolute USDT values (e.g. 65000). Strategy thresholds in
 `strategies/*.json` must be recalibrated before using a CEX connector.
 

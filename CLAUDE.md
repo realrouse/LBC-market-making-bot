@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**tradinebotte** is a Polymarket prediction market trading bot targeting Bitcoin Up/Down 5-minute markets on Polygon. It uses a quantitative signal-based strategy (best_bid >= 0.96 threshold) backtested at 98.3% win rate across 1663 trades.
+**tradinebotte** is a Polymarket prediction market trading bot targeting Bitcoin Up/Down 5-minute markets on Polygon. It uses a quantitative signal-based strategy (best_bid >= 0.95 threshold) backtested at 98.3% win rate across 1663 trades.
 
 ## Données d'infrastructure — règle obligatoire
 
@@ -76,9 +76,9 @@ tail -f ~/tradinebotte/live.log
 sqlite3 ~/tradinebotte/live.db "SELECT * FROM trades ORDER BY id DESC LIMIT 10;"
 ```
 
-**Run tests** (733 tests across 4 suites):
+**Run tests**:
 ```bash
-bash scripts/install.sh --with-tests
+bash scripts/run_tests.sh
 ```
 
 Linter: `pylint` (declared in `requirements-dev.txt`).

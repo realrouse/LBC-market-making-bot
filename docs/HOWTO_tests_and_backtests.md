@@ -126,10 +126,10 @@ OK (skipped=1)
 
 | File | Classes | What is tested |
 |------|---------|---------------|
-| `tests/test_bot.py` | 20 classes | Core bot logic: fee calculation, book message parsing, signal detection, trade resolution, daily PnL cache, DB schema migrations, strategy file loading, HTML escaping, OBI filter, trading-hour filter, circuit breaker |
+| `tradinebotte-polymarket/tests/test_bot.py` | 20 classes | Core bot logic: fee calculation, book message parsing, signal detection, trade resolution, daily PnL cache, DB schema migrations, strategy file loading, HTML escaping, OBI filter, trading-hour filter, circuit breaker |
 | `tests/test_backtest.py` | 9 classes | Backtest engine: `run_backtest`, `summarize`, `_ratio`, percentile helper, `detect_actual_params`, `_actual_stats`, `_collect_dbs` |
-| `tests/test_regression.py` | 2 classes | **Performance regression** against `data/paper3.db` (WR ≥ 98%, PnL ≥ $80, MaxDD < $100); **parameter consistency** between `live_bot.py` constants and `backtest.py` defaults — these two must always agree |
-| `tests/test_multibot.py` | 4 classes | Multi-bot feed and account bot integration (register_market, two-bot coordination) |
+| `tradinebotte-polymarket/tests/test_regression.py` | 2 classes | **Performance regression** against `data/paper3.db` (WR ≥ 98%, PnL ≥ $80, MaxDD < $100); **parameter consistency** between `tradinebotte-polymarket/live_bot.py` constants and `analysis/backtest.py` defaults — these two must always agree |
+| `tradinebotte-polymarket/tests/test_multibot.py` | 4 classes | Multi-bot feed and account bot integration (register_market, two-bot coordination) |
 | `tests/test_api_cex.py` | 10 classes | CEX adapter contract: fee calculation, metadata parsing, order book parsing for Binance and MEXC |
 
 ### The regression tests
@@ -145,7 +145,7 @@ OK (skipped=1)
 
 If any parameter change silently degrades performance, this test catches it. It is automatically **skipped** when `data/paper3.db` is absent (e.g. fresh CI checkout without data).
 
-`TestParamConsistency` checks that the parameter values in `bot/live_bot.py` (module-level constants) match the defaults in `scripts/backtest.py` (the `Params` dataclass). If they diverge, backtests no longer predict live performance.
+`TestParamConsistency` checks that the parameter values in `tradinebotte-polymarket/live_bot.py` (module-level constants) match the defaults in `analysis/backtest.py` (the `Params` dataclass). If they diverge, backtests no longer predict live performance.
 
 ---
 
@@ -163,19 +163,19 @@ The backtest engine tries the following in order and uses the first match:
 
 ```bash
 # Default: auto-select best available DB, default strategy parameters
-python3 scripts/backtest.py
+python3 analysis/backtest.py
 
 # Explicit file
-python3 scripts/backtest.py --db ~/tradinebotte/live.db
+python3 analysis/backtest.py --db ~/tradinebotte/live.db
 
 # Multiple files (independent capital per file)
-python3 scripts/backtest.py --db data/session_a.db data/session_b.db
+python3 analysis/backtest.py --db data/session_a.db data/session_b.db
 
 # Shell glob (same as above, shell expands the pattern)
-python3 scripts/backtest.py --db data/*.db
+python3 analysis/backtest.py --db data/*.db
 
 # Scan data/ automatically + live.db if usable
-python3 scripts/backtest.py --all
+python3 analysis/backtest.py --all
 ```
 
 ---
@@ -597,16 +597,17 @@ Strategy parameters are stored in `strategies/`:
 | File | Status | Description |
 |------|--------|-------------|
 | `polymarket_BTC5M.json` | v1 — reference | Original parameters (threshold=0.96, ratio=3.61). |
-| `polymarket_BTC5M_v2.json` | **v2 — active** | Sweep-optimised 2026-05-08 (threshold=0.95, ratio=4.42). |
+| `polymarket_BTC5M_piste3.json` | **piste3 — active** | OBI-calibrated (obi=-0.65, threshold=0.95, min_secs=30). |
 
-### v2 parameters
+### piste3 parameters
 
 ```json
 {
     "signal_threshold":   0.95,
-    "min_secs_remaining": 45,
-    "obi_reject_thresh":  -0.75,
+    "min_secs_remaining": 30,
+    "obi_reject_thresh":  -0.65,
     "daily_stop_loss":    30.0,
+    "weekly_stop_loss":   60.0,
     "stake":              10.0,
     "capital_start":      100.0
 }
@@ -615,7 +616,7 @@ Strategy parameters are stored in `strategies/`:
 The bot loads the strategy at startup. To activate a new version after updating the JSON:
 
 ```bash
-bash scripts/start_bot.sh   # restarts and reloads strategy
+bash tradinebotte-polymarket/scripts/start_bot.sh   # restarts and reloads strategy
 ```
 
 ---
@@ -645,18 +646,18 @@ When a better configuration is found:
 
 1. Copy the current strategy file:
    ```bash
-   cp strategies/polymarket_BTC5M_v2.json strategies/polymarket_BTC5M_v3.json
+   cp tradinebotte-polymarket/strategies/polymarket_BTC5M_piste3.json tradinebotte-polymarket/strategies/polymarket_BTC5M_piste4.json
    ```
 2. Edit the parameters in the new file.
 3. Update the `_description` field with the date and new ratio.
-4. Update the default path in `bot/live_bot.py` (search for `polymarket_BTC5M_v2.json`).
+4. Update the default path in `tradinebotte-polymarket/live_bot.py` (search for `polymarket_BTC5M_piste3.json`).
 5. Run the test suite to confirm all tests pass:
    ```bash
    bash scripts/run_tests.sh
    ```
 6. Restart the bot:
    ```bash
-   bash scripts/start_bot.sh
+   bash tradinebotte-polymarket/scripts/start_bot.sh
    ```
 
 ### Parameters not to change without a full backtest

@@ -237,7 +237,7 @@ Example with indicators enabled:
 
 ### Strategy parameters — each account bot is independent
 
-Strategy parameters (`strategies/polymarket/polymarket_BTC5M.json`) are read from
+Strategy parameters (`strategies/polymarket_BTC5M.json`) are read from
 `TRADINEBOTTE_DIR/strategies/` by each account bot **at process startup**.
 Because each `account_bot.py` is a separate OS process with its own copy of the
 `live_bot` module, every account bot evaluates signals independently against
@@ -249,7 +249,7 @@ This means you can run genuinely different strategies in parallel:
 | Account | `signal_threshold` | `stake` | `hour_filter` | Purpose |
 |---|---|---|---|---|
 | `~/account-conservative` | `0.98` | `$5` | US session only | Low-risk, fewer entries |
-| `~/account-standard` | `0.96` | `$10` | disabled | Backtested default |
+| `~/account-standard` | `0.95` | `$10` | disabled | Backtested default |
 | `~/account-aggressive` | `0.94` | `$20` | 24/7 | Higher frequency |
 
 Each account needs its own `strategies/` directory with a JSON file configured
@@ -258,8 +258,8 @@ for that strategy:
 ```bash
 # Set up a conservative account with a custom threshold
 mkdir -p ~/account-conservative/strategies
-cp strategies/polymarket/polymarket_BTC5M.json ~/account-conservative/strategies/
-# Edit ~/account-conservative/strategies/polymarket/polymarket_BTC5M.json:
+cp tradinebotte-polymarket/strategies/polymarket_BTC5M.json ~/account-conservative/strategies/
+# Edit ~/account-conservative/strategies/polymarket_BTC5M.json:
 #   "signal_threshold": 0.98, "stake": 5, "daily_stop_loss": 15
 TRADINEBOTTE_DIR=~/account-conservative python3 scripts/setup.py
 ```
@@ -283,8 +283,8 @@ Signal guards that differ per account bot (all read from the strategy JSON):
 ### Same Linux user (simplest)
 
 ```
-~/tradinebotte/               ← shared venv + feed log (no credentials here)
-  venv/
+~/tradinebotte/               ← shared .venv + feed log (no credentials here)
+  .venv/
   feed.log
   strategies/
     polymarket_BTC5M.json     ← shared strategy (or symlink per account)
@@ -326,9 +326,9 @@ separately.  Just launch all account bots at once:
 
 ```bash
 # All three can be started simultaneously — no ordering required
-TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
-TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
-TRADINEBOTTE_DIR=~/account-c bash scripts/start_account.sh
+TRADINEBOTTE_DIR=~/account-a bash tradinebotte-polymarket/scripts/start_account.sh
+TRADINEBOTTE_DIR=~/account-b bash tradinebotte-polymarket/scripts/start_account.sh
+TRADINEBOTTE_DIR=~/account-c bash tradinebotte-polymarket/scripts/start_account.sh
 ```
 
 **How it works (race-safe):**
@@ -347,18 +347,18 @@ If you prefer to start the feed explicitly (e.g. for systemd or monitoring):
 
 ```bash
 # Optional: manual feed start — account_bots will find it automatically
-bash scripts/start_feed.sh
+bash tradinebotte-polymarket/scripts/start_feed.sh
 
 # Then account bots (they will skip the auto-start and connect directly)
-TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
-TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
+TRADINEBOTTE_DIR=~/account-a bash tradinebotte-polymarket/scripts/start_account.sh
+TRADINEBOTTE_DIR=~/account-b bash tradinebotte-polymarket/scripts/start_account.sh
 ```
 
 To use a non-default feed address:
 
 ```bash
-TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
-TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
+TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-a bash tradinebotte-polymarket/scripts/start_account.sh
+TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-b bash tradinebotte-polymarket/scripts/start_account.sh
 ```
 
 ### Systemd launch (feed_auto_start=false, recommended for production)
@@ -373,8 +373,8 @@ Then start account bots normally — they probe the already-running feed service
 instead of forking it:
 
 ```bash
-TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
-TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
+TRADINEBOTTE_DIR=~/account-a bash tradinebotte-polymarket/scripts/start_account.sh
+TRADINEBOTTE_DIR=~/account-b bash tradinebotte-polymarket/scripts/start_account.sh
 ```
 
 If the feed is not reachable after 30 s (6 × 5 s probes), the bot exits with an
@@ -453,7 +453,7 @@ Account bots wait silently during this period.
 TRADINEBOTTE_DIR=~/account-c python3 scripts/setup.py
 
 # Start its bot (feed is already running)
-TRADINEBOTTE_DIR=~/account-c bash scripts/start_account.sh
+TRADINEBOTTE_DIR=~/account-c bash tradinebotte-polymarket/scripts/start_account.sh
 ```
 
 No restart of the feed or existing account bots required.
@@ -475,7 +475,7 @@ Each Linux user needs their own independent installation:
 ```bash
 # As user2 — one-time setup
 git clone https://github.com/neofutur/tradinebotte.git ~/tradinebotte
-bash ~/tradinebotte/scripts/install.sh          # creates ~/tradinebotte/venv with pyzmq
+bash ~/tradinebotte/scripts/install.sh          # creates ~/tradinebotte/.venv with pyzmq
 TRADINEBOTTE_DIR=~/account-2 python3 ~/tradinebotte/scripts/setup.py   # wallet setup
 ```
 
@@ -496,20 +496,20 @@ Typical choices:
 
 ```bash
 # As user1 — start the shared feed (binds tcp://127.0.0.1:5557)
-bash ~/tradinebotte/scripts/start_feed.sh
+bash ~/tradinebotte/tradinebotte-polymarket/scripts/start_feed.sh
 
 # As user2 — start their account bot (connects to the same address)
 TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5557 \
 TRADINEBOTTE_DIR=~/account-2 \
-bash ~/tradinebotte/scripts/start_account.sh
+bash ~/tradinebotte/tradinebotte-polymarket/scripts/start_account.sh
 
 # As user3 — another account bot
 TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5557 \
 TRADINEBOTTE_DIR=~/account-3 \
-bash ~/tradinebotte/scripts/start_account.sh
+bash ~/tradinebotte/tradinebotte-polymarket/scripts/start_account.sh
 ```
 
-Each user uses **their own venv** (`~/tradinebotte/venv/`) via their own
+Each user uses **their own venv** (`~/tradinebotte/.venv/`) via their own
 `start_account.sh`.  The `TRADINEBOTTE_FEED_ADDR` must match across all users.
 
 ### Directory layout (cross-user)
@@ -517,7 +517,7 @@ Each user uses **their own venv** (`~/tradinebotte/venv/`) via their own
 ```
 /home/user1/
   tradinebotte/
-    venv/                     ← user1's venv (has pyzmq, aiohttp, etc.)
+    .venv/                    ← user1's venv (has pyzmq, aiohttp, etc.)
     feed.log                  ← feed diagnostics
     strategies/
       polymarket_BTC5M.json
@@ -528,7 +528,7 @@ Each user uses **their own venv** (`~/tradinebotte/venv/`) via their own
 
 /home/user2/
   tradinebotte/
-    venv/                     ← user2's own venv (independent install)
+    .venv/                    ← user2's own venv (independent install)
     strategies/
       polymarket_BTC5M.json
   account-2/
@@ -538,7 +538,7 @@ Each user uses **their own venv** (`~/tradinebotte/venv/`) via their own
 
 /home/user3/
   tradinebotte/
-    venv/
+    .venv/
   account-3/
     config.json               (chmod 600, user3 only)
     live.db
@@ -588,9 +588,9 @@ If port 5557 is already in use on the machine:
 ss -tlnp | grep 5557
 
 # Use a different port for all participants
-TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash scripts/start_feed.sh
+TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash tradinebotte-polymarket/scripts/start_feed.sh
 # — every account bot must use the same address
-TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-2 bash scripts/start_account.sh
+TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-2 bash tradinebotte-polymarket/scripts/start_account.sh
 ```
 
 ### systemd services
@@ -599,19 +599,19 @@ The project ships three dedicated generator scripts:
 
 | Script | Generates | Purpose |
 |---|---|---|
-| `scripts/install_feed_service.sh` | `tradinebotte-feed.service` | System-level WebSocket feed (one per machine) |
-| `scripts/install_indicators_service.sh` | `tradinebotte-indicators.service` | Shared indicators pipeline (one per machine, optional) |
-| `scripts/install_account_service.sh` | `tradinebotte-account-<name>.service` | Per-account trading bot (one per wallet) |
+| `tradinebotte-polymarket/scripts/install_feed_service.sh` | `tradinebotte-feed.service` | System-level WebSocket feed (one per machine) |
+| `tradinebotte-indicators/scripts/install_indicators_service.sh` | `tradinebotte-indicators.service` | Shared indicators pipeline (one per machine, optional) |
+| `tradinebotte-polymarket/scripts/install_account_service.sh` | `tradinebotte-account-<name>.service` | Per-account trading bot (one per wallet) |
 
 **Step 1 — install the feed service (run once per machine, as any user):**
 
 ```bash
-bash scripts/install_feed_service.sh
+bash tradinebotte-polymarket/scripts/install_feed_service.sh
 # optional: use a non-default ZMQ address
-TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash scripts/install_feed_service.sh
+TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash tradinebotte-polymarket/scripts/install_feed_service.sh
 
 # Follow the printed sudo commands:
-sudo cp /tmp/tradinebotte-feed.service /etc/systemd/system/
+sudo cp ~/tmp/tradinebotte-feed.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable tradinebotte-feed
 sudo systemctl start tradinebotte-feed
@@ -642,11 +642,11 @@ step — the script warns if it is missing.
 
 ```bash
 # Each wallet owner runs this for their own directory:
-TRADINEBOTTE_DIR=~/account-a bash scripts/install_account_service.sh
-TRADINEBOTTE_DIR=~/account-b bash scripts/install_account_service.sh
+TRADINEBOTTE_DIR=~/account-a bash tradinebotte-polymarket/scripts/install_account_service.sh
+TRADINEBOTTE_DIR=~/account-b bash tradinebotte-polymarket/scripts/install_account_service.sh
 
 # Follow the printed sudo commands for each:
-sudo cp /tmp/tradinebotte-account-<username>.service /etc/systemd/system/
+sudo cp ~/tmp/tradinebotte-account-<username>.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable tradinebotte-account-<username>
 sudo systemctl start tradinebotte-account-<username>
@@ -687,7 +687,7 @@ journalctl -u tradinebotte-account-account-a -f
 
 ## Tests
 
-The multi-bot architecture is covered by `tests/test_multibot.py` (30 tests):
+The multi-bot architecture is covered by `tradinebotte-polymarket/tests/test_multibot.py` (30 tests):
 
 ```bash
 bash scripts/run_tests.sh

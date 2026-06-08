@@ -2,18 +2,18 @@
 
 > 🇬🇧 [English version](README.md)
 
-Bot de trading automatisé pour les marchés de prédiction [Polymarket](https://polymarket.com), ciblant les marchés Bitcoin Hausse/Baisse 5 minutes sur Polygon. Utilise une stratégie quantitative basée sur un signal (`best_bid >= 0.96`) backtestée à **98,3% de taux de victoire** sur 1663 trades (avril 2026).
+Bot de trading automatisé pour les marchés de prédiction [Polymarket](https://polymarket.com), ciblant les marchés Bitcoin Hausse/Baisse 5 minutes sur Polygon. Utilise une stratégie quantitative basée sur un signal (`best_bid >= 0.95`) backtestée à **98,3% de taux de victoire** sur 1663 trades (avril 2026).
 
 ## Fonctionnalités
 
-- **Stratégie quantitative** — entrée sur `best_bid >= 0.96`, backtestée à 98,3% de victoires sur 1663 trades
+- **Stratégie quantitative** — entrée sur `best_bid >= 0.95`, backtestée à 98,3% de victoires sur 1663 trades
 - **Flux WebSocket temps réel** — souscrit aux carnets d'ordres Polymarket ; traite chaque mise à jour bid/ask avec une latence inférieure à la seconde
 - **Découverte automatique des marchés** — interroge l'API Gamma toutes les 30 s en tâche de fond ; ne suit que les marchés expirant dans ±6 minutes pour éviter les prix figés
 - **Résolution automatique des trades** — clôture les positions automatiquement en WIN (bid ≥ 0.99), LOSS (bid ≤ 0.01), ou à l'expiration du marché
 - **Stop-loss journalier** — suspend le trading dès 30 $ de perte nette sur la journée ; reprend à la session suivante
 - **Persistance SQLite** (mode WAL) — tous les trades et les snapshots de prix toutes les 5 s sont stockés ; l'état survit aux crashs et redémarrages
 - **Reprise après crash** — restaure les trades non résolus depuis la base de données au démarrage ; reconstruit le capital à partir du PnL historique
-- **Moteur de backtest** — rejoue les données `snapshots` avec n'importe quel jeu de paramètres ; supporte la recherche en grille sur 135 combinaisons ; `--db file1.db file2.db` ou `--db data/*.db` exécute des simulations de capital indépendantes sur plusieurs fichiers de snapshots ; `--all` scanne automatiquement `data/` et ajoute `live.db` en tête si utilisable ; taux de victoire et PnL agrégés affichés sur tous les fichiers ; utilise le jeu de données embarqué (`data/backtest_sample_btc5m_range_2026.db`) si aucune base de données live n'est présente ; `analysis/backtest.py` supporte désormais le sizing Kelly fractionnel, les ratios Sharpe et Sortino, l'optimisation walk-forward, le filtre de volatilité par jour de semaine (P1) et le sizing de mise par paliers (P2)
+- **Moteur de backtest** — rejoue les données `snapshots` avec n'importe quel jeu de paramètres ; supporte la recherche en grille sur 135 combinaisons ; `--db file1.db file2.db` ou `--db data/*.db` exécute des simulations de capital indépendantes sur plusieurs fichiers de snapshots ; `--all` scanne automatiquement `data/` et ajoute `live.db` en tête si utilisable ; taux de victoire et PnL agrégés affichés sur tous les fichiers ; utilise `data/paper3.db` si aucune base de données live avec suffisamment de snapshots n'est présente ; `analysis/backtest.py` supporte désormais le sizing Kelly fractionnel, les ratios Sharpe et Sortino, l'optimisation walk-forward, le filtre de volatilité par jour de semaine (P1) et le sizing de mise par paliers (P2)
 - **Page de statut HTML optionnelle** — le bot écrit une page auto-rafraîchissante (chemin configurable, authentification HTTP Basic Auth optionnelle) — [aperçu visuel](docs/status_example.html)
 - **Partage WebSocket multi-bot** — `tradinebotte-polymarket/feed.py` maintient une seule connexion WebSocket et diffuse chaque mise à jour via ZeroMQ PUB ; un ou plusieurs processus `tradinebotte-polymarket/account_bot.py` souscrivent et tradent avec des bases SQLite, logs et configs totalement isolés ; chaque bot évalue les signaux avec **ses propres** paramètres de stratégie (seuils, mises ou filtres horaires différents) ; fonctionne entre utilisateurs Linux différents (`/home/user1`, `/home/user2`) ; **feed auto-démarré** — le premier account_bot à se lancer démarre feed.py automatiquement via un verrou fichier sans race condition, aucune gestion manuelle du feed requise — voir [docs/multi.fr.md](docs/multi.fr.md) pour le guide de décision et la référence d'architecture complète
 - **API exchange modulaire** — tout le code spécifique Polymarket est dans `tradinebotte-polymarket/api_polymarket.py` ; changer d'exchange ne nécessite qu'un nouveau fichier adaptateur et une seule ligne d'import dans `live_bot.py` ; les connecteurs Binance spot (`tradinebotte-cex/api_binance.py`), MEXC spot (`tradinebotte-cex/api_mexc.py`) et Bitstamp spot (`tradinebotte-cex/api_bitstamp.py`) sont inclus, implémentant l'interface identique avec signature HMAC-SHA256, calcul de l'OBI et mode simulation
@@ -32,34 +32,34 @@ Bot de trading automatisé pour les marchés de prédiction [Polymarket](https:/
 - **Mode simulation** — le flag `--simulate` isole tous les fichiers dans `~/tradinebotte-sim` par défaut, affiche les logs dans le terminal, et ne place aucun ordre réel ; définir `TRADINEBOTTE_DIR` avant le lancement pour utiliser un répertoire personnalisé — plusieurs bots peuvent ainsi tourner en parallèle sans conflit de répertoire
 - **Code annoté par types** — les 28 fonctions et méthodes de classe de `live_bot.py` portent des annotations de paramètres et de retour complètes ; active l'analyse statique et l'autocomplétion IDE
 - **Filtre heure/jour** — bloc optionnel `hour_filter` dans le JSON de stratégie ; restreint les entrées à des plages horaires UTC configurables par type de jour (semaine/weekend), avec gestion intégrée de l'ouverture hebdomadaire US (lundi avant 13h30 UTC) et de la fermeture (vendredi à partir de 20h00 UTC) ; désactivé par défaut ; appliqué identiquement dans le bot live et le moteur de backtest ; voir [INSTALL.fr.md](INSTALL.fr.md#filtre-heure--jour) pour la documentation complète
-- **Suite de tests — 733 tests répartis en 4 suites** — `tradinebotte-polymarket/tests/test_bot.py` (340 tests) couvre les 11 gardes du signal, les chemins de résolution, le calcul des frais, le parsing WebSocket, la page de statut HTML, le hashage htpasswd, la restauration d'état, la logique du filtre horaire, la mise proportionnelle, le stop-loss hebdomadaire et la configuration de découverte des marchés ; `tradinebotte-polymarket/tests/test_backtest.py` (87 tests) couvre le moteur de replay, le sizing Kelly fractionnel, les ratios Sharpe/Sortino, l'optimisation walk-forward et le filtre de volatilité par jour de semaine ; `tradinebotte-polymarket/tests/test_multibot.py` (170 tests) couvre `feed.py` et `account_bot.py` avec intégration ZMQ round-trip ; `tradinebotte-indicators/tests/test_indicators.py` (136 tests) couvre le pipeline d'indicateurs ; `tests/test_api_cex.py` (racine) couvre les adaptateurs Bitstamp, MEXC et Binance ; aucun réseau ni credentials requis
-- **Services systemd user** — `scripts/install_service.sh` (Option A) et `scripts/install_feed_service.sh` / `scripts/install_account_service.sh` (Option B) génèrent des fichiers d'unité prêts à installer ; les bots redémarrent automatiquement en cas d'erreur ou de reboot (`Restart=on-failure`) ; le service feed utilise `RestartSec=10`, les bots de compte `RestartSec=30` ; `Requires=tradinebotte-feed.service` impose l'ordre de démarrage/redémarrage ; les déploiements multi-comptes utilisent des unités `~/.config/systemd/user/` gérées via `systemctl --user` — aucun sudo requis au moment du déploiement
+- **Suite de tests — 891 tests répartis en 9 suites** — `tradinebotte-polymarket/tests/test_bot.py` (360 tests) couvre les 11 gardes du signal, les chemins de résolution, le calcul des frais, le parsing WebSocket, la page de statut HTML, le hashage htpasswd, la restauration d'état, la logique du filtre horaire, la mise proportionnelle, le stop-loss hebdomadaire et la configuration de découverte des marchés ; `tests/test_backtest.py` (111 tests) couvre le moteur de replay, le sizing Kelly fractionnel, les ratios Sharpe/Sortino, l'optimisation walk-forward et le filtre de volatilité par jour de semaine ; `tradinebotte-polymarket/tests/test_multibot.py` (30 tests) couvre `feed.py` et `account_bot.py` avec intégration ZMQ round-trip ; `tradinebotte-polymarket/tests/test_regression.py` (25 tests) couvre la régression de performance et la cohérence des paramètres ; `tradinebotte-indicators/tests/test_indicators.py` (136 tests) couvre le pipeline d'indicateurs ; `tests/test_api_cex.py` (121 tests) couvre les adaptateurs Bitstamp, MEXC et Binance ; `tests/test_cycle_strategy.py` (41), `tests/test_grid_trail.py` (15), `tests/test_scalping.py` (52) couvrent les stratégies CEX ; aucun réseau ni credentials requis
+- **Services systemd user** — `tradinebotte-polymarket/scripts/install_service.sh` (Option A) et `tradinebotte-polymarket/scripts/install_feed_service.sh` / `tradinebotte-polymarket/scripts/install_account_service.sh` (Option B) génèrent des fichiers d'unité prêts à installer ; les bots redémarrent automatiquement en cas d'erreur ou de reboot (`Restart=on-failure`) ; le service feed utilise `RestartSec=10`, les bots de compte `RestartSec=30` ; `Requires=tradinebotte-feed.service` impose l'ordre de démarrage/redémarrage ; les déploiements multi-comptes utilisent des unités `~/.config/systemd/user/` gérées via `systemctl --user` — aucun sudo requis au moment du déploiement
 - **Vérification de types mypy** — `mypy tradinebotte-polymarket tradinebotte-cex tradinebotte-indicators tradinetools --ignore-missing-imports` retourne 0 erreur ; workflow CI exécuté à chaque push et pull request
 - **Bibliothèque partagée `tradinetools`** (package `tradinetools/`) — `zmq.py` (fabriques de sockets ZMQ), `schemas.py` (dataclasses de messages versionnés), `math.py` (helpers scalaires d'indicateurs : `sma_last`, `ema_last`, `atr_last`, `bollinger_last`, `vwap_last`, `vol_zscore_last`, `rolling_max_last`), `logging.py` ; installée comme package éditable (`pip install -e tradinetools/`) ; partagée entre les quatre sous-services
 - **Stratégie DCA** (`tradinebotte-cex/strategy_engines/dca.py` — `DCAStrategy`) — achats DCA cadencés à intervalles configurables ; take-profit et stop-loss optionnel ; persistance SQLite ; configurée via `tradinebotte-cex/strategies/dca/btc_dca.json`
 - **Stratégie SwingHold** (`tradinebotte-cex/strategy_engines/swinghold.py` — `SwingHoldStrategy`) — vend `sell_fraction` de la position à chaque niveau de résistance au-dessus de l'entrée ; conserve le reste pour une accumulation long terme ; stop-loss sur la totalité de la position restante ; configurée via `tradinebotte-cex/strategies/swing/btc_swinghold.json`
-- **Bot d'accumulation BTC v1.5** (`tradinebotte-cex/accumulation_bot.py`) — achat sur creux OBI avec ratchet de profit progressif ; scale-in adaptatif avec trailing stop de rebuy et expiration ; buffer Earn configurable (`earn_buffer_usd`) ; gate VWAP sur l'achat initial uniquement (`vwap_gate_initial`) ; v1.5 ajoute quatre gates de signal : Fear & Greed (`fear_greed_gate`), liquidations (`liq_gate`), ratio Long/Short (`ls_ratio_gate`), RSI 4h (`rsi4h_gate`) ; tous les paramètres surchargeables via `tradinebotte-cex/strategies/longterm/btc_accumulation.json` ; déploiement via `tradinebotte-cex/scripts/deploy_accumulation_claude4.sh`
+- **Bot d'accumulation BTC v1.5** (`tradinebotte-cex/accumulation_bot.py`) — achat sur creux OBI avec ratchet de profit progressif ; scale-in adaptatif avec trailing stop de rebuy et expiration ; buffer Earn configurable (`earn_buffer_usd`) ; gate VWAP sur l'achat initial uniquement (`vwap_gate_initial`) ; v1.5 ajoute quatre gates de signal : Fear & Greed (`fear_greed_gate`), liquidations (`liq_gate`), ratio Long/Short (`ls_ratio_gate`), RSI 4h (`rsi4h_gate`) ; tous les paramètres surchargeables via `tradinebotte-cex/strategies/accumulation/btc_accumulation.json` ; déploiement via `tradinebotte-cex/scripts/deploy_accumulation_claude4.sh`
 - **Nouveaux scripts d'analyse** — `analysis/backtest_swing_dca.py` (backtester DCA/Swing/SwingHold ; options : `--compare`, `--all-dbs`, `--sweep`, `--config`) ; `analysis/backtest_orderbook.py` (replay scalping OBI) ; `analysis/calibrate_obi_proxy.py` (calibration des seuils OBI)
 - **Script de test d'intégration** — `scripts/test_multibot_deploy.sh` automatise un test complet d'install propre et de bout en bout sur un ensemble configurable de comptes Linux de test : nettoyage, déploiement rsync, création du venv, lancement simultané des N bots en mode `--verbose` (stress-test du démarrage automatique du feed avec verrou sans race condition), monitoring par heartbeats toutes les 30s, analyse des logs (WebSocket, nombre de book updates, lignes d'erreur), teardown ; serveur, port, utilisateurs et mots de passe lus depuis `~/.tradinebotte-test.conf` (template : `scripts/test_multibot.conf.example`) ; `--skip-deploy` réutilise une install existante ; `--duration N` ajuste la fenêtre de test ; sort 0 en cas de succès total
 - **Audit de sécurité continu** — `pip-audit` s'exécute à chaque push et chaque semaine pour détecter les CVE dans les dépendances runtime (`aiohttp`, `websockets`, `web3`, `py-clob-client`) ; Dependabot ouvre des PRs automatiques quand de nouvelles versions sont disponibles
 - **Logging asynchrone + mesure de latence** — les écritures de logs ne bloquent jamais le event loop ; chaque trade émet une ligne `[LATENCY]` avec `signal_ms` (message WS → décision d'ordre) et `order_rtt_ms` (round-trip API CLOB) ; `analysis/latency.py` parse le log et affiche min/mean/p50/p90/p99/max pour chaque métrique ; un thread daemon `QueueListener` vide la queue de logs sur disque en arrière-plan ; ajouter `--no-log` pour supprimer entièrement le fichier log (la DB SQLite n'est pas affectée) pour un I/O disque minimal en production ; ajouter `--no-snapshots` pour ne pas écrire les snapshots de prix toutes les 5 s dans la DB (les trades continuent d'être enregistrés) — réduit la pression d'écriture sur les longues sessions ; ajouter `--snapshot-interval SECS` pour remplacer l'intervalle d'écriture des snapshots en secondes (défaut : 5 ; utiliser 1 pour le mode collecte de données) ; ajouter `--reset-db` pour sauvegarder `live.db` dans un fichier horodaté puis le supprimer avant le lancement, de sorte que le bot repart de zéro (capital et historique de trades) après confirmation interactive (sans effet si la DB est absente)
 - **Collecte de données** (premier compte de déploiement — mode simulation, snapshots à 1 seconde) :
   - Déployer et lancer le collecteur :
-    `bash scripts/start_collector.sh`           # déploiement + lancement
-    `bash scripts/start_collector.sh --status`  # vérifier si en cours
-    `bash scripts/start_collector.sh --stop`    # arrêter
+    `bash tradinebotte-polymarket/scripts/start_collector.sh`           # déploiement + lancement
+    `bash tradinebotte-polymarket/scripts/start_collector.sh --status`  # vérifier si en cours
+    `bash tradinebotte-polymarket/scripts/start_collector.sh --stop`    # arrêter
   - Télécharger la base de données hebdomadaire :
-    `bash scripts/collect_db.sh --status`       # compteurs distants de lignes
-    `bash scripts/collect_db.sh --rotate`       # télécharger + archiver + redémarrer
+    `bash tradinebotte-polymarket/scripts/collect_db.sh --status`       # compteurs distants de lignes
+    `bash tradinebotte-polymarket/scripts/collect_db.sh --rotate`       # télécharger + archiver + redémarrer
   - Automatiser la collecte hebdomadaire (cron) :
-    `bash scripts/schedule_collect.sh --install`   # tous les dimanches à 03:00 UTC
-    `bash scripts/schedule_collect.sh --status`    # afficher l'entrée cron
-    `bash scripts/schedule_collect.sh --run-now`   # exécuter immédiatement
+    `bash tradinebotte-polymarket/scripts/schedule_collect.sh --install`   # tous les dimanches à 03:00 UTC
+    `bash tradinebotte-polymarket/scripts/schedule_collect.sh --status`    # afficher l'entrée cron
+    `bash tradinebotte-polymarket/scripts/schedule_collect.sh --run-now`   # exécuter immédiatement
 
 ## Stratégie
 
 - Surveille les marchés "Bitcoin Up or Down — 5 minutes" dont `endDate` est dans une fenêtre de ±6 minutes
-- Signal d'entrée : `best_bid >= 0.96` sur un token UP ou DOWN
+- Signal d'entrée : `best_bid >= 0.95` sur un token UP ou DOWN
 - Exécute un ordre LIMIT BUY au `best_ask` via l'API CLOB de Polymarket
 - Résolution : WIN si bid >= 0.99, LOSS si bid <= 0.01, ou à l'expiration du marché (bid >= 0.50 = WIN)
 - Stop-loss journalier : 30 $ | Mise par trade : 10 $ | Frais : 2%
@@ -174,22 +174,14 @@ Guide complet (prérequis, configuration du wallet, page de statut web, monitori
 bash scripts/run_tests.sh
 ```
 
-733 tests répartis en 4 suites. La suite couvre : le calcul des frais, le parsing des messages WebSocket, le calcul de l'OBI, l'enregistrement des marchés, les 11 gardes d'entrée du signal (dont le stop-loss journalier), la résolution des trades (WIN/LOSS/expiration), le calcul du PnL, la restauration d'état après un crash, le hashage SHA1 htpasswd, le rendu de la page de statut HTML, la mise à jour d'état asynchrone, tous les chemins signal/résolution/paramètres du backtest, le sizing Kelly fractionnel, les ratios Sharpe/Sortino, l'optimisation walk-forward, le filtre de volatilité par jour de semaine, l'intégration ZMQ feed/account_bot avec un et deux bots simultanés, les flux subscribe/redeem/mode-sim de `EarnManager`, le backtest de la stratégie cycle long terme, le pipeline d'indicateurs et l'adaptateur Bitstamp. Aucun accès réseau ni credentials nécessaires — une base SQLite en mémoire est utilisée pour chaque test.
+891 tests répartis en 9 suites. La suite couvre : le calcul des frais, le parsing des messages WebSocket, le calcul de l'OBI, l'enregistrement des marchés, les 11 gardes d'entrée du signal (dont le stop-loss journalier), la résolution des trades (WIN/LOSS/expiration), le calcul du PnL, la restauration d'état après un crash, le hashage SHA1 htpasswd, le rendu de la page de statut HTML, la mise à jour d'état asynchrone, tous les chemins signal/résolution/paramètres du backtest, le sizing Kelly fractionnel, les ratios Sharpe/Sortino, l'optimisation walk-forward, le filtre de volatilité par jour de semaine, l'intégration ZMQ feed/account_bot avec un et deux bots simultanés, les flux subscribe/redeem/mode-sim de `EarnManager`, le backtest de la stratégie cycle long terme, le pipeline d'indicateurs et l'adaptateur Bitstamp. Aucun accès réseau ni credentials nécessaires — une base SQLite en mémoire est utilisée pour chaque test.
 
 ## Backtest
 
 Rejouer les données `snapshots` historiques avec des paramètres de stratégie configurables.
-Si `TRADINEBOTTE_DIR/live.db` est absent ou contient moins de 100 snapshots, le script utilise automatiquement le jeu de données embarqué (`data/backtest_sample_btc5m_range_2026.db`, 2430 snapshots issus de vrais marchés BTC 5 minutes collectés le 2026-04-25). Le fichier sélectionné est affiché au démarrage.
+La base est sélectionnée dans cet ordre : `$TRADINEBOTTE_DIR/live.db` (si ≥ 100 snapshots), puis `data/paper3.db` (session de paper trading, 764k snapshots). Le fichier sélectionné est affiché au démarrage.
 
-Trois jeux de données de sessions réelles sont inclus dans `data/` :
-
-| Fichier | Snapshots | Période | Trades | Taux victoire |
-|---|---|---|---|---|
-| `backtest_sample_btc5m_range_2026.db` | 2 430 | 2026-04-25 | 0 | — |
-| `calmsaturday.db` | 10 126 | 2026-04-26 ~11h | 9 | 100 % |
-| `basicsunday.db` | 24 870 | 2026-04-25→26 ~26h | 43 | 97,7 % |
-
-Lancer les trois en une commande avec `--all` (agrégat : 52 trades, 51 victoires, **98,1 % de taux de victoire**).
+Lancer plusieurs bases en une commande avec `--all` (scanne `data/` pour tous les fichiers `.db` et ajoute `live.db` si utilisable).
 
 ```bash
 python3 analysis/backtest.py                        # paramètres par défaut
@@ -229,14 +221,14 @@ Voir [`docs/AdaptedGridTrading.fr.md`](docs/AdaptedGridTrading.fr.md) pour la do
 
 ## Notes
 
-- Le CLI `sqlite3` est optionnel — le bot utilise le module Python intégré. L'installer (`sudo apt install sqlite3`) uniquement pour les requêtes manuelles. Sans sudo : `~/tradinebotte/venv/bin/python3 -c "import sqlite3; c=sqlite3.connect('live.db'); print(c.execute('SELECT COUNT(*) FROM snapshots').fetchone()[0])"`
+- Le CLI `sqlite3` est optionnel — le bot utilise le module Python intégré. L'installer (`sudo apt install sqlite3`) uniquement pour les requêtes manuelles. Sans sudo : `~/tradinebotte/.venv/bin/python3 -c "import sqlite3; c=sqlite3.connect('live.db'); print(c.execute('SELECT COUNT(*) FROM snapshots').fetchone()[0])"`
 
 - Les timeouts recv WebSocket (~30s) en période calme sont **normaux** — les keepalives `ping_interval=20` maintiennent la connexion ; le bot ne se reconnecte que si tous les marchés suivis ont expiré
 - Le refresh des marchés (polling de l'API Gamma toutes les 30s) s'exécute en **tâche async de fond**, de sorte que le traitement des messages WebSocket n'est jamais bloqué pendant les appels HTTP
 - La requête API Gamma utilise `tag_id=102892` (le tag `5M`) pour pré-filtrer côté serveur aux seuls marchés 5 minutes, réduisant chaque poll de potentiellement des milliers de marchés à ~12–20 en **un seul appel API** (sans pagination)
 - Si `POLY_PRIVATE_KEY` n'est pas défini, les ordres sont simulés (aucune exécution on-chain)
 - Les signaux peuvent être rares en période de faible volatilité BTC — c'est attendu
-- Ne pas modifier `SIGNAL_THRESHOLD` (0.96) sans relancer le backtest complet
+- Ne pas modifier `SIGNAL_THRESHOLD` (0.95) sans relancer le backtest complet
 
 ## Licence
 

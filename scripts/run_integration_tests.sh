@@ -51,7 +51,7 @@ echo -e "${BOLD}tradinebotte — SSH Integration Tests${NC}"
 echo -e "Config: ${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
 
 [[ "$RUN_STANDALONE" == "true" ]] && \
-    run_test "Standalone multi-user (Option A)" "$SCRIPT_DIR/test_standalone_deploy.sh"
+    run_test "Standalone multi-user (Option A)" "$(dirname "$SCRIPT_DIR")/tradinebotte-polymarket/scripts/test_standalone_deploy.sh"
 
 [[ "$RUN_MULTIBOT" == "true" ]] && \
     run_test "Multi-bot ZeroMQ (Option B)" "$SCRIPT_DIR/test_multibot_deploy.sh"
