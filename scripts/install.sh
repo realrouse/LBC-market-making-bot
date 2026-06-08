@@ -59,13 +59,13 @@ _t() { [ "$LANG" = "FR" ] && printf '%s' "$2" || printf '%s' "$1"; }
 # ── Helpers ───────────────────────────────────────────────────────
 _check_syntax() {
     local file="$1"
-    "$INSTALL_DIR/venv/bin/python3" -c \
+    "$INSTALL_DIR/.venv/bin/python3" -c \
         "import ast, sys; ast.parse(open(sys.argv[1]).read()); print(sys.argv[2])" \
         "$file" "$(basename "$file") : $(_t 'SYNTAX OK' 'SYNTAXE OK')"
 }
 
 _pip_install() {
-    local pip="$INSTALL_DIR/venv/bin/pip"
+    local pip="$INSTALL_DIR/.venv/bin/pip"
     "$pip" install --quiet --upgrade pip
     "$pip" install --quiet "$@" -r "$REPO_DIR/requirements.txt"
     "$pip" install --quiet -e "$REPO_DIR/tradinetools"
@@ -130,12 +130,12 @@ if [ "$_STRAT_SRC" != "$_STRAT_DST" ]; then
 fi
 
 # ── Python virtual environment ────────────────────────────────────
-if [ -d "$INSTALL_DIR/venv" ]; then
-    echo "=== $(_t "Updating Python packages (existing venv)" "Mise à jour des packages Python (venv existant)") ==="
+if [ -d "$INSTALL_DIR/.venv" ]; then
+    echo "=== $(_t "Updating Python packages (existing .venv)" "Mise à jour des packages Python (.venv existant)") ==="
     _pip_install --upgrade
 else
     echo "=== $(_t "Creating virtual environment" "Création de l'environnement virtuel") ==="
-    python3 -m venv "$INSTALL_DIR/venv"
+    python3 -m venv "$INSTALL_DIR/.venv"
     echo "=== $(_t "Installing Python packages" "Installation des packages Python") ==="
     _pip_install
 fi
@@ -171,7 +171,7 @@ if [ "$WITH_TESTS" = "1" ]; then
            "$INSTALL_DIR/data/backtest_sample_btc5m_range_2026.db"
     fi
     echo "=== $(_t "Running tests" "Lancement des tests") ==="
-    TRADINEBOTTE_DIR="$INSTALL_DIR" "$INSTALL_DIR/venv/bin/python3" \
+    TRADINEBOTTE_DIR="$INSTALL_DIR" "$INSTALL_DIR/.venv/bin/python3" \
         -W ignore::ResourceWarning -m unittest discover "$INSTALL_DIR/tests/" -v
 fi
 

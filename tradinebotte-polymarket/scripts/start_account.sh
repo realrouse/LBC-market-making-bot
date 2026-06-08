@@ -18,9 +18,13 @@
 
 INSTALL_DIR="${TRADINEBOTTE_DIR:-$HOME/tradinebotte}"
 INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
-# Venv lookup: account dir first, then shared ~/tradinebotte (Option B layout).
-if [ -d "$INSTALL_DIR/venv" ]; then
+# Venv lookup: account dir first (.venv preferred), then shared ~/tradinebotte (Option B layout).
+if [ -x "$INSTALL_DIR/.venv/bin/python3" ]; then
+    VENV="$INSTALL_DIR/.venv"
+elif [ -x "$INSTALL_DIR/venv/bin/python3" ]; then
     VENV="$INSTALL_DIR/venv"
+elif [ -x "$HOME/tradinebotte/.venv/bin/python3" ]; then
+    VENV="$HOME/tradinebotte/.venv"
 else
     VENV="$HOME/tradinebotte/venv"
 fi

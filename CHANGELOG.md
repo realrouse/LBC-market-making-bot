@@ -6,6 +6,18 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.67] — 2026-06-07
+
+### Changed
+- **`scripts/install.sh` — virtualenv standardized to `.venv`**: creation and all references changed from `venv/` to `.venv/`; detection block checks for `.venv` first (new installs), then falls back to `venv` for legacy installs; `CLAUDE.md` runtime-paths section updated to reflect `.venv/`
+- **`tradinebotte-polymarket/scripts/start_feed.sh` — dual venv detection**: now checks `.venv/bin/python3` first, then falls back to `venv/bin/python3` for backward compatibility; previously hardcoded to `venv` only which broke on accounts where `install.sh` had already created `.venv`
+- **`tradinebotte-polymarket/scripts/start_account.sh` — full venv fallback chain for Option B**: checks `.venv` then `venv` in the account dir, then `~/tradinebotte/.venv`, then `~/tradinebotte/venv` as final fallback; previously only checked the account-dir `venv` which failed in the shared-venv Option B layout
+
+### Fixed
+- **All deployment accounts migrated from `venv/` to `.venv/`**: existing `systemd --user` service units updated (`ExecStart` paths patched from `venv/bin/python3` to `.venv/bin/python3`), old `venv/` directories removed; `connectors/` and `strategy_engines/` directories synced to flat-layout accounts that were missing them after rsync updates
+
+---
+
 ## [0.66] — 2026-06-07
 
 ### Fixed

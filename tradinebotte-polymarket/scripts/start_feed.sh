@@ -17,15 +17,17 @@
 
 INSTALL_DIR="${TRADINEBOTTE_DIR:-$HOME/tradinebotte}"
 INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
-VENV="$INSTALL_DIR/venv"
-FEED_LOG="$INSTALL_DIR/feed.log"
-FEED_PID_FILE="$INSTALL_DIR/feed.pid"
-
-if [ ! -d "$VENV" ]; then
-    echo "ERROR: venv not found in $INSTALL_DIR"
+if [ -x "$INSTALL_DIR/.venv/bin/python3" ]; then
+    VENV="$INSTALL_DIR/.venv"
+elif [ -x "$INSTALL_DIR/venv/bin/python3" ]; then
+    VENV="$INSTALL_DIR/venv"
+else
+    echo "ERROR: virtualenv not found in $INSTALL_DIR/{.venv,venv}"
     echo "Run first: bash scripts/install.sh"
     exit 1
 fi
+FEED_LOG="$INSTALL_DIR/feed.log"
+FEED_PID_FILE="$INSTALL_DIR/feed.pid"
 
 if [ -f "$FEED_PID_FILE" ]; then
     _pid=$(cat "$FEED_PID_FILE")

@@ -6,6 +6,18 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.67] — 2026-06-07
+
+### Changements
+- **`scripts/install.sh` — virtualenv standardisé en `.venv`** : création et toutes les références passées de `venv/` à `.venv/` ; le bloc de détection vérifie `.venv` en premier (nouvelles installations), puis bascule sur `venv` pour les installations existantes ; section runtime-paths de `CLAUDE.md` mise à jour pour refléter `.venv/`
+- **`tradinebotte-polymarket/scripts/start_feed.sh` — détection dual venv** : vérifie `.venv/bin/python3` en premier, puis bascule sur `venv/bin/python3` pour la compatibilité descendante ; était précédemment codé en dur sur `venv` uniquement, ce qui échouait sur les comptes où `install.sh` avait déjà créé `.venv`
+- **`tradinebotte-polymarket/scripts/start_account.sh` — chaîne complète de fallback venv pour Option B** : vérifie `.venv` puis `venv` dans le répertoire du compte, puis `~/tradinebotte/.venv`, puis `~/tradinebotte/venv` en dernier recours ; vérifiait précédemment uniquement le `venv` du répertoire de compte, ce qui échouait avec le layout venv partagé Option B
+
+### Corrections
+- **Tous les comptes de déploiement migrés de `venv/` vers `.venv/`** : unités de service `systemd --user` existantes mises à jour (chemins `ExecStart` patchés de `venv/bin/python3` vers `.venv/bin/python3`), anciens répertoires `venv/` supprimés ; répertoires `connectors/` et `strategy_engines/` synchronisés vers les comptes à layout plat qui en manquaient après les mises à jour rsync
+
+---
+
 ## [0.66] — 2026-06-07
 
 ### Corrections
