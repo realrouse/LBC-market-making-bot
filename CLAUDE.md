@@ -54,33 +54,38 @@ The project is **bilingual at the documentation level** and **English-only at th
 
 ## Commands
 
-**Install dependencies** (creates venv at `~/tradinebotte/venv`):
+**Install dependencies** (creates virtualenv at `~/tradinebotte/.venv`):
 ```bash
 bash scripts/install.sh
 ```
 
 **One-time wallet setup** (derives API keys, checks/swaps USDC.e balance, approves CTF Exchange):
 ```bash
-python3 scripts/setup.py 0xYOUR_PRIVATE_KEY
+python3 scripts/setup.py
 ```
 
-**Start the bot** (requires env vars: `POLY_PRIVATE_KEY`, `POLY_API_KEY`, `POLY_API_SECRET`, `POLY_PASSPHRASE`):
+**Start the bot**:
 ```bash
-bash scripts/start_bot.sh
+~/tradinebotte/run.sh
 ```
 
 **Monitor live status and stats**:
 ```bash
-bash scripts/monitor.sh
+bash tradinebotte-polymarket/scripts/monitor.sh
 tail -f ~/tradinebotte/live.log
 sqlite3 ~/tradinebotte/live.db "SELECT * FROM trades ORDER BY id DESC LIMIT 10;"
 ```
 
-No test suite exists yet. There is no linter configured.
+**Run tests** (733 tests across 4 suites):
+```bash
+bash scripts/install.sh --with-tests
+```
+
+Linter: `pylint` (declared in `requirements-dev.txt`).
 
 ## Architecture
 
-The bot is a single-file async state machine (`bot/live_bot.py`, ~1530 lines) driven by WebSocket market data.
+The bot is a single-file async state machine (`tradinebotte-polymarket/live_bot.py`) driven by WebSocket market data.
 
 **Core data flow:**
 1. `main()` initializes SQLite DB and `BotState`, restores unresolved trades from DB
@@ -133,7 +138,7 @@ These are backtested. Changing them without re-running the full backtest invalid
 - Bot source: `~/tradinebotte/live_bot.py`
 - Database: `~/tradinebotte/live.db`
 - Log file: `~/tradinebotte/live.log`
-- Virtualenv: `~/tradinebotte/venv/`
+- Virtualenv: `~/tradinebotte/.venv/`
 
 ## Normal Behavior
 
