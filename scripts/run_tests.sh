@@ -30,7 +30,7 @@ echo "Python : $PYTHON ($("$PYTHON" --version))"
 echo "Tests  : $PROJECT_DIR/tests/ + tradinebotte-*/tests/"
 echo ""
 "$PYTHON" -W ignore::ResourceWarning -m unittest discover -s tests/ -p "test_*.py" -v
-for _svc_tests in tradinebotte-*/tests/; do
+for _svc_tests in tradinebotte-*/tests/ tradinetools/tests/; do
     if [ -d "$_svc_tests" ] && ls "$_svc_tests"test_*.py >/dev/null 2>&1; then
         echo ""
         echo "=== Tests: $_svc_tests ==="

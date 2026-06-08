@@ -96,7 +96,7 @@ class Params:
     min_ask_vol:        float = 10.0
     win_threshold:      float = 0.99
     loss_threshold:     float = 0.01
-    obi_reject_thresh:  float = -0.25
+    obi_reject_thresh:  float = -0.40
     stake:              float = 10.0
     daily_stop_loss:    float = 30.0
     capital_start:      float = 100.0
@@ -1142,6 +1142,10 @@ def main():
         except sqlite3.OperationalError:
             conn.close()
             print(f"  Skipping {os.path.basename(db_path)} (no snapshots table)")
+            continue
+        except sqlite3.DatabaseError:
+            conn.close()
+            print(f"  Skipping {os.path.basename(db_path)} (malformed database)")
             continue
 
         if n_snapshots == 0:

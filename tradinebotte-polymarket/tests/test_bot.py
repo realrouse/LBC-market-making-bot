@@ -1655,7 +1655,7 @@ class TestStrategyLoading(unittest.TestCase):
 
     def test_min_secs(self):
         s = self._load("polymarket_BTC5M.json")
-        self.assertEqual(s["min_secs_remaining"], 45)
+        self.assertEqual(s["min_secs_remaining"], 30)
 
     def test_obi(self):
         s = self._load("polymarket_BTC5M.json")
