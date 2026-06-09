@@ -204,10 +204,11 @@ if \$VENV/bin/python3 -m pip install --quiet -e $_install_dir/tradinetools 2>/de
     echo 'tradinetools ok (pip)'
 else
     mkdir -p \$SITE
+    rm -rf \$SITE/tradinetools
     cp -r $_install_dir/tradinetools/tradinetools \$SITE/tradinetools
     echo 'tradinetools ok (copy)'
 fi
-\$VENV/bin/python3 -c 'from tradinetools.zmq import make_pub; print(\"import check ok\")' 2>&1
+\$VENV/bin/python3 -c 'from tradinetools.zmq import ipc_socket_dir, make_pub; print(\"import check ok\")' 2>&1
 " 2>&1 \
         && echo -e "${GREEN}  ✓ tradinetools installed in .venv${NC}" \
         || echo -e "${RED}  ✗ tradinetools install failed${NC}"
@@ -262,10 +263,11 @@ if \$VENV/bin/python3 -m pip install --quiet -e $_install_dir/tradinetools 2>/de
     echo 'tradinetools ok (pip)'
 else
     mkdir -p \$SITE
+    rm -rf \$SITE/tradinetools
     cp -r $_install_dir/tradinetools/tradinetools \$SITE/tradinetools
     echo 'tradinetools ok (copy)'
 fi
-\$VENV/bin/python3 -c 'from tradinetools.zmq import warn_if_external_bind; print(\"import check ok\")' 2>&1
+\$VENV/bin/python3 -c 'from tradinetools.zmq import ipc_socket_dir, make_pub; print(\"import check ok\")' 2>&1
 " 2>&1 \
         && echo -e "${GREEN}  ✓ tradinetools installed in .venv${NC}" \
         || echo -e "${RED}  ✗ tradinetools install failed${NC}"
@@ -305,6 +307,15 @@ if [[ "$RESTART_ACCOUNT" == "true" ]]; then
         && echo -e "${GREEN}  ✓ account_bot.py synced (bot/)${NC}" \
         || echo -e "${YELLOW}  ! bot/ subdir not present — skipping${NC}"
 
+    # Push live_bot.py to bot/ — account_bot imports it from there (sys.path includes bot/)
+    SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
+        rsync -az \
+        -e "ssh $_ssh_opts" \
+        "$LOCAL_REPO/tradinebotte-polymarket/live_bot.py" \
+        "$_c1_user@$_server:$_install_dir/bot/live_bot.py" 2>&1 \
+        && echo -e "${GREEN}  ✓ live_bot.py synced (bot/)${NC}" \
+        || echo -e "${YELLOW}  ! bot/live_bot.py sync skipped${NC}"
+
     # Push tradinetools
     SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
         rsync -az \
@@ -328,10 +339,11 @@ if \$VENV/bin/python3 -m pip install --quiet -e $_install_dir/tradinetools 2>/de
     echo 'tradinetools ok (pip)'
 else
     mkdir -p \$SITE
+    rm -rf \$SITE/tradinetools
     cp -r $_install_dir/tradinetools/tradinetools \$SITE/tradinetools
     echo 'tradinetools ok (copy)'
 fi
-\$VENV/bin/python3 -c 'from tradinetools.logging import setup_logger; print(\"import check ok\")' 2>&1
+\$VENV/bin/python3 -c 'from tradinetools.zmq import ipc_socket_dir, make_pub; print(\"import check ok\")' 2>&1
 " 2>&1 \
         && echo -e "${GREEN}  ✓ tradinetools installed in .venv${NC}" \
         || echo -e "${RED}  ✗ tradinetools install failed${NC}"
