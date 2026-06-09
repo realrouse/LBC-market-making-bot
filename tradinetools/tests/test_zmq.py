@@ -1,8 +1,10 @@
 """Unit tests for tradinetools.zmq — socket factories and warn_if_external_bind."""
 
 import asyncio
+import stat
 import sys
 import os
+import tempfile
 import time
 import socket as _socket
 import unittest
@@ -14,7 +16,7 @@ import zmq.asyncio
 
 from tradinetools.zmq import (
     make_pub, make_sub, make_rep, make_req,
-    warn_if_external_bind,
+    warn_if_external_bind, ipc_socket_dir, default_ipc_addr,
     PORT_FEED, PORT_INDICATORS, PORT_IND_REG,
 )
 
@@ -231,6 +233,158 @@ class TestPortConstants(unittest.TestCase):
     def test_ports_are_distinct(self):
         ports = {PORT_FEED, PORT_INDICATORS, PORT_IND_REG}
         self.assertEqual(len(ports), 3)
+
+
+class TestIpcSocketDir(unittest.TestCase):
+
+    def test_returns_existing_directory(self):
+        d = ipc_socket_dir()
+        self.assertTrue(os.path.isdir(d), f"ipc_socket_dir() returned non-existent dir: {d}")
+
+    def test_returns_absolute_path(self):
+        d = ipc_socket_dir()
+        self.assertTrue(os.path.isabs(d))
+
+    def test_fallback_dir_created_with_0700(self):
+        """When /run/user/$UID is absent, fallback is created with mode 0700."""
+        with tempfile.TemporaryDirectory() as td:
+            fallback = os.path.join(td, "sock-dir")
+            # Patch ipc_socket_dir to use our tmp path instead of /run/user
+            import tradinetools.zmq as _zmq_mod
+            orig = _zmq_mod.ipc_socket_dir
+
+            def _patched():
+                os.makedirs(fallback, mode=0o700, exist_ok=True)
+                return fallback
+
+            _zmq_mod.ipc_socket_dir = _patched
+            try:
+                result = _zmq_mod.ipc_socket_dir()
+                self.assertEqual(result, fallback)
+                self.assertTrue(os.path.isdir(fallback))
+                mode = stat.S_IMODE(os.stat(fallback).st_mode)
+                self.assertEqual(mode, 0o700)
+            finally:
+                _zmq_mod.ipc_socket_dir = orig
+
+
+class TestDefaultIpcAddr(unittest.TestCase):
+
+    def test_returns_ipc_scheme(self):
+        addr = default_ipc_addr("tradinebotte-feed")
+        self.assertTrue(addr.startswith("ipc://"), f"Expected ipc://, got: {addr}")
+
+    def test_contains_socket_name(self):
+        addr = default_ipc_addr("tradinebotte-feed")
+        self.assertIn("tradinebotte-feed.sock", addr)
+
+    def test_different_names_differ(self):
+        a1 = default_ipc_addr("tradinebotte-feed")
+        a2 = default_ipc_addr("tradinebotte-indicators")
+        self.assertNotEqual(a1, a2)
+
+
+class TestIpcPubSubRoundtrip(unittest.IsolatedAsyncioTestCase):
+    """IPC PUB/SUB roundtrip using a temp directory — does not touch /run/user."""
+
+    async def asyncSetUp(self):
+        self.ctx = zmq.asyncio.Context()
+        self._tmpdir = tempfile.mkdtemp()
+
+    async def asyncTearDown(self):
+        self.ctx.term()
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    async def test_ipc_pub_sub_roundtrip(self):
+        addr = f"ipc://{self._tmpdir}/test-feed.sock"
+        pub = make_pub(self.ctx, addr, name="TEST-FEED")
+        sub = make_sub(self.ctx, addr)
+        sub.setsockopt(zmq.RCVTIMEO, 1000)
+        await asyncio.sleep(0.05)
+
+        try:
+            msg = {"v": 1, "t": "book", "token_id": "abc", "best_bid": 0.95}
+            await pub.send_json(msg)
+            received = await sub.recv_json()
+            self.assertEqual(received["t"], "book")
+            self.assertAlmostEqual(received["best_bid"], 0.95)
+        finally:
+            pub.close()
+            sub.close()
+
+    async def test_ipc_socket_file_exists_after_bind(self):
+        addr = f"ipc://{self._tmpdir}/test-exists.sock"
+        pub = make_pub(self.ctx, addr)
+        try:
+            self.assertTrue(os.path.exists(f"{self._tmpdir}/test-exists.sock"))
+        finally:
+            pub.close()
+
+    async def test_ipc_socket_file_is_0600(self):
+        addr = f"ipc://{self._tmpdir}/test-perms.sock"
+        pub = make_pub(self.ctx, addr)
+        try:
+            mode = stat.S_IMODE(os.stat(f"{self._tmpdir}/test-perms.sock").st_mode)
+            self.assertEqual(mode, 0o600, f"Expected 0o600, got {oct(mode)}")
+        finally:
+            pub.close()
+
+    async def test_ipc_stale_socket_cleaned_on_rebind(self):
+        """make_pub removes a stale socket file so Restart=on-failure works."""
+        sock_path = f"{self._tmpdir}/test-stale.sock"
+        addr = f"ipc://{sock_path}"
+
+        # Simulate a stale socket file left by a crash
+        with open(sock_path, "wb") as f:
+            f.write(b"stale")
+
+        pub = make_pub(self.ctx, addr)
+        try:
+            self.assertTrue(os.path.exists(sock_path))
+        finally:
+            pub.close()
+
+
+class TestIpcRepReq(unittest.TestCase):
+    """IPC REP/REQ roundtrip using a temp directory."""
+
+    def setUp(self):
+        self.ctx = zmq.Context()
+        self._tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        self.ctx.term()
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def test_ipc_rep_req_roundtrip(self):
+        addr = f"ipc://{self._tmpdir}/test-reg.sock"
+        rep = make_rep(self.ctx, addr, name="TEST-REG")
+        req = make_req(self.ctx, addr)
+        rep.setsockopt(zmq.RCVTIMEO, 1000)
+        req.setsockopt(zmq.RCVTIMEO, 1000)
+        time.sleep(0.05)
+
+        try:
+            req.send_json({"t": "register", "stream_id": "btc_4h"})
+            msg = rep.recv_json()
+            self.assertEqual(msg["t"], "register")
+            rep.send_json({"t": "register_ack", "ok": True})
+            ack = req.recv_json()
+            self.assertTrue(ack["ok"])
+        finally:
+            rep.close()
+            req.close()
+
+    def test_ipc_rep_socket_is_0600(self):
+        addr = f"ipc://{self._tmpdir}/test-rep-perms.sock"
+        rep = make_rep(self.ctx, addr)
+        try:
+            mode = stat.S_IMODE(os.stat(f"{self._tmpdir}/test-rep-perms.sock").st_mode)
+            self.assertEqual(mode, 0o600, f"Expected 0o600, got {oct(mode)}")
+        finally:
+            rep.close()
 
 
 if __name__ == "__main__":

@@ -79,8 +79,10 @@ VENV="$INSTALL_DIR/venv"
 [[ -d "$INSTALL_DIR/.venv" ]] && VENV="$INSTALL_DIR/.venv"
 
 # ── ZMQ addresses ─────────────────────────────────────────────────────────────
-IND_ADDR="${TRADINEBOTTE_INDICATORS_ADDR:-tcp://127.0.0.1:5559}"
-REG_ADDR="${TRADINEBOTTE_INDICATORS_REG_ADDR:-tcp://127.0.0.1:5561}"
+_UID=$(id -u)
+_IPC_DIR="/run/user/${_UID}"; [ -d "${_IPC_DIR}" ] || { _IPC_DIR="/tmp/tradinebotte-${_UID}"; mkdir -p -m 700 "${_IPC_DIR}"; }
+IND_ADDR="${TRADINEBOTTE_INDICATORS_ADDR:-ipc://${_IPC_DIR}/tradinebotte-indicators.sock}"
+REG_ADDR="${TRADINEBOTTE_INDICATORS_REG_ADDR:-ipc://${_IPC_DIR}/tradinebotte-ind-reg.sock}"
 
 ENV_FILE="$INSTALL_DIR/credentials"
 OUTPUT="${HOME}/tmp/${SERVICE_NAME}.service"

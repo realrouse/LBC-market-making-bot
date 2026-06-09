@@ -8,8 +8,10 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-Environment=TRADINEBOTTE_INDICATORS_ADDR=tcp://127.0.0.1:5559
-Environment=TRADINEBOTTE_INDICATORS_REG_ADDR=tcp://127.0.0.1:5561
+# IPC socket addresses are auto-detected from /run/user/%U/ — no override needed.
+# To force TCP (e.g. multi-stack), uncomment and set:
+# Environment=TRADINEBOTTE_INDICATORS_ADDR=tcp://127.0.0.1:5559
+# Environment=TRADINEBOTTE_INDICATORS_REG_ADDR=tcp://127.0.0.1:5561
 EnvironmentFile=-%h/tradinebotte/credentials
 WorkingDirectory=%h/tradinebotte
 ExecStart=%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/indicators.py --config %h/tradinebotte/strategies/indicators/indicators_all.json

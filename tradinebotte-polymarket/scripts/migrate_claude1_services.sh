@@ -89,8 +89,9 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-Environment=TRADINEBOTTE_INDICATORS_ADDR=tcp://127.0.0.1:5559
-Environment=TRADINEBOTTE_INDICATORS_REG_ADDR=tcp://127.0.0.1:5561
+# IPC socket addresses auto-detected from /run/user/%U/ — no override needed.
+# Environment=TRADINEBOTTE_INDICATORS_ADDR=tcp://127.0.0.1:5559
+# Environment=TRADINEBOTTE_INDICATORS_REG_ADDR=tcp://127.0.0.1:5561
 EnvironmentFile=-%h/tradinebotte/credentials
 WorkingDirectory=%h/tradinebotte
 ExecStart=%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/indicators.py --config %h/tradinebotte/strategies/indicators/indicators_all.json
@@ -115,7 +116,8 @@ StartLimitBurst=10
 
 [Service]
 Type=simple
-Environment=TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5557
+# IPC socket address auto-detected from /run/user/%U/ — no override needed.
+# Environment=TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5557
 WorkingDirectory=%h/tradinebotte
 ExecStart=%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/feed.py
 Restart=on-failure
@@ -141,7 +143,8 @@ StartLimitBurst=5
 [Service]
 Type=simple
 Environment=TRADINEBOTTE_DIR=%h/tradinebotte
-Environment=TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5557
+# IPC socket address auto-detected from /run/user/%U/ — no override needed.
+# Environment=TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5557
 WorkingDirectory=%h/tradinebotte
 ExecStart=%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/bot/account_bot.py
 Restart=on-failure
@@ -181,7 +184,7 @@ echo ""
 echo "  # 1. Enable linger so user services persist across reboots (no active session needed)"
 echo "  loginctl enable-linger $c1_user"
 echo ""
-echo "  # 2. Stop and disable system services (releases ZeroMQ ports 5557, 5559, 5561)"
+echo "  # 2. Stop and disable system services (releases ZeroMQ TCP sockets)"
 echo "  systemctl stop    tradinebotte-indicators tradinebotte-feed tradinebotte-account-${c1_user}"
 echo "  systemctl disable tradinebotte-indicators tradinebotte-feed tradinebotte-account-${c1_user}"
 echo ""
@@ -194,4 +197,4 @@ echo ""
 echo "  # 4. Verify all three are active"
 echo "  su -l $c1_user -c \"XDG_RUNTIME_DIR=/run/user/\$UID_C1 systemctl --user status tradinebotte-indicators tradinebotte-feed tradinebotte-account-${c1_user}\""
 echo ""
-warn "Do NOT start user services before stopping system services — ports 5557/5559/5561 must be free."
+warn "Do NOT start user services before stopping system services — the old TCP sockets must be released first."

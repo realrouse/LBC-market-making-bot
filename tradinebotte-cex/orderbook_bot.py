@@ -142,8 +142,8 @@ DEFAULTS = {
     "liq_gate":            False,
     "liq_stream_id":       "btc_liquidations",
     "liq_long_block_usd":  5_000_000,  # block longs during long cascade ($5M/5min)
-    # Indicators service (ZMQ)
-    "indicators_addr":     "tcp://127.0.0.1:5559",
+    # Indicators service (ZMQ) — None means auto-detect (IPC or set TRADINEBOTTE_INDICATORS_ADDR)
+    "indicators_addr":     None,
     "spot_stream_id":      "btc_scalping_spot",
     "perp_stream_id":      "btc_scalping_perp",
     "vwap_stream_id":      "btc_vwap_context",
@@ -574,13 +574,16 @@ async def _handle_indicator(state: StreamState, db: sqlite3.Connection,
 
 async def _zmq_loop(states: list, db: sqlite3.Connection, p: dict) -> None:
     try:
+        import os as _os
         import zmq.asyncio as azmq
-        from tradinetools.zmq import make_sub, PORT_INDICATORS
+        from tradinetools.zmq import make_sub, default_ipc_addr
     except ImportError:
         logger.error("pyzmq not installed — run: pip install pyzmq")
         return
 
-    addr = p.get("indicators_addr", f"tcp://127.0.0.1:{PORT_INDICATORS}")
+    addr = (p.get("indicators_addr")
+            or _os.environ.get("TRADINEBOTTE_INDICATORS_ADDR")
+            or default_ipc_addr("tradinebotte-indicators"))
     stream_map = {}
     for st in states:
         sid_key = f"{st.mode}_stream_id"
@@ -706,7 +709,7 @@ async def _run(p: dict, db: sqlite3.Connection) -> None:
     macro_mode = ("enabled — block longs when macro direction=bullish"
                   if p.get("macro_obi_gate") else "disabled")
     logger.info("MacroOBI: %s  indicators: %s",
-                macro_mode, p.get("indicators_addr", "tcp://127.0.0.1:5559"))
+                macro_mode, p.get("indicators_addr") or "(IPC auto-detect)")
     funding_thresh = p.get("funding_gate_thresh", 0.0005)
     funding_mode = (f"enabled — block longs when funding_rate > {funding_thresh:.4%}/8h"
                     if p.get("funding_gate") else "disabled")

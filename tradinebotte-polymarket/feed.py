@@ -30,12 +30,15 @@ import aiohttp, websockets, zmq, zmq.asyncio
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import api_polymarket as api
-from tradinetools.zmq import make_pub, PORT_FEED
+from tradinetools.zmq import make_pub, default_ipc_addr
 from tradinetools.logging import setup_logger
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────
-_PORT_BASE      = int(os.environ.get("TRADINEBOTTE_PORT_BASE", str(PORT_FEED)))
-FEED_ADDR       = os.environ.get("TRADINEBOTTE_FEED_ADDR", f"tcp://127.0.0.1:{_PORT_BASE}")
+_PORT_BASE = os.environ.get("TRADINEBOTTE_PORT_BASE")
+FEED_ADDR  = os.environ.get(
+    "TRADINEBOTTE_FEED_ADDR",
+    f"tcp://127.0.0.1:{_PORT_BASE}" if _PORT_BASE else default_ipc_addr("tradinebotte-feed"),
+)
 MARKET_REFRESH  = 30   # seconds between Gamma API polls
 PING_INTERVAL   = 10   # seconds between keepalive pings to subscribers
 _INSTALL_DIR    = os.environ.get("TRADINEBOTTE_DIR", os.getcwd())

@@ -33,7 +33,7 @@ Message types consumed from feed.py:
 import argparse, asyncio, fcntl, hashlib, logging, os, subprocess, sys, time
 import zmq, zmq.asyncio
 from tradinetools.logging import setup_logger
-from tradinetools.zmq import make_req, make_sub, PORT_FEED
+from tradinetools.zmq import make_req, make_sub, default_ipc_addr
 
 # Set by _parse_args() before live_bot import — used throughout for debug logs.
 VERBOSE = False
@@ -45,8 +45,11 @@ def _parse_args() -> argparse.Namespace:
                    help="Enable DEBUG logging — very detailed, for diagnostics only")
     return p.parse_args()
 
-_PORT_BASE = int(os.environ.get("TRADINEBOTTE_PORT_BASE", str(PORT_FEED)))
-_FEED_ADDR = os.environ.get("TRADINEBOTTE_FEED_ADDR", f"tcp://127.0.0.1:{_PORT_BASE}")
+_PORT_BASE = os.environ.get("TRADINEBOTTE_PORT_BASE")
+_FEED_ADDR = os.environ.get(
+    "TRADINEBOTTE_FEED_ADDR",
+    f"tcp://127.0.0.1:{_PORT_BASE}" if _PORT_BASE else default_ipc_addr("tradinebotte-feed"),
+)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 

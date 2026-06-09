@@ -50,7 +50,7 @@ Configuration keys in strategy JSON
     "rsi_buy_max":            52        skip new BUY when RSI(4h) > this value
     "rsi_stale_secs":         3600      treat RSI as stale (bypass filter) after N s
 
-    "indicators_addr":        "tcp://127.0.0.1:5559"
+    "indicators_addr":        None   (None = auto-detect IPC or set TRADINEBOTTE_INDICATORS_ADDR)
     "indicators_stream_id":   "btc_4h"
 
     "poll_interval":          2.0       seconds between REST fill polls (live mode)
@@ -175,10 +175,12 @@ class SwingStrategy:
         self._rsi_stale_secs  = float(cfg.get("rsi_stale_secs",     3600.0))
         self._ema200_filter   = bool(cfg.get("ema200_filter_enabled", True))
         self._atr_sl_mult     = float(cfg.get("atr_sl_multiplier",    1.5))
-        from tradinetools.zmq import PORT_INDICATORS
-        self._indicators_addr = str(cfg.get("indicators_addr",
-                                    getattr(config, "indicators_addr",
-                                            f"tcp://127.0.0.1:{PORT_INDICATORS}")))
+        from tradinetools.zmq import default_ipc_addr
+        self._indicators_addr = str(
+            cfg.get("indicators_addr")
+            or getattr(config, "indicators_addr", None)
+            or default_ipc_addr("tradinebotte-indicators")
+        )
         self._indicators_sid  = str(cfg.get("indicators_stream_id",   "btc_4h"))
         self._poll_interval   = float(cfg.get("poll_interval",          2.0))
 

@@ -76,26 +76,36 @@ from typing import Any, NamedTuple
 
 import aiohttp, websockets, zmq, zmq.asyncio
 
-from tradinetools.zmq import make_pub, make_sub, make_rep
+from tradinetools.zmq import make_pub, make_sub, make_rep, default_ipc_addr
 from tradinetools.math import (atr_last, bollinger_last, vwap_last,
                                 vol_zscore_last, rolling_max_last)
 from tradinetools.logging import setup_logger
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────
-# TRADINEBOTTE_PORT_BASE shifts the entire default port layout uniformly.
-# Default layout (base=5557): feed=5557, indicators PUB=5559, indicators REP=5561.
-# Example — run a second independent stack on base 6557:
+# TRADINEBOTTE_PORT_BASE shifts the entire default port layout to TCP.
+# Set it only when running multiple independent stacks on the same host over TCP.
+# Default (unset): IPC sockets in /run/user/$UID/ (per-UID, kernel-isolated).
+# Example — run a second TCP stack on base 6557:
 #   TRADINEBOTTE_PORT_BASE=6557 python3 tradinebotte-indicators/indicators.py --config ...
 # Per-service env vars still override PORT_BASE when set explicitly.
-_PORT_BASE  = int(os.environ.get("TRADINEBOTTE_PORT_BASE", "5557"))
-_PORT_SHIFT = _PORT_BASE - 5557  # 0 when using defaults
+_PORT_BASE_STR = os.environ.get("TRADINEBOTTE_PORT_BASE")
+_PORT_BASE  = int(_PORT_BASE_STR) if _PORT_BASE_STR else None
+_PORT_SHIFT = (_PORT_BASE - 5557) if _PORT_BASE else 0  # 0 when using IPC defaults
 
-_FEED_ADDR = os.environ.get("TRADINEBOTTE_FEED_ADDR",
-                             f"tcp://127.0.0.1:{_PORT_BASE}")
-_IND_ADDR  = os.environ.get("TRADINEBOTTE_INDICATORS_ADDR",
-                             f"tcp://127.0.0.1:{_PORT_BASE + 2}")
-_REG_ADDR  = os.environ.get("TRADINEBOTTE_INDICATORS_REG_ADDR",
-                             f"tcp://127.0.0.1:{_PORT_BASE + 4}")
+_FEED_ADDR = os.environ.get(
+    "TRADINEBOTTE_FEED_ADDR",
+    f"tcp://127.0.0.1:{_PORT_BASE}" if _PORT_BASE else default_ipc_addr("tradinebotte-feed"),
+)
+_IND_ADDR = os.environ.get(
+    "TRADINEBOTTE_INDICATORS_ADDR",
+    f"tcp://127.0.0.1:{_PORT_BASE + 2}" if _PORT_BASE
+    else default_ipc_addr("tradinebotte-indicators"),
+)
+_REG_ADDR = os.environ.get(
+    "TRADINEBOTTE_INDICATORS_REG_ADDR",
+    f"tcp://127.0.0.1:{_PORT_BASE + 4}" if _PORT_BASE
+    else default_ipc_addr("tradinebotte-ind-reg"),
+)
 _BINANCE_REST_URL             = "https://api.binance.com/api/v3/klines"
 _BINANCE_WS_BASE              = "wss://stream.binance.com:9443/ws"
 _BINANCE_SPOT_COMBINED_WS     = "wss://stream.binance.com:9443/stream"

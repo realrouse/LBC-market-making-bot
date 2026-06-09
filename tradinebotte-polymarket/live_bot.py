@@ -47,7 +47,7 @@ if os.path.isdir(_cex_dir) and _cex_dir not in sys.path:
 import api_polymarket as api
 import bot_utils
 from bot_utils import print_dashboard, write_web_status
-from tradinetools.zmq import PORT_FEED, PORT_INDICATORS, PORT_IND_REG
+from tradinetools.zmq import PORT_FEED, PORT_INDICATORS, PORT_IND_REG, default_ipc_addr
 
 # ─── STRATEGY DEFAULTS (module-level — tests reference these directly) ────────
 # Hardcoded defaults — overridden by make_config() when a strategy JSON is
@@ -476,22 +476,35 @@ def make_config(simulate: bool = False, no_log: bool = False,
     us_weekly_close     = bool(_hf.get("us_weekly_close",   True))
     us_holiday_filter   = bool(_hf.get("us_holiday_filter", US_HOLIDAY_FILTER))
 
-    # Feed address: config.json first, env var as fallback.
-    _port_base = int(os.environ.get("TRADINEBOTTE_PORT_BASE", str(PORT_FEED)))
+    # Feed address: config.json first, env var as fallback, IPC as final default.
+    # Set TRADINEBOTTE_PORT_BASE to shift to a TCP-based stack (backward compat).
+    _port_base = os.environ.get("TRADINEBOTTE_PORT_BASE")
     feed_addr = cfg.get(
         "feed_addr",
-        os.environ.get("TRADINEBOTTE_FEED_ADDR", f"tcp://127.0.0.1:{_port_base}"),
+        os.environ.get(
+            "TRADINEBOTTE_FEED_ADDR",
+            f"tcp://127.0.0.1:{_port_base}" if _port_base
+            else default_ipc_addr("tradinebotte-feed"),
+        ),
     )
     feed_auto_start = bool(cfg.get("feed_auto_start", True))
 
-    # Indicators service: config.json first, env vars as fallback.
+    # Indicators service: config.json first, env vars as fallback, IPC as final default.
     indicators_addr = cfg.get(
         "indicators_addr",
-        os.environ.get("TRADINEBOTTE_INDICATORS_ADDR", f"tcp://127.0.0.1:{_port_base + 2}"),
+        os.environ.get(
+            "TRADINEBOTTE_INDICATORS_ADDR",
+            f"tcp://127.0.0.1:{int(_port_base) + 2}" if _port_base
+            else default_ipc_addr("tradinebotte-indicators"),
+        ),
     )
     indicators_reg_addr = cfg.get(
         "indicators_reg_addr",
-        os.environ.get("TRADINEBOTTE_INDICATORS_REG_ADDR", f"tcp://127.0.0.1:{_port_base + 4}"),
+        os.environ.get(
+            "TRADINEBOTTE_INDICATORS_REG_ADDR",
+            f"tcp://127.0.0.1:{int(_port_base) + 4}" if _port_base
+            else default_ipc_addr("tradinebotte-ind-reg"),
+        ),
     )
     indicators_streams = cfg.get("indicators_streams", [])
 

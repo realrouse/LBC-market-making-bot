@@ -98,8 +98,8 @@ DEFAULTS: dict = {
     "snapshot_every_n":      20,
     "spread_ema_alpha":       0.1,
     "buy_dust_tolerance_usdt": 0.01,
-    # Indicators service (ZMQ)
-    "indicators_addr":       "tcp://127.0.0.1:5559",
+    # Indicators service (ZMQ) — None means auto-detect (IPC or set TRADINEBOTTE_INDICATORS_ADDR)
+    "indicators_addr":       None,
     "scalping_stream_id":    "btc_scalping_spot",
     # VWAP gate
     "vwap_gate":             True,
@@ -685,14 +685,17 @@ async def _handle_indicator(state: AccumState, db: sqlite3.Connection,
 
 async def _zmq_loop(state: AccumState, db: sqlite3.Connection) -> None:
     try:
+        import os as _os
         import zmq.asyncio as azmq
-        from tradinetools.zmq import make_sub, PORT_INDICATORS
+        from tradinetools.zmq import make_sub, default_ipc_addr
     except ImportError:
         logger.error("pyzmq not installed — run: pip install pyzmq")
         return
 
-    p           = state.p
-    addr        = p.get("indicators_addr", f"tcp://127.0.0.1:{PORT_INDICATORS}")
+    p    = state.p
+    addr = (p.get("indicators_addr")
+            or _os.environ.get("TRADINEBOTTE_INDICATORS_ADDR")
+            or default_ipc_addr("tradinebotte-indicators"))
     scalping_id = p.get("scalping_stream_id",  "btc_scalping_spot")
     macro_id = (p.get("macro_obi_stream_id", "btc_macro_obi")
                 if p.get("macro_obi_gate",   True) else None)
