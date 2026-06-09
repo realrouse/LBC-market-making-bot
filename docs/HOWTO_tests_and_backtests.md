@@ -101,8 +101,9 @@ bash scripts/run_tests.sh
 This script:
 1. Locates the project virtual environment (`.venv/` or `~/tradinebotte/venv/`).
 2. Runs the full unittest suite (`tests/test_*.py`) with verbose output.
-3. Runs a backtest `--all` on any `data/*.db` files found (non-blocking).
-4. Invokes the `doc-sync` agent to audit flag documentation (requires `claude` CLI).
+3. Runs the data quality check (`analysis/check_data_quality.py --no-gaps --warn-only`) on any `data/*.db` files found (non-blocking).
+4. Runs a backtest `--all` on any `data/*.db` files found (non-blocking).
+5. Invokes the `doc-sync` agent to audit flag documentation (requires `claude` CLI).
 
 ### Reading the output
 
