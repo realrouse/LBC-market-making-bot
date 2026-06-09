@@ -574,13 +574,13 @@ async def _handle_indicator(state: StreamState, db: sqlite3.Connection,
 
 async def _zmq_loop(states: list, db: sqlite3.Connection, p: dict) -> None:
     try:
-        import zmq
         import zmq.asyncio as azmq
+        from tradinetools.zmq import make_sub, PORT_INDICATORS
     except ImportError:
         logger.error("pyzmq not installed — run: pip install pyzmq")
         return
 
-    addr = p.get("indicators_addr", "tcp://127.0.0.1:5559")
+    addr = p.get("indicators_addr", f"tcp://127.0.0.1:{PORT_INDICATORS}")
     stream_map = {}
     for st in states:
         sid_key = f"{st.mode}_stream_id"
@@ -605,9 +605,7 @@ async def _zmq_loop(states: list, db: sqlite3.Connection, p: dict) -> None:
                    + ([liq_sid]      if liq_sid      else []))
 
     ctx = azmq.Context.instance()
-    sub = ctx.socket(zmq.SUB)
-    sub.setsockopt(zmq.SUBSCRIBE, b"")
-    sub.connect(addr)
+    sub = make_sub(ctx, addr)
     logger.info("ZMQ SUB → %s  streams: %s", addr, all_streams)
 
     try:

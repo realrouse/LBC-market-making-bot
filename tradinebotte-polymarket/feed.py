@@ -30,11 +30,11 @@ import aiohttp, websockets, zmq, zmq.asyncio
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import api_polymarket as api
-from tradinetools.zmq import warn_if_external_bind
+from tradinetools.zmq import make_pub, PORT_FEED
 from tradinetools.logging import setup_logger
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────
-_PORT_BASE      = int(os.environ.get("TRADINEBOTTE_PORT_BASE", "5557"))
+_PORT_BASE      = int(os.environ.get("TRADINEBOTTE_PORT_BASE", str(PORT_FEED)))
 FEED_ADDR       = os.environ.get("TRADINEBOTTE_FEED_ADDR", f"tcp://127.0.0.1:{_PORT_BASE}")
 MARKET_REFRESH  = 30   # seconds between Gamma API polls
 PING_INTERVAL   = 10   # seconds between keepalive pings to subscribers
@@ -261,10 +261,8 @@ async def _run_ws(sock: zmq.asyncio.Socket, session: aiohttp.ClientSession) -> N
 
 
 async def main() -> None:
-    warn_if_external_bind(FEED_ADDR, "FEED_ADDR")
     ctx  = zmq.asyncio.Context()
-    sock = ctx.socket(zmq.PUB)
-    sock.bind(FEED_ADDR)
+    sock = make_pub(ctx, FEED_ADDR, "FEED_ADDR")
     logger.info("Feed PUB bound on %s", FEED_ADDR)
     if VERBOSE:
         logger.debug("Verbose mode active — full DEBUG logs enabled")

@@ -47,6 +47,7 @@ if os.path.isdir(_cex_dir) and _cex_dir not in sys.path:
 import api_polymarket as api
 import bot_utils
 from bot_utils import print_dashboard, write_web_status
+from tradinetools.zmq import PORT_FEED, PORT_INDICATORS, PORT_IND_REG
 
 # ─── STRATEGY DEFAULTS (module-level — tests reference these directly) ────────
 # Hardcoded defaults — overridden by make_config() when a strategy JSON is
@@ -278,7 +279,7 @@ class BotConfig:
     weekly_stop_loss: float = WEEKLY_STOP_LOSS
 
     # ZeroMQ feed address (account_bot / indicators only)
-    feed_addr: str = "tcp://127.0.0.1:5557"
+    feed_addr: str = f"tcp://127.0.0.1:{PORT_FEED}"
     # When False, account_bot will not auto-start feed.py; it exits if the feed
     # is unreachable. Set to false when feed is managed by systemd.
     feed_auto_start: bool = True
@@ -287,8 +288,8 @@ class BotConfig:
     # indicators_addr: PUB socket to subscribe for published indicator messages.
     # indicators_reg_addr: REP socket to register streams dynamically at startup.
     # indicators_streams: list of subscribe requests sent at account_bot startup.
-    indicators_addr:     str  = "tcp://127.0.0.1:5559"
-    indicators_reg_addr: str  = "tcp://127.0.0.1:5561"
+    indicators_addr:     str  = f"tcp://127.0.0.1:{PORT_INDICATORS}"
+    indicators_reg_addr: str  = f"tcp://127.0.0.1:{PORT_IND_REG}"
     indicators_streams:  list = field(default_factory=list)
 
     # Credentials
@@ -476,7 +477,7 @@ def make_config(simulate: bool = False, no_log: bool = False,
     us_holiday_filter   = bool(_hf.get("us_holiday_filter", US_HOLIDAY_FILTER))
 
     # Feed address: config.json first, env var as fallback.
-    _port_base = int(os.environ.get("TRADINEBOTTE_PORT_BASE", "5557"))
+    _port_base = int(os.environ.get("TRADINEBOTTE_PORT_BASE", str(PORT_FEED)))
     feed_addr = cfg.get(
         "feed_addr",
         os.environ.get("TRADINEBOTTE_FEED_ADDR", f"tcp://127.0.0.1:{_port_base}"),

@@ -685,14 +685,14 @@ async def _handle_indicator(state: AccumState, db: sqlite3.Connection,
 
 async def _zmq_loop(state: AccumState, db: sqlite3.Connection) -> None:
     try:
-        import zmq
         import zmq.asyncio as azmq
+        from tradinetools.zmq import make_sub, PORT_INDICATORS
     except ImportError:
         logger.error("pyzmq not installed — run: pip install pyzmq")
         return
 
     p           = state.p
-    addr        = p.get("indicators_addr", "tcp://127.0.0.1:5559")
+    addr        = p.get("indicators_addr", f"tcp://127.0.0.1:{PORT_INDICATORS}")
     scalping_id = p.get("scalping_stream_id",  "btc_scalping_spot")
     macro_id = (p.get("macro_obi_stream_id", "btc_macro_obi")
                 if p.get("macro_obi_gate",   True) else None)
@@ -706,9 +706,7 @@ async def _zmq_loop(state: AccumState, db: sqlite3.Connection) -> None:
                 if p.get("rsi4h_gate",       True) else None)
 
     ctx = azmq.Context.instance()
-    sub = ctx.socket(zmq.SUB)
-    sub.setsockopt(zmq.SUBSCRIBE, b"")
-    sub.connect(addr)
+    sub = make_sub(ctx, addr)
     streams = ", ".join(s for s in
                         [scalping_id, "btc_vwap_context", macro_id,
                          fg_id, liq_id, ls_id, rsi4h_id] if s)

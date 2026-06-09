@@ -32,6 +32,8 @@ Message types consumed from feed.py:
 """
 import argparse, asyncio, fcntl, hashlib, logging, os, subprocess, sys, time
 import zmq, zmq.asyncio
+from tradinetools.logging import setup_logger
+from tradinetools.zmq import make_req, make_sub, PORT_FEED
 
 # Set by _parse_args() before live_bot import — used throughout for debug logs.
 VERBOSE = False
@@ -43,14 +45,13 @@ def _parse_args() -> argparse.Namespace:
                    help="Enable DEBUG logging — very detailed, for diagnostics only")
     return p.parse_args()
 
-_PORT_BASE = int(os.environ.get("TRADINEBOTTE_PORT_BASE", "5557"))
+_PORT_BASE = int(os.environ.get("TRADINEBOTTE_PORT_BASE", str(PORT_FEED)))
 _FEED_ADDR = os.environ.get("TRADINEBOTTE_FEED_ADDR", f"tcp://127.0.0.1:{_PORT_BASE}")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # live_bot no longer has module-level side effects — safe to import anywhere.
-import live_bot as bot
-from tradinetools.logging import setup_logger
+import live_bot as bot  # pylint: disable=wrong-import-order,wrong-import-position
 
 _INSTALL_DIR = os.environ.get("TRADINEBOTTE_DIR", os.getcwd())
 logger = setup_logger("account", os.path.join(_INSTALL_DIR, "account.log"))
@@ -200,10 +201,9 @@ def _register_indicators_sync(config: "bot.BotConfig") -> None:
     logger.info("Registering %d indicator stream(s) with %s",
                 len(streams), config.indicators_reg_addr)
     ctx = zmq.Context()
-    req = ctx.socket(zmq.REQ)
+    req = make_req(ctx, config.indicators_reg_addr)
     req.setsockopt(zmq.RCVTIMEO, 5_000)
     req.setsockopt(zmq.SNDTIMEO, 5_000)
-    req.connect(config.indicators_reg_addr)
     try:
         for spec in streams:
             label = spec.get("stream_id") or (
@@ -258,9 +258,7 @@ def _register_from_market_msg(state: bot.BotState, msg: dict) -> None:
 async def _run(state: bot.BotState) -> None:
     """Main message loop: receive ZMQ messages from feed.py and dispatch to live_bot handlers."""
     ctx  = zmq.asyncio.Context()
-    sock = ctx.socket(zmq.SUB)
-    sock.connect(_FEED_ADDR)
-    sock.setsockopt(zmq.SUBSCRIBE, b"")
+    sock = make_sub(ctx, _FEED_ADDR)
     logger.info("Connected to feed: %s", _FEED_ADDR)
 
     last_msg_ts = time.time()

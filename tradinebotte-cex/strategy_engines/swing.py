@@ -175,8 +175,10 @@ class SwingStrategy:
         self._rsi_stale_secs  = float(cfg.get("rsi_stale_secs",     3600.0))
         self._ema200_filter   = bool(cfg.get("ema200_filter_enabled", True))
         self._atr_sl_mult     = float(cfg.get("atr_sl_multiplier",    1.5))
+        from tradinetools.zmq import PORT_INDICATORS
         self._indicators_addr = str(cfg.get("indicators_addr",
-                                    getattr(config, "indicators_addr", "tcp://127.0.0.1:5559")))
+                                    getattr(config, "indicators_addr",
+                                            f"tcp://127.0.0.1:{PORT_INDICATORS}")))
         self._indicators_sid  = str(cfg.get("indicators_stream_id",   "btc_4h"))
         self._poll_interval   = float(cfg.get("poll_interval",          2.0))
 
@@ -251,17 +253,15 @@ class SwingStrategy:
     async def _indicators_loop(self) -> None:
         """Subscribe to the shared indicators PUB socket; update last_rsi."""
         try:
-            import zmq
             import zmq.asyncio as azmq
+            from tradinetools.zmq import make_sub
         except ImportError:
             logger.warning("SwingStrategy: pyzmq not installed — trend filter disabled")
             self._trend_filter = False
             return
 
         ctx = azmq.Context.instance()
-        sub = ctx.socket(zmq.SUB)
-        sub.setsockopt(zmq.SUBSCRIBE, b"")
-        sub.connect(self._indicators_addr)
+        sub = make_sub(ctx, self._indicators_addr)
         logger.info("SwingStrategy [%s] indicators SUB → %s",
                     self.sw.symbol, self._indicators_addr)
         try:
