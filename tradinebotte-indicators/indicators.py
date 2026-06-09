@@ -827,7 +827,7 @@ async def _binance_liquidations_task(spec: StreamSpec, pub: zmq.asyncio.Socket) 
     symbol   = (spec.asset or "BTCUSDT").lower()
     ws_url   = f"wss://fstream.binance.com/ws/{symbol}@forceOrder"
     backoff  = 5
-    events: deque[tuple[float, float, float]] = deque()  # (ts_ms, liq_long, liq_short)
+    events: deque[tuple[float, float, float]] = deque(maxlen=5_000)  # (ts_ms, liq_long, liq_short)
 
     def _publish_window(now_ms: float) -> None:
         cutoff = now_ms - window_s * 1000
@@ -955,7 +955,7 @@ async def _binance_scalping_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> N
     prev_obi_ema: float | None = None
     mid_prices:   deque[float] = deque(maxlen=vol_window_n)
     # (ts_ms, buy_vol, sell_vol) — trimmed by time window
-    trade_window: deque[tuple[float, float, float]] = deque()
+    trade_window: deque[tuple[float, float, float]] = deque(maxlen=2_000)
     depth_count   = 0
     backoff       = 5
 

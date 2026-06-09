@@ -3031,7 +3031,8 @@ class TestWeeklyStopLoss(unittest.IsolatedAsyncioTestCase):
         )
         state = self._make_state(cfg)
         state.weekly_pnl = -61.0
-        state._weekly_pnl_week = int(time.time() // (7 * 86400))
+        _dt = datetime.now(timezone.utc)
+        state._weekly_pnl_week = (_dt - timedelta(days=_dt.weekday())).toordinal()
 
         ts = make_token(best_bid=0.97, best_ask=0.975, secs_remaining=120)
         before = state.total_trades
@@ -3046,7 +3047,8 @@ class TestWeeklyStopLoss(unittest.IsolatedAsyncioTestCase):
         )
         state = self._make_state(cfg)
         state.weekly_pnl = -10.0
-        state._weekly_pnl_week = int(time.time() // (7 * 86400))
+        _dt = datetime.now(timezone.utc)
+        state._weekly_pnl_week = (_dt - timedelta(days=_dt.weekday())).toordinal()
         state.capital = 1000.0
 
         ts = make_token(best_bid=0.97, best_ask=0.975, secs_remaining=120)

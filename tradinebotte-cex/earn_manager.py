@@ -306,7 +306,7 @@ class EarnManager:
         """
         parked = await self.get_position()
         if parked <= 0:
-            return True  # nothing in Earn — assume spot has the funds
+            return True  # nothing parked in Earn — redemption not possible; caller must verify spot
         # How much more do we need beyond keep_liquid?
         shortfall = needed_usdt - keep_liquid
         if shortfall <= 0:

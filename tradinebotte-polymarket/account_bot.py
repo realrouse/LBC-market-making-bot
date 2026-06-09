@@ -369,16 +369,19 @@ async def main() -> None:
     if VERBOSE:
         logger.debug("[INIT] init_db...")
     conn  = bot.init_db(config)
-    state = bot.BotState(conn, config)
-    bot.restore_state_from_db(state)
-    if VERBOSE:
-        logger.debug("[INIT] capital=%.2f open_trades=%d",
-                     state.capital, len(state.open_trades))
+    try:
+        state = bot.BotState(conn, config)
+        bot.restore_state_from_db(state)
+        if VERBOSE:
+            logger.debug("[INIT] capital=%.2f open_trades=%d",
+                         state.capital, len(state.open_trades))
 
-    import aiohttp
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
-        state.session = session
-        await _run(state)
+        import aiohttp
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+            state.session = session
+            await _run(state)
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":

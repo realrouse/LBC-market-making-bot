@@ -1126,9 +1126,10 @@ async def check_signal(state: BotState, ts: TokenState, _t_ws: Optional[float] =
         state.daily_pnl = 0.0
         state._daily_pnl_day = today_day
 
-    # Weekly reset — same pattern; period boundary every 7 days.
-    today_week = int(time.time() // (7 * 86400))
-    if state._weekly_pnl_week != today_week:
+    # Weekly reset — Monday UTC boundary; deferred while trades are open.
+    _dt = datetime.now(timezone.utc)
+    today_week = (_dt - timedelta(days=_dt.weekday())).toordinal()
+    if state._weekly_pnl_week != today_week and not state.open_trades:
         state.weekly_pnl = 0.0
         state._weekly_pnl_week = today_week
 
@@ -1298,8 +1299,8 @@ def close_trade(state: BotState, ts: TokenState, trade_id: int, outcome: str) ->
     Mark a trade as resolved in the DB and update capital.
 
     PnL calculation:
-      gross = tokens_bought - stake  (WIN)  or  -stake  (LOSS)
-      net   = gross - protocol fee - estimated gas cost
+      gross = tokens_bought - (stake + fee)  (WIN)  or  -(stake + fee)  (LOSS)
+      net   = gross - estimated gas cost
     """
     now_ms = int(time.time() * 1000)
     row = state.conn.execute(
@@ -1309,8 +1310,8 @@ def close_trade(state: BotState, ts: TokenState, trade_id: int, outcome: str) ->
     stake, tb, fee, signal_ts_ms = row
     duration_s = int((now_ms - signal_ts_ms) / 1000) if signal_ts_ms else 0
     won = (outcome == "WIN")
-    pg = (tb - stake) if won else -stake
-    pn = pg - fee - state.config.gas_fee_usd
+    pg = (tb - stake - fee) if won else (-stake - fee)
+    pn = pg - state.config.gas_fee_usd
     roi = (pn / stake * 100) if stake else 0.0
     ca = state.capital + pn
     state.conn.execute(
@@ -1577,15 +1578,19 @@ def restore_state_from_db(state: BotState) -> None:
     state.daily_pnl = daily_row[0] or 0.0
     state._daily_pnl_day = int(time.time() // 86400)
 
-    # Weekly PnL — same pattern, 7-day window aligned on the current period.
-    week_start_ms = int(int(time.time() // (7 * 86400)) * 7 * 86400 * 1000)
+    # Weekly PnL — Monday UTC boundary; reconstruct from DB on startup.
+    _dt_now = datetime.now(timezone.utc)
+    _week_mon = (_dt_now - timedelta(days=_dt_now.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    week_start_ms = int(_week_mon.timestamp() * 1000)
     weekly_row = state.conn.execute(
         "SELECT COALESCE(SUM(pnl_net),0) FROM trades "
         "WHERE resolved=1 AND signal_ts_ms>=?",
         (week_start_ms,)
     ).fetchone()
     state.weekly_pnl = weekly_row[0] or 0.0
-    state._weekly_pnl_week = int(time.time() // (7 * 86400))
+    state._weekly_pnl_week = (_dt_now - timedelta(days=_dt_now.weekday())).toordinal()
 
     logger.info(
         "State : capital=$%.2f | %d trades | WR=%.1f%% | daily_pnl=$%+.2f | weekly_pnl=$%+.2f",
@@ -1658,20 +1663,23 @@ async def main() -> None:
         logger.warning("  POLY_PRIVATE_KEY not set — orders SIMULATED")
     logger.info("=" * 65)
     conn = init_db(config)
-    state = BotState(conn, config)
-    restore_state_from_db(state)
+    try:
+        state = BotState(conn, config)
+        restore_state_from_db(state)
 
-    async with aiohttp.ClientSession(
-        connector=aiohttp.TCPConnector(limit=10),
-        timeout=aiohttp.ClientTimeout(total=30),
-    ) as session:
-        state.session = session   # available before ws_loop for strategy restore
-        if config.strategy_type != "threshold":
-            from strategy_engines import load as _load_strat
-            state.strategy = _load_strat(config.strategy_type, config)
-            logger.info("  Algorithm   : %s", config.strategy_type)
-            await state.strategy.restore_from_db(state)
-        await ws_loop(state, session)
+        async with aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(limit=10),
+            timeout=aiohttp.ClientTimeout(total=30),
+        ) as session:
+            state.session = session   # available before ws_loop for strategy restore
+            if config.strategy_type != "threshold":
+                from strategy_engines import load as _load_strat
+                state.strategy = _load_strat(config.strategy_type, config)
+                logger.info("  Algorithm   : %s", config.strategy_type)
+                await state.strategy.restore_from_db(state)
+            await ws_loop(state, session)
+    finally:
+        conn.close()
 
 if __name__ == "__main__":
     try:

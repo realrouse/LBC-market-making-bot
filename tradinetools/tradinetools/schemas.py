@@ -14,7 +14,7 @@ Version history:
 
 from __future__ import annotations
 from dataclasses import dataclass, asdict, field
-from typing import Any
+from typing import Any, get_type_hints
 
 
 # ─── Base ────────────────────────────────────────────────────────────────────
@@ -28,8 +28,22 @@ class _Base:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "_Base":
+        hints = get_type_hints(cls)
         known = {f.name for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]  # pylint: disable=no-member
-        return cls(**{k: v for k, v in d.items() if k in known})
+        _COERCE: dict[type, type] = {int: int, float: float, str: str, bool: bool}
+        kwargs: dict[str, Any] = {}
+        for k, v in d.items():
+            if k not in known or v is None:
+                continue
+            target = hints.get(k)
+            coerce = _COERCE.get(target)  # type: ignore[arg-type]
+            if coerce is not None and not isinstance(v, target):  # type: ignore[arg-type]
+                try:
+                    v = coerce(v)
+                except (TypeError, ValueError):
+                    continue
+            kwargs[k] = v
+        return cls(**kwargs)
 
 
 # ─── Polymarket feed messages (feed.py → account_bot.py) ─────────────────────
@@ -86,9 +100,9 @@ class IndicatorsMessage(_Base):
         reserved = {"t", "v", "stream_id", "ts"}
         payload = {k: v for k, v in d.items() if k not in reserved}
         return cls(
-            v=d.get("v", 1),
-            stream_id=d.get("stream_id", ""),
-            ts=d.get("ts", 0),
+            v=int(d.get("v", 1)),
+            stream_id=str(d.get("stream_id", "")),
+            ts=int(d.get("ts", 0)),
             payload=payload,
         )
 
