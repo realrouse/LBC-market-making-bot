@@ -205,10 +205,10 @@ takes precedence over both.
 | Variable | config.json key | Default | Scope | Description |
 |---|---|---|---|---|
 | `TRADINEBOTTE_DIR` | — | `~/tradinebotte` | all scripts | Runtime directory: where `config.json`, `live.db`, `live.log`, the venv, and strategy files are stored. **No config.json key** — this is the bootstrap path needed to locate the file in the first place. |
-| `TRADINEBOTTE_FEED_ADDR` | `feed_addr` | `tcp://127.0.0.1:5557` | feed, account\_bot, indicators | ZeroMQ PUB/SUB address used by the shared WebSocket feed (Option B multi-bot). Set a different port when running multiple feeds on the same machine. |
-| `TRADINEBOTTE_PORT_BASE` | — | `5557` | feed, account\_bot, indicators | Base port number; `TRADINEBOTTE_FEED_ADDR` defaults to `tcp://127.0.0.1:<PORT_BASE>` when the full address is not set. |
-| `TRADINEBOTTE_INDICATORS_ADDR` | `indicators_addr` | `tcp://127.0.0.1:5559` | indicators, account\_bot | ZeroMQ PUB address where the shared indicators service publishes enriched messages. `account_bot` subscribes here when `indicators_streams` is set. |
-| `TRADINEBOTTE_INDICATORS_REG_ADDR` | `indicators_reg_addr` | `tcp://127.0.0.1:5561` | account\_bot | ZeroMQ REP address of the shared indicators service for dynamic stream registration. Each `account_bot` sends subscribe requests here at startup. |
+| `TRADINEBOTTE_FEED_ADDR` | `feed_addr` | IPC auto-detected (`/run/user/$UID/tradinebotte-feed.sock`) | feed, account\_bot, indicators | ZeroMQ PUB/SUB address for the shared WebSocket feed (Option B multi-bot). Leave unset for IPC (single-host). Set to `tcp://127.0.0.1:5557` to force TCP, e.g. when running multiple independent stacks or cross-host. |
+| `TRADINEBOTTE_PORT_BASE` | — | (unset) | feed, account\_bot, indicators | When set, switches all address defaults to TCP and shifts ports by `PORT_BASE − 5557`. E.g. `TRADINEBOTTE_PORT_BASE=6557` runs a second independent TCP stack at 6557/6559/6561. Leave unset for IPC (recommended). |
+| `TRADINEBOTTE_INDICATORS_ADDR` | `indicators_addr` | IPC auto-detected (`/run/user/$UID/tradinebotte-indicators.sock`) | indicators, account\_bot | ZeroMQ PUB address where the shared indicators service publishes enriched messages. `account_bot` subscribes here when `indicators_streams` is set. |
+| `TRADINEBOTTE_INDICATORS_REG_ADDR` | `indicators_reg_addr` | IPC auto-detected (`/run/user/$UID/tradinebotte-ind-reg.sock`) | account\_bot | ZeroMQ REP address of the shared indicators service for dynamic stream registration. Each `account_bot` sends subscribe requests here at startup. |
 | — | `feed_auto_start` | `true` | account\_bot | When `false`, `account_bot` expects `feed.py` to be managed externally (e.g. systemd); probes with retries instead of auto-starting it. Exits if the feed is unreachable after 30 s. |
 | — | `indicators_streams` | `[]` | account\_bot | List of stream subscription specs sent to the shared indicators service at startup. See [Technical Indicator Service](#technical-indicator-service). |
 | `TRADINEBOTTE_INSTALL_DIR` | — | auto-detected | install scripts | Override the install directory used by `install_feed_service.sh` and `install_indicators_service.sh` when searching for the virtualenv. |
@@ -542,17 +542,17 @@ When more than one file is processed, each file runs with capital reset to `capi
 `tradinebotte-indicators/indicators.py` is a ZeroMQ pipeline stage that sits between feed.py and any consumer. It subscribes to the feed PUB socket, accumulates a price history per token, and republishes enriched indicator messages on a second PUB socket. All three Binance WebSocket loops are protected by a 120-second recv watchdog — if Binance stops sending data while keeping the TCP connection alive, the service detects the stall and reconnects automatically.
 
 ```
-feed.py  PUB :5557  ──SUB──▶  indicators.py  ──PUB :5559──▶  consumers
+feed.py  PUB (IPC)  ──SUB──▶  indicators.py  ──PUB (IPC)──▶  consumers
 ```
 
 ```bash
-# Start with default settings (SUB :5557 → PUB :5559)
+# Start with default settings (IPC auto-detected from /run/user/$UID/)
 python3 tradinebotte-indicators/indicators.py
 
 # Custom periods
 python3 tradinebotte-indicators/indicators.py --rsi 7 --sma 10 --ema 5 --vol 10
 
-# Custom ZMQ addresses
+# Custom ZMQ addresses (TCP override example)
 python3 tradinebotte-indicators/indicators.py --feed tcp://127.0.0.1:5558 --out tcp://127.0.0.1:5560
 
 # Verbose (prints each indicator publish to stdout)
@@ -573,9 +573,9 @@ Messages are only published once `--min-ticks` (default: 25) price updates have 
 | Flag | Default | Description |
 |---|---|---|
 | `--config FILE` | — | Path to the indicators JSON config file (recommended) |
-| `--feed ADDR` | `tcp://127.0.0.1:5557` | ZMQ address to subscribe to (feed.py PUB) |
-| `--out ADDR` | `tcp://127.0.0.1:5559` | ZMQ PUB address to bind and publish on |
-| `--reg-addr ADDR` | `tcp://127.0.0.1:5561` | ZMQ REP address for dynamic stream registration |
+| `--feed ADDR` | IPC auto-detected | ZMQ address to subscribe to (feed.py PUB) |
+| `--out ADDR` | IPC auto-detected | ZMQ PUB address to bind and publish on |
+| `--reg-addr ADDR` | IPC auto-detected | ZMQ REP address for dynamic stream registration |
 | `--rsi N` | 14 | RSI period |
 | `--sma N` | 20 | SMA period |
 | `--ema N` | 9 | EMA period |
@@ -593,7 +593,7 @@ Each account declares its needs in `config.json`:
 
 ```json
 {
-  "indicators_reg_addr": "tcp://127.0.0.1:5561",
+  "indicators_reg_addr": "ipc:///run/user/1000/tradinebotte-ind-reg.sock",
   "indicators_streams": [
     {
       "source": "binance_ws",
@@ -900,7 +900,7 @@ TRADINEBOTTE_DIR=~/account-a bash tradinebotte-polymarket/scripts/start_account.
 TRADINEBOTTE_DIR=~/account-b bash tradinebotte-polymarket/scripts/start_account.sh
 ```
 
-Custom feed address (useful when running on different ports or hosts):
+Custom feed address (TCP override — useful for a second independent stack or cross-host):
 
 ```bash
 TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash tradinebotte-polymarket/scripts/start_feed.sh

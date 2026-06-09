@@ -149,13 +149,14 @@ of each frame — no partial messages.
 
 | Variable | Default | Bound by | Connected by |
 |---|---|---|---|
-| `TRADINEBOTTE_FEED_ADDR` | `tcp://127.0.0.1:5557` | `feed.py` | `account_bot.py`, `indicators.py` |
-| `TRADINEBOTTE_INDICATORS_ADDR` | `tcp://127.0.0.1:5559` | `indicators.py` PUB | any consumer |
-| `TRADINEBOTTE_INDICATORS_REG_ADDR` | `tcp://127.0.0.1:5561` | `indicators.py` REP | `account_bot.py` (startup REQ) |
+| `TRADINEBOTTE_FEED_ADDR` | IPC auto-detected (`/run/user/$UID/tradinebotte-feed.sock`) | `feed.py` | `account_bot.py`, `indicators.py` |
+| `TRADINEBOTTE_INDICATORS_ADDR` | IPC auto-detected (`/run/user/$UID/tradinebotte-indicators.sock`) | `indicators.py` PUB | any consumer |
+| `TRADINEBOTTE_INDICATORS_REG_ADDR` | IPC auto-detected (`/run/user/$UID/tradinebotte-ind-reg.sock`) | `indicators.py` REP | `account_bot.py` (startup REQ) |
 
-Both can be overridden with environment variables to run multiple independent
-feed+account stacks on the same machine (e.g. port 5557 for stack A, 5558
-for stack B).
+All three default to IPC Unix sockets in `/run/user/$UID/` (set 0700 by systemd-logind —
+kernel-enforced per-UID isolation).  Override with `TRADINEBOTTE_PORT_BASE` to switch to TCP
+and run multiple independent stacks on the same machine (e.g. base=5557 for stack A,
+base=6557 for stack B).
 
 ---
 
@@ -796,10 +797,10 @@ any missed `market` messages are re-published on the next 30-second refresh.
 
 | Variable | Default | Scope | Description |
 |---|---|---|---|
-| `TRADINEBOTTE_PORT_BASE` | `5557` | feed.py, account_bot.py, indicators.py | Base port of the entire stack. All default port numbers shift by `PORT_BASE − 5557`. Override per-service vars still take precedence. |
-| `TRADINEBOTTE_FEED_ADDR` | `tcp://127.0.0.1:$PORT_BASE` | feed.py, account_bot.py, indicators.py | Exact ZMQ address for the feed PUB socket. Overrides `PORT_BASE` for the feed only. |
-| `TRADINEBOTTE_INDICATORS_ADDR` | `tcp://127.0.0.1:$(PORT_BASE+2)` | indicators.py, account_bot.py | ZMQ PUB address for the indicators service. `indicators.py` binds it; `account_bot.py` subscribes to it when `indicators_streams` is set. |
-| `TRADINEBOTTE_INDICATORS_REG_ADDR` | `tcp://127.0.0.1:$(PORT_BASE+4)` | indicators.py, account_bot.py | ZMQ REP address for dynamic stream registration. `indicators.py` binds it; `account_bot.py` sends REQ subscribe requests here at startup. |
+| `TRADINEBOTTE_PORT_BASE` | (unset) | feed.py, account_bot.py, indicators.py | When set, switches all address defaults to TCP and shifts ports by `PORT_BASE − 5557`. Leave unset for IPC (recommended for single-host). |
+| `TRADINEBOTTE_FEED_ADDR` | IPC auto-detected | feed.py, account_bot.py, indicators.py | Exact ZMQ address for the feed PUB socket. Overrides auto-detection. Set `PORT_BASE` to enable TCP, or set this var directly for explicit TCP/IPC path. |
+| `TRADINEBOTTE_INDICATORS_ADDR` | IPC auto-detected | indicators.py, account_bot.py | ZMQ PUB address for the indicators service. `indicators.py` binds it; `account_bot.py` subscribes to it when `indicators_streams` is set. |
+| `TRADINEBOTTE_INDICATORS_REG_ADDR` | IPC auto-detected | indicators.py, account_bot.py | ZMQ REP address for dynamic stream registration. `indicators.py` binds it; `account_bot.py` sends REQ subscribe requests here at startup. |
 | `TRADINEBOTTE_DIR` | `~/tradinebotte` | account_bot.py, live_bot.py | Per-account data directory (DB, log, config, strategies) |
 
 ### Running two independent stacks on the same machine

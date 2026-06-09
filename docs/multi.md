@@ -48,7 +48,7 @@ Polymarket WebSocket
    ┌─────────┐
    │ feed.py │  ← single process, no credentials, no trading logic
    └────┬────┘
-        │ ZeroMQ PUB  tcp://127.0.0.1:5557
+        │ ZeroMQ PUB  IPC (/run/user/$UID/tradinebotte-feed.sock)
         │
    ┌────┴────────────────────────┐
    │                             │
@@ -186,14 +186,16 @@ Sent every 10 seconds.  Account bots ignore it; useful for monitoring feed healt
 
 | Variable | Default | Scope | Description |
 |---|---|---|---|
-| `TRADINEBOTTE_FEED_ADDR` | `tcp://127.0.0.1:5557` | feed.py, account_bot.py | ZeroMQ PUB/SUB address for the shared feed. |
-| `TRADINEBOTTE_INDICATORS_ADDR` | `tcp://127.0.0.1:5559` | indicators.py, account_bot.py | ZeroMQ PUB address of the shared indicators service. `account_bot` subscribes here when `indicators_streams` is configured. |
-| `TRADINEBOTTE_INDICATORS_REG_ADDR` | `tcp://127.0.0.1:5561` | indicators.py, account_bot.py | ZeroMQ REP address for dynamic stream registration. Each `account_bot` sends subscribe requests here at startup. |
+| `TRADINEBOTTE_FEED_ADDR` | IPC auto-detected (`/run/user/$UID/tradinebotte-feed.sock`) | feed.py, account_bot.py | ZeroMQ PUB/SUB address for the shared feed. Leave unset for IPC. Set to `tcp://127.0.0.1:5557` for multi-stack TCP mode. |
+| `TRADINEBOTTE_INDICATORS_ADDR` | IPC auto-detected (`/run/user/$UID/tradinebotte-indicators.sock`) | indicators.py, account_bot.py | ZeroMQ PUB address of the shared indicators service. |
+| `TRADINEBOTTE_INDICATORS_REG_ADDR` | IPC auto-detected (`/run/user/$UID/tradinebotte-ind-reg.sock`) | indicators.py, account_bot.py | ZeroMQ REP address for dynamic stream registration. Each `account_bot` sends subscribe requests here at startup. |
 | `TRADINEBOTTE_DIR` | `~/tradinebotte` | account_bot.py only | Per-account data directory (DB, log, config). |
 
-`TRADINEBOTTE_FEED_ADDR` must be set consistently between the feed and all account bots.
-The indicators variables default to sensible values and only need to be overridden
-when running multiple independent stacks on the same machine.
+All three ZMQ addresses default to IPC Unix sockets in `/run/user/$UID/` (kernel-isolated,
+mode 0700, set by systemd-logind). All services for one account share the same UID, so
+no explicit address configuration is needed for a standard single-host deployment.
+To run multiple independent stacks over TCP, set `TRADINEBOTTE_PORT_BASE` to different
+values per stack (e.g. 5557 for stack A, 6557 for stack B).
 
 ### Per-account `config.json`
 
@@ -211,18 +213,16 @@ overrides.  Files are chmod 600 and never shared between accounts.
 
 | Key | Default | Description |
 |---|---|---|
-| `feed_addr` | `tcp://127.0.0.1:5557` | ZMQ address of the shared feed. |
+| `feed_addr` | IPC auto-detected | ZMQ address of the shared feed. Omit for IPC; set explicitly for TCP. |
 | `feed_auto_start` | `true` | Set to `false` when the feed is managed by systemd — account_bot will probe with retries instead of forking feed.py. |
-| `indicators_reg_addr` | `tcp://127.0.0.1:5561` | ZMQ REP address of the shared indicators service. |
+| `indicators_reg_addr` | IPC auto-detected | ZMQ REP address of the shared indicators service. Omit for IPC; set explicitly for TCP. |
 | `indicators_streams` | `[]` | List of stream subscriptions to register with the indicators service at startup. Leave empty to skip indicators. |
 
 Example with indicators enabled:
 
 ```json
 {
-  "feed_addr":         "tcp://127.0.0.1:5557",
   "feed_auto_start":   false,
-  "indicators_reg_addr": "tcp://127.0.0.1:5561",
   "indicators_streams": [
     {
       "source":     "binance_ws",
@@ -393,8 +393,8 @@ tail -f ~/tradinebotte/feed.log
 Expected output every 10 s (ping loop) and on every market refresh:
 
 ```
-[INFO]  Feed PUB bind sur tcp://127.0.0.1:5557
-[INFO]  WebSocket connecte — diffusion sur tcp://127.0.0.1:5557
+[INFO]  Feed PUB bind on ipc:///run/user/1000/tradinebotte-feed.sock
+[INFO]  WebSocket connecte — diffusion on ipc:///run/user/1000/tradinebotte-feed.sock
 [INFO]  Marches BTC 5-min : 4
 [INFO]  Nouveaux tokens : 8
 ```
@@ -495,10 +495,12 @@ Typical choices:
 ### Launch sequence (cross-user)
 
 ```bash
-# As user1 — start the shared feed (binds tcp://127.0.0.1:5557)
+# As user1 — start the shared feed (IPC default; or set TRADINEBOTTE_FEED_ADDR for TCP)
 bash ~/tradinebotte/tradinebotte-polymarket/scripts/start_feed.sh
 
-# As user2 — start their account bot (connects to the same address)
+# As user2 — start their account bot.
+# Cross-user: IPC is per-UID so user2 cannot reach user1's IPC socket.
+# Use TCP when feed and account bots run under different OS users:
 TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5557 \
 TRADINEBOTTE_DIR=~/account-2 \
 bash ~/tradinebotte/tradinebotte-polymarket/scripts/start_account.sh
@@ -510,7 +512,9 @@ bash ~/tradinebotte/tradinebotte-polymarket/scripts/start_account.sh
 ```
 
 Each user uses **their own venv** (`~/tradinebotte/.venv/`) via their own
-`start_account.sh`.  The `TRADINEBOTTE_FEED_ADDR` must match across all users.
+`start_account.sh`.  When using TCP (cross-user), `TRADINEBOTTE_FEED_ADDR` must
+match across all users.  When all services run as the same OS user, IPC is used
+automatically and no env var is needed.
 
 ### Directory layout (cross-user)
 
@@ -579,18 +583,20 @@ ZMQ port and receive market data, but that data is public (Polymarket's order bo
 is public) and contains nothing sensitive.  Private keys never leave each user's
 own `TRADINEBOTTE_DIR`.
 
-### Port conflicts
+### TCP port conflicts (multi-stack mode)
 
-If port 5557 is already in use on the machine:
+IPC mode (the default) uses filesystem sockets and has no port conflicts.
+If you are using TCP (e.g. `TRADINEBOTTE_PORT_BASE` is set) and port 5557 is
+already in use:
 
 ```bash
 # Check what is using the port
 ss -tlnp | grep 5557
 
-# Use a different port for all participants
-TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash tradinebotte-polymarket/scripts/start_feed.sh
-# — every account bot must use the same address
-TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-2 bash tradinebotte-polymarket/scripts/start_account.sh
+# Use a different base port for all participants
+TRADINEBOTTE_PORT_BASE=6557 bash tradinebotte-polymarket/scripts/start_feed.sh
+# — every account bot must use the same base
+TRADINEBOTTE_PORT_BASE=6557 TRADINEBOTTE_DIR=~/account-2 bash tradinebotte-polymarket/scripts/start_account.sh
 ```
 
 ### systemd services
@@ -607,7 +613,7 @@ The project ships three dedicated generator scripts:
 
 ```bash
 bash tradinebotte-polymarket/scripts/install_feed_service.sh
-# optional: use a non-default ZMQ address
+# optional: force a specific TCP address
 TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash tradinebotte-polymarket/scripts/install_feed_service.sh
 
 # Follow the printed sudo commands:
