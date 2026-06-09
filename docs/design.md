@@ -39,7 +39,7 @@ Polymarket WebSocket
   ┌──────────┐
   │ feed.py  │  ← WebSocket only, no keys, no trading
   └────┬─────┘
-       │ ZeroMQ PUB  tcp://127.0.0.1:5557
+       │ ZeroMQ PUB  IPC (/run/user/$UID/tradinebotte-feed.sock)
        │
   ┌────┴──────────────────────┐
   ▼                           ▼
@@ -627,7 +627,7 @@ first `account_bot.py` to start automatically launches `feed.py`.
 ```
 account_bot starts
     │
-    ├─── probe feed (TCP connect, recv within 5 s)?
+    ├─── probe feed address (recv within 5 s)?
     │       YES ──▶ connect SUB, begin trading
     │
     │       NO
@@ -666,7 +666,7 @@ feed_auto_start = false:
 
 account_bot starts
     │
-    ├─── probe feed (TCP connect, recv within 5 s)?
+    ├─── probe feed address (recv within 5 s)?
     │       YES ──▶ connect SUB, register indicators, begin trading
     │
     │       NO (retry up to 6×)

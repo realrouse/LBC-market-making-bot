@@ -390,13 +390,13 @@ error and systemd restarts it automatically.
 tail -f ~/tradinebotte/feed.log
 ```
 
-Expected output every 10 s (ping loop) and on every market refresh:
+Expected output on startup and on every market refresh:
 
 ```
-[INFO]  Feed PUB bind on ipc:///run/user/1000/tradinebotte-feed.sock
-[INFO]  WebSocket connecte — diffusion on ipc:///run/user/1000/tradinebotte-feed.sock
-[INFO]  Marches BTC 5-min : 4
-[INFO]  Nouveaux tokens : 8
+[INFO]  Feed PUB bound on ipc:///run/user/1000/tradinebotte-feed.sock
+[INFO]  BTC 5-min markets: 4
+[INFO]  Subscribing to 8 tokens...
+[INFO]  WebSocket connected — broadcasting on ipc:///run/user/1000/tradinebotte-feed.sock
 ```
 
 Absence of log lines for > 60 s (two refresh cycles) indicates a problem.
@@ -410,8 +410,8 @@ tail -f ~/account-b/account.log
 
 Normal output mirrors the standalone bot: signal guards, trade entries, resolutions.
 
-If a bot prints `Aucun message du feed depuis Xs` it is connected but the feed is
-not publishing — check `feed.log`.
+If a bot prints `No message from feed for Xs — is feed alive?` it is connected
+but the feed is not publishing — check `feed.log`.
 
 ### SQLite queries (per account)
 
