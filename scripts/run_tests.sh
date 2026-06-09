@@ -38,6 +38,17 @@ for _svc_tests in tradinebotte-*/tests/ tradinetools/tests/; do
     fi
 done
 
+# ── Data quality check ───────────────────────────────────────────
+if ls "$PROJECT_DIR"/data/*.db >/dev/null 2>&1; then
+    echo ""
+    echo "=== Data quality check (data/*.db) ==="
+    "$PYTHON" analysis/check_data_quality.py --no-gaps --warn-only \
+        || { echo "⚠️  Data quality check non-blocking — check manually"; true; }
+else
+    echo ""
+    echo "ℹ️  No data/*.db files found — data quality check skipped"
+fi
+
 # ── Backtest multi-DB ─────────────────────────────────────────────
 if ls "$PROJECT_DIR"/data/*.db >/dev/null 2>&1; then
     echo ""
@@ -60,4 +71,20 @@ if command -v claude &>/dev/null; then
 else
     echo ""
     echo "ℹ️  claude CLI not found — doc audit skipped (agent: .claude/agents/doc-sync.md)"
+fi
+
+# ── Pylint ────────────────────────────────────────────────────────
+echo ""
+echo "=== Pylint ==="
+if "$PYTHON" -m pylint --version &>/dev/null; then
+    _py_files=$(git ls-files '*.py' 2>/dev/null)
+    if [ -n "$_py_files" ]; then
+        # shellcheck disable=SC2086
+        "$PYTHON" -m pylint $_py_files \
+            || { echo "⚠️  Pylint non-blocking — check before releasing"; true; }
+    else
+        echo "ℹ️  No tracked Python files found — pylint skipped"
+    fi
+else
+    echo "ℹ️  pylint not installed — skipped (pip install -r requirements-dev.txt)"
 fi

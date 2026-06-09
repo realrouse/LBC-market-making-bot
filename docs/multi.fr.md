@@ -393,13 +393,13 @@ et systemd le redémarre automatiquement.
 tail -f ~/tradinebotte/feed.log
 ```
 
-Sortie attendue toutes les 10 s (boucle ping) et à chaque refresh de marchés :
+Sortie attendue au démarrage et à chaque refresh de marchés :
 
 ```
-[INFO]  Feed PUB bind sur ipc:///run/user/1000/tradinebotte-feed.sock
-[INFO]  WebSocket connecte — diffusion sur ipc:///run/user/1000/tradinebotte-feed.sock
-[INFO]  Marches BTC 5-min : 4
-[INFO]  Nouveaux tokens : 8
+[INFO]  Feed PUB bound on ipc:///run/user/1000/tradinebotte-feed.sock
+[INFO]  BTC 5-min markets: 4
+[INFO]  Subscribing to 8 tokens...
+[INFO]  WebSocket connected — broadcasting on ipc:///run/user/1000/tradinebotte-feed.sock
 ```
 
 Absence de lignes de log pendant > 60 s (deux cycles de refresh) indique un problème.
@@ -414,8 +414,8 @@ tail -f ~/account-b/account.log
 La sortie normale reflète le bot autonome : gardes du signal, entrées de trades,
 résolutions.
 
-Si un bot affiche `Aucun message du feed depuis Xs`, il est connecté mais le feed
-ne publie plus — vérifier `feed.log`.
+Si un bot affiche `No message from feed for Xs — is feed alive?`, il est connecté
+mais le feed ne publie plus — vérifier `feed.log`.
 
 ### Requêtes SQLite (par compte)
 

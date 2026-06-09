@@ -41,7 +41,7 @@ Polymarket WebSocket
   ┌──────────┐
   │ feed.py  │  ← WebSocket uniquement, pas de clés, pas de trading
   └────┬─────┘
-       │ ZeroMQ PUB  tcp://127.0.0.1:5557
+       │ ZeroMQ PUB  IPC (/run/user/$UID/tradinebotte-feed.sock)
        │
   ┌────┴──────────────────────┐
   ▼                           ▼
@@ -154,13 +154,14 @@ livraison atomique de chaque frame — jamais de message partiel.
 
 | Variable | Défaut | Bindé par | Connecté par |
 |---|---|---|---|
-| `TRADINEBOTTE_FEED_ADDR` | `tcp://127.0.0.1:5557` | `feed.py` | `account_bot.py`, `indicators.py` |
-| `TRADINEBOTTE_INDICATORS_ADDR` | `tcp://127.0.0.1:5559` | `indicators.py` PUB | tout consumer |
-| `TRADINEBOTTE_INDICATORS_REG_ADDR` | `tcp://127.0.0.1:5561` | `indicators.py` REP | `account_bot.py` (REQ au démarrage) |
+| `TRADINEBOTTE_FEED_ADDR` | IPC détecté auto. (`/run/user/$UID/tradinebotte-feed.sock`) | `feed.py` | `account_bot.py`, `indicators.py` |
+| `TRADINEBOTTE_INDICATORS_ADDR` | IPC détecté auto. (`/run/user/$UID/tradinebotte-indicators.sock`) | `indicators.py` PUB | tout consumer |
+| `TRADINEBOTTE_INDICATORS_REG_ADDR` | IPC détecté auto. (`/run/user/$UID/tradinebotte-ind-reg.sock`) | `indicators.py` REP | `account_bot.py` (REQ au démarrage) |
 
-Les deux peuvent être surchargées via variables d'environnement pour faire
-tourner plusieurs stacks feed+compte indépendants sur la même machine (ex.
-port 5557 pour le stack A, 5558 pour le stack B).
+Les trois utilisent par défaut des sockets IPC Unix dans `/run/user/$UID/` (mode 0700
+imposé par systemd-logind — isolation par UID au niveau noyau). Utiliser
+`TRADINEBOTTE_PORT_BASE` pour basculer en TCP et faire tourner plusieurs stacks
+indépendants sur la même machine (ex. base=5557 pour le stack A, base=6557 pour le stack B).
 
 ---
 
@@ -631,7 +632,7 @@ premier `account_bot.py` à démarrer lance `feed.py` automatiquement.
 ```
 account_bot démarre
     │
-    ├─── sonde le feed (TCP connect, réception sous 5 s) ?
+    ├─── sonde l'adresse du feed (réception sous 5 s) ?
     │       OUI ──▶ connecte SUB, commence le trading
     │
     │       NON
@@ -671,7 +672,7 @@ feed_auto_start = false :
 
 account_bot démarre
     │
-    ├─── sonde le feed (TCP connect, réception sous 5 s) ?
+    ├─── sonde l'adresse du feed (réception sous 5 s) ?
     │       OUI ──▶ connecte SUB, enregistre les indicateurs, commence le trading
     │
     │       NON (jusqu'à 6 tentatives)
@@ -803,10 +804,10 @@ sont re-publiés au prochain refresh de 30 secondes.
 
 | Variable | Défaut | Portée | Description |
 |---|---|---|---|
-| `TRADINEBOTTE_PORT_BASE` | `5557` | feed.py, account_bot.py, indicators.py | Port de base de toute la pile. Tous les ports par défaut se décalent de `PORT_BASE − 5557`. Les variables par service restent prioritaires. |
-| `TRADINEBOTTE_FEED_ADDR` | `tcp://127.0.0.1:$PORT_BASE` | feed.py, account_bot.py, indicators.py | Adresse ZMQ exacte du socket PUB feed. Remplace `PORT_BASE` pour le feed uniquement. |
-| `TRADINEBOTTE_INDICATORS_ADDR` | `tcp://127.0.0.1:$(PORT_BASE+2)` | indicators.py, account_bot.py | Adresse ZMQ PUB du service indicators. `indicators.py` la bind ; `account_bot.py` s'y abonne quand `indicators_streams` est défini. |
-| `TRADINEBOTTE_INDICATORS_REG_ADDR` | `tcp://127.0.0.1:$(PORT_BASE+4)` | indicators.py, account_bot.py | Adresse ZMQ REP pour l'enregistrement dynamique de flux. `indicators.py` la bind ; `account_bot.py` y envoie des REQ subscribe au démarrage. |
+| `TRADINEBOTTE_PORT_BASE` | (non défini) | feed.py, account_bot.py, indicators.py | Quand défini, bascule tous les défauts d'adresse en TCP et décale les ports de `PORT_BASE − 5557`. Laisser non défini pour IPC (recommandé en déploiement mono-machine). |
+| `TRADINEBOTTE_FEED_ADDR` | IPC détecté auto. | feed.py, account_bot.py, indicators.py | Adresse ZMQ exacte du socket PUB feed. Remplace la détection automatique. Définir `PORT_BASE` pour activer TCP, ou définir cette variable directement pour un chemin TCP/IPC explicite. |
+| `TRADINEBOTTE_INDICATORS_ADDR` | IPC détecté auto. | indicators.py, account_bot.py | Adresse ZMQ PUB du service indicators. `indicators.py` la bind ; `account_bot.py` s'y abonne quand `indicators_streams` est défini. |
+| `TRADINEBOTTE_INDICATORS_REG_ADDR` | IPC détecté auto. | indicators.py, account_bot.py | Adresse ZMQ REP pour l'enregistrement dynamique de flux. `indicators.py` la bind ; `account_bot.py` y envoie des REQ subscribe au démarrage. |
 | `TRADINEBOTTE_DIR` | `~/tradinebotte` | account_bot.py, live_bot.py | Répertoire de données par compte (BD, log, config, stratégies) |
 
 ### Faire tourner deux piles indépendantes sur la même machine

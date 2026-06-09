@@ -6,6 +6,20 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.79] — 2026-06-09
+
+### Ajouté
+- **`analysis/btc_variation.py`** — rapport de variation du prix BTC depuis les bases de données locales des collecteurs ; détecte automatiquement la base CEX la plus récente (table `ob_snapshots` ou `snapshots`), affiche un tableau OHLC journalier et la variation globale `▲/▼` avec les flags `--days N` et `--db PATH`
+- **`analysis/check_data_quality.py`** — vérifications d'invariants sur toutes les bases de données des collecteurs ; classifie automatiquement chaque DB (ob\_cex, cex\_snap, polymarket, klines, daily) et exécute des contrôles ciblés : bornes de prix, contamination de type (probabilités Polymarket dans les tables CEX), sanité OBI, identité comptable du capital, détection de gaps de collecte via SQL `LAG()` ; flags `--no-gaps`, `--warn-only` et `--verbose` ; sort avec code non-zéro sur tout `FAIL` par défaut
+- **`scripts/run_tests.sh`** — contrôle qualité des données ajouté en étape 3 (`--no-gaps --warn-only`, non bloquant) ; pylint ajouté en étape 6 (non bloquant, ignoré proprement si non installé)
+- **`docs/HOWTO_tests_and_backtests.md`, `docs/HOWTO_tests_and_backtests.fr.md`** — nouvelle sous-section *Checklist pré-release* : commande de scan complet des gaps (`check_data_quality.py --warn-only` sans `--no-gaps`) et rappel des tests d'intégration
+
+### Modifié
+- **`docs/design.md`, `docs/design.fr.md`** — architecture IPC : diagramme Option B mis à jour des adresses TCP vers les chemins de sockets IPC ; labels des organigrammes de sonde corrigés ; table des adresses par défaut et table ENV mises à jour vers la détection automatique IPC
+- **`docs/multi.md`, `docs/multi.fr.md`** — exemples de logs de monitoring remplacés par les chaînes réelles de `feed.py` (bind IPC, nombre de marchés, abonnement aux tokens, WebSocket connecté)
+
+---
+
 ## [0.78] — 2026-06-09
 
 ### Correctifs

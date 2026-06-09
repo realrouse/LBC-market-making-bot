@@ -101,8 +101,10 @@ bash scripts/run_tests.sh
 Ce script :
 1. Localise le virtualenv du projet (`.venv/` ou `~/tradinebotte/venv/`).
 2. Lance la suite unittest complète (`tests/test_*.py`) en mode verbeux.
-3. Lance un backtest `--all` sur tous les fichiers `data/*.db` trouvés (non bloquant).
-4. Invoque l'agent `doc-sync` pour auditer la documentation des flags (nécessite le CLI `claude`).
+3. Lance le contrôle qualité des données (`analysis/check_data_quality.py --no-gaps --warn-only`) sur tous les fichiers `data/*.db` trouvés (non bloquant).
+4. Lance un backtest `--all` sur tous les fichiers `data/*.db` trouvés (non bloquant).
+5. Invoque l'agent `doc-sync` pour auditer la documentation des flags (nécessite le CLI `claude`).
+6. Lance pylint sur tous les fichiers Python trackés (nécessite l'installation de `requirements-dev.txt`, non bloquant).
 
 ### Lire la sortie
 
@@ -147,6 +149,24 @@ OK (skipped=1)
 Si un changement de paramètre dégrade silencieusement les performances, ce test le détecte. Il est automatiquement **ignoré** quand `data/paper3.db` est absent (ex : checkout CI sans données).
 
 `TestParamConsistency` vérifie que les valeurs des paramètres dans `bot/live_bot.py` (constantes au niveau module) correspondent aux valeurs par défaut dans `scripts/backtest.py` (le dataclass `Params`). Si elles divergent, les backtests ne prédisent plus les performances live.
+
+### Checklist pré-release
+
+`bash scripts/run_tests.sh` couvre la partie automatisée. Avant de tagger une release, exécuter également :
+
+**Contrôle qualité complet avec détection des gaps** (plus lent, ~22 s — omis par `run_tests.sh` pour la rapidité) :
+
+```bash
+python3 analysis/check_data_quality.py --warn-only
+```
+
+Lance les requêtes LAG() de détection de gaps ignorées par `--no-gaps`. Tout résultat `FAIL` (gap de collecte > 2 h, contamination de prix, violation d'invariant de capital) doit être investigué avant la release. Les items `WARN` sont informatifs.
+
+**Tests d'intégration** (requis pour les releases touchant le multibot, l'IPC ou le déploiement ; nécessite `~/.tradinebotte-test.conf`) :
+
+```bash
+bash scripts/run_integration_tests.sh
+```
 
 ---
 
