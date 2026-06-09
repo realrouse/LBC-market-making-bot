@@ -38,6 +38,17 @@ for _svc_tests in tradinebotte-*/tests/ tradinetools/tests/; do
     fi
 done
 
+# ── Data quality check ───────────────────────────────────────────
+if ls "$PROJECT_DIR"/data/*.db >/dev/null 2>&1; then
+    echo ""
+    echo "=== Data quality check (data/*.db) ==="
+    "$PYTHON" analysis/check_data_quality.py --no-gaps --warn-only \
+        || { echo "⚠️  Data quality check non-blocking — check manually"; true; }
+else
+    echo ""
+    echo "ℹ️  No data/*.db files found — data quality check skipped"
+fi
+
 # ── Backtest multi-DB ─────────────────────────────────────────────
 if ls "$PROJECT_DIR"/data/*.db >/dev/null 2>&1; then
     echo ""
