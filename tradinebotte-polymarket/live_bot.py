@@ -515,7 +515,8 @@ def make_config(simulate: bool = False, no_log: bool = False,
     # Ensure the install directory exists before any file handle is opened.
     os.makedirs(install_dir, exist_ok=True)
     for _fpath in (log_path, db_path):
-        open(_fpath, "a").close()
+        with open(_fpath, "a", encoding="utf-8"):
+            pass
         os.chmod(_fpath, 0o640)
 
     config = BotConfig(

@@ -189,7 +189,7 @@ class SwingStrategy:
             symbol,
             len(support), len(resistance),
             size, max_pos, sl_pct * 100, tp_fall * 100,
-            "RSI≤%.0f" % self._rsi_buy_max if self._trend_filter else "off",
+            f"RSI≤{self._rsi_buy_max:.0f}" if self._trend_filter else "off",
             "on" if self._ema200_filter else "off",
             self._atr_sl_mult,
         )
@@ -227,7 +227,7 @@ class SwingStrategy:
 
         # EMA200 directional filter — skip BUY when price < EMA200
         if self._ema200_filter and self.sw.last_ema200 is not None:
-            if age <= self._rsi_stale_secs and price > 0 and price < self.sw.last_ema200:
+            if age <= self._rsi_stale_secs and 0 < price < self.sw.last_ema200:
                 return False
 
         # RSI overbought filter

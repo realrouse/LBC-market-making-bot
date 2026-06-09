@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# pylint: disable=too-many-lines
 """
 indicators.py — Technical indicator service
 
@@ -68,7 +69,7 @@ Usage:
       --config tradinebotte-indicators/strategies/indicators.json
 """
 
-import argparse, asyncio, json, logging, math, os, sqlite3, sys, time
+import argparse, asyncio, json, logging, math, os, sqlite3, time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple
