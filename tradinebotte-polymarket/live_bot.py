@@ -1119,10 +1119,10 @@ async def check_signal(state: BotState, ts: TokenState, _t_ws: Optional[float] =
     """
     cfg = state.config
 
-    # Midnight UTC reset — runs on every book update so the counter resets
-    # promptly at midnight regardless of whether any signal fires that day.
+    # Midnight UTC reset — deferred while trades are open so that a trade
+    # entered just before midnight counts against the correct day's stop-loss.
     today_day = int(time.time() // 86400)
-    if state._daily_pnl_day != today_day:
+    if state._daily_pnl_day != today_day and not state.open_trades:
         state.daily_pnl = 0.0
         state._daily_pnl_day = today_day
 
@@ -1153,7 +1153,7 @@ async def check_signal(state: BotState, ts: TokenState, _t_ws: Optional[float] =
     if ts.best_bid > cfg.entry_max: state.rejection_stats.entry_max += 1; return
     if ts.best_ask >= 1.0: state.rejection_stats.best_ask += 1; return   # expired markets
     if ts.best_ask > cfg.entry_max: state.rejection_stats.entry_max += 1; return
-    if ts.ask_vol > 0 and ts.ask_vol < cfg.min_ask_vol: state.rejection_stats.ask_vol += 1; return
+    if ts.ask_vol < cfg.min_ask_vol: state.rejection_stats.ask_vol += 1; return
     if ts.secs_remaining < cfg.min_secs_remaining: state.rejection_stats.secs_remaining += 1; return
     if ts.obi < cfg.obi_reject_thresh: state.rejection_stats.obi += 1; return
     if cfg.vol_filter_enabled \
@@ -1203,6 +1203,16 @@ async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[floa
     if stake <= 0:
         logger.info("[KELLY] f*≤0 — no edge at ask=%.4f wr=%.1f%% — skipping %s",
                     ep, state.win_rate, ts.market_id[:12])
+        return
+    # Hard capital guard vs actual computed stake — check_signal uses cfg.stake
+    # as a proxy, which may underestimate when stake_step or Kelly yields a
+    # higher-than-base stake, causing capital to go negative on close.
+    _committed = len(state.open_trades) * cfg.stake
+    if stake > state.capital - _committed:
+        logger.warning(
+            "[CAPITAL] computed stake=$%.2f > available=$%.2f — skipping %s",
+            stake, state.capital - _committed, ts.market_id[:12],
+        )
         return
     tb    = stake / ep if ep > 0 else 0                         # tokens bought
     fee   = api.compute_fee(ep, tb)

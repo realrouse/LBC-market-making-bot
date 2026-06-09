@@ -721,7 +721,7 @@ class TestRestoreState(unittest.TestCase):
         self.assertEqual(fresh.wins, 0)
 
 
-# ─── Daily PnL cache (amelioration II) ───────────────────────────────────────
+# ─── Daily PnL cache (enhancement II) ───────────────────────────────────────
 
 class TestDailyPnlCache(unittest.TestCase):
     """
@@ -827,7 +827,7 @@ class TestDailyPnlCache(unittest.TestCase):
                                msg="yesterday's pnl_net must not count in daily_pnl")
 
 
-# ─── Signalled restore for recent resolved trades (amelioration VI) ───────────
+# ─── Signalled restore for recent resolved trades (enhancement VI) ───────────
 
 class TestSignalledRestore(unittest.TestCase):
     """

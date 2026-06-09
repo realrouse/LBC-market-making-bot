@@ -681,13 +681,13 @@ class SwingStrategy:
             self._save_state(state.conn)
             return
 
-        # Stop-loss check — before fill poll so we cancel TP orders first
-        changed = False
+        # Stop-loss check — before fill poll so we cancel TP orders first.
+        # Save immediately after each SL close so a crash cannot duplicate the SL.
         for pos in self._open_positions():
             if pos.status in ("long", "tp_placed") and pos.sl_price is not None:
                 if price <= pos.sl_price:
                     await self._close_sl(state, pos, price)
-                    changed = True
+                    self._save_state(state.conn)
 
         # Fill detection (throttled for live REST calls)
         now = time.time()
@@ -696,7 +696,4 @@ class SwingStrategy:
             prev_trades = self.sw.total_trades
             await self._poll_fills(state, ts)
             if self.sw.total_trades != prev_trades:
-                changed = True
-
-        if changed:
-            self._save_state(state.conn)
+                self._save_state(state.conn)

@@ -234,6 +234,7 @@ class StreamState:
         self.p               = p
         self.obi_ema         = 0.0
         self.tfi             = 0.0
+        self.last_price      = 0.0
         self.vwap_dip_score  = 0.0    # (vwap - price) / vwap; positive = below VWAP
         self.vwap_dip_zone   = "neutral"
         self.vol_price_zone  = "neutral"  # "buy_hvn" | "sell_hvn" | "neutral"
@@ -406,6 +407,7 @@ async def _handle_indicator(state: StreamState, db: sqlite3.Connection,
     if mid is None:
         return
     mid = float(mid)
+    state.last_price = mid
 
     best_bid = float(msg.get("best_bid", mid))
     best_ask = float(msg.get("best_ask", mid))
@@ -433,13 +435,19 @@ async def _handle_indicator(state: StreamState, db: sqlite3.Connection,
         pos    = state.position
         reason = None
         if pos.direction == "long":
-            if   mid >= pos.tp:                               reason = "tp"
-            elif mid <= pos.sl:                               reason = "sl"
-            elif ts_ms - pos.entry_ts_ms >= pos.max_hold_ms: reason = "timeout"
+            if mid >= pos.tp:
+                reason = "tp"
+            elif mid <= pos.sl:
+                reason = "sl"
+            elif ts_ms - pos.entry_ts_ms >= pos.max_hold_ms:
+                reason = "timeout"
         else:
-            if   mid <= pos.tp:                               reason = "tp"
-            elif mid >= pos.sl:                               reason = "sl"
-            elif ts_ms - pos.entry_ts_ms >= pos.max_hold_ms: reason = "timeout"
+            if mid <= pos.tp:
+                reason = "tp"
+            elif mid >= pos.sl:
+                reason = "sl"
+            elif ts_ms - pos.entry_ts_ms >= pos.max_hold_ms:
+                reason = "timeout"
         if reason:
             _close_paper(state, mid, reason, ts_ms, db)
         return
@@ -482,7 +490,8 @@ async def _handle_indicator(state: StreamState, db: sqlite3.Connection,
         zone = state.vol_price_zone
         if zone == "sell_hvn" and direction in ("long", "both"):
             if not _block_long(
-                f"[{state.mode}] VolProfile gate: long blocked (sell_hvn score={state.vol_zone_score:.3f})"
+                f"[{state.mode}] VolProfile gate: long blocked"
+                f" (sell_hvn score={state.vol_zone_score:.3f})"
             ):
                 return
             direction = "short"
@@ -494,7 +503,8 @@ async def _handle_indicator(state: StreamState, db: sqlite3.Connection,
     if p.get("macro_obi_gate", False):
         if state.macro_obi_dir == "bullish" and direction in ("long", "both"):
             if not _block_long(
-                f"[{state.mode}] MacroOBI gate: long blocked (macro={state.macro_obi_dir} obi={state.macro_obi:.4f})"
+                f"[{state.mode}] MacroOBI gate: long blocked"
+                f" (macro={state.macro_obi_dir} obi={state.macro_obi:.4f})"
             ):
                 return
             direction = "short"
@@ -505,7 +515,8 @@ async def _handle_indicator(state: StreamState, db: sqlite3.Connection,
         thresh = p.get("funding_gate_thresh", 0.0005)
         if state.funding_rate > thresh and direction in ("long", "both"):
             if not _block_long(
-                f"[{state.mode}] Funding gate: long blocked (rate={state.funding_rate:.6f} > thresh={thresh:.6f})"
+                f"[{state.mode}] Funding gate: long blocked"
+                f" (rate={state.funding_rate:.6f} > thresh={thresh:.6f})"
             ):
                 return
             direction = "short"
@@ -516,7 +527,8 @@ async def _handle_indicator(state: StreamState, db: sqlite3.Connection,
         liq_thresh = p.get("liq_long_block_usd", 5_000_000)
         if state.liq_long_usd > liq_thresh and direction in ("long", "both"):
             if not _block_long(
-                f"[{state.mode}] Liq gate: long blocked (liq_long=${state.liq_long_usd:.0f} > ${liq_thresh:.0f})"
+                f"[{state.mode}] Liq gate: long blocked"
+                f" (liq_long=${state.liq_long_usd:.0f} > ${liq_thresh:.0f})"
             ):
                 return
             direction = "short"
@@ -575,11 +587,16 @@ async def _zmq_loop(states: list, db: sqlite3.Connection, p: dict) -> None:
         sid     = p.get(sid_key, f"btc_scalping_{st.mode}")
         stream_map[sid] = st
 
-    vwap_sid     = p.get("vwap_stream_id",       "btc_vwap_context")   if p.get("vwap_gate")        else None
-    vol_sid      = p.get("vol_profile_stream_id","btc_volume_profile") if p.get("vol_profile_gate") else None
-    macro_sid    = p.get("macro_obi_stream_id",  "btc_macro_obi")      if p.get("macro_obi_gate")   else None
-    funding_sid  = p.get("funding_stream_id",    "btc_funding")         if p.get("funding_gate")     else None
-    liq_sid      = p.get("liq_stream_id",        "btc_liquidations")    if p.get("liq_gate")         else None
+    vwap_sid    = (p.get("vwap_stream_id",        "btc_vwap_context")
+                   if p.get("vwap_gate")        else None)
+    vol_sid     = (p.get("vol_profile_stream_id", "btc_volume_profile")
+                   if p.get("vol_profile_gate") else None)
+    macro_sid   = (p.get("macro_obi_stream_id",   "btc_macro_obi")
+                   if p.get("macro_obi_gate")   else None)
+    funding_sid = (p.get("funding_stream_id",     "btc_funding")
+                   if p.get("funding_gate")     else None)
+    liq_sid     = (p.get("liq_stream_id",         "btc_liquidations")
+                   if p.get("liq_gate")         else None)
     all_streams = (list(stream_map.keys())
                    + ([vwap_sid]     if vwap_sid     else [])
                    + ([vol_sid]      if vol_sid      else [])
@@ -597,9 +614,9 @@ async def _zmq_loop(states: list, db: sqlite3.Connection, p: dict) -> None:
         while True:
             try:
                 msg = await sub.recv_json()
-            except asyncio.CancelledError:
+            except asyncio.CancelledError:  # pylint: disable=try-except-raise
                 raise
-            except Exception as exc:
+            except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.warning("ZMQ recv error: %s — retrying in 5s", exc)
                 await asyncio.sleep(5)
                 continue
@@ -683,9 +700,10 @@ async def _run(p: dict, db: sqlite3.Connection) -> None:
                 p["max_hold_minutes"], p["stake_frac"] * 100)
     logger.info("TFI: gate=%s", tfi_mode)
     logger.info("VWAP: %s", vwap_mode)
-    vol_mode = ("enabled — block sell_hvn longs, confirm_n→%d in buy_hvn" %
-                p.get("vol_buy_confirm_n", 10)
-                if p.get("vol_profile_gate") else "disabled")
+    vol_mode = (
+        f"enabled — block sell_hvn longs, confirm_n→{p.get('vol_buy_confirm_n', 10)} in buy_hvn"
+        if p.get("vol_profile_gate") else "disabled"
+    )
     logger.info("VolProfile: %s", vol_mode)
     macro_mode = ("enabled — block longs when macro direction=bullish"
                   if p.get("macro_obi_gate") else "disabled")
@@ -711,12 +729,13 @@ async def _run(p: dict, db: sqlite3.Connection) -> None:
         for st in states:
             if st.position is not None:
                 pos = st.position
-                # Estimate PnL at mid-price; mark-to-market at shutdown.
-                mid = (pos.entry_price + pos.entry_price) / 2   # last known
+                # Estimate PnL at last known mid-price; fall back to entry if no tick seen.
+                mid = st.last_price if st.last_price > 0 else pos.entry_price
+                qty = pos.stake / pos.entry_price
                 if pos.direction == "long":
-                    pnl_net = (mid - pos.entry_price) * (pos.stake / pos.entry_price) - pos.fee_entry
+                    pnl_net = (mid - pos.entry_price) * qty - pos.fee_entry
                 else:
-                    pnl_net = (pos.entry_price - mid) * (pos.stake / pos.entry_price) - pos.fee_entry
+                    pnl_net = (pos.entry_price - mid) * qty - pos.fee_entry
                 capital_after = pos.capital_before + pnl_net
                 db.execute("""
                     UPDATE ob_trades

@@ -624,6 +624,9 @@ async def _zmq_feed_task(feed_addr: str, pub: zmq.asyncio.Socket,
     stream_id = feed_streams[0].id if len(feed_streams) == 1 else "feed"
 
     series: dict[str, PriceSeries] = {}
+    series_last_seen: dict[str, float] = {}   # token_id → last message epoch
+    _SERIES_TTL_S = 900   # purge tokens not seen for 15 minutes
+    _purge_counter = 0
     try:
         while True:
             msg: dict[str, Any] = await sub.recv_json()
@@ -633,6 +636,19 @@ async def _zmq_feed_task(feed_addr: str, pub: zmq.asyncio.Socket,
             bid      = msg.get("best_bid")
             if not token_id or bid is None:
                 continue
+            now_ts = time.time()
+            series_last_seen[token_id] = now_ts
+            # Purge stale tokens every 512 messages to bound memory growth.
+            _purge_counter += 1
+            if _purge_counter >= 512:
+                _purge_counter = 0
+                cutoff = now_ts - _SERIES_TTL_S
+                stale = [t for t, ts in series_last_seen.items() if ts < cutoff]
+                for t in stale:
+                    series.pop(t, None)
+                    series_last_seen.pop(t, None)
+                if stale:
+                    logger.debug("[feed] purged %d stale token series", len(stale))
             s = series.setdefault(token_id, PriceSeries())
             s.push(float(bid))
             if len(s) < min_ticks:

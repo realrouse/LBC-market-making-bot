@@ -1,3 +1,4 @@
+# pylint: disable=protected-access
 """Unit tests for tradinebotte-cex strategy engines: SwingStrategy, DCAStrategy, SwingHoldStrategy."""
 
 import sys
@@ -22,9 +23,9 @@ sys.modules.setdefault("connectors", _connectors_mod)
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from strategy_engines.swing     import SwingStrategy
-from strategy_engines.dca       import DCAStrategy
-from strategy_engines.swinghold import SwingHoldStrategy
+from strategy_engines.swing     import SwingStrategy      # pylint: disable=wrong-import-position
+from strategy_engines.dca       import DCAStrategy        # pylint: disable=wrong-import-position
+from strategy_engines.swinghold import SwingHoldStrategy  # pylint: disable=wrong-import-position
 
 
 # ── Minimal config fixtures ──────────────────────────────────────────────────

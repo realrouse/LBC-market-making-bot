@@ -1,3 +1,4 @@
+# pylint: disable=protected-access
 """
 Tests for bot/earn_manager.py
 
@@ -24,8 +25,8 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-import earn_manager as em
-from earn_manager import EarnManager, MIN_LIQUID_USDT, MIN_SUBSCRIBE_USDT
+import earn_manager as em  # pylint: disable=wrong-import-position
+from earn_manager import EarnManager, MIN_LIQUID_USDT, MIN_SUBSCRIBE_USDT  # pylint: disable=wrong-import-position
 
 
 # ---------------------------------------------------------------------------

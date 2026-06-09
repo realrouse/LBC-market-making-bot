@@ -104,11 +104,11 @@ def get_market_question(market):
     return market.get("description", market.get("symbol", ""))
 
 
-def get_market_end_ts_ms(market):
+def get_market_end_ts_ms(_market):
     return 0.0
 
 
-def get_market_start_ts_ms(market):
+def get_market_start_ts_ms(_market):
     return 0.0
 
 
@@ -184,7 +184,7 @@ def parse_book_update(msg):
                 p, s = float(item[0]), float(item[1])
                 if p > 0 and s > 0:
                     r.append((p, s))
-            except Exception:
+            except Exception:  # pylint: disable=broad-exception-caught
                 continue
         return r
 
@@ -227,7 +227,7 @@ async def get_markets(session, symbol=DEFAULT_SYMBOL, **_):
                 logger.warning("Bitstamp ticker HTTP %s", resp.status)
                 return []
             data = await resp.json(content_type=None)
-    except Exception as exc:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning("Bitstamp get_markets error: %s", exc)
         return []
 
@@ -243,7 +243,7 @@ async def get_markets(session, symbol=DEFAULT_SYMBOL, **_):
 
 
 # ─── ORDER BOOK (REST snapshot) ───────────────────────────────────────────────
-async def get_order_book(session, symbol=DEFAULT_SYMBOL, depth=5):
+async def get_order_book(session, symbol=DEFAULT_SYMBOL, depth=5):  # pylint: disable=unused-argument
     """Fetch a REST order book snapshot for the given symbol."""
     clean = symbol.lower().split(":")[0]
     try:
@@ -255,7 +255,7 @@ async def get_order_book(session, symbol=DEFAULT_SYMBOL, depth=5):
                 logger.warning("Bitstamp order_book HTTP %s", resp.status)
                 return {}
             return await resp.json(content_type=None)
-    except Exception as exc:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning("Bitstamp get_order_book error: %s", exc)
         return {}
 
@@ -303,12 +303,12 @@ async def post_order(session, symbol, price, size_usdc, *, side="BUY", **_):
             oid = str(data.get("id", ""))
             logger.info("Bitstamp order placed: %s", oid)
             return oid or None
-    except Exception as exc:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.error("Bitstamp post_order exception: %s", exc)
         return None
 
 
-async def get_order_status(session, symbol, order_id):
+async def get_order_status(session, symbol, order_id):  # pylint: disable=unused-argument
     """Return Bitstamp order status string or None."""
     if not _has_creds():
         return "simulated"
@@ -325,12 +325,12 @@ async def get_order_status(session, symbol, order_id):
         ) as resp:
             data = await resp.json(content_type=None)
             return data.get("status")
-    except Exception as exc:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning("Bitstamp get_order_status: %s", exc)
         return None
 
 
-async def cancel_order(session, symbol, order_id):
+async def cancel_order(session, symbol, order_id):  # pylint: disable=unused-argument
     """Cancel an open order. Returns True on success."""
     if not _has_creds():
         return True
@@ -347,7 +347,7 @@ async def cancel_order(session, symbol, order_id):
         ) as resp:
             data = await resp.json(content_type=None)
             return data.get("id") is not None
-    except Exception as exc:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning("Bitstamp cancel_order: %s", exc)
         return False
 
@@ -381,7 +381,7 @@ async def get_open_orders(session, symbol=DEFAULT_SYMBOL):
             }
             for o in (raw if isinstance(raw, list) else [])
         ]
-    except Exception as exc:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning("Bitstamp get_open_orders: %s", exc)
         return []
 
@@ -390,19 +390,19 @@ async def get_open_orders(session, symbol=DEFAULT_SYMBOL):
 # Bitstamp does not support a Binance-style user data stream (listen key).
 # Grid strategy falls back to REST polling for fills when these return None.
 
-async def get_listen_key(session, symbol=None) -> str | None:
+async def get_listen_key(session, symbol=None) -> str | None:  # pylint: disable=unused-argument
     return None
 
 
-async def keepalive_listen_key(session, listen_key: str) -> None:
+async def keepalive_listen_key(session, listen_key: str) -> None:  # pylint: disable=unused-argument
     return
 
 
-def make_user_stream_url(listen_key: str) -> str:
+def make_user_stream_url(listen_key: str) -> str:  # pylint: disable=unused-argument
     return ""
 
 
-def parse_user_stream_msg(msg: dict) -> dict | None:
+def parse_user_stream_msg(msg: dict) -> dict | None:  # pylint: disable=unused-argument
     return None
 
 
@@ -446,6 +446,6 @@ async def get_ohlcv(session, symbol=DEFAULT_SYMBOL, step=86400,
             }
             for c in data.get("data", {}).get("ohlc", [])
         ]
-    except Exception as exc:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning("Bitstamp get_ohlcv error: %s", exc)
         return []

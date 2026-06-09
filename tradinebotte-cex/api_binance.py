@@ -19,7 +19,13 @@ To switch live_bot.py to Binance:
     import api_binance as api   # line 62 in live_bot.py
 """
 
-import hashlib, hmac, json, logging, os, time, uuid
+import hashlib
+import hmac
+import json
+import logging
+import os
+import time
+import uuid
 from urllib.parse import urlencode
 import aiohttp
 
@@ -66,12 +72,12 @@ def get_market_question(market):
     return market.get("question", market.get("symbol", ""))
 
 
-def get_market_end_ts_ms(market):
+def get_market_end_ts_ms(_market):
     """Return 0 — spot markets have no scheduled expiry."""
     return 0.0
 
 
-def get_market_start_ts_ms(market):
+def get_market_start_ts_ms(_market):
     """Return 0 — start time is not applicable to spot markets."""
     return 0.0
 
@@ -142,7 +148,7 @@ def parse_book_update(msg):
                 p, s = float(item[0]), float(item[1])
                 if p > 0 and s > 0:
                     r.append((p, s))
-            except Exception:
+            except Exception:  # pylint: disable=broad-exception-caught
                 continue
         return r
 
@@ -194,7 +200,7 @@ async def get_markets(session, symbol=DEFAULT_SYMBOL, **_):
             "bid_qty":  float(data.get("bidQty", 0)),
             "ask_qty":  float(data.get("askQty", 0)),
         }]
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         logger.warning("Binance fetch error : %s", e)
         return []
 
@@ -212,7 +218,7 @@ def _sign(params: dict, secret: str) -> str:
 
 async def post_order(session, symbol, price, size_usdc, *,
                      api_key=None, api_secret=None, side="BUY",
-                     private_key=None, install_dir=None):
+                     private_key=None, install_dir=None):  # pylint: disable=unused-argument
     """
     Submit a LIMIT order to Binance spot.
 
@@ -264,14 +270,14 @@ async def post_order(session, symbol, price, size_usdc, *,
                 return None
             oid = str(data.get("orderId", ""))
             return oid or None
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("Binance post_order error : %s", e)
         return None
 
 
 async def post_market_order(session, symbol, quantity, *, side="SELL",
                             api_key=None, api_secret=None,
-                            private_key=None, install_dir=None):
+                            private_key=None, install_dir=None):  # pylint: disable=unused-argument
     """
     Submit a MARKET order — executed immediately at best available price.
 
@@ -309,7 +315,7 @@ async def post_market_order(session, symbol, quantity, *, side="SELL",
                 logger.error("Binance market order error %d : %.300s", resp.status, data)
                 return None
             return str(data.get("orderId", "")) or None
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("Binance post_market_order error : %s", e)
         return None
 
@@ -350,7 +356,7 @@ async def get_order_status(session, symbol, order_id, *,
                 logger.warning("Binance get_order_status error %d : %.300s", resp.status, data)
                 return None
             return str(data.get("status", "")) or None
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("Binance get_order_status error : %s", e)
         return None
 
@@ -390,7 +396,7 @@ async def cancel_order(session, symbol, order_id, *,
                 logger.warning("Binance cancel_order error %d : %.300s", resp.status, data)
                 return False
             return str(data.get("status", "")) == "CANCELED"
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("Binance cancel_order error : %s", e)
         return False
 
@@ -438,14 +444,14 @@ async def get_open_orders(session, symbol, *, api_key=None, api_secret=None):
                 }
                 for o in data
             ]
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("Binance get_open_orders error : %s", e)
         return []
 
 
 # ─── USER DATA STREAM ─────────────────────────────────────────────────────────
 
-async def get_listen_key(session, *, api_key=None, api_secret=None):
+async def get_listen_key(session, *, api_key=None, api_secret=None):  # pylint: disable=unused-argument
     """
     Create a new user data stream and return its listenKey (60-min TTL).
     Extend with keepalive_listen_key every 30 min before it expires.
@@ -466,12 +472,12 @@ async def get_listen_key(session, *, api_key=None, api_secret=None):
                 return None
             data = await resp.json(content_type=None)
             return data.get("listenKey") or None
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("Binance get_listen_key error : %s", e)
         return None
 
 
-async def keepalive_listen_key(session, listen_key, *, api_key=None, api_secret=None):
+async def keepalive_listen_key(session, listen_key, *, api_key=None, api_secret=None):  # pylint: disable=unused-argument
     """
     Extend the TTL of an existing listenKey (PUT /api/v3/userDataStream).
     Should be called every ~30 min to prevent key expiry (TTL = 60 min).
@@ -488,7 +494,7 @@ async def keepalive_listen_key(session, listen_key, *, api_key=None, api_secret=
             timeout=aiohttp.ClientTimeout(total=10),
         ) as resp:
             return resp.status == 200
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("Binance keepalive_listen_key error : %s", e)
         return False
 

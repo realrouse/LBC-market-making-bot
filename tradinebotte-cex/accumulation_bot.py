@@ -279,7 +279,7 @@ def _restore_state(state: AccumState, db: sqlite3.Connection) -> bool:
         return False
     if row is None:
         return False
-    (ts_ms, holdings, avg, free, realized,
+    (_, holdings, avg, free, realized,
      peak, last_buy_ts, rebuys_json, bands_json) = row
     state.holdings_btc      = holdings
     state.avg_entry         = avg
@@ -363,8 +363,7 @@ async def _buy(state: AccumState, price: float, usdt_amount: float,
 
     state.holdings_btc += qty_btc
     state.free_usdt    -= total
-    if state.holdings_btc > state.peak_holdings_btc:
-        state.peak_holdings_btc = state.holdings_btc
+    state.peak_holdings_btc = max(state.peak_holdings_btc, state.holdings_btc)
 
     if state.earn is not None:
         await state.earn.park_idle(state.free_usdt, keep_liquid=earn_keep)
@@ -469,7 +468,7 @@ async def _check_rebuys(state: AccumState, price: float,
     expired = []
     filled  = []
     for rb in state.pending_rebuys:
-        if max_age > 0 and rb.ts_ms > 0 and (ts_ms - rb.ts_ms) > max_age:
+        if rb.ts_ms > 0 and 0 < max_age < (ts_ms - rb.ts_ms):
             logger.info("Rebuy +%.1f%% expired (age=%dd) — band re-armed",
                         rb.band_pct, (ts_ms - rb.ts_ms) // 86_400_000)
             state.active_bands.discard(rb.band_pct)
@@ -505,7 +504,7 @@ async def _check_obi_scale_in(state: AccumState, price: float,
     base_iv  = p.get("min_scale_interval_s", 3600)
     floor_iv = p.get("scale_in_cooldown_min_s", base_iv)
     strong   = p.get("scale_in_obi_strong_thresh", 0.80)
-    min_iv   = min(floor_iv, base_iv // 2) if abs(state.obi_ema) >= strong else base_iv
+    min_iv   = max(floor_iv, base_iv // 2) if abs(state.obi_ema) >= strong else base_iv
     if (ts_ms - state.last_buy_ts) / 1000.0 < min_iv:
         return
 
@@ -603,8 +602,10 @@ def _handle_fear_greed(state: AccumState, msg: dict) -> None:
 def _handle_liquidations(state: AccumState, msg: dict) -> None:
     long_usd  = msg.get("liq_long_usd")
     short_usd = msg.get("liq_short_usd")
-    if long_usd  is not None: state.liq_long_usd  = float(long_usd)
-    if short_usd is not None: state.liq_short_usd = float(short_usd)
+    if long_usd  is not None:
+        state.liq_long_usd  = float(long_usd)
+    if short_usd is not None:
+        state.liq_short_usd = float(short_usd)
     logger.debug("Liq: long=%.0f  short=%.0f  USDT",
                  state.liq_long_usd, state.liq_short_usd)
 
@@ -693,11 +694,16 @@ async def _zmq_loop(state: AccumState, db: sqlite3.Connection) -> None:
     p           = state.p
     addr        = p.get("indicators_addr", "tcp://127.0.0.1:5559")
     scalping_id = p.get("scalping_stream_id",  "btc_scalping_spot")
-    macro_id    = p.get("macro_obi_stream_id", "btc_macro_obi")    if p.get("macro_obi_gate",    True) else None
-    fg_id       = p.get("fear_greed_stream_id","fear_greed")        if p.get("fear_greed_gate",   True) else None
-    liq_id      = p.get("liq_stream_id",       "btc_liquidations") if p.get("liq_gate",           True) else None
-    ls_id       = p.get("ls_ratio_stream_id",  "btc_ls_ratio")     if p.get("ls_ratio_gate",      True) else None
-    rsi4h_id    = p.get("rsi4h_stream_id",     "btc_4h")           if p.get("rsi4h_gate",         True) else None
+    macro_id = (p.get("macro_obi_stream_id", "btc_macro_obi")
+                if p.get("macro_obi_gate",   True) else None)
+    fg_id    = (p.get("fear_greed_stream_id", "fear_greed")
+                if p.get("fear_greed_gate",  True) else None)
+    liq_id   = (p.get("liq_stream_id",  "btc_liquidations")
+                if p.get("liq_gate",         True) else None)
+    ls_id    = (p.get("ls_ratio_stream_id", "btc_ls_ratio")
+                if p.get("ls_ratio_gate",    True) else None)
+    rsi4h_id = (p.get("rsi4h_stream_id", "btc_4h")
+                if p.get("rsi4h_gate",       True) else None)
 
     ctx = azmq.Context.instance()
     sub = ctx.socket(zmq.SUB)
@@ -712,9 +718,9 @@ async def _zmq_loop(state: AccumState, db: sqlite3.Connection) -> None:
         while True:
             try:
                 msg = await sub.recv_json()
-            except asyncio.CancelledError:
+            except asyncio.CancelledError:  # pylint: disable=try-except-raise
                 raise
-            except Exception as exc:
+            except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.warning("ZMQ recv error: %s — retrying in 5s", exc)
                 await asyncio.sleep(5)
                 continue
@@ -842,7 +848,7 @@ def main() -> None:
         strat = Path(args.strategy)
         if not strat.is_absolute():
             strat = install_dir / strat
-        with open(strat) as f:
+        with open(strat, encoding="utf-8") as f:
             p.update({k: v for k, v in json.load(f).items()
                       if not k.startswith("_")})
 

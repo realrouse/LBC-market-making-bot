@@ -139,10 +139,10 @@ async def _market_refresh(sock: zmq.asyncio.Socket,
                     await ws.send(api.make_subscribe_msg(new_ids[i:i + api.WS_BATCH_SIZE]))
                 logger.info("New tokens: %d", len(new_ids))
 
-            # Purge expired markets.
+            # Purge expired markets — 5 s grace matches live_bot's resolution window.
             now_ms = time.time() * 1000
             expired = [mid for mid, r in list(registered.items())
-                       if r.get("end_ms", 0) and now_ms > r["end_ms"]]
+                       if r.get("end_ms", 0) and now_ms > r["end_ms"] + 5_000]
             for mid in expired:
                 r = registered.pop(mid, {})
                 for tid in (r.get("up", ""), r.get("dn", "")):
