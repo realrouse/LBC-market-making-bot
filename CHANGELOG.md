@@ -6,6 +6,20 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.79] — 2026-06-09
+
+### Added
+- **`analysis/btc_variation.py`** — BTC price variation report from local collector databases; auto-detects the most recent CEX database (`ob_snapshots` or `snapshots` table), prints daily OHLC table and overall `▲/▼` variation with `--days N` and `--db PATH` flags
+- **`analysis/check_data_quality.py`** — invariant checks on all collector databases; auto-classifies each DB (ob\_cex, cex\_snap, polymarket, klines, daily) and runs targeted checks: price bounds, type contamination (Polymarket probabilities in CEX tables), OBI sanity, capital accounting identity, collection gap detection via SQL `LAG()`; `--no-gaps`, `--warn-only`, and `--verbose` flags; exits non-zero on any `FAIL` by default
+- **`scripts/run_tests.sh`** — data quality check added as step 3 (`--no-gaps --warn-only`, non-blocking); pylint added as step 6 (non-blocking, skipped gracefully if not installed)
+- **`docs/HOWTO_tests_and_backtests.md`, `docs/HOWTO_tests_and_backtests.fr.md`** — new *Pre-release checklist* subsection: full gap scan command (`check_data_quality.py --warn-only` without `--no-gaps`) and integration tests reminder
+
+### Changed
+- **`docs/design.md`, `docs/design.fr.md`** — IPC architecture: Option B diagram updated from TCP addresses to IPC socket paths; probe flowchart labels corrected; default address table and ENV table updated to IPC auto-detection
+- **`docs/multi.md`, `docs/multi.fr.md`** — monitoring log examples replaced with actual `feed.py` output strings (IPC bind, market count, token subscription, WebSocket connected)
+
+---
+
 ## [0.78] — 2026-06-09
 
 ### Fixed
