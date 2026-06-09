@@ -6,6 +6,16 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.76] — 2026-06-09
+
+### Modifications
+- **`INSTALL.md`, `INSTALL.fr.md` — section multi-bot réécrite pour l'architecture trois services IPC** : documente `indicators.py` + `feed.py` + `account_bot.py` comme trois processus managés distincts ; sockets IPC dans `/run/user/$UID/` avec isolation par utilisateur Linux enforced par le noyau ; services systemd utilisateur (`systemctl --user`, sans `sudo`) désormais l'approche principale recommandée ; modèles complets de fichiers d'unité pour les trois services inclus ; `loginctl enable-linger` documenté comme étape admin unique ; étape d'installation de tradinetools ajoutée avec fallback en cas d'échec de `pip` (`rm -rf $SITE/tradinetools && cp -r …`) ; prérequis `feed_auto_start: false` documenté ; exigence de synchronisation de `bot/live_bot.py` documentée
+- **`QUICKSTART.md`, `QUICKSTART.fr.md` — résumé Option B multi-compte ajouté** : configuration des trois services systemd utilisateur décrite avec les commandes essentielles et lien vers la procédure complète ; commande d'arrêt du service système supprimée
+- **`README.md`, `README.fr.md` — bullet fonctionnalité multi-bot mis à jour** : décrit désormais l'architecture trois processus et le déploiement IPC au lieu du modèle deux processus avec démarrage auto du feed
+- **`UPDATE.md`, `UPDATE.fr.md` — commande de redémarrage des indicateurs mise à jour** : `sudo systemctl restart tradinebotte-indicators` remplacé par `systemctl --user restart tradinebotte-indicators.service` (unité utilisateur, sans sudo)
+
+---
+
 ## [0.75] — 2026-06-09
 
 ### Ajout
