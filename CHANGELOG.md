@@ -6,6 +6,14 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.78] — 2026-06-09
+
+### Fixed
+- **`INSTALL.md`, `INSTALL.fr.md` — account service layout corrected to flat-dir approach**: the `bot/` subdirectory approach was incorrect for a fresh deploy where only `account_bot.py` and `live_bot.py` are placed there (omitting `api_polymarket.py` and other modules that `live_bot.py` imports); corrected to the flat-dir approach: all three services (`indicators.py`, `feed.py`, `account_bot.py`) run from `~/tradinebotte/` so `account_bot.py`'s `sys.path.insert(0, dirname(__file__))` resolves `~/tradinebotte/` and `import live_bot` finds all its dependencies; directory layout updated; shadow copy note removed from architecture notes
+- **`README.md`, `README.fr.md` — multi-bot bullet updated**: removed shadow copy reference, noted flat-dir layout
+
+---
+
 ## [0.77] — 2026-06-09
 
 ### Fixed

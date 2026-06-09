@@ -912,17 +912,15 @@ son propre feed quand le feed partagé est un service géré :
 ### Arborescence (exemple — deux comptes)
 
 ```
-~/tradinebotte/          ← installation partagée : venv, fichiers bot, tradinetools/
+~/tradinebotte/          ← installation partagée : venv, tous les fichiers bot, tradinetools/
   .venv/
-  live_bot.py
-  feed.py                ← service feed s'exécute depuis ici
-  indicators.py          ← service indicators s'exécute depuis ici
+  live_bot.py            ← importé par account_bot (sys.path inclut ~/tradinebotte/)
+  feed.py                ← ExecStart du service feed
+  indicators.py          ← ExecStart du service indicators
+  account_bot.py         ← ExecStart du service account_bot
   tradinetools/
   feed.log
   indicators.log
-  bot/
-    account_bot.py       ← service account_bot s'exécute depuis ici (sys.path insère bot/)
-    live_bot.py          ← copie miroir — maintenir synchronisé avec ~/tradinebotte/live_bot.py à chaque mise à jour
 ~/account-a/             ← compte A : DB, log, config propres
   config.json            ← "feed_auto_start": false
   live.db
@@ -1001,8 +999,8 @@ Requires=tradinebotte-feed.service
 
 [Service]
 Type=simple
-WorkingDirectory=%h/tradinebotte/bot
-ExecStart=%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/bot/account_bot.py
+WorkingDirectory=%h/tradinebotte
+ExecStart=%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/account_bot.py
 Restart=on-failure
 RestartSec=10
 
@@ -1095,7 +1093,7 @@ Le feed publie trois types de messages JSON via ZeroMQ PUB :
 - Si le feed redémarre, les account bots récupèrent automatiquement — ils rateront les mises à jour pendant l'interruption mais ne placeront pas d'ordres en double car l'ensemble `signalled` est persisté dans la DB entre les sessions.
 - Le pattern PUB/SUB ZeroMQ est unidirectionnel : les account bots n'envoient jamais de messages au feed.
 - Les sockets IPC sont placées dans `/run/user/$UID/` (géré par systemd-logind, mode 0700). Le répertoire de secours est `/tmp/tradinebotte-$UID/` (mode 0700) pour les systèmes sans `systemd-logind`.
-- **`bot/live_bot.py` doit rester synchronisé** : `account_bot.py` insère son propre répertoire (`bot/`) dans `sys.path` et y importe `live_bot`. Toujours pousser `live_bot.py` → `bot/live_bot.py` à chaque mise à jour pour éviter des adresses IPC/TCP obsolètes.
+- `account_bot.py` insère son propre répertoire dans `sys.path` et y importe `live_bot`. Avec l'arborescence à plat (`ExecStart` pointant vers `~/tradinebotte/account_bot.py`), les deux fichiers se trouvent dans `~/tradinebotte/` et restent synchronisés automatiquement à chaque mise à jour rsync.
 
 ### Tests d'intégration
 

@@ -900,17 +900,15 @@ a managed service:
 ### Directory layout (example — two accounts)
 
 ```
-~/tradinebotte/          ← shared install: venv, bot files, tradinetools/
+~/tradinebotte/          ← shared install: venv, all bot files, tradinetools/
   .venv/
-  live_bot.py
-  feed.py                ← feed service runs from here
-  indicators.py          ← indicators service runs from here
+  live_bot.py            ← account_bot imports this (sys.path includes ~/tradinebotte/)
+  feed.py                ← feed service ExecStart
+  indicators.py          ← indicators service ExecStart
+  account_bot.py         ← account service ExecStart
   tradinetools/
   feed.log
   indicators.log
-  bot/
-    account_bot.py       ← account service runs from here (sys.path inserts bot/)
-    live_bot.py          ← shadow copy — keep in sync with ~/tradinebotte/live_bot.py on every update
 ~/account-a/             ← account A: own DB, log, config
   config.json            ← "feed_auto_start": false
   live.db
@@ -988,8 +986,8 @@ Requires=tradinebotte-feed.service
 
 [Service]
 Type=simple
-WorkingDirectory=%h/tradinebotte/bot
-ExecStart=%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/bot/account_bot.py
+WorkingDirectory=%h/tradinebotte
+ExecStart=%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/account_bot.py
 Restart=on-failure
 RestartSec=10
 
@@ -1082,7 +1080,7 @@ The feed publishes three JSON message types over ZeroMQ PUB:
 - If the feed restarts, account bots automatically recover — they will miss book updates during the gap but will not place duplicate orders because the `signalled` set is persisted to the DB between sessions.
 - The ZeroMQ PUB/SUB pattern is one-way: account bots never send messages back to the feed.
 - IPC sockets are placed in `/run/user/$UID/` (managed by systemd-logind, mode 0700).  The fallback for systems without `systemd-logind` is `/tmp/tradinebotte-$UID/` (mode 0700).
-- **`bot/live_bot.py` must stay in sync**: `account_bot.py` inserts its own directory (`bot/`) into `sys.path` and imports `live_bot` from there.  Always push `live_bot.py` → `bot/live_bot.py` on every update to avoid stale IPC/TCP address defaults.
+- `account_bot.py` inserts its own directory into `sys.path` and imports `live_bot` from there.  With the flat-dir layout (`ExecStart` pointing to `~/tradinebotte/account_bot.py`), both files live in `~/tradinebotte/` and stay in sync automatically on every rsync update.
 
 ### Integration tests
 

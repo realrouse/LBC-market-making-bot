@@ -6,6 +6,14 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.78] — 2026-06-09
+
+### Correctifs
+- **`INSTALL.md`, `INSTALL.fr.md` — arborescence du service account corrigée vers l'approche répertoire à plat** : l'approche sous-répertoire `bot/` était incorrecte pour une installation fraîche où seulement `account_bot.py` et `live_bot.py` y sont placés (sans `api_polymarket.py` et autres modules importés par `live_bot.py`) ; corrigé vers l'approche à plat : les trois services (`indicators.py`, `feed.py`, `account_bot.py`) s'exécutent depuis `~/tradinebotte/` afin que `sys.path.insert(0, dirname(__file__))` de `account_bot.py` résolve `~/tradinebotte/` et que `import live_bot` trouve toutes ses dépendances ; arborescence mise à jour ; note sur la copie miroir supprimée des notes d'architecture
+- **`README.md`, `README.fr.md` — bullet multi-bot mis à jour** : référence à la copie miroir supprimée, arborescence à plat notée
+
+---
+
 ## [0.77] — 2026-06-09
 
 ### Correctifs
