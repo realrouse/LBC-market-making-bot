@@ -183,8 +183,16 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
         echo 'updating dependencies...'
         \"\$VENV/bin/pip\" install --quiet -r requirements.txt 2>/dev/null \
             && echo 'deps ok' || echo 'pip warning (non-fatal)'
-        \"\$VENV/bin/pip\" install --quiet -e tradinetools 2>/dev/null \
-            && echo 'tradinetools ok' || echo 'tradinetools warning (non-fatal)'
+        PYVER=\$(\"\$VENV/bin/python3\" -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')
+        SITE=\$VENV/lib/python\${PYVER}/site-packages
+        if \"\$VENV/bin/pip\" install --quiet -e tradinetools 2>/dev/null; then
+            echo 'tradinetools ok (pip)'
+        else
+            rm -rf \"\$SITE/tradinetools\"
+            cp -r tradinetools/tradinetools \"\$SITE/tradinetools\"
+            echo 'tradinetools ok (copy)'
+        fi
+        \"\$VENV/bin/python3\" -c 'from tradinetools.zmq import ipc_socket_dir, make_pub; print(\"tradinetools import ok\")' 2>&1
 
         # XDG_RUNTIME_DIR is required for systemctl --user in non-interactive SSH sessions
         export XDG_RUNTIME_DIR=/run/user/\$(id -u)

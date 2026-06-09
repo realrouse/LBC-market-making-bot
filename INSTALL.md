@@ -205,10 +205,10 @@ takes precedence over both.
 | Variable | config.json key | Default | Scope | Description |
 |---|---|---|---|---|
 | `TRADINEBOTTE_DIR` | — | `~/tradinebotte` | all scripts | Runtime directory: where `config.json`, `live.db`, `live.log`, the venv, and strategy files are stored. **No config.json key** — this is the bootstrap path needed to locate the file in the first place. |
-| `TRADINEBOTTE_FEED_ADDR` | `feed_addr` | `tcp://127.0.0.1:5557` | feed, account\_bot, indicators | ZeroMQ PUB/SUB address used by the shared WebSocket feed (Option B multi-bot). Set a different port when running multiple feeds on the same machine. |
-| `TRADINEBOTTE_PORT_BASE` | — | `5557` | feed, account\_bot, indicators | Base port number; `TRADINEBOTTE_FEED_ADDR` defaults to `tcp://127.0.0.1:<PORT_BASE>` when the full address is not set. |
-| `TRADINEBOTTE_INDICATORS_ADDR` | `indicators_addr` | `tcp://127.0.0.1:5559` | indicators, account\_bot | ZeroMQ PUB address where the shared indicators service publishes enriched messages. `account_bot` subscribes here when `indicators_streams` is set. |
-| `TRADINEBOTTE_INDICATORS_REG_ADDR` | `indicators_reg_addr` | `tcp://127.0.0.1:5561` | account\_bot | ZeroMQ REP address of the shared indicators service for dynamic stream registration. Each `account_bot` sends subscribe requests here at startup. |
+| `TRADINEBOTTE_FEED_ADDR` | `feed_addr` | IPC auto-detected (`/run/user/$UID/tradinebotte-feed.sock`) | feed, account\_bot, indicators | ZeroMQ PUB/SUB address for the shared WebSocket feed (Option B multi-bot). Leave unset for IPC (single-host). Set to `tcp://127.0.0.1:5557` to force TCP, e.g. when running multiple independent stacks or cross-host. |
+| `TRADINEBOTTE_PORT_BASE` | — | (unset) | feed, account\_bot, indicators | When set, switches all address defaults to TCP and shifts ports by `PORT_BASE − 5557`. E.g. `TRADINEBOTTE_PORT_BASE=6557` runs a second independent TCP stack at 6557/6559/6561. Leave unset for IPC (recommended). |
+| `TRADINEBOTTE_INDICATORS_ADDR` | `indicators_addr` | IPC auto-detected (`/run/user/$UID/tradinebotte-indicators.sock`) | indicators, account\_bot | ZeroMQ PUB address where the shared indicators service publishes enriched messages. `account_bot` subscribes here when `indicators_streams` is set. |
+| `TRADINEBOTTE_INDICATORS_REG_ADDR` | `indicators_reg_addr` | IPC auto-detected (`/run/user/$UID/tradinebotte-ind-reg.sock`) | account\_bot | ZeroMQ REP address of the shared indicators service for dynamic stream registration. Each `account_bot` sends subscribe requests here at startup. |
 | — | `feed_auto_start` | `true` | account\_bot | When `false`, `account_bot` expects `feed.py` to be managed externally (e.g. systemd); probes with retries instead of auto-starting it. Exits if the feed is unreachable after 30 s. |
 | — | `indicators_streams` | `[]` | account\_bot | List of stream subscription specs sent to the shared indicators service at startup. See [Technical Indicator Service](#technical-indicator-service). |
 | `TRADINEBOTTE_INSTALL_DIR` | — | auto-detected | install scripts | Override the install directory used by `install_feed_service.sh` and `install_indicators_service.sh` when searching for the virtualenv. |
@@ -542,17 +542,17 @@ When more than one file is processed, each file runs with capital reset to `capi
 `tradinebotte-indicators/indicators.py` is a ZeroMQ pipeline stage that sits between feed.py and any consumer. It subscribes to the feed PUB socket, accumulates a price history per token, and republishes enriched indicator messages on a second PUB socket. All three Binance WebSocket loops are protected by a 120-second recv watchdog — if Binance stops sending data while keeping the TCP connection alive, the service detects the stall and reconnects automatically.
 
 ```
-feed.py  PUB :5557  ──SUB──▶  indicators.py  ──PUB :5559──▶  consumers
+feed.py  PUB (IPC)  ──SUB──▶  indicators.py  ──PUB (IPC)──▶  consumers
 ```
 
 ```bash
-# Start with default settings (SUB :5557 → PUB :5559)
+# Start with default settings (IPC auto-detected from /run/user/$UID/)
 python3 tradinebotte-indicators/indicators.py
 
 # Custom periods
 python3 tradinebotte-indicators/indicators.py --rsi 7 --sma 10 --ema 5 --vol 10
 
-# Custom ZMQ addresses
+# Custom ZMQ addresses (TCP override example)
 python3 tradinebotte-indicators/indicators.py --feed tcp://127.0.0.1:5558 --out tcp://127.0.0.1:5560
 
 # Verbose (prints each indicator publish to stdout)
@@ -573,9 +573,9 @@ Messages are only published once `--min-ticks` (default: 25) price updates have 
 | Flag | Default | Description |
 |---|---|---|
 | `--config FILE` | — | Path to the indicators JSON config file (recommended) |
-| `--feed ADDR` | `tcp://127.0.0.1:5557` | ZMQ address to subscribe to (feed.py PUB) |
-| `--out ADDR` | `tcp://127.0.0.1:5559` | ZMQ PUB address to bind and publish on |
-| `--reg-addr ADDR` | `tcp://127.0.0.1:5561` | ZMQ REP address for dynamic stream registration |
+| `--feed ADDR` | IPC auto-detected | ZMQ address to subscribe to (feed.py PUB) |
+| `--out ADDR` | IPC auto-detected | ZMQ PUB address to bind and publish on |
+| `--reg-addr ADDR` | IPC auto-detected | ZMQ REP address for dynamic stream registration |
 | `--rsi N` | 14 | RSI period |
 | `--sma N` | 20 | SMA period |
 | `--ema N` | 9 | EMA period |
@@ -593,7 +593,7 @@ Each account declares its needs in `config.json`:
 
 ```json
 {
-  "indicators_reg_addr": "tcp://127.0.0.1:5561",
+  "indicators_reg_addr": "ipc:///run/user/1000/tradinebotte-ind-reg.sock",
   "indicators_streams": [
     {
       "source": "binance_ws",
@@ -850,12 +850,18 @@ Use Option B when running two or more accounts simultaneously, when accounts bel
 to different Linux users, or when comparing different strategies in parallel.
 For a single account, Option A (`live_bot.py` standalone) is simpler.
 
-The ZeroMQ architecture splits the bot into two processes:
+The ZeroMQ architecture uses **three** processes per deployment:
 
 | Process | File | Role |
 |---|---|---|
-| Feed | `tradinebotte-polymarket/feed.py` | Single WS connection; broadcasts book updates via ZMQ PUB |
-| Account bot | `tradinebotte-polymarket/account_bot.py` | Subscribes to feed; trades one account in full isolation |
+| Indicators | `indicators.py` | Computes signal data; publishes via ZMQ PUB; registers markets on REP socket |
+| Feed | `feed.py` | Single WebSocket connection; broadcasts book updates via ZMQ PUB |
+| Account bot | `account_bot.py` | Subscribes to feed and indicators; executes trades for one account |
+
+All three communicate over IPC sockets (`ipc://`) placed in `/run/user/$UID/`
+(kernel-enforced mode 0700 per Linux user).  No TCP port conflicts between
+Linux users sharing the same server.  The fallback location is
+`/tmp/tradinebotte-$UID/` on systems without `systemd-logind`.
 
 ### Prerequisites
 
@@ -866,14 +872,45 @@ the dependencies:
 bash scripts/install.sh
 ```
 
+Install `tradinetools` (the shared ZMQ utility library).  `pip install -e` may
+fail on Python 3.14 venvs; the copy fallback is always reliable:
+
+```bash
+cd ~/tradinebotte
+PYVER=$(.venv/bin/python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+SITE=.venv/lib/python${PYVER}/site-packages
+if .venv/bin/pip install --quiet -e tradinetools 2>/dev/null; then
+    echo 'tradinetools ok (pip)'
+else
+    rm -rf "$SITE/tradinetools"
+    cp -r tradinetools/tradinetools "$SITE/tradinetools"
+    echo 'tradinetools ok (copy)'
+fi
+.venv/bin/python3 -c 'from tradinetools.zmq import ipc_socket_dir, make_pub; print("tradinetools ok")'
+```
+
+**Account config** — add `feed_auto_start: false` to each account's `config.json`
+so the account bot does not try to spawn a private feed when the shared feed is
+a managed service:
+
+```json
+{ "feed_auto_start": false }
+```
+
 ### Directory layout (example — two accounts)
 
 ```
-~/tradinebotte/          ← shared venv + the feed log
+~/tradinebotte/          ← shared install: venv, all bot files, tradinetools/
   .venv/
+  live_bot.py            ← account_bot imports this (sys.path includes ~/tradinebotte/)
+  feed.py                ← feed service ExecStart
+  indicators.py          ← indicators service ExecStart
+  account_bot.py         ← account service ExecStart
+  tradinetools/
   feed.log
+  indicators.log
 ~/account-a/             ← account A: own DB, log, config
-  config.json
+  config.json            ← "feed_auto_start": false
   live.db
   account.log
 ~/account-b/             ← account B: own DB, log, config
@@ -889,33 +926,136 @@ TRADINEBOTTE_DIR=~/account-a python3 scripts/setup.py   # enter account A key
 TRADINEBOTTE_DIR=~/account-b python3 scripts/setup.py   # enter account B key
 ```
 
-### Launching
+### Systemd user services (recommended)
+
+User services run without `sudo`, restart automatically on crash, and persist
+across reboots when linger is enabled.
+
+**One-time admin step** — enable linger so services survive after SSH logout
+(requires root or `sudo`; run once per VPS user, not by the bot user itself):
 
 ```bash
-# 1. Start the shared feed (one instance, any TRADINEBOTTE_DIR for the venv path)
+sudo loginctl enable-linger <bot_username>
+```
+
+**Install unit files** — run as the bot user:
+
+```bash
+mkdir -p ~/.config/systemd/user/
+
+cat > ~/.config/systemd/user/tradinebotte-indicators.service << 'EOF'
+[Unit]
+Description=tradinebotte indicators
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/tradinebotte
+ExecStart=%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/indicators.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+
+cat > ~/.config/systemd/user/tradinebotte-feed.service << 'EOF'
+[Unit]
+Description=tradinebotte feed
+After=tradinebotte-indicators.service
+Requires=tradinebotte-indicators.service
+
+[Service]
+Type=simple
+# IPC address auto-detected from /run/user/%U/ — no override needed.
+# To force TCP: Environment=TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5557
+WorkingDirectory=%h/tradinebotte
+ExecStart=%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/feed.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+
+cat > ~/.config/systemd/user/tradinebotte-account.service << 'EOF'
+[Unit]
+Description=tradinebotte account bot
+After=tradinebotte-feed.service
+Requires=tradinebotte-feed.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/tradinebotte
+ExecStart=%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/account_bot.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+EOF
+
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+systemctl --user daemon-reload
+systemctl --user enable --now tradinebotte-indicators.service
+systemctl --user enable --now tradinebotte-feed.service
+systemctl --user enable --now tradinebotte-account.service
+```
+
+**Verify** (wait ~10 s after start):
+
+```bash
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+systemctl --user status tradinebotte-indicators.service
+systemctl --user status tradinebotte-feed.service
+systemctl --user status tradinebotte-account.service
+```
+
+**Note:** `XDG_RUNTIME_DIR` must be set explicitly in non-interactive SSH
+sessions.  The `export XDG_RUNTIME_DIR=/run/user/$(id -u)` line above is
+required whenever you run `systemctl --user` over SSH.
+
+### Manual launch (without systemd)
+
+```bash
+# 1. Start indicators (required by feed and account bots)
+cd ~/tradinebotte && .venv/bin/python3 indicators.py &
+
+# 2. Start the shared feed (one instance)
 bash tradinebotte-polymarket/scripts/start_feed.sh
 
-# 2. Start each account bot in a separate shell
+# 3. Start each account bot in a separate shell
 TRADINEBOTTE_DIR=~/account-a bash tradinebotte-polymarket/scripts/start_account.sh
 TRADINEBOTTE_DIR=~/account-b bash tradinebotte-polymarket/scripts/start_account.sh
 ```
 
-Custom feed address (useful when running on different ports or hosts):
+TCP override — useful for a second independent stack or cross-host routing:
 
 ```bash
 TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash tradinebotte-polymarket/scripts/start_feed.sh
 TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-a bash tradinebotte-polymarket/scripts/start_account.sh
 ```
 
-**Feed flags** (`scripts/start_feed.sh` passes these through to `tradinebotte-polymarket/feed.py`):
+**Feed flags** (`scripts/start_feed.sh` passes these through to `feed.py`):
 
 - `--verbose` — enable DEBUG logging; prints every raw WebSocket message and ZMQ publish; useful for diagnosing feed connectivity or message format issues
 
-**Account bot flags** (`scripts/start_account.sh` passes these through to `tradinebotte-polymarket/account_bot.py`):
+**Account bot flags** (`scripts/start_account.sh` passes these through to `account_bot.py`):
 
 - `--verbose` — enable DEBUG logging for diagnostics; prints every book update, signal evaluation, and ZMQ message received; useful during initial setup or troubleshooting
 
 ### Stopping
+
+With systemd user services:
+
+```bash
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+systemctl --user stop tradinebotte-account.service
+systemctl --user stop tradinebotte-feed.service
+systemctl --user stop tradinebotte-indicators.service
+```
+
+Without systemd (PID files):
 
 ```bash
 kill $(cat ~/tradinebotte/feed.pid)
@@ -936,9 +1076,11 @@ The feed publishes three JSON message types over ZeroMQ PUB:
 ### Architecture notes
 
 - The feed has no trading logic and holds no credentials — it is safe to restart without affecting account state.
-- Each `tradinebotte-polymarket/account_bot.py` process writes to its own SQLite database; the `handle_book_update` / `check_signal` / `enter_live_trade` path from `live_bot.py` runs unmodified.
+- Each `account_bot.py` process writes to its own SQLite database; the `handle_book_update` / `check_signal` / `enter_live_trade` path from `live_bot.py` runs unmodified.
 - If the feed restarts, account bots automatically recover — they will miss book updates during the gap but will not place duplicate orders because the `signalled` set is persisted to the DB between sessions.
 - The ZeroMQ PUB/SUB pattern is one-way: account bots never send messages back to the feed.
+- IPC sockets are placed in `/run/user/$UID/` (managed by systemd-logind, mode 0700).  The fallback for systems without `systemd-logind` is `/tmp/tradinebotte-$UID/` (mode 0700).
+- `account_bot.py` inserts its own directory into `sys.path` and imports `live_bot` from there.  With the flat-dir layout (`ExecStart` pointing to `~/tradinebotte/account_bot.py`), both files live in `~/tradinebotte/` and stay in sync automatically on every rsync update.
 
 ### Integration tests
 

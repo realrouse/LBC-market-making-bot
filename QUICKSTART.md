@@ -26,7 +26,7 @@ tail -f ~/tradinebotte/live.log
 Monitor: `bash tradinebotte-polymarket/scripts/monitor.sh`  
 Auto-restart on reboot: see [INSTALL.md — systemd setup](INSTALL.md#auto-start-with-systemd-recommended-for-dedicated-servers)
 
-**Stop:** `kill $(cat ~/tradinebotte/live.pid)` · or `sudo systemctl stop tradinebotte` (system unit) · or `systemctl --user stop tradinebotte-live.service` (user unit, no sudo)
+**Stop:** `kill $(cat ~/tradinebotte/live.pid)` · or `systemctl --user stop tradinebotte-live.service` (user unit, no sudo)
 
 ---
 
@@ -35,4 +35,26 @@ Auto-restart on reboot: see [INSTALL.md — systemd setup](INSTALL.md#auto-start
 See [INSTALL.md](INSTALL.md) for:
 - **git clone** — recommended when GitHub is accessible from the target machine
 - **rsync** — recommended for servers without git (deploy from a local dev machine)
-- Full details on multi-account setup (Option B — ZeroMQ shared WebSocket)
+- Full details on multi-account setup (Option B — ZeroMQ three-service architecture)
+
+### Multi-account setup (Option B) — summary
+
+Option B runs three systemd user services per deployment: **indicators**, **feed**, and **account_bot**.
+All three communicate over IPC sockets in `/run/user/$UID/` — no TCP port conflicts between Linux users.
+
+One-time admin step per VPS user (root required):
+
+```bash
+sudo loginctl enable-linger <bot_username>
+```
+
+Then as the bot user (no sudo needed):
+
+```bash
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+systemctl --user enable --now tradinebotte-indicators.service
+systemctl --user enable --now tradinebotte-feed.service
+systemctl --user enable --now tradinebotte-account.service
+```
+
+Full procedure (unit file templates, tradinetools install, config): [INSTALL.md — Multi-bot WebSocket sharing](INSTALL.md#multi-bot-websocket-sharing-option-b--zeromq)

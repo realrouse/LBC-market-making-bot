@@ -9,7 +9,7 @@ from indicators import (
     IndicatorSpec, StreamSpec, IndicatorsConfig, load_config,
     derive_stream_id, parse_subscribe_request, _handle_subscribe,
     _SOURCES_WITHOUT_INDICATORS, _DEFAULT_POLL_INTERVALS, _VALID_SOURCES,
-    _shift_addr, _PORT_SHIFT,
+    _shift_addr, _PORT_SHIFT, _REG_ADDR,
 )
 
 
@@ -303,7 +303,7 @@ class TestLoadConfig(unittest.TestCase):
     def test_loads_reg_addr_default(self):
         path = self._write_config(self._base_cfg())
         cfg = load_config(path)
-        self.assertEqual(cfg.reg_addr, "tcp://127.0.0.1:5561")
+        self.assertEqual(cfg.reg_addr, _REG_ADDR)
 
     def test_loads_reg_addr_override(self):
         path = self._write_config(self._base_cfg(zmq_reg_addr="tcp://127.0.0.1:5599"))

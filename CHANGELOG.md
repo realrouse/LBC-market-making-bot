@@ -6,6 +6,31 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.78] — 2026-06-09
+
+### Fixed
+- **`INSTALL.md`, `INSTALL.fr.md` — account service layout corrected to flat-dir approach**: the `bot/` subdirectory approach was incorrect for a fresh deploy where only `account_bot.py` and `live_bot.py` are placed there (omitting `api_polymarket.py` and other modules that `live_bot.py` imports); corrected to the flat-dir approach: all three services (`indicators.py`, `feed.py`, `account_bot.py`) run from `~/tradinebotte/` so `account_bot.py`'s `sys.path.insert(0, dirname(__file__))` resolves `~/tradinebotte/` and `import live_bot` finds all its dependencies; directory layout updated; shadow copy note removed from architecture notes
+- **`README.md`, `README.fr.md` — multi-bot bullet updated**: removed shadow copy reference, noted flat-dir layout
+
+---
+
+## [0.77] — 2026-06-09
+
+### Fixed
+- **`INSTALL.md`, `INSTALL.fr.md` — account service ExecStart corrected**: the account_bot unit previously used `%h/tradinebotte/account_bot.py`; corrected to `%h/tradinebotte/bot/account_bot.py` (WorkingDirectory `%h/tradinebotte/bot`) so that `account_bot.py`'s `sys.path.insert(0, dirname(__file__))` resolves `live_bot` from `bot/live_bot.py`, matching the live deployment; directory layout updated to show `bot/account_bot.py` and `bot/live_bot.py`
+
+---
+
+## [0.76] — 2026-06-09
+
+### Changed
+- **`INSTALL.md`, `INSTALL.fr.md` — multi-bot section rewritten for three-service IPC architecture**: documents `indicators.py` + `feed.py` + `account_bot.py` as three separate managed processes; IPC sockets in `/run/user/$UID/` with per-user kernel isolation; systemd user services (`systemctl --user`, no `sudo`) are now the primary recommended approach; includes full unit file templates for all three services; `loginctl enable-linger` documented as a one-time admin step; tradinetools install step added with `pip` failure fallback (`rm -rf $SITE/tradinetools && cp -r …`); `feed_auto_start: false` config requirement noted; `bot/live_bot.py` sync requirement documented
+- **`QUICKSTART.md`, `QUICKSTART.fr.md` — multi-account Option B summary added**: three-service systemd user service setup described with essential commands and link to full procedure; system unit stop command removed
+- **`README.md`, `README.fr.md` — multi-bot feature bullet updated**: now describes the three-process architecture and IPC-based deployment instead of the two-process feed auto-start model
+- **`UPDATE.md`, `UPDATE.fr.md` — indicators restart command updated**: `sudo systemctl restart tradinebotte-indicators` replaced with `systemctl --user restart tradinebotte-indicators.service` (user unit, no sudo)
+
+---
+
 ## [0.75] — 2026-06-09
 
 ### Added

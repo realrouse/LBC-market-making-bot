@@ -123,7 +123,9 @@ La v0.50 ajoute de nouveaux flux et paramètres à `tradinebotte-indicators/indi
 1. Redémarrer le service d'indicateurs partagé **avant** de redémarrer les bots dépendants (accumulation, scalping, swing) :
 
 ```bash
-sudo systemctl restart tradinebotte-indicators
+# Avec le service systemd utilisateur (recommandé — sans sudo) :
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+systemctl --user restart tradinebotte-indicators.service
 # ou via le fichier PID :
 kill $(cat ~/tradinebotte/indicators.pid)
 bash tradinebotte-indicators/scripts/start_indicators.sh

@@ -128,7 +128,9 @@ v0.50 adds new streams and parameters to `tradinebotte-indicators/indicators.py`
 1. Restart the shared indicators service **before** restarting any dependent bots (accumulation, scalping, swing):
 
 ```bash
-sudo systemctl restart tradinebotte-indicators
+# With systemd user service (recommended — no sudo):
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+systemctl --user restart tradinebotte-indicators.service
 # or, using the PID file:
 kill $(cat ~/tradinebotte/indicators.pid)
 bash tradinebotte-indicators/scripts/start_indicators.sh
