@@ -10,7 +10,7 @@ config.json is loaded:
     ...
 """
 
-import base64, hashlib, html, logging, logging.handlers, os, sqlite3, sys
+import html, logging, logging.handlers, os, sqlite3, sys
 from datetime import datetime, timezone
 from typing import Any
 
