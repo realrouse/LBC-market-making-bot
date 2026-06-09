@@ -21,6 +21,7 @@ how to interpret the results to make informed strategy decisions.
 9. [Full workflow — `strategy_compare.sh`](#9-full-workflow----strategy_comparesh)
 10. [Strategy JSON files](#10-strategy-json-files)
 11. [Interpreting results and making decisions](#11-interpreting-results-and-making-decisions)
+12. [Other backtest scripts](#12-other-backtest-scripts)
 
 ---
 
@@ -57,7 +58,7 @@ how to interpret the results to make informed strategy decisions.
 | `entry_max` | 0.998 | strategy JSON | Maximum `best_bid` accepted. Guards against already-resolved markets that slip through the time filter. |
 | `min_secs_remaining` | 45 | strategy JSON / `--min-secs` | Minimum seconds left in the market at entry. Too short → no time to recover; too long → less accurate signal. |
 | `min_ask_vol` | 10 | strategy JSON / `--min-ask` | Minimum ask-side liquidity in USD. Entries are skipped when the market is too illiquid. 0 = disabled. |
-| `obi_reject_thresh` | −0.75 | strategy JSON / `--obi` | OBI floor. Entries are rejected when `OBI < obi_reject_thresh`, i.e. when sell pressure is too strong. |
+| `obi_reject_thresh` | −0.25 (CLI) / −0.65 (piste3 live) | strategy JSON / `--obi` | OBI floor. Entries are rejected when `OBI < obi_reject_thresh`, i.e. when sell pressure is too strong. CLI flag `--obi` defaults to −0.25; the active live strategy (piste3) uses −0.65. |
 | `stake` | 10 | strategy JSON / `--stake` | USD amount wagered per trade. |
 | `daily_stop_loss` | 30 | strategy JSON | Maximum cumulative loss per calendar day (UTC). When reached, the bot stops entering new trades for the rest of the day. |
 | `capital_start` | 100 | strategy JSON | Starting capital for a backtest run. Used as the denominator for PnL%. |
@@ -347,6 +348,14 @@ The final line gives the exact CLI command to reproduce the best overall config.
 ### `min_ask` column note
 
 `min_ask` has negligible effect on most markets — the top-N deduplication (`--top`) removes the `min_ask` variants so you only see configs that differ on the meaningful axes (`threshold`, `min_secs`, `obi`).
+
+### WARNING — `--sweep-all` contamination by non-Polymarket databases
+
+`--sweep-all` includes **every database that has a `snapshots` table**, not just Polymarket databases. CEX strategy databases (`grid_cex_*.db`, `swing_cex_*.db`) also contain a `snapshots` table and are silently included in the sweep.
+
+This contaminates OBI optimisation: CEX snapshots have different OBI distributions, and the aggregated sweep will recommend a much more lenient OBI threshold (e.g. `obi=−0.75`) that looks good in aggregate but degrades Polymarket performance when tested in isolation.
+
+**Safe usage of `--sweep-all`**: always validate the top recommendation by re-running it on a single Polymarket database (`--db data/polymarket_5M_c2_*.db`) before adopting it. Confirmed case from 2026-06-08 session: sweep-all recommended `obi=−0.75` (Sharpe 6.4) but `obi=−0.25` (current) scored Sharpe 10.1 on c2 alone.
 
 ---
 
@@ -663,3 +672,124 @@ When a better configuration is found:
 ### Parameters not to change without a full backtest
 
 `WIN_THRESHOLD` (0.99), `LOSS_THRESHOLD` (0.01), `FEE_RATE` (2%), and `STAKE` are not swept. Changing them invalidates all existing backtest comparisons. The regression tests (`TestParamConsistency`) enforce that `live_bot.py` and `backtest.py` always agree on these values.
+
+---
+
+## 12. Other backtest scripts
+
+The sections above document `analysis/backtest.py` (Polymarket). The following scripts cover CEX and accumulation strategies and share the same general philosophy: historical replay → stats → optional sweep.
+
+### `scripts/backtest_accumulation.py` — BTC long-term accumulation
+
+Fetches live Binance 1h klines (BTCUSDT) and replays the accumulation strategy from `tradinebotte-cex/strategies/accumulation/btc_accumulation.json`.
+
+```bash
+# Default: full history from 2024-09-01 with dip proxy
+python3 scripts/backtest_accumulation.py
+
+# Specific date range
+python3 scripts/backtest_accumulation.py --start 2026-01-01 --end 2026-06-30
+
+# OBI proxy (taker-buy EMA) instead of price-dip proxy
+python3 scripts/backtest_accumulation.py --proxy obi
+
+# Show full trade log
+python3 scripts/backtest_accumulation.py --trades
+
+# Use a different strategy config
+python3 scripts/backtest_accumulation.py --strategy path/to/btc_accumulation.json
+```
+
+**Key flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--start` | 2024-09-01 | Start date (YYYY-MM-DD) |
+| `--end` | today | End date |
+| `--proxy` | dip | Scale-in signal: `dip` (price drop from N-candle high) or `obi` (taker-buy EMA) |
+| `--dip-pct` | 4.0 | Dip proxy: % drop from recent high to trigger |
+| `--dip-lookback` | 72 | Dip proxy: rolling-high lookback in candles |
+| `--capital` | from JSON | Override capital_usdt |
+
+**Note:** `--dip-pct` and `--dip-lookback` are backtest-only simulation knobs — they approximate the live OBI signal and do not map to any live strategy parameter. The live bot uses real-time OBI from the indicators service.
+
+**Validation guidance:** Always use a train/test split when tuning parameters. Use 2024-09 → 2025-12 as train and 2026-01 → today as the held-out test. Re-running on the full period with newly chosen parameters is in-sample and overstates improvement.
+
+### `analysis/backtest_orderbook.py` — OB scalping
+
+Replays the orderbook_bot strategy against `ob_snapshots` data from a `live_ob_*.db` file.
+
+```bash
+python3 analysis/backtest_orderbook.py                              # auto-detect DB
+python3 analysis/backtest_orderbook.py --db data/live_ob_2026-05-26.db
+python3 analysis/backtest_orderbook.py --mode spot --direction both
+python3 analysis/backtest_orderbook.py --sweep                      # 576-combo grid search
+python3 analysis/backtest_orderbook.py --sweep --csv results/ob_sweep.csv
+```
+
+**Note:** Databases created before fix M-1 (2026-05-23) lack the `tfi` column and cannot be used.
+
+### `analysis/backtest_grid.py` — CEX grid strategy
+
+Replays a static or trailing grid strategy on OHLCV (1-minute klines) databases.
+
+```bash
+python3 analysis/backtest_grid.py --all                     # all BTCUSDT_1m*.db in data/
+python3 analysis/backtest_grid.py --all --trail bear        # trailing grid following downtrend
+python3 analysis/backtest_grid.py --all --sweep             # 15-combo parameter sweep
+python3 analysis/backtest_grid.py --all --compare           # static vs trailing side-by-side
+```
+
+**Key flags:** `--range` (grid ±% around center), `--levels` (order count), `--trail {off,bear,bull,both}`, `--sweep` (15 combos: range × levels), `--sort {calmar,pnl}`.
+
+### `analysis/backtest_swing_dca.py` — CEX swing / DCA
+
+Replays DCA, Swing, or SwingHold strategies on OHLCV databases.
+
+```bash
+python3 analysis/backtest_swing_dca.py --all-dbs --compare   # 3 strategies × 3 regimes
+python3 analysis/backtest_swing_dca.py --strategy dca --sweep
+python3 analysis/backtest_swing_dca.py data/BTCUSDT_1m90d_range_20260208-20260509.db
+```
+
+**Key flags:** `--all-dbs` (bull 2024 + bear 2022 + range 2026), `--compare` (all 3 strategies side-by-side), `--strategy {dca,swing,swinghold}`, `--sweep` (tp_pct × sl_pct grid).
+
+### `analysis/backtest_volfilter.py` — Polymarket volatility filter
+
+Tests a bid-volatility / range / OBI-volatility filter against a Polymarket snapshots database. Runs a comparison of 3 scenarios automatically.
+
+```bash
+python3 analysis/backtest_volfilter.py                         # auto-detect DB
+python3 analysis/backtest_volfilter.py --db data/polymarket_5M_c2_*.db --sweep
+```
+
+**Note:** This script does not support `--help`; calling it directly runs the comparison.
+
+### `analysis/backtest_stake_secs.py` — Stake curve optimization
+
+Optimises the per-trade stake as a function of seconds-remaining and bid confidence. Tests three curve shapes (A = continuous, B = step function, C = Kelly bucket).
+
+```bash
+python3 analysis/backtest_stake_secs.py --db data/polymarket_5M_c2_*.db --curve all --top 15
+```
+
+**Note:** Curve C (Kelly) produces large in-sample gains. Validate with walk-forward before considering for live use.
+
+### `analysis/backtest_scalping.py` — CEX scalping
+
+Replays a short-term CEX scalping strategy on 1-minute OHLCV klines.
+
+```bash
+python3 analysis/backtest_scalping.py                          # default DB
+python3 analysis/backtest_scalping.py --compare                # 3 configs side-by-side
+```
+
+### `analysis/backtest_cycle_strategy.py` — BTC market cycle strategy
+
+Backtests a Mayer-Multiple / drawback regime strategy on the long-term daily OHLCV dataset.
+
+```bash
+python3 analysis/backtest_cycle_strategy.py                    # default params
+python3 analysis/backtest_cycle_strategy.py --compare          # parameter comparison
+python3 analysis/backtest_cycle_strategy.py --top-mm 2.2 --bot-mm 0.8
+```

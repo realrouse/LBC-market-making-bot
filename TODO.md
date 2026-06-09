@@ -127,6 +127,85 @@
 
 ---
 
+## Security review 2026-06-08 — Findings to fix
+
+### CRITICAL — Open
+
+- **[C-2]** Private key used as Python dict key in `api_polymarket.py`
+  The Polymarket private key is passed as a plain Python dict key (hashable, immutable, stays in
+  memory until GC). Should be wrapped in a non-hashable container or zeroed after use. Fix: replace
+  the dict-key usage with an explicit lookup by key index or use a dedicated credentials object.
+
+### HIGH — Open
+
+- **[H-2]** ZeroMQ sockets have no authentication on multi-tenant host
+  `feed.py` and `indicators.py` bind PUB/REP sockets on `127.0.0.1` without CURVE or ZAP auth.
+  On a multi-tenant VPS any local process can subscribe to the raw market data stream and send
+  commands to the REP socket. Fix: enable CURVE auth or add a ZAP handler before exposing data
+  to multiple user accounts.
+
+- **[H-3]** SSH passwords appear in `/proc` and remote heredoc
+  Deploy scripts pass SSH credentials via environment variables or heredocs that briefly appear in
+  `/proc/<pid>/cmdline`. Fix: use SSH key-based auth for all deploy operations; eliminate password
+  arguments from command lines.
+
+### LOW — Open
+
+- **[L-1]** Private key stored as plain `str` in `BotConfig` (unzeroable)
+  Python strings are immutable and cannot be securely zeroed. The private key in `BotConfig.private_key`
+  remains in memory until garbage-collected. Fix: use a `bytearray` or a `SecretStr` wrapper that
+  can be explicitly zeroed after use, and clear on bot shutdown.
+
+- **[+]** Add `|` guard to `install_service.sh`, `install_feed_service.sh`, `install_indicators_service.sh`
+  Pipe (`|`) in service unit names can break `systemctl enable`; add a guard that aborts with a
+  clear error if the computed service name contains `|`.
+
+### LOW — Done
+
+- **[L-2] DONE** — Remove dead `PASS=` line from remote heredoc in `update_standalone.sh`
+  Dead `PASS=` variable removed to eliminate credential exposure in heredoc.
+
+- **[L-3] DONE** — Convert `_has_creds` from module-level bool to function in `api_bitstamp.py`
+  Module-level `_has_creds` was evaluated at import time before env vars were set.
+  Replaced with a `_has_creds()` function called at runtime.
+
+---
+
+## Backtest analysis 2026-06-08 — Completed
+
+All 7 analysis tasks from the production-database backtest session are done.
+Full results and parameter recommendations in `notes/backtest_20260608.txt`.
+
+- **[B-1] DONE** — Polymarket baseline + walk-forward (c2 5M primary)
+  Confirmed: `thr=0.95 secs=30 obi=-0.25 dsl=$50` — Sharpe 10.10, WR 99.5%. Stable.
+
+- **[B-2] DONE** — Polymarket vol filter + stake sizing (c2)
+  `vol_bid <= 0.03` filter: +43% EV/trade, +$40 PnL. Step stake $15/$12/$10/$8: Sharpe +2 pts.
+  Both need OOS walk-forward before live deployment.
+
+- **[B-3] DONE** — OB scalping sweep (c4, 576 combos)
+  All negative — 92% timeout exits. Strategy has no detectable edge on current data.
+  **Do not deploy orderbook_bot in live mode with current params.**
+
+- **[B-4] DONE** — CEX grid/swing backtests (3 regimes: bull 2024 / bear 2022 / range 2026)
+  Grid: ±15% / 20 levels / trail=bear most robust across regimes (Calmar 1.71).
+  Swing: only profitable in bull market. DCA consistently positive across all regimes.
+
+- **[B-5] DONE** — `--sweep-all` contamination identified and documented
+  CEX databases included in sweep skew OBI recommendation to -0.75; c2 alone gives Sharpe 6.4
+  vs 10.1 with current -0.25. Warning added to `docs/HOWTO_tests_and_backtests.md`.
+
+- **[B-6] DONE** — Accumulation strategy parameter improvements validated OOS
+  `btc_accumulation.json` → v2.0: `max_invested_pct` 0.90→0.65, new `max_avg_entry_mult=1.20`
+  guard, `sell_fraction` 0.15→0.10, `rebuy_max_age_days` 30→60.
+  OOS test (2026-01 → 2026-06): Alpha +6.0% → +9.8%, drawdown -21.6% → -17.8%.
+
+- **[B-7] DONE** — All backtest scripts smoke-tested + docs updated (bilingual)
+  9 scripts verified (all pass `--help`). Section 12 added to `HOWTO_tests_and_backtests.md/.fr.md`
+  covering the 8 non-Polymarket scripts.
+
+---
+
 ## Audit 2026-06-05 — Findings to fix
 
 ### HIGH — Done

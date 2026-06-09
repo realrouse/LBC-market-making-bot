@@ -21,6 +21,7 @@ interpréter les résultats pour prendre des décisions éclairées sur la strat
 9. [Workflow complet — `strategy_compare.sh`](#9-workflow-complet----strategy_comparesh)
 10. [Fichiers de stratégie JSON](#10-fichiers-de-stratégie-json)
 11. [Interpréter les résultats et prendre des décisions](#11-interpréter-les-résultats-et-prendre-des-décisions)
+12. [Autres scripts de backtest](#12-autres-scripts-de-backtest)
 
 ---
 
@@ -57,7 +58,7 @@ interpréter les résultats pour prendre des décisions éclairées sur la strat
 | `entry_max` | 0,998 | JSON stratégie | Maximum de `best_bid` accepté. Protège contre les marchés déjà résolus qui passent au travers du filtre temporel. |
 | `min_secs_remaining` | 45 | JSON stratégie / `--min-secs` | Secondes minimum restantes dans le marché à l'entrée. Trop court → pas de temps pour récupérer ; trop long → signal moins précis. |
 | `min_ask_vol` | 10 | JSON stratégie / `--min-ask` | Liquidité minimum côté vendeur en USD. Les entrées sont ignorées quand le marché est trop illiquide. 0 = désactivé. |
-| `obi_reject_thresh` | −0,75 | JSON stratégie / `--obi` | Plancher OBI. Les entrées sont rejetées quand `OBI < obi_reject_thresh`, c.-à-d. quand la pression vendeuse est trop forte. |
+| `obi_reject_thresh` | −0,25 (CLI) / −0,65 (piste3 live) | JSON stratégie / `--obi` | Plancher OBI. Les entrées sont rejetées quand `OBI < obi_reject_thresh`, c.-à-d. quand la pression vendeuse est trop forte. Le flag CLI `--obi` utilise −0,25 par défaut ; la stratégie live active (piste3) utilise −0,65. |
 | `stake` | 10 | JSON stratégie / `--stake` | Montant en USD misé par trade. |
 | `daily_stop_loss` | 30 | JSON stratégie | Perte cumulée maximale par jour calendaire (UTC). Une fois atteint, le bot cesse d'entrer de nouveaux trades pour le reste de la journée. |
 | `capital_start` | 100 | JSON stratégie | Capital de départ pour un run de backtest. Utilisé comme dénominateur pour PnL%. |
@@ -347,6 +348,14 @@ La dernière ligne donne la commande CLI exacte pour reproduire la meilleure con
 ### Note sur la colonne `min_ask`
 
 `min_ask` a un effet négligeable sur la plupart des marchés — la déduplication du top-N (`--top`) supprime les variantes `min_ask` pour que vous ne voyiez que les configs qui diffèrent sur les axes significatifs (`threshold`, `min_secs`, `obi`).
+
+### AVERTISSEMENT — contamination de `--sweep-all` par les bases non-Polymarket
+
+`--sweep-all` inclut **toutes les bases ayant une table `snapshots`**, pas seulement les bases Polymarket. Les bases des stratégies CEX (`grid_cex_*.db`, `swing_cex_*.db`) ont aussi une table `snapshots` et sont silencieusement incluses dans le sweep.
+
+Cela contamine l'optimisation OBI : les snapshots CEX ont des distributions OBI différentes, et le sweep agrégé recommandera un seuil OBI beaucoup plus permissif (ex. `obi=−0,75`) qui semble bon globalement mais dégrade les performances Polymarket testé en isolation.
+
+**Utilisation sûre de `--sweep-all`** : validez toujours la meilleure recommandation en la ré-exécutant sur une seule base Polymarket (`--db data/polymarket_5M_c2_*.db`) avant de l'adopter. Cas confirmé du 2026-06-08 : sweep-all recommandait `obi=−0,75` (Sharpe 6,4) mais `obi=−0,25` (actuel) a obtenu Sharpe 10,1 sur c2 seul.
 
 ---
 
@@ -666,3 +675,119 @@ Quand une meilleure configuration est trouvée :
 ### Paramètres à ne pas modifier sans backtest complet
 
 `WIN_THRESHOLD` (0,99), `LOSS_THRESHOLD` (0,01), `FEE_RATE` (2 %) et `STAKE` ne sont pas balayés. Les modifier invalide toutes les comparaisons de backtest existantes. Les tests de régression (`TestParamConsistency`) garantissent que `live_bot.py` et `backtest.py` sont toujours en accord sur ces valeurs.
+
+---
+
+## 12. Autres scripts de backtest
+
+Les sections précédentes documentent `analysis/backtest.py` (Polymarket). Les scripts suivants couvrent les stratégies CEX et d'accumulation et partagent la même philosophie : rejeu historique → stats → sweep optionnel.
+
+### `scripts/backtest_accumulation.py` — Accumulation BTC long terme
+
+Récupère les klines 1h Binance (BTCUSDT) en live et rejoue la stratégie d'accumulation depuis `tradinebotte-cex/strategies/accumulation/btc_accumulation.json`.
+
+```bash
+# Défaut : historique depuis 2024-09-01 avec proxy dip
+python3 scripts/backtest_accumulation.py
+
+# Plage de dates spécifique
+python3 scripts/backtest_accumulation.py --start 2026-01-01 --end 2026-06-30
+
+# Proxy OBI (EMA taker-buy) à la place du proxy prix
+python3 scripts/backtest_accumulation.py --proxy obi
+
+# Afficher le journal complet des trades
+python3 scripts/backtest_accumulation.py --trades
+```
+
+**Flags principaux :**
+
+| Flag | Défaut | Description |
+|------|--------|-------------|
+| `--start` | 2024-09-01 | Date de début (YYYY-MM-DD) |
+| `--end` | aujourd'hui | Date de fin |
+| `--proxy` | dip | Signal de scale-in : `dip` (chute de prix depuis le haut N bougies) ou `obi` (EMA taker-buy) |
+| `--dip-pct` | 4,0 | Proxy dip : % de chute depuis le haut récent pour déclencher |
+| `--dip-lookback` | 72 | Proxy dip : fenêtre glissante du haut en bougies |
+| `--capital` | depuis JSON | Override capital_usdt |
+
+**Note :** `--dip-pct` et `--dip-lookback` sont des paramètres de simulation uniquement — ils n'ont pas d'équivalent dans le bot live.
+
+**Validation :** Utilisez toujours un split train/test lors du réglage des paramètres. Utilisez 2024-09 → 2025-12 en train et 2026-01 → aujourd'hui en test hors-échantillon.
+
+### `analysis/backtest_orderbook.py` — Scalping orderbook
+
+Rejoue la stratégie orderbook_bot sur des données `ob_snapshots` d'un fichier `live_ob_*.db`.
+
+```bash
+python3 analysis/backtest_orderbook.py
+python3 analysis/backtest_orderbook.py --db data/live_ob_2026-05-26.db
+python3 analysis/backtest_orderbook.py --sweep                      # grille 576 combos
+python3 analysis/backtest_orderbook.py --sweep --csv results/ob_sweep.csv
+```
+
+**Note :** Les bases créées avant le correctif M-1 (2026-05-23) n'ont pas la colonne `tfi` et ne peuvent pas être utilisées.
+
+### `analysis/backtest_grid.py` — Stratégie grid CEX
+
+Rejoue une stratégie de grille statique ou suivante sur des bases OHLCV (klines 1 minute).
+
+```bash
+python3 analysis/backtest_grid.py --all                     # toutes les BTCUSDT_1m*.db
+python3 analysis/backtest_grid.py --all --trail bear        # grille suivante baissière
+python3 analysis/backtest_grid.py --all --sweep             # sweep 15 combos
+python3 analysis/backtest_grid.py --all --compare           # statique vs suivante
+```
+
+**Flags principaux :** `--range` (±% autour du centre), `--levels` (nombre d'ordres), `--trail {off,bear,bull,both}`, `--sort {calmar,pnl}`.
+
+### `analysis/backtest_swing_dca.py` — Swing / DCA CEX
+
+Rejoue les stratégies DCA, Swing ou SwingHold sur des bases OHLCV.
+
+```bash
+python3 analysis/backtest_swing_dca.py --all-dbs --compare   # 3 stratégies × 3 régimes
+python3 analysis/backtest_swing_dca.py --strategy dca --sweep
+```
+
+**Flags principaux :** `--all-dbs` (bull 2024 + bear 2022 + range 2026), `--compare` (3 stratégies côte à côte), `--sweep` (grille tp_pct × sl_pct).
+
+### `analysis/backtest_volfilter.py` — Filtre de volatilité Polymarket
+
+Teste un filtre bid-volatilité / range / OBI-volatilité sur une base snapshots Polymarket. Lance automatiquement une comparaison de 3 scénarios.
+
+```bash
+python3 analysis/backtest_volfilter.py
+python3 analysis/backtest_volfilter.py --db data/polymarket_5M_c2_*.db --sweep
+```
+
+**Note :** Ce script ne supporte pas `--help` ; l'appeler directement lance la comparaison.
+
+### `analysis/backtest_stake_secs.py` — Optimisation de la mise
+
+Optimise la mise par trade en fonction des secondes restantes et de la confiance bid. Teste trois formes de courbe (A = continue, B = step function, C = Kelly par bucket).
+
+```bash
+python3 analysis/backtest_stake_secs.py --db data/polymarket_5M_c2_*.db --curve all --top 15
+```
+
+**Note :** La courbe C (Kelly) produit de gros gains en-échantillon. Validez avec walk-forward avant tout usage en live.
+
+### `analysis/backtest_scalping.py` — Scalping CEX
+
+Rejoue une stratégie de scalping court terme sur des klines 1 minute.
+
+```bash
+python3 analysis/backtest_scalping.py
+python3 analysis/backtest_scalping.py --compare   # 3 configs côte à côte
+```
+
+### `analysis/backtest_cycle_strategy.py` — Stratégie cycle BTC
+
+Backtest d'une stratégie de régime basée sur le Mayer Multiple sur le dataset journalier long terme.
+
+```bash
+python3 analysis/backtest_cycle_strategy.py
+python3 analysis/backtest_cycle_strategy.py --compare
+python3 analysis/backtest_cycle_strategy.py --top-mm 2.2 --bot-mm 0.8
+```

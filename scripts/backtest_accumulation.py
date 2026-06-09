@@ -33,8 +33,8 @@ ap.add_argument("--trades",  action="store_true",   help="Print full trade log")
 ap.add_argument("--strategy", default=None,         help="Path to btc_accumulation.json")
 ap.add_argument("--proxy",   default="dip",         choices=["obi","dip"],
                 help="Scale-in signal proxy: obi=taker-buy EMA, dip=price drop from N-candle high (default: dip)")
-ap.add_argument("--dip-pct",      type=float, default=2.0,  help="Dip proxy: pct drop from recent high to trigger (default 2.0)")
-ap.add_argument("--dip-lookback", type=int,   default=24,   help="Dip proxy: rolling high lookback in candles (default 24)")
+ap.add_argument("--dip-pct",      type=float, default=4.0,  help="Dip proxy: pct drop from recent high to trigger (default 4.0)")
+ap.add_argument("--dip-lookback", type=int,   default=72,   help="Dip proxy: rolling high lookback in candles (default 72)")
 args = ap.parse_args()
 
 # ── Load strategy params ───────────────────────────────────────────────────
@@ -64,8 +64,10 @@ MIN_HOLD_PCT   = P.get("min_holdings_pct", 0.30)
 RB_MIN         = P.get("rebuy_discount_min_pct", 0.15) / 100
 RB_MAX         = P.get("rebuy_discount_max_pct", 1.00) / 100
 RB_MULT        = P.get("rebuy_spread_mult", 3.0)
-FEE            = P["fee_spot"]
-SYMBOL         = P["symbol"]
+FEE              = P["fee_spot"]
+SYMBOL           = P["symbol"]
+MAX_AVG_ENTRY_MULT = P.get("max_avg_entry_mult", 1.20)
+REBUY_MAX_AGE_S    = int(P.get("rebuy_max_age_days", 60) * 86400)
 
 # ── Binance kline fetch ────────────────────────────────────────────────────
 BASE = "https://api.binance.com/api/v3/klines"
@@ -199,18 +201,23 @@ def check_profit_bands(high: float, low: float, ts_s: int):
             state.active_bands.add(band_pct)
             disc     = _rebuy_discount()
             rb_price = sell_price * (1 - disc)
-            state.pending_rebuys.append((rb_price, qty, band_pct))
+            state.pending_rebuys.append((rb_price, qty, band_pct, ts_s))
 
 # ── Rebuy check (uses candle low) ─────────────────────────────────────────
 def check_rebuys(low: float, ts_s: int):
+    expired = [r for r in state.pending_rebuys if (ts_s - r[3]) > REBUY_MAX_AGE_S]
+    for item in expired:
+        state.pending_rebuys.remove(item)
+        state.active_bands.discard(item[2])
+
     filled = []
-    for (rb_price, qty, band_pct) in state.pending_rebuys:
+    for (rb_price, qty, band_pct, created_ts) in state.pending_rebuys:
         if low <= rb_price:
             invested = state.holdings_btc * state.avg_entry if state.avg_entry > 0 else 0
             if (invested + qty * rb_price) / CAPITAL > MAX_INV_PCT:
                 continue
             if _buy(rb_price, qty * rb_price, f"rebuy@{band_pct}%", ts_s):
-                filled.append((rb_price, qty, band_pct))
+                filled.append((rb_price, qty, band_pct, created_ts))
                 state.active_bands.discard(band_pct)
     for item in filled:
         state.pending_rebuys.remove(item)
@@ -220,6 +227,8 @@ def check_scale_in(price: float, ts_s: int):
     if state.obi_ema >= -OBI_THRESH:
         return
     if (ts_s - state.last_buy_ts_s) < MIN_IV_S:
+        return
+    if state.avg_entry > 0 and price > state.avg_entry * MAX_AVG_ENTRY_MULT:
         return
     invested = state.holdings_btc * state.avg_entry if state.avg_entry > 0 else 0
     amount   = _scale_in_amount(price)
@@ -308,6 +317,11 @@ btc_value    = state.holdings_btc * last_price
 print(f"""
 ╔══════════════════════════════════════════════════════════════════╗
 ║       ACCUMULATION BACKTEST  {args.start} → {args.end or 'today'}  [{args.proxy}]
+╠══════════════════════════════════════════════════════════════════╣
+║  PARAMS
+║    max_invested_pct : {MAX_INV_PCT:.0%}   max_avg_entry_mult: ×{MAX_AVG_ENTRY_MULT:.2f}
+║    dip_pct          : {args.dip_pct:.1f}%  dip_lookback: {args.dip_lookback}h
+║    sell_fraction    : {SELL_FRAC:.0%}   rebuy_max_age: {REBUY_MAX_AGE_S//86400}d
 ╠══════════════════════════════════════════════════════════════════╣
 ║  MARKET
 ║    BTC start  : ${first_price:>10,.2f}
