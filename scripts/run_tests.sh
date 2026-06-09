@@ -72,3 +72,19 @@ else
     echo ""
     echo "ℹ️  claude CLI not found — doc audit skipped (agent: .claude/agents/doc-sync.md)"
 fi
+
+# ── Pylint ────────────────────────────────────────────────────────
+echo ""
+echo "=== Pylint ==="
+if "$PYTHON" -m pylint --version &>/dev/null; then
+    _py_files=$(git ls-files '*.py' 2>/dev/null)
+    if [ -n "$_py_files" ]; then
+        # shellcheck disable=SC2086
+        "$PYTHON" -m pylint $_py_files \
+            || { echo "⚠️  Pylint non-blocking — check before releasing"; true; }
+    else
+        echo "ℹ️  No tracked Python files found — pylint skipped"
+    fi
+else
+    echo "ℹ️  pylint not installed — skipped (pip install -r requirements-dev.txt)"
+fi

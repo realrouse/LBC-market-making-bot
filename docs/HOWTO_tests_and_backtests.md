@@ -104,6 +104,7 @@ This script:
 3. Runs the data quality check (`analysis/check_data_quality.py --no-gaps --warn-only`) on any `data/*.db` files found (non-blocking).
 4. Runs a backtest `--all` on any `data/*.db` files found (non-blocking).
 5. Invokes the `doc-sync` agent to audit flag documentation (requires `claude` CLI).
+6. Runs pylint on all tracked Python files (requires `requirements-dev.txt` install, non-blocking).
 
 ### Reading the output
 
@@ -148,6 +149,24 @@ OK (skipped=1)
 If any parameter change silently degrades performance, this test catches it. It is automatically **skipped** when `data/paper3.db` is absent (e.g. fresh CI checkout without data).
 
 `TestParamConsistency` checks that the parameter values in `tradinebotte-polymarket/live_bot.py` (module-level constants) match the defaults in `analysis/backtest.py` (the `Params` dataclass). If they diverge, backtests no longer predict live performance.
+
+### Pre-release checklist
+
+`bash scripts/run_tests.sh` covers the automated part. Before tagging a release, also run:
+
+**Full data quality scan with gap detection** (slower, ~22 s — skipped by `run_tests.sh` for speed):
+
+```bash
+python3 analysis/check_data_quality.py --warn-only
+```
+
+This runs the LAG() gap queries omitted by `--no-gaps`. Any `FAIL` result (collection gap > 2 h, price contamination, capital invariant violation) should be investigated before release. `WARN` items are informational.
+
+**Integration tests** (required for releases touching multibot, IPC, or deploy code; needs `~/.tradinebotte-test.conf`):
+
+```bash
+bash scripts/run_integration_tests.sh
+```
 
 ---
 
