@@ -83,6 +83,13 @@ bash scripts/run_tests.sh
 
 Linter: `pylint` (declared in `requirements-dev.txt`).
 
+**Prepare a release** (MANDATORY — run this before every merge to main):
+```bash
+bash scripts/prepare_release.sh
+```
+
+This script runs the full pre-release checklist and aborts on blocking failures. **Never merge dev → main without running it first.**
+
 ## Architecture
 
 The bot is a single-file async state machine (`tradinebotte-polymarket/live_bot.py`) driven by WebSocket market data.
