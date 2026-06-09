@@ -902,10 +902,15 @@ a managed service:
 ```
 ~/tradinebotte/          ← shared install: venv, bot files, tradinetools/
   .venv/
+  live_bot.py
+  feed.py                ← feed service runs from here
+  indicators.py          ← indicators service runs from here
+  tradinetools/
   feed.log
   indicators.log
   bot/
-    live_bot.py          ← keep in sync with ~/tradinebotte/live_bot.py on every update
+    account_bot.py       ← account service runs from here (sys.path inserts bot/)
+    live_bot.py          ← shadow copy — keep in sync with ~/tradinebotte/live_bot.py on every update
 ~/account-a/             ← account A: own DB, log, config
   config.json            ← "feed_auto_start": false
   live.db
@@ -983,8 +988,8 @@ Requires=tradinebotte-feed.service
 
 [Service]
 Type=simple
-WorkingDirectory=%h/tradinebotte
-ExecStart=%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/account_bot.py
+WorkingDirectory=%h/tradinebotte/bot
+ExecStart=%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/bot/account_bot.py
 Restart=on-failure
 RestartSec=10
 

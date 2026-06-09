@@ -6,6 +6,13 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.77] — 2026-06-09
+
+### Correctifs
+- **`INSTALL.md`, `INSTALL.fr.md` — ExecStart du service account corrigé** : l'unité account_bot utilisait précédemment `%h/tradinebotte/account_bot.py` ; corrigé en `%h/tradinebotte/bot/account_bot.py` (WorkingDirectory `%h/tradinebotte/bot`) afin que `sys.path.insert(0, dirname(__file__))` dans `account_bot.py` résolve `live_bot` depuis `bot/live_bot.py`, conformément au déploiement actif ; arborescence mise à jour pour montrer `bot/account_bot.py` et `bot/live_bot.py`
+
+---
+
 ## [0.76] — 2026-06-09
 
 ### Modifications

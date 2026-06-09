@@ -914,10 +914,15 @@ son propre feed quand le feed partagé est un service géré :
 ```
 ~/tradinebotte/          ← installation partagée : venv, fichiers bot, tradinetools/
   .venv/
+  live_bot.py
+  feed.py                ← service feed s'exécute depuis ici
+  indicators.py          ← service indicators s'exécute depuis ici
+  tradinetools/
   feed.log
   indicators.log
   bot/
-    live_bot.py          ← maintenir synchronisé avec ~/tradinebotte/live_bot.py à chaque mise à jour
+    account_bot.py       ← service account_bot s'exécute depuis ici (sys.path insère bot/)
+    live_bot.py          ← copie miroir — maintenir synchronisé avec ~/tradinebotte/live_bot.py à chaque mise à jour
 ~/account-a/             ← compte A : DB, log, config propres
   config.json            ← "feed_auto_start": false
   live.db
@@ -996,8 +1001,8 @@ Requires=tradinebotte-feed.service
 
 [Service]
 Type=simple
-WorkingDirectory=%h/tradinebotte
-ExecStart=%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/account_bot.py
+WorkingDirectory=%h/tradinebotte/bot
+ExecStart=%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/bot/account_bot.py
 Restart=on-failure
 RestartSec=10
 
