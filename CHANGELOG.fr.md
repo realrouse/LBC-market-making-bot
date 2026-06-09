@@ -6,6 +6,60 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.75] — 2026-06-09
+
+### Ajout
+- **`scripts/cleanup_server.sh`** : nouvel utilitaire pour supprimer les fichiers obsolètes de tous les comptes de déploiement en 6 phases — venvs dupliqués, résidus de git clone, anciens fichiers de stratégie à plat, fichiers PID/logs/DBs périmés, et fichiers Python du mauvais module ; la phase 1 (services système) affiche les commandes root sans les exécuter ; toutes les phases supportent `--dry-run` et `--phase=N`
+
+### Modifié
+- **`tradinebotte-cex/strategies/accumulation/btc_accumulation.json` v2.0 — gestion du capital renforcée** : `max_invested_pct` 0,90 → 0,65 (déployer au maximum 65 % du capital) ; nouveau garde `max_avg_entry_mult: 1.20` qui bloque le scale-in quand le prix est déjà 20 %+ au-dessus du prix d'entrée moyen ; `sell_fraction` 0,25 → 0,10 ; `rebuy_max_age_days: 60` ajouté
+
+### Corrigé
+- **`scripts/backtest_accumulation.py` — garde avg_entry et expiration des rebuys** : charge `MAX_AVG_ENTRY_MULT` et `REBUY_MAX_AGE_S` depuis la config ; `check_scale_in()` retourne immédiatement si prix > avg_entry × MAX_AVG_ENTRY_MULT ; `check_rebuys()` expire les rebuys en attente depuis plus de REBUY_MAX_AGE_S (nécessite un tuple à 4 éléments avec `created_ts`) ; valeurs par défaut CLI mises à jour : `--dip-pct` 3 → 4, `--dip-lookback` 48 → 72
+
+---
+
+## [0.74] — 2026-06-09
+
+### Corrigé
+- **`tradinebotte-polymarket/scripts/update_claude1.sh` — VERIFY signalait toujours FAILURE** : la logique de vérification était empruntée à `update_standalone.sh` qui cherche un processus `live_bot.py` autonome et `live.log` ; ni l'un ni l'autre n'existe sur ce compte qui utilise trois services systemd utilisateur (indicators + feed + account_bot) ; remplacé par `_verify_claude1_multiservice()` qui vérifie les trois unités de service, lit `account.log` et contrôle la connectivité au feed ; `--verify-only` exécute désormais la bonne vérification sans déclencher de mise à jour
+
+---
+
+## [0.73] — 2026-06-08
+
+### Sécurité
+- **`tradinebotte-polymarket/scripts/install_account_service.sh` — injection Python dans le code inline `-c` (H-4)** : `ACCOUNT_DIR` était interpolé directement dans un heredoc `python3 -c` ; des caractères spéciaux dans le chemin (guillemets, points-virgules) pouvaient exécuter du Python arbitraire ; corrigé en passant `ACCOUNT_DIR` comme argument CLI (`sys.argv[1]`)
+- **`tradinebotte-polymarket/scripts/install_account_service.sh` — collision du délimiteur `|` dans `sed` (H-4)** : `sed "s|...|${ACCOUNT_DIR}|"` se cassait silencieusement si `ACCOUNT_DIR` contenait un `|` littéral ; corrigé avec un garde `[[ "$ACCOUNT_DIR" == *\|* ]]`
+- **`tradinebotte-cex/orderbook_bot.py` — nom de colonne non sanitisé dans `ALTER TABLE` (M-1)** : `f"ALTER TABLE {self.symbol}"` permettait du SQL arbitraire via une valeur `symbol` malveillante dans la config ; corrigé avec une assertion sur liste blanche
+- **`tradinebotte-polymarket/live_bot.py`, `feed.py` — exposition de la clé privée via tracebacks (M-2)** : `exc_info=True` dans les gestionnaires d'erreur WebSocket pouvait inclure la clé privée dans les tracebacks ; remplacé par `str(e)` explicite
+- **`tradinebotte-polymarket/live_bot.py` — fichiers log et base de données lisibles par tous (M-3)** : `live.log` et `live.db` créés avec les permissions par défaut (0o644/0o666) ; `chmod 640` appliqué à l'initialisation du bot
+- **`tradinebotte-indicators/indicators.py` — `os.getcwd()` pour `TRADINEBOTTE_DIR` (M-4)** : se résolvait au répertoire de lancement du processus ; remplacé par `os.path.dirname(os.path.abspath(__file__))` pour une résolution stable indépendante du CWD
+- **`requirements.txt` — `bcrypt` absent ; repli silencieux sur SHA-1 dans `bot_utils.py` (H-1)** : `_htpasswd()` utilisait silencieusement SHA-1 non salé si `bcrypt` n'était pas installé ; lève désormais `ImportError` immédiatement ; `bcrypt==5.0.0` ajouté à `requirements.txt`
+- **`tradinebotte-polymarket/scripts/update_standalone.sh` — ligne `PASS=` morte dans le heredoc distant (L-2)** : assignation résiduelle supprimée
+- **`tradinebotte-cex/api_bitstamp.py` — `_has_creds` évalué à l'import (L-3)** : capturait les variables d'environnement `BITSTAMP_*` à l'import ; converti en fonction pour une réévaluation à chaque appel
+
+---
+
+## [0.72] — 2026-06-08
+
+### Corrigé
+- **`scripts/run_tests.sh` — `tradinetools/tests/` jamais exécuté** : 87 tests dans `test_math`, `test_schemas`, `test_zmq` absents de la boucle de découverte ; ajoutés à la suite
+- **`analysis/backtest.py --all` — crash sur base de données corrompue** : un fichier `.db` malformé provoquait une `DatabaseError` non gérée qui interrompait l'exécution multi-db ; un gestionnaire `try/except DatabaseError` ignore désormais le fichier fautif et continue
+- **`tests/test_bot.py::TestStrategyLoading::test_min_secs` — valeur attendue périmée** : `min_secs_remaining` était asserté à 45, mais `polymarket_BTC5M.json` avait été mis à jour à 30 ; test corrigé
+- **`tests/test_regression.py::TestParamConsistency::test_obi_reject_thresh` — divergence silencieuse live/backtest** : `backtest.Params.obi_reject_thresh` valait -0,25 tandis que `live_bot.OBI_REJECT_THRESH` était à -0,40 (calibré le 2026-05-30, jamais reporté) ; synchronisé à -0,40
+- **`README.md`, `README.fr.md` — compteur de tests périmé** : mis à jour de 891 tests / 9 suites à 1090 tests / 14 suites
+
+---
+
+## [0.71] — 2026-06-08
+
+### Corrigé
+- **31 incohérences docs/code corrigées dans tous les fichiers bilingues** : `SIGNAL_THRESHOLD` corrigé 0,96 → 0,95 dans README, INSTALL, CLAUDE.md, `snapshots.md`, `multi.md` et la docstring de `live_bot.py` ; chemins de scripts préfixés avec `tradinebotte-polymarket/` ; références à `polymarket_BTC5M_v2.json` remplacées par `polymarket_BTC5M_piste3.json` ; références aux DBs embarquées supprimées ; compteurs de tests mis à jour ; `venv/` → `.venv/` dans `multi.md` et `install.sh` ; `/tmp` → `~/tmp` dans les chemins de copie de fichiers de service ; chemin de stratégie CEX `longterm/` → `accumulation/` ; toutes les corrections appliquées aux docs EN et FR
+- **`scripts/run_integration_tests.sh` — bug critique de chemin** : `test_standalone_deploy.sh` se résolvait au mauvais répertoire en mode `--standalone`, provoquant une erreur à chaque exécution ; chemin corrigé
+
+---
+
 ## [0.70] — 2026-06-08
 
 ### Corrections

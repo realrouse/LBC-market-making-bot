@@ -6,6 +6,60 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.75] — 2026-06-09
+
+### Added
+- **`scripts/cleanup_server.sh`**: new utility to remove stale files from all deployment accounts across 6 phases — duplicate venvs, git-clone residues, old flat strategy files, stale PID/log/DB files, and wrong-module Python files; phase 1 (system services) prints root commands without executing them; all phases support `--dry-run` and `--phase=N` flags
+
+### Changed
+- **`tradinebotte-cex/strategies/accumulation/btc_accumulation.json` v2.0 — capital management tightened**: `max_invested_pct` 0.90 → 0.65 (deploy at most 65% of capital); new `max_avg_entry_mult: 1.20` guard blocks scale-in when price is already 20%+ above average entry; `sell_fraction` 0.25 → 0.10; `rebuy_max_age_days: 60` added
+
+### Fixed
+- **`scripts/backtest_accumulation.py` — avg_entry guard and rebuy expiry**: loads `MAX_AVG_ENTRY_MULT` and `REBUY_MAX_AGE_S` from config; `check_scale_in()` returns early when price > avg_entry × MAX_AVG_ENTRY_MULT; `check_rebuys()` expires pending rebuys older than REBUY_MAX_AGE_S (requires 4-tuple with `created_ts`); CLI defaults updated: `--dip-pct` 3 → 4, `--dip-lookback` 48 → 72
+
+---
+
+## [0.74] — 2026-06-09
+
+### Fixed
+- **`tradinebotte-polymarket/scripts/update_claude1.sh` — VERIFY always reported FAILURE**: the verify logic was borrowed from `update_standalone.sh` which checks for a standalone `live_bot.py` process and `live.log`; neither exists on this account which uses three systemd user services (indicators + feed + account_bot); replaced with `_verify_claude1_multiservice()` that checks the three service units, reads `account.log`, and verifies feed connectivity; `--verify-only` now runs the correct check without triggering an update
+
+---
+
+## [0.73] — 2026-06-08
+
+### Security
+- **`tradinebotte-polymarket/scripts/install_account_service.sh` — Python injection in inline `-c` code (H-4)**: `ACCOUNT_DIR` was interpolated directly into a `python3 -c` heredoc; attacker-controlled path characters (quotes, semicolons) could execute arbitrary Python; fixed by passing `ACCOUNT_DIR` as a CLI argument (`sys.argv[1]`) instead
+- **`tradinebotte-polymarket/scripts/install_account_service.sh` — `|` delimiter collision in `sed` substitution (H-4)**: `sed "s|...|${ACCOUNT_DIR}|"` would break silently if `ACCOUNT_DIR` contained a literal `|`; fixed with a `[[ "$ACCOUNT_DIR" == *\|* ]]` guard
+- **`tradinebotte-cex/orderbook_bot.py` — unsanitized column name in `ALTER TABLE` (M-1)**: `f"ALTER TABLE {self.symbol}"` allowed arbitrary SQL via a crafted `symbol` config value; fixed with an allowlist assertion before the f-string
+- **`tradinebotte-polymarket/live_bot.py`, `feed.py` — private key exposure via exception tracebacks (M-2)**: `exc_info=True` in WebSocket error handlers logged full tracebacks that could include private key material from enclosing scope; replaced with explicit `str(e)` messages
+- **`tradinebotte-polymarket/live_bot.py` — world-readable log and database files (M-3)**: `live.log` and `live.db` were created with default umask permissions (0o644 / 0o666); now `chmod 640` at bot init so group and other have no read access
+- **`tradinebotte-indicators/indicators.py` — `os.getcwd()` fallback for `TRADINEBOTTE_DIR` (M-4)**: resolved to whichever directory the process was launched from, not the script's own directory; replaced with `os.path.dirname(os.path.abspath(__file__))` for stable resolution regardless of CWD
+- **`requirements.txt` — `bcrypt` missing; SHA-1 silent fallback in `bot_utils.py` (H-1)**: `_htpasswd()` silently fell back to unsalted SHA-1 when `bcrypt` was not installed; now raises `ImportError` immediately; `bcrypt==5.0.0` added to `requirements.txt`
+- **`tradinebotte-polymarket/scripts/update_standalone.sh` — dead `PASS=` line in remote heredoc (L-2)**: a leftover `PASS="$TEST_PASSWORDS[$IDX]"` assignment was present in the remote heredoc even after the variable was no longer used; removed
+- **`tradinebotte-cex/api_bitstamp.py` — `_has_creds` evaluated at import time (L-3)**: a module-level `bool` captured `BITSTAMP_*` env vars at import, meaning a process that set these vars after importing the module would see stale `False`; converted to a function so env vars are re-evaluated at each call
+
+---
+
+## [0.72] — 2026-06-08
+
+### Fixed
+- **`scripts/run_tests.sh` — `tradinetools/tests/` never executed**: 87 tests across `test_math`, `test_schemas`, `test_zmq` were absent from the discover loop; added to the suite
+- **`analysis/backtest.py --all` — crash on malformed database**: a corrupted `.db` file caused an unhandled `DatabaseError` that aborted the entire multi-db run; a `try/except DatabaseError` handler now skips the offending file and continues
+- **`tests/test_bot.py::TestStrategyLoading::test_min_secs` — stale expected value**: `min_secs_remaining` was asserted as 45 but `polymarket_BTC5M.json` had been updated to 30; test updated
+- **`tests/test_regression.py::TestParamConsistency::test_obi_reject_thresh` — silent live/backtest divergence**: `backtest.Params.obi_reject_thresh` defaulted to -0.25 while `live_bot.OBI_REJECT_THRESH` was -0.40 (calibrated 2026-05-30 and never backported); synced to -0.40
+- **`README.md`, `README.fr.md` — test count stale**: updated from 891 tests / 9 suites to 1090 tests / 14 suites after adding tradinetools and 4 other missing suites
+
+---
+
+## [0.71] — 2026-06-08
+
+### Fixed
+- **31 doc/code discrepancies corrected across all bilingual docs**: `SIGNAL_THRESHOLD` corrected 0.96 → 0.95 in README, INSTALL, CLAUDE.md, `snapshots.md`, `multi.md`, and `live_bot.py` docstring; script paths in docs prefixed with `tradinebotte-polymarket/` where missing; `polymarket_BTC5M_v2.json` references replaced with active `polymarket_BTC5M_piste3.json`; bundled DB references (`calmsaturday.db`, `basicsunday.db`) removed; test counts updated; `venv/` → `.venv/` in `multi.md` and `install.sh`; `/tmp` → `~/tmp` in service file copy paths; CEX strategy path `longterm/` → `accumulation/`; all fixes applied to both EN and FR docs
+- **`scripts/run_integration_tests.sh` — critical path bug**: `test_standalone_deploy.sh` resolved to the wrong directory in `--standalone` mode, causing the integration test to error on every run; path corrected
+
+---
+
 ## [0.70] — 2026-06-08
 
 ### Fixed
