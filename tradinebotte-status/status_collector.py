@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+"""status_collector.py — centralised heartbeat receiver for tradinebotte bots.
+
+Binds a ZMQ PULL socket on TRADINEBOTTE_STATUS_ADDR (default tcp://127.0.0.1:5562).
+Each bot pushes a JSON heartbeat once per hour.  Payloads are validated, indexed
+columns extracted, and the full payload stored in heartbeat.db.
+
+Usage:
+    python3 status_collector.py [--dir DIR] [--status-addr ADDR]
+
+Environment:
+    TRADINEBOTTE_STATUS_ADDR   ZMQ bind address (default tcp://127.0.0.1:5562)
+    TRADINEBOTTE_STATUS_DIR    Install directory for heartbeat.db
+"""
+
+import argparse
+import asyncio
+import json
+import logging
+import os
+import signal
+import sqlite3
+import sys
+import time
+from typing import Any
+
+import zmq
+import zmq.asyncio
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "tradinetools"))
+from tradinetools.zmq import default_status_addr, make_pull
+
+logger = logging.getLogger("status_collector")
+
+_DB_SCHEMA = """
+CREATE TABLE IF NOT EXISTS heartbeats (
+    id        INTEGER PRIMARY KEY,
+    ts        INTEGER NOT NULL,
+    account   TEXT    NOT NULL,
+    bot_name  TEXT    NOT NULL,
+    version   TEXT,
+    status    TEXT,
+    bounds_ok INTEGER,
+    payload   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_heartbeats_account_bot ON heartbeats(account, bot_name);
+CREATE INDEX IF NOT EXISTS idx_heartbeats_ts          ON heartbeats(ts);
+"""
+
+
+def open_db(db_path: str) -> sqlite3.Connection:
+    db = sqlite3.connect(db_path, check_same_thread=False)
+    db.executescript(_DB_SCHEMA)
+    db.commit()
+    return db
+
+
+def store_heartbeat(db: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Extract indexed columns and write one heartbeat row.
+
+    Missing fields default gracefully; bounds_ok is coerced to 0/1/None.
+    """
+    ts = int(payload.get("ts") or time.time())
+    account = str(payload.get("account") or "unknown")
+    bot_name = str(payload.get("bot_name") or "unknown")
+    version = payload.get("version")
+    status = payload.get("status")
+    raw_bounds = payload.get("bounds_ok")
+    if raw_bounds is None:
+        bounds_ok = None
+    else:
+        bounds_ok = 1 if raw_bounds else 0
+    db.execute(
+        "INSERT INTO heartbeats (ts, account, bot_name, version, status, bounds_ok, payload)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (ts, account, bot_name, version, status, bounds_ok, json.dumps(payload)),
+    )
+    db.commit()
+
+
+async def _recv_loop(
+    sock: zmq.asyncio.Socket,
+    db: sqlite3.Connection,
+    stop: asyncio.Event,
+) -> None:
+    while not stop.is_set():
+        try:
+            raw = await asyncio.wait_for(sock.recv(), timeout=1.0)
+        except asyncio.TimeoutError:
+            continue
+        except zmq.ZMQError as exc:
+            if stop.is_set():
+                break
+            logger.warning("ZMQ recv error: %s", exc)
+            continue
+        try:
+            payload = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            logger.warning("Malformed heartbeat (not JSON): %s", exc)
+            continue
+        if not isinstance(payload, dict):
+            logger.warning("Malformed heartbeat (expected dict, got %s): %r", type(payload).__name__, payload)
+            continue
+        try:
+            store_heartbeat(db, payload)
+            logger.info(
+                "heartbeat stored: account=%s bot=%s version=%s status=%s",
+                payload.get("account"),
+                payload.get("bot_name"),
+                payload.get("version"),
+                payload.get("status"),
+            )
+        except sqlite3.Error as exc:
+            logger.error("DB write failed: %s", exc)
+
+
+async def run(status_addr: str, db_path: str) -> None:
+    ctx = zmq.asyncio.Context()
+    db = open_db(db_path)
+    stop = asyncio.Event()
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, stop.set)
+
+    sock = make_pull(ctx, status_addr, name="STATUS_ADDR")
+    logger.info("status_collector listening on %s — db=%s", status_addr, db_path)
+    try:
+        await _recv_loop(sock, db, stop)
+    finally:
+        sock.close(linger=0)
+        ctx.term()
+        db.close()
+    logger.info("status_collector stopped")
+
+
+def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s — %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
+    default_dir = os.environ.get(
+        "TRADINEBOTTE_STATUS_DIR", os.path.expanduser("~/tradinebotte")
+    )
+    default_addr = os.environ.get("TRADINEBOTTE_STATUS_ADDR", default_status_addr())
+
+    parser = argparse.ArgumentParser(description="tradinebotte heartbeat collector")
+    parser.add_argument(
+        "--dir",
+        default=default_dir,
+        help="Install directory — heartbeat.db is written here",
+    )
+    parser.add_argument(
+        "--status-addr",
+        default=default_addr,
+        help="ZMQ PULL bind address (default %(default)s)",
+    )
+    args = parser.parse_args()
+    os.makedirs(args.dir, exist_ok=True)
+    asyncio.run(run(args.status_addr, os.path.join(args.dir, "heartbeat.db")))
+
+
+if __name__ == "__main__":
+    main()

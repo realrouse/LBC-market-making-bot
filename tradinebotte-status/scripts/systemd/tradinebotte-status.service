@@ -1,0 +1,16 @@
+[Unit]
+Description=tradinebotte — Status collector (bot heartbeats)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/tradinebotte
+Environment=TRADINEBOTTE_STATUS_ADDR=tcp://127.0.0.1:5562
+ExecStart=%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/status_collector.py --dir %h/tradinebotte
+Restart=on-failure
+RestartSec=15
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=default.target

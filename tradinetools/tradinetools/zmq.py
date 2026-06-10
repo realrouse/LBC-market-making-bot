@@ -127,3 +127,13 @@ def make_push(ctx: zmq.asyncio.Context, addr: str) -> zmq.asyncio.Socket:
     sock = ctx.socket(zmq.PUSH)
     sock.connect(addr)
     return sock
+
+
+def default_status_addr() -> str:
+    """Return the default address for the status_collector PULL socket.
+
+    Always TCP loopback — never IPC.  The status collector is owned by one
+    account but all bot accounts PUSH to it cross-user; IPC sockets are
+    per-UID and would silently drop those heartbeats.
+    """
+    return f"tcp://127.0.0.1:{PORT_STATUS}"
