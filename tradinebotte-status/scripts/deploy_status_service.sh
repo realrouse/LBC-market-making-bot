@@ -233,12 +233,12 @@ VERIFY_OUT=$(_ssh "
     echo '--- systemctl status ---'
     systemctl --user status '${SVC_NAME}' --no-pager -n 5 2>&1 || true
     echo '--- version stamp ---'
-    cat '${INSTALL_DIR}/version.stamp' 2>/dev/null || echo '(no version.stamp)'
+    cat ${INSTALL_DIR}/version.stamp 2>/dev/null || echo '(no version.stamp)'
     echo '--- heartbeat.db rows ---'
-    if [ -f '${INSTALL_DIR}/heartbeat.db' ]; then
+    if [ -f ${INSTALL_DIR}/heartbeat.db ]; then
         python3 -c \"
-import sqlite3
-db = sqlite3.connect('${INSTALL_DIR}/heartbeat.db')
+import sqlite3, os
+db = sqlite3.connect(os.path.expanduser('${INSTALL_DIR}/heartbeat.db'))
 cnt = db.execute('SELECT count(*) FROM heartbeats').fetchone()[0]
 print(f'  {cnt} total row(s) in heartbeats table')
 db.close()
