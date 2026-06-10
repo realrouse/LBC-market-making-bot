@@ -53,6 +53,11 @@ VERBOSE = False
 registered: dict[str, dict[str, Any]] = {}  # market_id → {up, dn, end_ms, question, start_ms}
 token_meta: dict[str, str] = {}             # token_id  → market_id
 
+# Heartbeat sentinels — updated by _run_ws, read by the heartbeat lambda.
+_ws_connected: bool = False
+_last_book_ts: float = 0.0
+_msgs_total: int = 0
+
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="tradinebotte feed broadcaster")
@@ -178,6 +183,7 @@ async def _run_ws(sock: zmq.asyncio.Socket, session: aiohttp.ClientSession) -> N
     every book-update message to subscribers via the PUB socket until the connection
     drops.  _market_refresh and _ping_loop run as concurrent background tasks.
     """
+    global _ws_connected, _last_book_ts, _msgs_total
     if VERBOSE:
         logger.debug("[WS] calling get_markets...")
     markets = await api.get_markets(session)
@@ -215,6 +221,7 @@ async def _run_ws(sock: zmq.asyncio.Socket, session: aiohttp.ClientSession) -> N
         for i in range(0, len(all_token_ids), api.WS_BATCH_SIZE):
             await ws.send(api.make_subscribe_msg(all_token_ids[i:i + api.WS_BATCH_SIZE]))
         logger.info("WebSocket connected — broadcasting on %s", FEED_ADDR)
+        _ws_connected = True
 
         refresh_task = asyncio.create_task(_market_refresh(sock, session, ws))
         ping_task    = asyncio.create_task(_ping_loop(sock))
@@ -251,10 +258,13 @@ async def _run_ws(sock: zmq.asyncio.Socket, session: aiohttp.ClientSession) -> N
                     p = api.parse_book_update(msg)
                     if p:
                         msgs_received += 1
+                        _last_book_ts = time.time()
+                        _msgs_total += 1
                         if VERBOSE and msgs_received % 50 == 0:
                             logger.debug("[WS] %d book updates published", msgs_received)
                         _pub_json(sock, {"t": "book", **p})
         finally:
+            _ws_connected = False
             refresh_task.cancel()
             ping_task.cancel()
             for t in (refresh_task, ping_task):
@@ -274,7 +284,10 @@ async def main() -> None:
     await asyncio.sleep(0.5)
 
     _hb_task = asyncio.create_task(
-        heartbeat_loop("feed", os.path.dirname(os.path.abspath(__file__)), lambda: {})
+        heartbeat_loop("feed", os.path.dirname(os.path.abspath(__file__)),
+                       lambda: {"ws_connected": _ws_connected,
+                                "last_book_ts": _last_book_ts,
+                                "msgs_total": _msgs_total})
     )
     try:
         backoff = 1

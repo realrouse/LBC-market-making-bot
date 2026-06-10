@@ -134,6 +134,9 @@ logger = setup_logger("indicators", os.path.join(_INSTALL_DIR, "indicators.log")
 
 VERBOSE = False
 
+# Heartbeat sentinel — updated by _publish(), read by the heartbeat lambda.
+_last_pub_ts: float = 0.0
+
 
 # ─── INDICATOR MATH (pure stdlib) ────────────────────────────────────────────
 
@@ -557,7 +560,9 @@ async def _seed_ohlcv_series(symbol: str, timeframe: str,
 
 def _publish(pub: zmq.asyncio.Socket, out: dict[str, Any]) -> None:
     """Send one enriched indicator message on the PUB socket (non-blocking)."""
+    global _last_pub_ts
     pub.send_json({"v": 1, **out}, zmq.NOBLOCK)
+    _last_pub_ts = time.time()
     if VERBOSE:
         keys = [k for k in out if k not in ("t", "token_id", "asset",
                                              "timeframe", "stream_id", "ts")]
@@ -1937,7 +1942,7 @@ async def run(feed_addr: str, ind_addr: str, reg_addr: str,
     ))
 
     tasks.append(asyncio.create_task(
-        heartbeat_loop("indicators", _INSTALL_DIR, lambda: {}),
+        heartbeat_loop("indicators", _INSTALL_DIR, lambda: {"last_pub_ts": _last_pub_ts}),
         name="heartbeat",
     ))
 

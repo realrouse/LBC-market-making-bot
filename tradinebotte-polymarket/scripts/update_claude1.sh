@@ -116,7 +116,7 @@ fi
 # ─── Run the standard update (rsync + optional live_bot restart) ──────────────
 # Note: update_standalone's VERIFY step reports a false negative on this account
 # (no standalone live_bot on this account — services are managed separately below).
-TEST_STANDALONE_USER_IDX=0 bash "$(dirname "$0")/update_standalone.sh" "${FORWARD_ARGS[@]}"
+TEST_STANDALONE_USER_IDX=0 bash "$(dirname "$0")/update_standalone.sh" --skip-verify "${FORWARD_ARGS[@]}"
 UPDATE_EXIT=$?
 
 # Abort on rsync failure only; the verify false-negative is expected and ignored.

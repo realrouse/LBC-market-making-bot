@@ -30,6 +30,7 @@ set -uo pipefail
 LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 GIT_HASH=$(git -C "$LOCAL_REPO" rev-parse --short HEAD 2>/dev/null || echo "unknown")
 SKIP_RESTART=false
+SKIP_VERIFY=false
 VERIFY_ONLY=false
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -46,6 +47,7 @@ FAILURES=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --skip-restart) SKIP_RESTART=true ;;
+        --skip-verify)  SKIP_VERIFY=true ;;
         --verify-only)  VERIFY_ONLY=true; SKIP_RESTART=true ;;
         -h|--help)
             grep '^#' "${BASH_SOURCE[0]}" | head -30 | sed 's/^# \?//'
@@ -245,6 +247,7 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
     fi
 fi
 
+if [[ "$SKIP_VERIFY" == "false" ]]; then
 # ─── Step 3: verify ────────────────────────────────────────────────────────────
 section "STEP 3 — VERIFY"   # connection #4
 VERIFY_OUT=$(_ssh "
@@ -289,6 +292,7 @@ fi
 ERROR_COUNT=$(echo "$VERIFY_OUT" | grep -cE '\[ERROR\]|\[CRITICAL\]' || true)
 [[ "$ERROR_COUNT" -eq 0 ]] && ok "No errors at startup" \
     || err "$ERROR_COUNT ERROR/CRITICAL line(s) in startup log"
+fi  # SKIP_VERIFY
 
 # ─── Report ────────────────────────────────────────────────────────────────────
 section "RESULT"

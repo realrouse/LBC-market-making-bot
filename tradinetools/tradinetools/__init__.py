@@ -76,12 +76,19 @@ async def heartbeat_loop(
     get_extra: Callable[[], dict[str, Any]],
     *,
     interval: int = 3600,
+    warmup_interval: int = 60,
+    warmup_count: int = 3,
 ) -> None:
     """Send a JSON heartbeat to the status collector at regular intervals.
 
-    Fires immediately on startup, then every `interval` seconds.  Swallows all
-    exceptions except CancelledError so a collector outage never crashes a bot.
-    Callers must cancel this task to stop it; the finally block closes the socket.
+    Fires immediately on startup.  The first `warmup_count` sleep cycles use
+    `warmup_interval` seconds so the collector picks up the bot quickly after
+    deployment; subsequent cycles use `interval` seconds.
+
+    `TRADINEBOTTE_HB_INTERVAL` env var overrides `interval` at runtime.
+
+    Swallows all exceptions except CancelledError so a collector outage never
+    crashes a bot.  Callers must cancel this task to stop it.
     """
     try:
         import zmq  # noqa: PLC0415
@@ -91,10 +98,18 @@ async def heartbeat_loop(
         _hb_logger.warning("pyzmq not installed — heartbeat disabled")
         return
 
+    env_interval = os.environ.get("TRADINEBOTTE_HB_INTERVAL")
+    if env_interval:
+        try:
+            interval = int(env_interval)
+        except ValueError:
+            _hb_logger.warning("TRADINEBOTTE_HB_INTERVAL=%r is not an integer — ignored", env_interval)
+
     addr = os.environ.get("TRADINEBOTTE_STATUS_ADDR") or default_status_addr()
     ctx = zmq.asyncio.Context()
     sock = make_push(ctx, addr)
     sock.setsockopt(zmq.LINGER, 0)
+    cycle = 0
     try:
         while True:
             try:
@@ -102,7 +117,9 @@ async def heartbeat_loop(
                 await sock.send(json.dumps(payload).encode())
             except Exception as exc:
                 _hb_logger.warning("heartbeat send failed: %s", exc)
-            await asyncio.sleep(interval)
+            cycle += 1
+            sleep_s = warmup_interval if cycle < warmup_count else interval
+            await asyncio.sleep(sleep_s)
     finally:
         sock.close(linger=0)
         ctx.term()

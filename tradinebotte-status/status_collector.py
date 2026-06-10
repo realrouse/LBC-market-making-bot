@@ -78,6 +78,23 @@ def store_heartbeat(db: sqlite3.Connection, payload: dict[str, Any]) -> None:
     db.commit()
 
 
+def _prune_old_heartbeats(db: sqlite3.Connection) -> int:
+    """Delete heartbeat rows older than 1 year; return count removed."""
+    cutoff = int(time.time()) - 365 * 86400
+    cur = db.execute("DELETE FROM heartbeats WHERE ts < ?", (cutoff,))
+    db.commit()
+    return cur.rowcount
+
+
+async def _prune_loop(db: sqlite3.Connection, stop: asyncio.Event) -> None:
+    """Run _prune_old_heartbeats at startup and every 24 h."""
+    while not stop.is_set():
+        deleted = _prune_old_heartbeats(db)
+        if deleted:
+            logger.info("pruned %d heartbeat row(s) older than 1 year", deleted)
+        await asyncio.sleep(86400)
+
+
 async def _recv_loop(
     sock: zmq.asyncio.Socket,
     db: sqlite3.Connection,
@@ -125,9 +142,12 @@ async def run(status_addr: str, db_path: str) -> None:
 
     sock = make_pull(ctx, status_addr, name="STATUS_ADDR")
     logger.info("status_collector listening on %s — db=%s", status_addr, db_path)
+    prune_task = asyncio.create_task(_prune_loop(db, stop), name="prune")
     try:
         await _recv_loop(sock, db, stop)
     finally:
+        prune_task.cancel()
+        await asyncio.gather(prune_task, return_exceptions=True)
         sock.close(linger=0)
         ctx.term()
         db.close()
