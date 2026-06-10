@@ -13,6 +13,7 @@ PORT_FEED       = 5557   # feed.py PUB (Polymarket order book)
 PORT_FEED_ALT   = 5558   # feed.py PUB alternate
 PORT_INDICATORS = 5559   # indicators.py PUB
 PORT_IND_REG    = 5561   # indicators.py REP (registration)
+PORT_STATUS     = 5562   # status_collector.py PULL (bot heartbeats)
 
 
 def ipc_socket_dir() -> str:
@@ -107,5 +108,22 @@ def make_rep(ctx: zmq.Context, addr: str, name: str = "REP") -> zmq.Socket:
 def make_req(ctx: zmq.Context, addr: str) -> zmq.Socket:
     """Connect a synchronous REQ socket to addr and return it."""
     sock = ctx.socket(zmq.REQ)
+    sock.connect(addr)
+    return sock
+
+
+def make_pull(ctx: zmq.asyncio.Context, addr: str, name: str = "PULL") -> zmq.asyncio.Socket:
+    """Bind an async PULL socket to addr and return it."""
+    warn_if_external_bind(addr, name)
+    _prepare_ipc_bind(addr)
+    sock = ctx.socket(zmq.PULL)
+    sock.bind(addr)
+    _chmod_ipc(addr)
+    return sock
+
+
+def make_push(ctx: zmq.asyncio.Context, addr: str) -> zmq.asyncio.Socket:
+    """Connect an async PUSH socket to addr and return it."""
+    sock = ctx.socket(zmq.PUSH)
     sock.connect(addr)
     return sock
