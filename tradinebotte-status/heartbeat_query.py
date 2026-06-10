@@ -117,7 +117,7 @@ def print_table(
     """Print the formatted table; return the number of issues detected."""
     issues = 0
 
-    header = f"  {'STATUS':<6}  {'ACCOUNT':<20}  {'BOT':<20}  {'AGE':>7}  {'STATUS':<9}  INFO"
+    header = f"  {'STATUS':<6}  {'ACCOUNT':<20}  {'BOT':<20}  {'AGE':>7}  {'STATUS':<9}  {'BOUNDS':<10}  VERSION"
     sep    = "  " + "─" * (len(header) - 2)
     print(header)
     print(sep)
@@ -125,10 +125,9 @@ def print_table(
     alive_bots: set[str] = set()
     for r in rows:
         mins = r.age_s // 60
-        info = f"bounds={r.bounds_ok}  v={r.version}"
         line = (
             f"  {r.flag:<6}  {r.account:<20}  {r.bot_name:<20}"
-            f"  {mins:>5}min  {r.bot_status:<9}  {info}"
+            f"  {mins:>5}min  {r.bot_status:<9}  {r.bounds_ok:<10}  {r.version}"
         )
         if r.flag == "ALIVE":
             print(_c(_GREEN, f"✓ {line}", color))

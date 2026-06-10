@@ -102,6 +102,6 @@ SSHPASS="$COLL_PASS" /usr/bin/sshpass -e \
     -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
     -o PreferredAuthentications=password \
     -p "$PORT" "$COLL_USER@$SERVER" \
-    "python3 '${INSTALL_DIR}/heartbeat_query.py' ${REMOTE_ARGS[*]+"${REMOTE_ARGS[*]}"}"
+    "python3 ${INSTALL_DIR}/heartbeat_query.py ${REMOTE_ARGS[*]+"${REMOTE_ARGS[*]}"}"
 
 # SSH exit code propagates directly — 0 = all ALIVE, 1 = issues or DB missing.
