@@ -194,6 +194,11 @@ def main() -> None:
         action="store_true",
         help="Force ANSI colour codes even when stdout is not a TTY (e.g. over SSH)",
     )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output JSON array instead of table (ignores --color)",
+    )
     args = parser.parse_args()
 
     color = (not args.no_color) and (args.color or sys.stdout.isatty())
@@ -208,6 +213,24 @@ def main() -> None:
     if not rows:
         print("heartbeat.db exists but has no rows — collector running but no bot has reported yet.")
         sys.exit(1)
+
+    if args.json:
+        import json as _json
+        print(_json.dumps([
+            {
+                "account":    r.account,
+                "bot_name":   r.bot_name,
+                "last_ts":    r.last_ts,
+                "age_s":      r.age_s,
+                "flag":       r.flag,
+                "bot_status": r.bot_status,
+                "bounds_ok":  r.bounds_ok,
+                "version":    r.version,
+            }
+            for r in rows
+        ]))
+        issues = sum(1 for r in rows if r.flag != "ALIVE")
+        sys.exit(0 if issues == 0 else 1)
 
     issues = print_table(rows, set(args.require), color)
 
