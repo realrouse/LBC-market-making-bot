@@ -1,5 +1,6 @@
-"""Unit tests for status_collector — store_heartbeat, open_db, and build_heartbeat."""
+"""Unit tests for status_collector, build_heartbeat, and heartbeat_query."""
 
+import io
 import json
 import os
 import sqlite3
@@ -7,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import redirect_stdout
 
 _TESTS_DIR = os.path.dirname(__file__)
 sys.path.insert(0, os.path.join(_TESTS_DIR, ".."))
@@ -193,6 +195,174 @@ class TestBuildHeartbeat(unittest.TestCase):
     def test_extra_overrides_status(self):
         payload = build_heartbeat("b", None, {"status": "halted"})
         self.assertEqual(payload["status"], "halted")
+
+
+class TestHeartbeatQueryClassify(unittest.TestCase):
+    """Tests for heartbeat_query.classify() — pure function, no I/O."""
+
+    def setUp(self):
+        from heartbeat_query import classify
+        self.classify = classify
+
+    def test_zero_age_is_alive(self):
+        self.assertEqual(self.classify(0, 7200, 14400), "ALIVE")
+
+    def test_exactly_stale_threshold_is_alive(self):
+        self.assertEqual(self.classify(7200, 7200, 14400), "ALIVE")
+
+    def test_one_over_stale_threshold_is_stale(self):
+        self.assertEqual(self.classify(7201, 7200, 14400), "STALE")
+
+    def test_exactly_dead_threshold_is_stale(self):
+        self.assertEqual(self.classify(14400, 7200, 14400), "STALE")
+
+    def test_one_over_dead_threshold_is_dead(self):
+        self.assertEqual(self.classify(14401, 7200, 14400), "DEAD")
+
+    def test_custom_thresholds(self):
+        self.assertEqual(self.classify(100, 60, 120), "STALE")
+        self.assertEqual(self.classify(200, 60, 120), "DEAD")
+        self.assertEqual(self.classify(30, 60, 120), "ALIVE")
+
+
+class TestHeartbeatQueryRows(unittest.TestCase):
+    """Tests for heartbeat_query.query_heartbeats() — uses a temp DB."""
+
+    def setUp(self):
+        fd, self.db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        from status_collector import open_db
+        self.db = open_db(self.db_path)
+        from heartbeat_query import query_heartbeats
+        self.query_heartbeats = query_heartbeats
+        self.now = int(time.time())
+
+    def tearDown(self):
+        self.db.close()
+        os.unlink(self.db_path)
+
+    def _insert(self, account, bot_name, age_s, bounds_ok=True, version="abc123"):
+        ts = self.now - age_s
+        payload = {"account": account, "bot_name": bot_name, "ts": ts,
+                   "bounds_ok": bounds_ok, "version": version, "status": "running"}
+        self.db.execute(
+            "INSERT INTO heartbeats (ts, account, bot_name, version, status, bounds_ok, payload)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (ts, account, bot_name, version, "running",
+             1 if bounds_ok else 0, json.dumps(payload)),
+        )
+        self.db.commit()
+
+    def test_empty_db_returns_empty_list(self):
+        rows = self.query_heartbeats(self.db_path, 7200, 14400, now=self.now)
+        self.assertEqual(rows, [])
+
+    def test_alive_row_classified(self):
+        self._insert("acct-a", "live_bot", 600)
+        rows = self.query_heartbeats(self.db_path, 7200, 14400, now=self.now)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].flag, "ALIVE")
+        self.assertEqual(rows[0].bot_name, "live_bot")
+
+    def test_stale_row_classified(self):
+        self._insert("acct-a", "live_bot", 10800)  # 3 h
+        rows = self.query_heartbeats(self.db_path, 7200, 14400, now=self.now)
+        self.assertEqual(rows[0].flag, "STALE")
+
+    def test_dead_row_classified(self):
+        self._insert("acct-a", "live_bot", 18000)  # 5 h
+        rows = self.query_heartbeats(self.db_path, 7200, 14400, now=self.now)
+        self.assertEqual(rows[0].flag, "DEAD")
+
+    def test_multiple_bots_returned(self):
+        self._insert("acct-a", "account_bot", 300)
+        self._insert("acct-b", "live_bot", 300)
+        self._insert("acct-c", "swing_bot", 300)
+        rows = self.query_heartbeats(self.db_path, 7200, 14400, now=self.now)
+        self.assertEqual(len(rows), 3)
+
+    def test_only_latest_per_account_bot(self):
+        # two rows for same (account, bot_name) — only the newer one counts
+        ts_old = self.now - 9000
+        ts_new = self.now - 600
+        for ts in (ts_old, ts_new):
+            self.db.execute(
+                "INSERT INTO heartbeats (ts, account, bot_name, version, status, bounds_ok, payload)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (ts, "acct-a", "live_bot", "v1", "running", 1, "{}"),
+            )
+        self.db.commit()
+        rows = self.query_heartbeats(self.db_path, 7200, 14400, now=self.now)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].flag, "ALIVE")  # 600s < 7200
+
+    def test_bounds_ok_field_mapped(self):
+        self._insert("acct-a", "live_bot", 300, bounds_ok=True)
+        rows = self.query_heartbeats(self.db_path, 7200, 14400, now=self.now)
+        self.assertEqual(rows[0].bounds_ok, "ok")
+
+    def test_bounds_fail_field_mapped(self):
+        self._insert("acct-a", "live_bot", 300, bounds_ok=False)
+        rows = self.query_heartbeats(self.db_path, 7200, 14400, now=self.now)
+        self.assertEqual(rows[0].bounds_ok, "FAIL")
+
+
+class TestHeartbeatQueryTable(unittest.TestCase):
+    """Tests for heartbeat_query.print_table() — checks issue counts."""
+
+    def setUp(self):
+        from heartbeat_query import BotRow, print_table
+        self.BotRow = BotRow
+        self.print_table = print_table
+
+    def _make_row(self, bot_name, flag, account="acct-a"):
+        return self.BotRow(
+            account=account, bot_name=bot_name,
+            last_ts=0, age_s=0, flag=flag,
+            bot_status="running", bounds_ok="ok", version="abc",
+        )
+
+    def test_all_alive_zero_issues(self):
+        rows = [self._make_row("live_bot", "ALIVE"), self._make_row("account_bot", "ALIVE")]
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            count = self.print_table(rows, set(), color=False)
+        self.assertEqual(count, 0)
+
+    def test_stale_counts_as_issue(self):
+        rows = [self._make_row("live_bot", "STALE")]
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            count = self.print_table(rows, set(), color=False)
+        self.assertEqual(count, 1)
+
+    def test_dead_counts_as_issue(self):
+        rows = [self._make_row("live_bot", "DEAD")]
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            count = self.print_table(rows, set(), color=False)
+        self.assertEqual(count, 1)
+
+    def test_missing_required_bot_counts_as_issue(self):
+        rows = [self._make_row("live_bot", "ALIVE")]
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            count = self.print_table(rows, {"account_bot"}, color=False)
+        self.assertEqual(count, 1)  # account_bot required but missing
+
+    def test_required_bot_alive_no_issue(self):
+        rows = [self._make_row("account_bot", "ALIVE")]
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            count = self.print_table(rows, {"account_bot"}, color=False)
+        self.assertEqual(count, 0)
+
+    def test_required_stale_bot_counts_as_issue(self):
+        rows = [self._make_row("account_bot", "STALE")]
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            count = self.print_table(rows, {"account_bot"}, color=False)
+        self.assertEqual(count, 2)  # STALE row + not ALIVE for required
 
 
 if __name__ == "__main__":
