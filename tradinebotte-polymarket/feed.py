@@ -30,6 +30,7 @@ import aiohttp, websockets, zmq, zmq.asyncio
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import api_polymarket as api
+from tradinetools import heartbeat_loop
 from tradinetools.zmq import make_pub, default_ipc_addr
 from tradinetools.logging import setup_logger
 
@@ -272,19 +273,26 @@ async def main() -> None:
         logger.debug("[ZMQ] PUB socket bound on %s", FEED_ADDR)
     await asyncio.sleep(0.5)
 
-    backoff = 1
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
-        while True:
-            try:
-                await _run_ws(sock, session)
-                backoff = 1
-            except Exception as e:
-                logger.warning("WS error — reconnecting in %ds: %s", backoff, e)
-                if VERBOSE:
-                    import traceback
-                    logger.debug("[WS] traceback: %s", traceback.format_exc())
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 60)
+    _hb_task = asyncio.create_task(
+        heartbeat_loop("feed", os.path.dirname(os.path.abspath(__file__)), lambda: {})
+    )
+    try:
+        backoff = 1
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+            while True:
+                try:
+                    await _run_ws(sock, session)
+                    backoff = 1
+                except Exception as e:
+                    logger.warning("WS error — reconnecting in %ds: %s", backoff, e)
+                    if VERBOSE:
+                        import traceback
+                        logger.debug("[WS] traceback: %s", traceback.format_exc())
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, 60)
+    finally:
+        _hb_task.cancel()
+        await asyncio.gather(_hb_task, return_exceptions=True)
 
 
 if __name__ == "__main__":
