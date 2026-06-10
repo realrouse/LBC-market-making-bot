@@ -892,6 +892,7 @@ class BotState:
         self._weekly_pnl_week: int = -1  # 7-day period index since Unix epoch
         # Batched snapshot commits — flushed every SNAPSHOT_COMMIT_SECS seconds.
         self.last_snapshot_commit_ts: float = 0.0
+        self.last_book_ts: float = 0.0       # epoch time of last processed book update
         # Circuit-breaker: suspend new entries after 3 consecutive CLOB failures.
         self.api_fail_streak: int = 0
         self.api_cooldown_until: float = 0.0
@@ -925,6 +926,7 @@ async def handle_book_update(state: BotState, parsed: dict[str, Any]) -> None:
     ts.ask_vol   = parsed["ask_vol"]
     ts.obi       = parsed["obi"]
     ts.last_update_ts = time.time()
+    state.last_book_ts = ts.last_update_ts
     # Dispatch to the active strategy.
     # state.strategy is None for the built-in threshold strategy (default),
     # or a GridStrategy/SwingStrategy instance for "grid"/"swing".
@@ -1700,7 +1702,13 @@ async def main() -> None:
                 heartbeat_loop(
                     _hb_bot_name,
                     config.install_dir,
-                    lambda: {"bounds_ok": state.daily_pnl >= -config.daily_stop_loss},
+                    lambda: {
+                        "bounds_ok":    state.daily_pnl >= -config.daily_stop_loss,
+                        "daily_pnl":    round(state.daily_pnl, 2),
+                        "capital":      round(state.capital, 2),
+                        "open_trades":  len(state.open_trades),
+                        "last_book_ts": state.last_book_ts,
+                    },
                 )
             )
             try:

@@ -831,7 +831,13 @@ async def _run(p: dict, db: sqlite3.Connection, install_dir: str = "") -> None:
                 heartbeat_loop(
                     "accumulation_bot",
                     install_dir or None,
-                    lambda: {"bounds_ok": state.free_usdt > 0},
+                    lambda: {
+                        "bounds_ok":      state.free_usdt > 0,
+                        "holdings_btc":   round(state.holdings_btc, 6),
+                        "free_usdt":      round(state.free_usdt, 2),
+                        "avg_entry":      round(state.avg_entry, 2),
+                        "total_realized": round(state.total_realized, 2),
+                    },
                 )
             ),
         ]

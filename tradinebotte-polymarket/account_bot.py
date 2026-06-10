@@ -81,6 +81,9 @@ _FEED_LOCK_PATH = f"{_FEED_TMP_DIR}/feed-{_feed_id(_FEED_ADDR)}.lock"
 _FEED_PROBE_MS  = 5_000   # ms to wait when probing for a live feed
 _FEED_READY_S   = 30      # max seconds to wait for feed to become ready
 
+# Heartbeat sentinel — updated in _run() on every feed message.
+_last_feed_msg_ts: float = 0.0
+
 
 # ─── Feed auto-start helpers ──────────────────────────────────────────────────
 
@@ -261,6 +264,7 @@ def _register_from_market_msg(state: bot.BotState, msg: dict) -> None:
 
 async def _run(state: bot.BotState) -> None:
     """Main message loop: receive ZMQ messages from feed.py and dispatch to live_bot handlers."""
+    global _last_feed_msg_ts
     ctx  = zmq.asyncio.Context()
     sock = make_sub(ctx, _FEED_ADDR)
     logger.info("Connected to feed: %s", _FEED_ADDR)
@@ -273,6 +277,7 @@ async def _run(state: bot.BotState) -> None:
             try:
                 raw = await asyncio.wait_for(sock.recv_json(), timeout=FEED_TIMEOUT)
                 last_msg_ts = time.time()
+                _last_feed_msg_ts = last_msg_ts
                 msgs_total += 1
             except asyncio.TimeoutError:
                 idle = time.time() - last_msg_ts
@@ -385,7 +390,12 @@ async def main() -> None:
                 heartbeat_loop(
                     "account_bot",
                     config.install_dir,
-                    lambda: {"bounds_ok": state.daily_pnl >= -config.daily_stop_loss},
+                    lambda: {
+                        "bounds_ok":         state.daily_pnl >= -config.daily_stop_loss,
+                        "daily_pnl":         round(state.daily_pnl, 2),
+                        "open_trades":       len(state.open_trades),
+                        "last_feed_msg_ts":  _last_feed_msg_ts,
+                    },
                 )
             )
             try:
