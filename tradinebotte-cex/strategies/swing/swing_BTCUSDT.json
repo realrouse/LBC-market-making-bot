@@ -6,8 +6,8 @@
     "connector":            "binance",
     "symbol":               "BTCUSDT",
 
-    "support_levels":       [70000, 72500, 75000, 76000],
-    "resistance_levels":    [78000, 80000, 82500, 85000],
+    "support_levels":       [58000, 59000, 60000, 61000],
+    "resistance_levels":    [63000, 65000, 68000, 70000],
 
     "order_size_usdt":      200.0,
     "max_positions":        3,
