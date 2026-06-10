@@ -1,4 +1,4 @@
-"""Unit tests for status_collector — store_heartbeat and open_db."""
+"""Unit tests for status_collector — store_heartbeat, open_db, and build_heartbeat."""
 
 import json
 import os
@@ -8,9 +8,12 @@ import tempfile
 import time
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+_TESTS_DIR = os.path.dirname(__file__)
+sys.path.insert(0, os.path.join(_TESTS_DIR, ".."))
+sys.path.insert(0, os.path.join(_TESTS_DIR, "../tradinetools"))
 
 from status_collector import open_db, store_heartbeat
+from tradinetools import build_heartbeat
 
 
 class TestOpenDb(unittest.TestCase):
@@ -151,12 +154,45 @@ class TestStoreHeartbeat(unittest.TestCase):
 class TestDefaultStatusAddr(unittest.TestCase):
 
     def test_returns_tcp_loopback_5562(self):
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../tradinetools"))
         from tradinetools.zmq import default_status_addr, PORT_STATUS
         addr = default_status_addr()
         self.assertEqual(addr, f"tcp://127.0.0.1:{PORT_STATUS}")
         self.assertIn("127.0.0.1", addr)
         self.assertNotIn("ipc://", addr)
+
+
+class TestBuildHeartbeat(unittest.TestCase):
+
+    def test_required_fields_present(self):
+        payload = build_heartbeat("test_bot", None, {})
+        for k in ("ts", "bot_name", "account", "version", "status"):
+            self.assertIn(k, payload)
+
+    def test_bot_name_preserved(self):
+        self.assertEqual(build_heartbeat("my_bot", None, {})["bot_name"], "my_bot")
+
+    def test_status_is_running(self):
+        self.assertEqual(build_heartbeat("b", None, {})["status"], "running")
+
+    def test_ts_is_recent(self):
+        before = int(time.time())
+        payload = build_heartbeat("b", None, {})
+        self.assertGreaterEqual(payload["ts"], before)
+        self.assertLessEqual(payload["ts"], int(time.time()) + 2)
+
+    def test_extra_merged(self):
+        payload = build_heartbeat("b", None, {"bounds_ok": True, "capital": 99.0})
+        self.assertTrue(payload["bounds_ok"])
+        self.assertAlmostEqual(payload["capital"], 99.0)
+
+    def test_account_non_empty(self):
+        payload = build_heartbeat("b", None, {})
+        self.assertIsNotNone(payload["account"])
+        self.assertGreater(len(payload["account"]), 0)
+
+    def test_extra_overrides_status(self):
+        payload = build_heartbeat("b", None, {"status": "halted"})
+        self.assertEqual(payload["status"], "halted")
 
 
 if __name__ == "__main__":

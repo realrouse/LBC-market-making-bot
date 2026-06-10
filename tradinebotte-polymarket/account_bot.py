@@ -32,6 +32,7 @@ Message types consumed from feed.py:
 """
 import argparse, asyncio, fcntl, hashlib, logging, os, subprocess, sys, time
 import zmq, zmq.asyncio
+from tradinetools import heartbeat_loop
 from tradinetools.logging import setup_logger
 from tradinetools.zmq import make_req, make_sub, default_ipc_addr
 
@@ -380,7 +381,18 @@ async def main() -> None:
         import aiohttp
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
             state.session = session
-            await _run(state)
+            _hb_task = asyncio.create_task(
+                heartbeat_loop(
+                    "account_bot",
+                    config.install_dir,
+                    lambda: {"bounds_ok": state.daily_pnl >= -config.daily_stop_loss},
+                )
+            )
+            try:
+                await _run(state)
+            finally:
+                _hb_task.cancel()
+                await asyncio.gather(_hb_task, return_exceptions=True)
     finally:
         conn.close()
 

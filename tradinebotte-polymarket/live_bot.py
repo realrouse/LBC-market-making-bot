@@ -47,6 +47,7 @@ if os.path.isdir(_cex_dir) and _cex_dir not in sys.path:
 import api_polymarket as api
 import bot_utils
 from bot_utils import print_dashboard, write_web_status
+from tradinetools import heartbeat_loop
 from tradinetools.zmq import PORT_FEED, PORT_INDICATORS, PORT_IND_REG, default_ipc_addr
 
 # ─── STRATEGY DEFAULTS (module-level — tests reference these directly) ────────
@@ -1692,7 +1693,21 @@ async def main() -> None:
                 state.strategy = _load_strat(config.strategy_type, config)
                 logger.info("  Algorithm   : %s", config.strategy_type)
                 await state.strategy.restore_from_db(state)
-            await ws_loop(state, session)
+            _hb_bot_name = {"grid": "grid_bot", "swing": "swing_bot"}.get(
+                config.strategy_type, "live_bot"
+            )
+            _hb_task = asyncio.create_task(
+                heartbeat_loop(
+                    _hb_bot_name,
+                    config.install_dir,
+                    lambda: {"bounds_ok": state.daily_pnl >= -config.daily_stop_loss},
+                )
+            )
+            try:
+                await ws_loop(state, session)
+            finally:
+                _hb_task.cancel()
+                await asyncio.gather(_hb_task, return_exceptions=True)
     finally:
         conn.close()
 
