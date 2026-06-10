@@ -138,7 +138,7 @@ data["accum"] = _qdb("~/tradinebotte/live_accum.db", {
 data["heartbeats"] = _qdb("~/tradinebotte/heartbeat.db", {
     "rows": (
         "SELECT account, bot_name, max(ts) as last_ts,"
-        " status, bounds_ok, version"
+        " status, bounds_ok, version, payload"
         " FROM heartbeats GROUP BY account, bot_name ORDER BY account, bot_name"
     ),
 })
@@ -202,6 +202,13 @@ def _classify_heartbeats(raw_rows: list, user_to_label: dict) -> list:
         bounds_val = row.get("bounds_ok")
         bounds = "-" if bounds_val is None else ("ok" if bounds_val else "FAIL")
         acct = row.get("account", "")
+        raw_payload = row.get("payload")
+        payload = {}
+        if raw_payload:
+            try:
+                payload = json.loads(raw_payload) if isinstance(raw_payload, str) else {}
+            except Exception:
+                pass
         result.append({
             "account":    acct,
             "bot_name":   row.get("bot_name", ""),
@@ -212,6 +219,7 @@ def _classify_heartbeats(raw_rows: list, user_to_label: dict) -> list:
             "bounds_ok":  bounds,
             "version":    (row.get("version") or "unknown")[:10],
             "_label":     user_to_label.get(acct, acct),
+            "payload":    payload,
         })
     return result
 
@@ -284,6 +292,7 @@ h3{color:#58a6ff;font-size:.9em;margin-bottom:8px}
              border-bottom:1px solid #30363d;white-space:nowrap}
 .hb-table td{padding:4px 10px;border-bottom:1px solid #1c2029;white-space:nowrap}
 .hb-table tr:last-child td{border-bottom:none}
+.hb-detail{color:#8b949e;font-size:.8em;white-space:nowrap}
 .alive{color:#3fb950}.stale{color:#d29922}.dead{color:#f85149}
 
 .tr-table{width:100%;border-collapse:collapse;font-size:.78em;margin-top:6px}
@@ -345,9 +354,87 @@ def _wr(w: int, l: int) -> str:
     return f"<span class='{cls}'>{pct:.1f}%</span>"
 
 
+def _render_payload_summary(bot_name: str, payload: dict, now: int) -> str:
+    if not payload:
+        return "—"
+
+    def _ago(ts):
+        if not ts:
+            return "never"
+        age = now - int(ts)
+        if age < 120:
+            return f"{age}s ago"
+        return f"{age // 60}min ago"
+
+    parts = []
+    if bot_name in ("live_bot", "grid_bot", "swing_bot"):
+        pnl = payload.get("daily_pnl")
+        if pnl is not None:
+            parts.append(f"pnl=${pnl:+.2f}")
+        cap = payload.get("capital")
+        if cap is not None:
+            parts.append(f"cap=${cap:.0f}")
+        ot = payload.get("open_trades")
+        if ot is not None:
+            parts.append(f"trades={ot}")
+        ts = payload.get("last_book_ts")
+        if ts:
+            parts.append(f"book={_ago(ts)}")
+    elif bot_name == "account_bot":
+        pnl = payload.get("daily_pnl")
+        if pnl is not None:
+            parts.append(f"pnl=${pnl:+.2f}")
+        ot = payload.get("open_trades")
+        if ot is not None:
+            parts.append(f"trades={ot}")
+        ts = payload.get("last_feed_msg_ts")
+        if ts:
+            parts.append(f"feed={_ago(ts)}")
+    elif bot_name == "accumulation_bot":
+        h = payload.get("holdings_btc")
+        if h is not None:
+            parts.append(f"btc={h:.4f}")
+        u = payload.get("free_usdt")
+        if u is not None:
+            parts.append(f"usdt=${u:.0f}")
+        e = payload.get("avg_entry")
+        if e is not None:
+            parts.append(f"entry={e:.0f}")
+        r = payload.get("total_realized")
+        if r is not None:
+            parts.append(f"pnl=${r:+.2f}")
+    elif bot_name == "orderbook_bot":
+        op = payload.get("open_positions")
+        if op is not None:
+            parts.append(f"pos={op}")
+        tp = payload.get("total_pnl")
+        if tp is not None:
+            parts.append(f"pnl=${tp:+.2f}")
+        lp = payload.get("last_price")
+        if lp:
+            parts.append(f"${lp:,.0f}")
+    elif bot_name == "feed":
+        ws = payload.get("ws_connected")
+        if ws is not None:
+            parts.append("ws=✓" if ws else "ws=✗")
+        mt = payload.get("msgs_total")
+        if mt is not None:
+            parts.append(f"msgs={mt}")
+        ts = payload.get("last_book_ts")
+        if ts:
+            parts.append(f"book={_ago(ts)}")
+    elif bot_name == "indicators":
+        ts = payload.get("last_pub_ts")
+        if ts:
+            parts.append(f"pub={_ago(ts)}")
+
+    return " · ".join(parts) if parts else "—"
+
+
 def _render_heartbeat_table(hb_rows: list) -> str:
     if not hb_rows:
         return "<p class='no-data'>No heartbeat data available</p>"
+    now = int(time.time())
     rows_html = ""
     for r in hb_rows:
         flag = r["flag"].lower()
@@ -355,6 +442,7 @@ def _render_heartbeat_table(hb_rows: list) -> str:
         age_str = f"{age_min}min" if age_min < 120 else f"{age_min//60}h{age_min%60:02d}m"
         bounds_cls = "" if r["bounds_ok"] in ("ok", "-") else " style='color:#f85149'"
         acct_label = r.get("_label") or r["account"]
+        detail = _render_payload_summary(r["bot_name"], r.get("payload", {}), now)
         rows_html += (
             f"<tr>"
             f"<td><span class='badge {flag}'>{r['flag']}</span></td>"
@@ -363,13 +451,14 @@ def _render_heartbeat_table(hb_rows: list) -> str:
             f"<td class='{flag}'>{age_str}</td>"
             f"<td{bounds_cls}>{escape(r['bounds_ok'])}</td>"
             f"<td style='color:#58a6ff;font-size:.9em'>{escape(r['version'])}</td>"
+            f"<td class='hb-detail'>{escape(detail)}</td>"
             f"</tr>"
         )
     return (
         "<table class='hb-table'>"
         "<thead><tr>"
         "<th>STATUS</th><th>ACCOUNT</th><th>BOT</th>"
-        "<th>AGE</th><th>BOUNDS</th><th>VERSION</th>"
+        "<th>AGE</th><th>BOUNDS</th><th>VERSION</th><th>DETAILS</th>"
         "</tr></thead>"
         f"<tbody>{rows_html}</tbody>"
         "</table>"

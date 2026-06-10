@@ -82,6 +82,10 @@ SA_USER="${ALL_USERS[$SA_IDX]}"
 SA_PASS="${ALL_PASSWORDS[$SA_IDX]}"
 SVC_NAME="tradinebotte-live-${SA_USER}.service"
 
+# Account-0 is the heartbeat collector — used for post-deploy HB check.
+HB_USER="${ALL_USERS[0]}"
+HB_PASS="${ALL_PASSWORDS[0]}"
+
 # ─── SSH helpers ───────────────────────────────────────────────────────────────
 _ssh() {
     SSHPASS="$SA_PASS" /usr/bin/sshpass -e \
@@ -89,6 +93,14 @@ _ssh() {
         -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
         -o PreferredAuthentications=password \
         -p "$PORT" "$SA_USER@$SERVER" "$@" 2>&1
+}
+
+_ssh_hb() {
+    SSHPASS="$HB_PASS" /usr/bin/sshpass -e \
+        ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
+        -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
+        -o PreferredAuthentications=password \
+        -p "$PORT" "$HB_USER@$SERVER" "$@" 2>&1
 }
 
 _rsync() {
@@ -166,6 +178,8 @@ if [[ "$VERIFY_ONLY" == "false" ]]; then
         exit 1
     fi
 fi
+
+T_BEFORE=$(date +%s)   # epoch snapshot for post-deploy heartbeat check
 
 # ─── Step 2: restart ───────────────────────────────────────────────────────────
 if [[ "$SKIP_RESTART" == "false" ]]; then
@@ -293,6 +307,37 @@ ERROR_COUNT=$(echo "$VERIFY_OUT" | grep -cE '\[ERROR\]|\[CRITICAL\]' || true)
 [[ "$ERROR_COUNT" -eq 0 ]] && ok "No errors at startup" \
     || err "$ERROR_COUNT ERROR/CRITICAL line(s) in startup log"
 fi  # SKIP_VERIFY
+
+# ─── Step 4: heartbeat check ───────────────────────────────────────────────────
+# Poll heartbeat.db on the collector account for a fresh row from SA_USER.
+# Skipped when --skip-verify or --skip-restart is set (no restart happened).
+if [[ "$SKIP_VERIFY" == "false" && "$SKIP_RESTART" == "false" ]]; then
+    section "STEP 4 — HEARTBEAT CHECK"
+    info "Polling collector for fresh $SA_USER heartbeat (up to 180s)..."
+    _HB_PY=$(cat <<PYEOF
+import sqlite3,time,os,sys
+t=$T_BEFORE
+p=os.path.expanduser("~/tradinebotte/heartbeat.db")
+if not os.path.exists(p):
+    print("HB_NODB"); sys.exit(1)
+db=sqlite3.connect(p)
+for i in range(30):
+    r=db.execute("SELECT ts,status FROM heartbeats WHERE account=? AND ts>? ORDER BY ts DESC LIMIT 1",("$SA_USER",t)).fetchone()
+    if r: print("HB_OK ts="+str(r[0])+" status="+str(r[1])); sys.exit(0)
+    time.sleep(6)
+print("HB_TIMEOUT"); sys.exit(1)
+PYEOF
+)
+    _HB_B64=$(echo "$_HB_PY" | base64 -w0)
+    HB_OUT=$(_ssh_hb "echo '$_HB_B64' | base64 -d | python3")
+    if echo "$HB_OUT" | grep -q "HB_OK"; then
+        ok "$SA_USER: fresh heartbeat confirmed — $(echo "$HB_OUT" | grep -oE 'status=[^ ]+')"
+    elif echo "$HB_OUT" | grep -q "HB_NODB"; then
+        warn "heartbeat.db not found on collector — status_collector not deployed?"
+    else
+        warn "$SA_USER: no heartbeat within 180s — warmup may still be in progress"
+    fi
+fi  # STEP 4
 
 # ─── Report ────────────────────────────────────────────────────────────────────
 section "RESULT"
