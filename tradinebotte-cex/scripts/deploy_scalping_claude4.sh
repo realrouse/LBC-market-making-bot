@@ -172,7 +172,10 @@ fi
 echo 'updating dependencies...'
 if [ -d $INSTALL_DIR/.venv ]; then VENV=$INSTALL_DIR/.venv/bin; else VENV=$INSTALL_DIR/venv/bin; fi
 \$VENV/pip install --quiet -r $INSTALL_DIR/requirements.txt 2>/dev/null && echo 'deps ok' || echo 'pip warning (non-fatal)'
-\$VENV/pip install --quiet -e $INSTALL_DIR/tradinetools 2>/dev/null && echo 'tradinetools ok' || echo 'tradinetools warning (non-fatal)'
+PYVER=\$(\$VENV/python3 -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')
+SITE=\$(dirname \$VENV)/lib/python\${PYVER}/site-packages
+mkdir -p \"\$SITE\" && rm -rf \"\$SITE/tradinetools\"
+cp -r $INSTALL_DIR/tradinetools/tradinetools \"\$SITE/tradinetools\" && echo 'tradinetools ok'
 "
     # Stop legacy candle/meanrev/breakout bots if still running (always)
     for LEGACY in scalping_candle_momentum scalping_meanrev scalping_breakout; do

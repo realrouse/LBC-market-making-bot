@@ -205,14 +205,10 @@ if [[ "$RESTART_INDICATORS" == "true" ]]; then
 VENV=$_install_dir/.venv
 PYVER=\$(\$VENV/bin/python3 -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')
 SITE=\$VENV/lib/python\${PYVER}/site-packages
-if \$VENV/bin/python3 -m pip install --quiet -e $_install_dir/tradinetools 2>/dev/null; then
-    echo 'tradinetools ok (pip)'
-else
-    mkdir -p \$SITE
-    rm -rf \$SITE/tradinetools
-    cp -r $_install_dir/tradinetools/tradinetools \$SITE/tradinetools
-    echo 'tradinetools ok (copy)'
-fi
+mkdir -p \$SITE
+rm -rf \$SITE/tradinetools
+cp -r $_install_dir/tradinetools/tradinetools \$SITE/tradinetools
+echo 'tradinetools ok'
 \$VENV/bin/python3 -c 'from tradinetools.zmq import ipc_socket_dir, make_pub; print(\"import check ok\")' 2>&1
 " 2>&1 \
         && echo -e "${GREEN}  ✓ tradinetools installed in .venv${NC}" \
@@ -264,14 +260,10 @@ if [[ "$RESTART_FEED" == "true" ]]; then
 VENV=$_install_dir/.venv
 PYVER=\$(\$VENV/bin/python3 -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')
 SITE=\$VENV/lib/python\${PYVER}/site-packages
-if \$VENV/bin/python3 -m pip install --quiet -e $_install_dir/tradinetools 2>/dev/null; then
-    echo 'tradinetools ok (pip)'
-else
-    mkdir -p \$SITE
-    rm -rf \$SITE/tradinetools
-    cp -r $_install_dir/tradinetools/tradinetools \$SITE/tradinetools
-    echo 'tradinetools ok (copy)'
-fi
+mkdir -p \$SITE
+rm -rf \$SITE/tradinetools
+cp -r $_install_dir/tradinetools/tradinetools \$SITE/tradinetools
+echo 'tradinetools ok'
 \$VENV/bin/python3 -c 'from tradinetools.zmq import ipc_socket_dir, make_pub; print(\"import check ok\")' 2>&1
 " 2>&1 \
         && echo -e "${GREEN}  ✓ tradinetools installed in .venv${NC}" \
@@ -340,14 +332,10 @@ if [[ "$RESTART_ACCOUNT" == "true" ]]; then
 VENV=$_install_dir/.venv
 PYVER=\$(\$VENV/bin/python3 -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')
 SITE=\$VENV/lib/python\${PYVER}/site-packages
-if \$VENV/bin/python3 -m pip install --quiet -e $_install_dir/tradinetools 2>/dev/null; then
-    echo 'tradinetools ok (pip)'
-else
-    mkdir -p \$SITE
-    rm -rf \$SITE/tradinetools
-    cp -r $_install_dir/tradinetools/tradinetools \$SITE/tradinetools
-    echo 'tradinetools ok (copy)'
-fi
+mkdir -p \$SITE
+rm -rf \$SITE/tradinetools
+cp -r $_install_dir/tradinetools/tradinetools \$SITE/tradinetools
+echo 'tradinetools ok'
 \$VENV/bin/python3 -c 'from tradinetools.zmq import ipc_socket_dir, make_pub; print(\"import check ok\")' 2>&1
 " 2>&1 \
         && echo -e "${GREEN}  ✓ tradinetools installed in .venv${NC}" \

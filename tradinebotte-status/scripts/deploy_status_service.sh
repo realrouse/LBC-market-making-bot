@@ -173,19 +173,14 @@ if [[ "$VERIFY_ONLY" == "false" ]]; then
         else echo 'ERROR: no venv at \${INSTALL}/.venv or \${INSTALL}/venv'; exit 1; fi
         echo \"venv: \${VENV}\"
 
-        # Install tradinetools into the venv
-        if \"\${VENV}/bin/python3\" -m pip install --quiet -e \"\${INSTALL}/tradinetools\" 2>/dev/null; then
-            echo 'tradinetools installed (pip -e)'
-        else
-            # Fallback: copy the package into site-packages
-            PYVER=\$(\"\${VENV}/bin/python3\" -c \
-                'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')
-            SITE=\${VENV}/lib/python\${PYVER}/site-packages
-            mkdir -p \"\${SITE}\"
-            rm -rf \"\${SITE}/tradinetools\"
-            cp -r \"\${INSTALL}/tradinetools/tradinetools\" \"\${SITE}/tradinetools\"
-            echo 'tradinetools installed (site-packages copy)'
-        fi
+        # Install tradinetools into site-packages directly
+        PYVER=\$(\"\${VENV}/bin/python3\" -c \
+            'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')
+        SITE=\${VENV}/lib/python\${PYVER}/site-packages
+        mkdir -p \"\${SITE}\"
+        rm -rf \"\${SITE}/tradinetools\"
+        cp -r \"\${INSTALL}/tradinetools/tradinetools\" \"\${SITE}/tradinetools\"
+        echo 'tradinetools installed (site-packages copy)'
 
         # Validate
         if \"\${VENV}/bin/python3\" -c \
