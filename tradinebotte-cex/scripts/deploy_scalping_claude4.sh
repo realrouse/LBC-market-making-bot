@@ -81,6 +81,7 @@ SC_USER="${ALL_USERS[$SC_IDX]}"
 SC_PASS="${ALL_PASSWORDS[$SC_IDX]}"
 
 LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+GIT_HASH=$(git -C "$LOCAL_REPO" rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
 # ─── SSH helpers ───────────────────────────────────────────────────────────────
 _ssh() {
@@ -162,7 +163,7 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
     info "Stopping legacy and current bots, starting orderbook_bot..."
 
     REMOTE_CMD="cd $INSTALL_DIR; mkdir -p strategies"$'\n'
-    REMOTE_CMD+="
+    REMOTE_CMD+="echo '${GIT_HASH}' > $INSTALL_DIR/version.stamp
 if [ ! -x venv/bin/python3 ] && [ ! -x .venv/bin/python3 ]; then
     echo 'Creating venv...'
     python3 -m venv venv

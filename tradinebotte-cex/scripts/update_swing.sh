@@ -23,6 +23,7 @@
 set -uo pipefail
 
 LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+GIT_HASH=$(git -C "$LOCAL_REPO" rev-parse --short HEAD 2>/dev/null || echo "unknown")
 SKIP_RESTART=false
 VERIFY_ONLY=false
 
@@ -183,6 +184,7 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
     info "Stopping old bot and starting updated one..."
 
     RESTART_OUT=$(_ssh "
+        echo '${GIT_HASH}' > ${INSTALL_DIR}/version.stamp
         INSTALL=$INSTALL_DIR
         export XDG_RUNTIME_DIR=/run/user/\$(id -u)
         cd \$INSTALL

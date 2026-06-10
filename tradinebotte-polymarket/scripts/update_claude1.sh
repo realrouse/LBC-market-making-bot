@@ -20,6 +20,9 @@
 
 set -uo pipefail
 
+LOCAL_REPO_C1="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+GIT_HASH=$(git -C "$LOCAL_REPO_C1" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+
 RESTART_INDICATORS=false
 RESTART_FEED=false
 RESTART_ACCOUNT=false
@@ -135,12 +138,14 @@ _restart_service() {
     echo -e "\n${BOLD}${YELLOW}═══ RESTART ${label} ═══${NC}"
 
     local out
+    local _install_dir="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
     out=$(SSHPASS="$c1_pass" /usr/bin/sshpass -e \
         ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
         -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
         -o PreferredAuthentications=password \
         -p "$port" "$c1_user@$server" \
-        "export XDG_RUNTIME_DIR=/run/user/\$(id -u); \
+        "echo '${GIT_HASH}' > ${_install_dir}/version.stamp; \
+         export XDG_RUNTIME_DIR=/run/user/\$(id -u); \
          systemctl --user reset-failed ${svc} 2>/dev/null; \
          systemctl --user restart ${svc} 2>/dev/null \
          && echo 'restarted' \

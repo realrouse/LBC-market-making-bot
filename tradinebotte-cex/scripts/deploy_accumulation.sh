@@ -65,6 +65,7 @@ SC_USER="${ALL_USERS[$SC_IDX]}"
 SC_PASS="${ALL_PASSWORDS[$SC_IDX]}"
 
 LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+GIT_HASH=$(git -C "$LOCAL_REPO" rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
 _ssh() {
     SSHPASS="$SC_PASS" /usr/bin/sshpass -e \
@@ -132,7 +133,7 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
     section "STEP 2 — RESTART"
 
     REMOTE_CMD="cd $INSTALL_DIR"$'\n'
-    REMOTE_CMD+="
+    REMOTE_CMD+="echo '${GIT_HASH}' > $INSTALL_DIR/version.stamp
 echo 'updating dependencies...'
 if [ -d $INSTALL_DIR/.venv ]; then VENV=$INSTALL_DIR/.venv/bin; else VENV=$INSTALL_DIR/venv/bin; fi
 \$VENV/pip install --quiet -r $INSTALL_DIR/requirements.txt 2>/dev/null && echo 'deps ok' || echo 'pip warning (non-fatal)'
