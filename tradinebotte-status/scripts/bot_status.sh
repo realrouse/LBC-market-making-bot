@@ -94,10 +94,16 @@ HB_ARGS=(
 )
 [[ "$COLOR" == true ]] && HB_ARGS+=("--color")
 
-if ! _ssh "${ALL_USERS[0]}" "${ALL_PASSWORDS[0]}" \
-       "python3 ${INSTALL_DIR}/heartbeat_query.py ${HB_ARGS[*]+"${HB_ARGS[*]}"}"; then
+HB_OUT=$(_ssh "${ALL_USERS[0]}" "${ALL_PASSWORDS[0]}" \
+    "python3 ${INSTALL_DIR}/heartbeat_query.py ${HB_ARGS[*]+"${HB_ARGS[*]}"}" 2>&1)
+HB_EXIT=$?
+if [[ -z "$HB_OUT" ]] || [[ $HB_EXIT -ge 2 ]]; then
     echo -e "  ${YELLOW}! heartbeat collector unreachable or no rows in DB${NC}"
     ISSUES=$((ISSUES + 1))
+else
+    echo -e "$HB_OUT"
+    # exit 1 = heartbeat_query.py found STALE/DEAD rows — already shown in the table
+    [[ $HB_EXIT -ne 0 ]] && ISSUES=$((ISSUES + 1))
 fi
 
 # ─── Section 2: Per-account service states ────────────────────────────────────
