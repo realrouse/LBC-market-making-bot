@@ -23,6 +23,7 @@ ARGS=("$@")
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PM="$REPO/tradinebotte-polymarket/scripts"
 CEX="$REPO/tradinebotte-cex/scripts"
+STATUS="$REPO/tradinebotte-status/scripts"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BOLD='\033[1m'; NC='\033[0m'
@@ -46,6 +47,20 @@ run_step() {
     fi
 }
 
+show_heartbeat_status() {
+    local label="$1"
+    echo -e "\n${BOLD}${YELLOW}─── $label ───${NC}"
+    if [[ ! -f "$STATUS/heartbeat_status.sh" ]]; then
+        echo -e "  ${YELLOW}! heartbeat_status.sh not found — skipping${NC}"
+        return 0
+    fi
+    bash "$STATUS/heartbeat_status.sh" || \
+        echo -e "  ${YELLOW}! heartbeat check non-zero — collector may not be deployed yet${NC}"
+    return 0
+}
+
+show_heartbeat_status "HEARTBEAT — PRE-DEPLOY SNAPSHOT"
+
 run_step "account-1 — rsync (Polymarket)"                "$PM/update_claude1.sh" --skip-restart
 run_step "account-2 — live_bot (Polymarket)"            "$PM/update_claude2.sh"
 run_step "account-3 — live_bot (Polymarket)"            "$PM/update_claude3.sh"
@@ -54,6 +69,8 @@ run_step "account-4 — live_bot (Polymarket)"            "$PM/update_claude4.sh
 run_step "account-4 — orderbook_bot"                    "$CEX/deploy_scalping_claude4.sh"
 run_step "account-4 — accumulation_bot (deepdip)"       "$CEX/deploy_accumulation_claude4.sh"
 run_step "account-5 — swing live_bot"                   "$CEX/update_swing.sh"
+
+show_heartbeat_status "HEARTBEAT — POST-DEPLOY SNAPSHOT"
 
 echo -e "\n${BOLD}${YELLOW}═══ DEPLOY ALL — SUMMARY ═══${NC}"
 for i in "${!STEP_LABELS[@]}"; do
