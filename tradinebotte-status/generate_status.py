@@ -48,6 +48,8 @@ import sqlite3, json, os, time, subprocess, sys
 
 now = int(time.time())
 today_start_ms = (now - (now % 86400)) * 1000
+week_start_ms  = (now - 7 * 86400) * 1000
+month_start_ms = (now - 30 * 86400) * 1000
 data = {"version": "?", "services": [], "live": None, "ob": None, "accum": None,
         "heartbeats": None}
 
@@ -109,6 +111,18 @@ data["live"] = _qdb("~/tradinebotte/live.db", {
     "today": (
         f"SELECT sum(pnl_net) p, count(*) t FROM trades"
         f" WHERE outcome IN ('WIN','LOSS') AND entry_ts_ms >= {today_start_ms}"
+    ),
+    "week": (
+        f"SELECT sum(pnl_net) p, count(*) t FROM trades"
+        f" WHERE outcome IN ('WIN','LOSS') AND entry_ts_ms >= {week_start_ms}"
+    ),
+    "month": (
+        f"SELECT sum(pnl_net) p, count(*) t FROM trades"
+        f" WHERE outcome IN ('WIN','LOSS') AND entry_ts_ms >= {month_start_ms}"
+    ),
+    "lifetime": (
+        "SELECT sum(pnl_net) p, count(*) t FROM trades"
+        " WHERE outcome IN ('WIN','LOSS')"
     ),
     "recent": (
         "SELECT id, entry_ts_ms/1000 entry_ts, direction,"
@@ -287,15 +301,15 @@ h2{color:#8b949e;font-size:.85em;text-transform:uppercase;letter-spacing:1.5px;
   visibility:hidden;opacity:0;pointer-events:none;
   position:absolute;left:0;top:calc(100% + 5px);z-index:300;
   background:#1c2029;border:1px solid #30363d;border-radius:7px;
-  padding:10px 14px;min-width:220px;max-width:420px;
-  font-size:.77em;color:#c9d1d9;line-height:1.75;white-space:normal;
+  padding:12px 16px;min-width:260px;max-width:480px;
+  font-size:.93em;color:#c9d1d9;line-height:1.9;white-space:normal;
   box-shadow:0 8px 28px rgba(0,0,0,.65);
   transition:opacity .13s ease,visibility .13s ease}
 .tt:hover .tip{visibility:visible;opacity:1}
 .tt .tip.tip-up{top:auto;bottom:calc(100% + 5px)}
-.tip-label{color:#8b949e;font-size:.9em;margin-bottom:3px;display:block}
-.tip-row{color:#c9d1d9;margin:1px 0}
-.tip-dim{color:#484f58;margin-top:5px;font-size:.88em}
+.tip-label{color:#8b949e;font-size:.88em;margin-bottom:5px;display:block}
+.tip-row{color:#c9d1d9;margin:2px 0}
+.tip-dim{color:#484f58;margin-top:6px;font-size:.86em}
 
 /* ── Summary bar ──────────────────────────────────────── */
 .summary-bar{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}
@@ -708,12 +722,21 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
         totals    = (live.get("totals") or [{}])[0]
         cap_row   = (live.get("capital") or [{}])[0]
         today_row = (live.get("today") or [{}])[0]
+        week_row  = (live.get("week") or [{}])[0]
+        month_row = (live.get("month") or [{}])[0]
+        life_row  = (live.get("lifetime") or [{}])[0]
         w         = totals.get("w", 0) or 0
         l         = totals.get("l", 0) or 0
         t         = totals.get("t", 0) or 0
         cap       = cap_row.get("capital")
         today_pnl = today_row.get("p")
         today_t   = today_row.get("t", 0) or 0
+        week_pnl  = week_row.get("p")
+        week_t    = week_row.get("t", 0) or 0
+        month_pnl = month_row.get("p")
+        month_t   = month_row.get("t", 0) or 0
+        life_pnl  = life_row.get("p")
+        life_t    = life_row.get("t", 0) or 0
         cap_str   = f"${cap:.2f}" if cap is not None else "—"
         pnl_sign  = "+" if (today_pnl or 0) >= 0 else "-"
         pnl_cls   = "pnl-pos" if (today_pnl or 0) >= 0 else "pnl-neg"
@@ -732,10 +755,17 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
             f"<div class='metric-big tt'>"
             f"<div class='lbl'>Today PnL</div>"
             f"<div class='val {pnl_cls}'>{pnl_str}</div>"
-            f"<div class='metric-sub'>{today_t} trades today</div>"
+            f"<div class='metric-sub'>{today_t}T today</div>"
             f"<div class='tip tip-up'>"
-            f"<span class='tip-label'>Today</span>"
-            f"<div class='tip-row'>{today_t} trades</div>"
+            f"<span class='tip-label'>PnL breakdown</span>"
+            f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>Today</span>"
+            f" {_fmt_pnl(today_pnl)} · {today_t}T</div>"
+            f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>7 days</span>"
+            f" {_fmt_pnl(week_pnl)} · {week_t}T</div>"
+            f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>30 days</span>"
+            f" {_fmt_pnl(month_pnl)} · {month_t}T</div>"
+            f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>Lifetime</span>"
+            f" {_fmt_pnl(life_pnl)} · {life_t}T</div>"
             f"</div></div>"
             f"</div>"
         )
@@ -864,21 +894,39 @@ def _render_html(
     svc_cls    = "alive" if svc_issues == 0 else "dead"
     unr_cls    = "alive" if unreachable == 0 else "dead"
 
-    # Aggregate today's PnL across all Polymarket accounts
-    today_pnl_total = sum(
-        float((acc.get("live") or {}).get("today", [{}])[0].get("p") or 0)
-        for acc in accounts
-        if acc.get("live")
-    )
-    pnl_sign = "+" if today_pnl_total >= 0 else ""
+    # Aggregate PnL across all Polymarket accounts for each time window
+    def _sum_pnl(key: str) -> float:
+        return sum(
+            float((acc.get("live") or {}).get(key, [{}])[0].get("p") or 0)
+            for acc in accounts if acc.get("live")
+        )
+
+    today_pnl_total = _sum_pnl("today")
+    week_pnl_total  = _sum_pnl("week")
+    month_pnl_total = _sum_pnl("month")
+    life_pnl_total  = _sum_pnl("lifetime")
+    pnl_sign    = "+" if today_pnl_total >= 0 else ""
     pnl_val_cls = "pnl-pos" if today_pnl_total >= 0 else "pnl-neg"
 
     summary_bar = (
         f"<div class='summary-bar'>"
         f"<div class='sb-item'><div class='lbl'>Bots alive</div>"
         f"<div class='val {alive_cls}'>{alive_bots}/{total_bots}</div></div>"
-        f"<div class='sb-item'><div class='lbl'>Today PnL</div>"
-        f"<div class='val {pnl_val_cls}'>{pnl_sign}${today_pnl_total:.2f}</div></div>"
+        f"<div class='sb-item tt'>"
+        f"<div class='lbl'>Today PnL</div>"
+        f"<div class='val {pnl_val_cls}'>{pnl_sign}${today_pnl_total:.2f}</div>"
+        f"<div class='tip'>"
+        f"<span class='tip-label'>PnL breakdown (all accounts)</span>"
+        f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>Today</span>"
+        f" {_fmt_pnl(today_pnl_total)}</div>"
+        f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>7 days</span>"
+        f" {_fmt_pnl(week_pnl_total)}</div>"
+        f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>30 days</span>"
+        f" {_fmt_pnl(month_pnl_total)}</div>"
+        f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>Lifetime</span>"
+        f" {_fmt_pnl(life_pnl_total)}</div>"
+        f"</div>"
+        f"</div>"
         f"<div class='sb-item'><div class='lbl'>HB issues</div>"
         f"<div class='val {hb_cls}'>{hb_issues}</div></div>"
         f"<div class='sb-item'><div class='lbl'>Svc issues</div>"
