@@ -25,8 +25,21 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from html import escape
+
+
+def _fetch_btc_24h(symbol: str = "BTCUSDT") -> dict:
+    """Fetch 24h ticker stats from Binance public REST API. Returns {} on any error."""
+    url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "tradinebotte-status/1.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.loads(resp.read())
+    except Exception:
+        return {}
 
 # ─── Remote data-collection snippet (runs via SSH on each account) ────────────
 
@@ -581,11 +594,17 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
 
     services_html = _render_services(data.get("services", []))
 
+    # Determine whether this account runs Polymarket bots (live_bot / account_bot).
+    # Non-Polymarket accounts (grid, swing) use heartbeat payload for stats instead.
+    _POLY_BOT_NAMES = {"live_bot", "account_bot"}
+    has_poly = any(r["bot_name"] in _POLY_BOT_NAMES for r in (hb_rows or []))
+
     live = data.get("live")
     stats_html = ""
     trade_html = ""
     open_html  = ""
-    if live:
+
+    if live and has_poly:
         totals    = (live.get("totals") or [{}])[0]
         cap_row   = (live.get("capital") or [{}])[0]
         today_row = (live.get("today") or [{}])[0]
@@ -625,6 +644,36 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
             )
             open_html = (
                 f"<div style='margin:4px 0'><span style='color:#d29922'>▶ Open:</span> {badges}</div>"
+            )
+
+    elif not has_poly:
+        # CEX-only account: show stats from heartbeat payload of primary bot
+        primary = next(
+            (r for r in (hb_rows or []) if r["bot_name"] in ("grid_bot", "swing_bot")),
+            None,
+        )
+        if primary:
+            p         = primary.get("payload", {})
+            cap       = p.get("capital")
+            pnl_d     = p.get("daily_pnl")
+            trades_o  = p.get("open_trades")
+            acct_s    = (primary.get("_label") or "").split()[0]
+            is_sim    = (acct_s, primary["bot_name"]) in _SIM_BOTS
+            mode_cls  = "sim" if is_sim else "live-mode"
+            mode_lbl  = "SIM" if is_sim else "LIVE"
+            cap_str   = f"${cap:.0f}" if cap is not None else "—"
+            trades_str = str(trades_o) if trades_o is not None else "—"
+            stats_html = (
+                f"<div class='cards' style='grid-template-columns:repeat(4,1fr);gap:6px;margin:8px 0'>"
+                f"<div class='card'><div class='lbl'>Capital</div><div class='val'>{cap_str}</div></div>"
+                f"<div class='card'><div class='lbl'>Mode</div>"
+                f"<div class='val'><span class='badge {mode_cls}' style='font-size:.85em'>"
+                f"{mode_lbl}</span></div></div>"
+                f"<div class='card'><div class='lbl'>Open orders</div>"
+                f"<div class='val'>{trades_str}</div></div>"
+                f"<div class='card'><div class='lbl'>Today PnL</div>"
+                f"<div class='val'>{_fmt_pnl(pnl_d)}</div></div>"
+                f"</div>"
             )
 
     cex_html = ""
@@ -703,10 +752,21 @@ def _render_html(
     svc_cls    = "alive" if svc_issues == 0 else "dead"
     unr_cls    = "alive" if unreachable == 0 else "dead"
 
+    # Aggregate today's PnL across all Polymarket accounts
+    today_pnl_total = sum(
+        float((acc.get("live") or {}).get("today", [{}])[0].get("p") or 0)
+        for acc in accounts
+        if acc.get("live")
+    )
+    pnl_sign = "+" if today_pnl_total >= 0 else ""
+    pnl_val_cls = "pnl-pos" if today_pnl_total >= 0 else "pnl-neg"
+
     summary_bar = (
         f"<div class='summary-bar'>"
         f"<div class='sb-item'><div class='lbl'>Bots alive</div>"
         f"<div class='val {alive_cls}'>{alive_bots}/{total_bots}</div></div>"
+        f"<div class='sb-item'><div class='lbl'>Today PnL</div>"
+        f"<div class='val {pnl_val_cls}'>{pnl_sign}${today_pnl_total:.2f}</div></div>"
         f"<div class='sb-item'><div class='lbl'>HB issues</div>"
         f"<div class='val {hb_cls}'>{hb_issues}</div></div>"
         f"<div class='sb-item'><div class='lbl'>Svc issues</div>"
@@ -716,19 +776,40 @@ def _render_html(
         f"</div>"
     )
 
-    # BTC spot price from orderbook_bot heartbeat payload (zero extra API calls)
-    btc_price_html = ""
-    for r in heartbeats:
-        if r["bot_name"] == "orderbook_bot":
-            lp = r.get("payload", {}).get("last_price")
-            if lp:
-                btc_price_html = (
-                    f"<div class='btc-price'>"
-                    f"<span>BTC</span>"
-                    f"<span class='price'>${lp:,.0f}</span>"
-                    f"</div>"
-                )
-            break
+    # BTC 24h: try Binance API first, fall back to orderbook_bot heartbeat payload
+    btc_24h   = _fetch_btc_24h()
+    btc_price = float(btc_24h.get("lastPrice") or 0)
+    btc_chg   = float(btc_24h.get("priceChangePercent") or 0)
+    btc_high  = float(btc_24h.get("highPrice") or 0)
+    btc_low   = float(btc_24h.get("lowPrice") or 0)
+    if not btc_price:
+        for r in heartbeats:
+            if r["bot_name"] == "orderbook_bot":
+                lp = r.get("payload", {}).get("last_price")
+                if lp:
+                    btc_price = float(lp)
+                break
+    if btc_price:
+        chg_cls  = "up" if btc_chg >= 0 else "dn"
+        chg_sign = "+" if btc_chg >= 0 else ""
+        chg_html = (
+            f"<span class='chg {chg_cls}'>{chg_sign}{btc_chg:.2f}%</span>"
+            if btc_24h else ""
+        )
+        range_html = (
+            f"<span style='color:#484f58;font-size:.88em'>H&thinsp;${btc_high:,.0f}"
+            f" &nbsp; L&thinsp;${btc_low:,.0f}</span>"
+            if btc_high else ""
+        )
+        btc_price_html = (
+            f"<div class='btc-price'>"
+            f"<span>BTC</span>"
+            f"<span class='price'>${btc_price:,.0f}</span>"
+            f"{chg_html}{range_html}"
+            f"</div>"
+        )
+    else:
+        btc_price_html = ""
 
     hb_html    = _render_heartbeat_table(heartbeats)
 
@@ -766,8 +847,15 @@ def _render_html(
 {cards_html}
 </div>
 <div class="footer">
-  Generated {ts_str} · collection {collection_s:.1f}s · auto-refresh every 60s
+  Generated {ts_str} · collection {collection_s:.1f}s
+  · <span id="rf-ct">refresh in 60s</span>
 </div>
+<script>
+(function(){{
+  var t=60,el=document.getElementById('rf-ct');
+  setInterval(function(){{t--;if(t<=0)t=60;el&&(el.textContent='refresh in '+t+'s');}},1000);
+}})();
+</script>
 </body>
 </html>"""
 
