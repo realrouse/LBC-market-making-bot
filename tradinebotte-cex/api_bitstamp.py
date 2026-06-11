@@ -28,6 +28,7 @@ import uuid
 from urllib.parse import urlencode
 
 import aiohttp
+from api_common import book_snapshot, parse_levels
 
 logger = logging.getLogger("live")
 
@@ -183,38 +184,12 @@ def parse_book_update(msg):
     bids_raw = data.get("bids", [])
     asks_raw = data.get("asks", [])
 
-    def pl(lst):
-        r = []
-        for item in lst:
-            try:
-                p, s = float(item[0]), float(item[1])
-                if p > 0 and s > 0:
-                    r.append((p, s))
-            except Exception:  # pylint: disable=broad-exception-caught
-                continue
-        return r
-
-    bids = sorted(pl(bids_raw), reverse=True)
-    asks = sorted(pl(asks_raw))
+    bids = sorted(parse_levels(bids_raw), reverse=True)
+    asks = sorted(parse_levels(asks_raw))
     if not bids and not asks:
         return None
 
-    bb = bids[0][0] if bids else 0.0
-    ba = asks[0][0] if asks else float("inf")
-    bv = sum(s for _, s in bids[:5])
-    av = sum(s for _, s in asks[:5])
-    tv = bv + av
-    obi = (bv - av) / tv if tv > 0 else 0.0
-
-    return {
-        "token_id": symbol,
-        "best_bid": bb,
-        "best_ask": ba,
-        "spread":   max(0.0, ba - bb),
-        "bid_vol":  bv,
-        "ask_vol":  av,
-        "obi":      obi,
-    }
+    return book_snapshot(bids, asks, symbol)
 
 
 # ─── MARKET DISCOVERY ─────────────────────────────────────────────────────────
@@ -246,24 +221,6 @@ async def get_markets(session, symbol=DEFAULT_SYMBOL, **_):
         "volume_24h":  float(data.get("volume", 0)),
         "timestamp":   int(data.get("timestamp", 0)),
     }]
-
-
-# ─── ORDER BOOK (REST snapshot) ───────────────────────────────────────────────
-async def get_order_book(session, symbol=DEFAULT_SYMBOL, depth=5):  # pylint: disable=unused-argument
-    """Fetch a REST order book snapshot for the given symbol."""
-    clean = symbol.lower().split(":")[0]
-    try:
-        async with session.get(
-            f"{BASE_URL}/order_book/{clean}/",
-            timeout=aiohttp.ClientTimeout(total=10),
-        ) as resp:
-            if resp.status != 200:
-                logger.warning("Bitstamp order_book HTTP %s", resp.status)
-                return {}
-            return await resp.json(content_type=None)
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        logger.warning("Bitstamp get_order_book error: %s", exc)
-        return {}
 
 
 # ─── ORDER MANAGEMENT ────────────────────────────────────────────────────────
@@ -410,48 +367,3 @@ def make_user_stream_url(listen_key: str) -> str:  # pylint: disable=unused-argu
 
 def parse_user_stream_msg(msg: dict) -> dict | None:  # pylint: disable=unused-argument
     return None
-
-
-# ─── OHLCV HISTORY (for backtesting / cycle analysis) ─────────────────────────
-async def get_ohlcv(session, symbol=DEFAULT_SYMBOL, step=86400,
-                    start: int = 0, end: int = 0, limit: int = 1000) -> list:
-    """
-    Fetch OHLCV candles from Bitstamp public API.
-
-    step   : candle width in seconds (60/180/300/900/1800/3600/7200/
-              14400/21600/43200/86400)
-    start  : Unix timestamp (seconds, UTC)
-    end    : Unix timestamp (seconds, UTC)
-    limit  : max candles per request (max 1000)
-
-    Returns list of dicts: {timestamp, open, high, low, close, volume}
-    """
-    clean = symbol.lower().split(":")[0]
-    params: dict = {"step": step, "limit": limit}
-    if start:
-        params["start"] = start
-    if end:
-        params["end"] = end
-    try:
-        async with session.get(
-            f"{BASE_URL}/ohlc/{clean}/",
-            params=params,
-            timeout=aiohttp.ClientTimeout(total=30),
-        ) as resp:
-            if resp.status != 200:
-                raise RuntimeError(f"HTTP {resp.status}")
-            data = await resp.json(content_type=None)
-        return [
-            {
-                "timestamp": int(c["timestamp"]),
-                "open":      float(c["open"]),
-                "high":      float(c["high"]),
-                "low":       float(c["low"]),
-                "close":     float(c["close"]),
-                "volume":    float(c["volume"]),
-            }
-            for c in data.get("data", {}).get("ohlc", [])
-        ]
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        logger.warning("Bitstamp get_ohlcv error: %s", exc)
-        return []

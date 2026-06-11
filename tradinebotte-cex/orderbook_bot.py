@@ -69,29 +69,12 @@ import argparse
 import asyncio
 import json
 import logging
-import logging.handlers
 import sqlite3
 import sys
 import time
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
-
-def _setup_logging(log_path: Path) -> None:
-    root = logging.getLogger()
-    root.setLevel(logging.INFO)
-    fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s",
-                            datefmt="%Y-%m-%d %H:%M:%S")
-    if sys.stdout.isatty():
-        sh = logging.StreamHandler(sys.stdout)
-        sh.setFormatter(fmt)
-        root.addHandler(sh)
-    fh = logging.handlers.RotatingFileHandler(
-        log_path, maxBytes=5_000_000, backupCount=3, encoding="utf-8")
-    fh.setFormatter(fmt)
-    root.addHandler(fh)
+from tradinetools.logging import setup_root_logger
 
 logger = logging.getLogger("orderbook_bot")
 
@@ -787,7 +770,7 @@ def main() -> None:
     install_dir = Path(args.dir) if args.dir else Path.home() / "tradinebotte"
     install_dir.mkdir(parents=True, exist_ok=True)
 
-    _setup_logging(install_dir / "orderbook_bot.log")
+    setup_root_logger(install_dir / "orderbook_bot.log")
     db = init_db(install_dir / "live_ob.db")
     logger.info("DB: %s", install_dir / "live_ob.db")
 

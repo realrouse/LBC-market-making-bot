@@ -10,7 +10,6 @@ logger = logging.getLogger(__name__)
 
 # Default port assignments
 PORT_FEED       = 5557   # feed.py PUB (Polymarket order book)
-PORT_FEED_ALT   = 5558   # feed.py PUB alternate
 PORT_INDICATORS = 5559   # indicators.py PUB
 PORT_IND_REG    = 5561   # indicators.py REP (registration)
 PORT_STATUS     = 5562   # status_collector.py PULL (bot heartbeats)

@@ -22,15 +22,13 @@ To switch live_bot.py to MEXC:
     import api_mexc as api   # line 62 in live_bot.py
 """
 
-import hashlib
-import hmac
 import json
 import logging
 import os
 import time
 import uuid
-from urllib.parse import urlencode
 import aiohttp
+from api_common import book_snapshot, hmac_sign as _sign, parse_levels
 
 logger = logging.getLogger("live")
 
@@ -102,10 +100,6 @@ def make_subscribe_msg(symbols):
     })
 
 
-def _ping_msg():
-    """Keepalive ping message for MEXC WebSocket (required every 30 s)."""
-    return json.dumps({"method": "PING"})
-
 
 # ─── ORDER BOOK ───────────────────────────────────────────────────────────────
 
@@ -144,38 +138,12 @@ def parse_book_update(msg):
     if not bids_raw and not asks_raw:
         return None
 
-    def pl(lst):
-        """Parse price-level list into (price, size) float tuples, skipping zeros/malformed."""
-        r = []
-        for item in lst:
-            try:
-                p, s = float(item[0]), float(item[1])
-                if p > 0 and s > 0:
-                    r.append((p, s))
-            except Exception:  # pylint: disable=broad-exception-caught
-                continue
-        return r
-
-    bids = sorted(pl(bids_raw), reverse=True)
-    asks = sorted(pl(asks_raw))
+    bids = sorted(parse_levels(bids_raw), reverse=True)
+    asks = sorted(parse_levels(asks_raw))
     if not bids and not asks:
         return None
 
-    bb = bids[0][0] if bids else 0.0
-    ba = asks[0][0] if asks else float("inf")
-    bv = sum(s for _, s in bids[:5])
-    av = sum(s for _, s in asks[:5])
-    tv = bv + av
-    obi = (bv - av) / tv if tv > 0 else 0.0
-    return {
-        "token_id": symbol,
-        "best_bid": bb,
-        "best_ask": ba,
-        "spread": max(0.0, ba - bb),
-        "bid_vol": bv,
-        "ask_vol": av,
-        "obi": obi,
-    }
+    return book_snapshot(bids, asks, symbol)
 
 
 # ─── MARKET DISCOVERY ─────────────────────────────────────────────────────────
@@ -207,15 +175,6 @@ async def get_markets(session, symbol=DEFAULT_SYMBOL):
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.warning("MEXC fetch error : %s", e)
         return []
-
-
-# ─── SIGNING ──────────────────────────────────────────────────────────────────
-
-def _sign(params: dict, secret: str) -> str:
-    """HMAC-SHA256 signature over the URL-encoded query string."""
-    query = urlencode(params)
-    return hmac.new(secret.encode("utf-8"), query.encode("utf-8"),
-                    hashlib.sha256).hexdigest()
 
 
 # ─── ORDER PLACEMENT ──────────────────────────────────────────────────────────

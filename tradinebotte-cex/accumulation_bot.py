@@ -37,9 +37,7 @@ import argparse
 import asyncio
 import json
 import logging
-import logging.handlers
 import sqlite3
-import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,24 +45,7 @@ from pathlib import Path
 import aiohttp
 
 from earn_manager import EarnManager
-
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
-
-def _setup_logging(log_path: Path) -> None:
-    root = logging.getLogger()
-    root.setLevel(logging.INFO)
-    fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s",
-                            datefmt="%Y-%m-%d %H:%M:%S")
-    if sys.stdout.isatty():
-        sh = logging.StreamHandler(sys.stdout)
-        sh.setFormatter(fmt)
-        root.addHandler(sh)
-    fh = logging.handlers.RotatingFileHandler(
-        log_path, maxBytes=5_000_000, backupCount=3, encoding="utf-8")
-    fh.setFormatter(fmt)
-    root.addHandler(fh)
+from tradinetools.logging import setup_root_logger
 
 logger = logging.getLogger("accumulation_bot")
 
@@ -856,7 +837,7 @@ def main() -> None:
     install_dir = Path(args.dir).expanduser() if args.dir else Path.home() / "tradinebotte"
     install_dir.mkdir(parents=True, exist_ok=True)
 
-    _setup_logging(install_dir / "accumulation_bot.log")
+    setup_root_logger(install_dir / "accumulation_bot.log")
 
     p = dict(DEFAULTS)
     if args.strategy:
