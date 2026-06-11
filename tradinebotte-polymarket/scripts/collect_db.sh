@@ -155,6 +155,7 @@ fi
 # ── --rotate ──────────────────────────────────────────────────────
 if [ "$ROTATE" = "1" ]; then
     echo "Rotating remote DB and restarting collector..."
+    # shellcheck disable=SC1083,SC2140
     _ssh "
         DB=$COLLECTOR_DIR/live.db
         BAK="\${DB%.db}_${YEAR}_W${WEEK}.db.bak"

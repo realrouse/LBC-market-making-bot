@@ -43,7 +43,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ── Load configuration ────────────────────────────────────────────
-BOLD="\033[1m"; GREEN="\033[32m"; RED="\033[31m"; YELLOW="\033[33m"; CYAN="\033[36m"; NC="\033[0m"
+BOLD="\033[1m"; GREEN="\033[32m"; RED="\033[31m"; YELLOW="\033[33m"; NC="\033[0m"
 
 CONF="${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
 if [[ ! -f "$CONF" ]]; then
@@ -194,7 +194,7 @@ if $PARALLEL; then
         PWD="${PASSWORDS[$i]}"
         LOG_FILE="${TMPDIR_LOCAL}/${USER}.log"
         RESULT_FILE="${TMPDIR_LOCAL}/${USER}.result"
-        > "$LOG_FILE"
+        : > "$LOG_FILE"
         rm -f "$RESULT_FILE"
         LOG_FILES+=("$LOG_FILE")
         RESULT_FILES+=("$RESULT_FILE")
@@ -224,7 +224,7 @@ else
         ACCOUNT_NUM=$((i + 1))
         LOG_FILE="${TMPDIR_LOCAL}/${USER}.log"
         RESULT_FILE="${TMPDIR_LOCAL}/${USER}.result"
-        > "$LOG_FILE"
+        : > "$LOG_FILE"
         rm -f "$RESULT_FILE"
 
         section "COMPTE ${ACCOUNT_NUM}/${TOTAL} — ${USER}@${HOST}"

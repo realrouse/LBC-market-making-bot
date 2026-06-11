@@ -80,7 +80,7 @@ VENV="$INSTALL_DIR/venv"
 
 # ── ZMQ addresses ─────────────────────────────────────────────────────────────
 _UID=$(id -u)
-_IPC_DIR="/run/user/${_UID}"; [ -d "${_IPC_DIR}" ] || { _IPC_DIR="/tmp/tradinebotte-${_UID}"; mkdir -p -m 700 "${_IPC_DIR}"; }
+_IPC_DIR="/run/user/${_UID}"; [ -d "${_IPC_DIR}" ] || { _IPC_DIR="/tmp/tradinebotte-${_UID}"; mkdir -p "${_IPC_DIR}"; chmod 700 "${_IPC_DIR}"; }
 IND_ADDR="${TRADINEBOTTE_INDICATORS_ADDR:-ipc://${_IPC_DIR}/tradinebotte-indicators.sock}"
 REG_ADDR="${TRADINEBOTTE_INDICATORS_REG_ADDR:-ipc://${_IPC_DIR}/tradinebotte-ind-reg.sock}"
 

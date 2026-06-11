@@ -20,7 +20,7 @@ mkdir -p "${HOME}/tmp"
 USER_NAME=$(id -un)
 BOT_DIR="$PROJECT_DIR"
 _UID=$(id -u)
-_IPC_DIR="/run/user/${_UID}"; [ -d "${_IPC_DIR}" ] || { _IPC_DIR="/tmp/tradinebotte-${_UID}"; mkdir -p -m 700 "${_IPC_DIR}"; }
+_IPC_DIR="/run/user/${_UID}"; [ -d "${_IPC_DIR}" ] || { _IPC_DIR="/tmp/tradinebotte-${_UID}"; mkdir -p "${_IPC_DIR}"; chmod 700 "${_IPC_DIR}"; }
 FEED_ADDR="${TRADINEBOTTE_FEED_ADDR:-ipc://${_IPC_DIR}/tradinebotte-feed.sock}"
 
 # Auto-detect venv: prefer project .venv (dev), fall back to ~/tradinebotte/venv (prod)
