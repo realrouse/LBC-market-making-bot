@@ -37,6 +37,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import sqlite3
 import time
 from dataclasses import dataclass, field
@@ -735,7 +736,7 @@ async def _stats_loop(state: AccumState) -> None:
         await asyncio.sleep(60)
         cooldown_s = max(0, state.p.get("min_scale_interval_s", 3600) -
                          (int(time.time() * 1000) - state.last_buy_ts) / 1000)
-        logger.info(
+        logger.debug(
             "HOLD %.6f BTC @ avg %.2f  price=%.2f  uPnL=%+.2f%%  "
             "free=%.2f  realized=%+.2f  spread=%.4f%%  bands=%s  rebuys=%d  "
             "dip_in=%ds  obi=%.3f  macro=%.3f(%s)  "
@@ -838,6 +839,12 @@ def main() -> None:
     install_dir.mkdir(parents=True, exist_ok=True)
 
     setup_root_logger(install_dir / "accumulation_bot.log")
+    try:
+        from version import __version__ as _ver  # pylint: disable=import-outside-toplevel
+    except ImportError:
+        _ver = "?"
+    logger.info("tradinebotte v%s accumulation_bot PID=%d starting — dir=%s",
+                _ver, os.getpid(), install_dir)
 
     p = dict(DEFAULTS)
     if args.strategy:

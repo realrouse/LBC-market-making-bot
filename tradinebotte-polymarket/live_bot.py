@@ -1422,7 +1422,7 @@ async def ws_loop(state: BotState, session: aiohttp.ClientSession) -> None:
             await _run_ws(state, session)
             backoff = 1
         except Exception as e:
-            logger.warning("WS error — reconnecting in %ds: %s", backoff, e)
+            logger.warning("WS error — reconnecting in %ds: %s", backoff, e, exc_info=True)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60)
 
@@ -1454,7 +1454,7 @@ async def _market_refresh_loop(state: BotState, session: aiohttp.ClientSession, 
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.warning("Market refresh error: %s", e)
+            logger.warning("Market refresh error: %s", e, exc_info=True)
 
 
 async def _run_ws(state: BotState, session: aiohttp.ClientSession) -> None:
@@ -1633,7 +1633,7 @@ async def main() -> None:
     _start_str = datetime.fromtimestamp(_BOT_START, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     logger.info("=" * 65)
     if config.simulate:
-        logger.warning("  SIMULATION MODE — data isolated in %s", config.install_dir)
+        logger.info("  SIMULATION MODE — data isolated in %s", config.install_dir)
     logger.info(
         "  LIVE BOT v0.41 | start=%s UTC | up %dh%02dm%02ds"
         " | thresh=%.2f stake=$%.0f minAskVol=%.0f",
@@ -1645,7 +1645,7 @@ async def main() -> None:
                     os.path.basename(config.strategy_loaded),
                     config.strategy_type, config.connector)
     else:
-        logger.warning("  Strategy: file not found — using defaults")
+        logger.info("  Strategy: file not found — using defaults")
     if config.connector == "polymarket":
         _tf = "15M" if config.market_tag_id == api.GAMMA_TAG_15M else "5M"
         logger.info("  Markets: BTC Up/Down %s (tag=%d, window=±%dmin)",
@@ -1678,7 +1678,7 @@ async def main() -> None:
     if config.weekly_stop_loss > 0:
         logger.info("  Weekly stop-loss: $%.0f", config.weekly_stop_loss)
     if not config.private_key:
-        logger.warning("  POLY_PRIVATE_KEY not set — orders SIMULATED")
+        logger.info("  POLY_PRIVATE_KEY not set — orders SIMULATED")
     logger.info("=" * 65)
     conn = init_db(config)
     try:

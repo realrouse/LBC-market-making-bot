@@ -622,7 +622,7 @@ async def _binance_kline_task(spec: StreamSpec, pub: zmq.asyncio.Socket,
                     })
         except Exception as exc:           # pylint: disable=broad-except
             logger.warning("[%s] WS error (%s) — reconnect in %ds",
-                           spec.id, exc, backoff)
+                           spec.id, exc, backoff, exc_info=True)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60)
 
@@ -888,7 +888,7 @@ async def _binance_liquidations_task(spec: StreamSpec, pub: zmq.asyncio.Socket) 
                     _publish_window(ts_ms)
         except Exception as exc:          # pylint: disable=broad-except
             logger.warning("[%s] liquidations WS error (%s) — reconnect in %ds",
-                           spec.id, exc, backoff)
+                           spec.id, exc, backoff, exc_info=True)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60)
 
@@ -1091,7 +1091,7 @@ async def _binance_scalping_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> N
 
         except Exception as exc:          # pylint: disable=broad-except
             logger.warning("[%s] scalping WS error (%s) — reconnect in %ds",
-                           spec.id, exc, backoff)
+                           spec.id, exc, backoff, exc_info=True)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60)
 
@@ -1481,7 +1481,7 @@ async def _binance_full_depth_task(spec: StreamSpec, pub: zmq.asyncio.Socket) ->
 
         except Exception as exc:            # pylint: disable=broad-except
             logger.warning("[%s] full depth error (%s) — reconnect in %ds",
-                           spec.id, exc, backoff)
+                           spec.id, exc, backoff, exc_info=True)
         await asyncio.sleep(backoff)
         backoff = min(backoff * 2, 60)
 

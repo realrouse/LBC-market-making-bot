@@ -30,7 +30,7 @@ from urllib.parse import urlencode
 import aiohttp
 from api_common import book_snapshot, parse_levels
 
-logger = logging.getLogger("live")
+logger = logging.getLogger(__name__)
 
 # ─── ENDPOINTS ────────────────────────────────────────────────────────────────
 BASE_URL      = "https://www.bitstamp.net/api/v2"
@@ -205,7 +205,7 @@ async def get_markets(session, symbol=DEFAULT_SYMBOL, **_):
             timeout=aiohttp.ClientTimeout(total=10),
         ) as resp:
             if resp.status != 200:
-                logger.warning("Bitstamp ticker HTTP %s", resp.status)
+                logger.warning("Bitstamp ticker HTTP %s [symbol=%s]", resp.status, clean)
                 return []
             data = await resp.json(content_type=None)
     except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -261,13 +261,17 @@ async def post_order(session, symbol, price, size_usdc, *, side="BUY", **_):
         ) as resp:
             data = await resp.json(content_type=None)
             if resp.status != 200 or data.get("status") == "error":
-                logger.error("Bitstamp order error %s: %.300s", resp.status, data)
+                logger.error("Bitstamp order error %s [%s %s qty=%.6f @ %.2f]: %s",
+                             resp.status, bs_side, symbol, quantity, price,
+                             data.get("reason", str(data)[:200]))
                 return None
             oid = str(data.get("id", ""))
-            logger.info("Bitstamp order placed: %s", oid)
+            logger.info("Bitstamp order placed: %s [%s %s qty=%.6f @ %.2f]",
+                        oid, bs_side, symbol, quantity, price)
             return oid or None
     except Exception as exc:  # pylint: disable=broad-exception-caught
-        logger.error("Bitstamp post_order exception: %s", exc)
+        logger.error("Bitstamp post_order exception [%s %s @ %.2f]: %s",
+                     bs_side, symbol, price, exc)
         return None
 
 

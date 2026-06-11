@@ -30,7 +30,7 @@ import uuid
 import aiohttp
 from api_common import book_snapshot, hmac_sign as _sign, parse_levels
 
-logger = logging.getLogger("live")
+logger = logging.getLogger(__name__)
 
 # ─── ENDPOINTS ────────────────────────────────────────────────────────────────
 BASE_URL      = "https://api.mexc.com"
@@ -160,7 +160,7 @@ async def get_markets(session, symbol=DEFAULT_SYMBOL):
             timeout=aiohttp.ClientTimeout(total=10),
         ) as resp:
             if resp.status != 200:
-                logger.warning("MEXC API error : %d", resp.status)
+                logger.warning("MEXC get_markets error %d [symbol=%s]", resp.status, symbol)
                 return []
             # content_type=None: bypass aiohttp's MIME check — some APIs omit charset
             data = await resp.json(content_type=None)
@@ -173,7 +173,7 @@ async def get_markets(session, symbol=DEFAULT_SYMBOL):
             "ask_qty":  float(data.get("askQty", 0)),
         }]
     except Exception as e:  # pylint: disable=broad-exception-caught
-        logger.warning("MEXC fetch error : %s", e)
+        logger.warning("MEXC get_markets fetch error [symbol=%s]: %s", symbol, e)
         return []
 
 
@@ -230,12 +230,14 @@ async def post_order(session, symbol, price, size_usdc, *,
         ) as resp:
             data = await resp.json(content_type=None)  # bypass MIME check
             if resp.status != 200:
-                logger.error("MEXC order error %d : %.300s", resp.status, data)
+                logger.error("MEXC order error %d [%s %s qty=%.6f @ %.2f]: code=%s msg=%s",
+                             resp.status, _side, _sym, quantity, price,
+                             data.get("code"), data.get("msg", str(data)[:200]))
                 return None
             oid = str(data.get("orderId", ""))
             return oid or None
     except Exception as e:  # pylint: disable=broad-exception-caught
-        logger.error("MEXC post_order error : %s", e)
+        logger.error("MEXC post_order error [%s %s @ %.2f]: %s", _side, _sym, price, e)
         return None
 
 

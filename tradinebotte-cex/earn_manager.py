@@ -37,7 +37,7 @@ from urllib.parse import urlencode
 
 import aiohttp
 
-logger = logging.getLogger("earn")
+logger = logging.getLogger(__name__)
 
 _BASE_URL        = "https://api.binance.com"
 _TIMEOUT         = aiohttp.ClientTimeout(total=15)
@@ -167,7 +167,8 @@ class EarnManager:
             logger.info("EarnManager sim: subscribe %.2f USDT", amount_usdt)
             return True
         if amount_usdt < MIN_SUBSCRIBE_USDT:
-            logger.debug("EarnManager: subscribe %.2f below minimum — skipped", amount_usdt)
+            logger.info("EarnManager: subscribe %.2f USDT below minimum (%.2f) — skipped",
+                        amount_usdt, MIN_SUBSCRIBE_USDT)
             return False
         pid = await self._product()
         if not pid:

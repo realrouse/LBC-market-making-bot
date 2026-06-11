@@ -69,6 +69,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import sqlite3
 import sys
 import time
@@ -648,7 +649,7 @@ async def _stats_loop(states: list) -> None:
             wr  = f"{st.wins}/{st.total_trades}" if st.total_trades else "0/0"
             pos = (f"{st.position.direction.upper()}@{st.position.entry_price:.2f}"
                    if st.position else "flat")
-            logger.info("[%s] OBI=%.3f  TFI=%+.3f  capital=%.2f  W/T=%s  PnL=%+.4f  %s",
+            logger.debug("[%s] OBI=%.3f  TFI=%+.3f  capital=%.2f  W/T=%s  PnL=%+.4f  %s",
                         st.mode, st.obi_ema, st.tfi, st.capital, wr, st.total_pnl, pos)
 
 # ---------------------------------------------------------------------------
@@ -771,6 +772,12 @@ def main() -> None:
     install_dir.mkdir(parents=True, exist_ok=True)
 
     setup_root_logger(install_dir / "orderbook_bot.log")
+    try:
+        from version import __version__ as _ver  # pylint: disable=import-outside-toplevel
+    except ImportError:
+        _ver = "?"
+    logger.info("tradinebotte v%s orderbook_bot PID=%d starting — dir=%s",
+                _ver, os.getpid(), install_dir)
     db = init_db(install_dir / "live_ob.db")
     logger.info("DB: %s", install_dir / "live_ob.db")
 

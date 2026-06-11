@@ -8,11 +8,11 @@ import sys
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
 
-_BOT_FORMAT  = "%(asctime)s %(levelname)s %(message)s"
+_BOT_FORMAT  = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
 _BOT_DATEFMT = "%Y-%m-%d %H:%M:%S"
 
 
-def setup_root_logger(log_path: str, max_bytes: int = 5_000_000) -> None:
+def setup_root_logger(log_path: str, max_bytes: int = 10_000_000) -> None:
     """Configure the root logger with rotating file output and optional TTY console.
 
     Captures all loggers (including library logs) — suited for standalone bot processes.
@@ -25,7 +25,7 @@ def setup_root_logger(log_path: str, max_bytes: int = 5_000_000) -> None:
         sh.setFormatter(fmt)
         root.addHandler(sh)
     fh = logging.handlers.RotatingFileHandler(
-        log_path, maxBytes=max_bytes, backupCount=3, encoding="utf-8")
+        log_path, maxBytes=max_bytes, backupCount=3, encoding="utf-8")  # 10 MB default, 3 rotations
     fh.setFormatter(fmt)
     root.addHandler(fh)
 

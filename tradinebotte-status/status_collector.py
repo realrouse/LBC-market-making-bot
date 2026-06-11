@@ -101,6 +101,9 @@ async def _recv_loop(
     db: sqlite3.Connection,
     stop: asyncio.Event,
 ) -> None:
+    _db_fail_streak = 0
+    _DB_FAIL_SUPPRESS = 5   # suppress repeated DB errors after this many consecutive failures
+
     while not stop.is_set():
         try:
             raw = await asyncio.wait_for(sock.recv(), timeout=1.0)
@@ -121,6 +124,7 @@ async def _recv_loop(
             continue
         try:
             store_heartbeat(db, payload)
+            _db_fail_streak = 0
             logger.info(
                 "heartbeat stored: account=%s bot=%s version=%s status=%s",
                 payload.get("account"),
@@ -129,7 +133,11 @@ async def _recv_loop(
                 payload.get("status"),
             )
         except sqlite3.Error as exc:
-            logger.error("DB write failed: %s", exc)
+            _db_fail_streak += 1
+            if _db_fail_streak <= _DB_FAIL_SUPPRESS:
+                logger.error("DB write failed: %s", exc)
+            if _db_fail_streak == _DB_FAIL_SUPPRESS:
+                logger.error("DB write failing repeatedly — suppressing further errors until recovery")
 
 
 async def run(status_addr: str, db_path: str) -> None:
@@ -159,8 +167,8 @@ async def run(status_addr: str, db_path: str) -> None:
 def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s — %(message)s",
-        datefmt="%Y-%m-%dT%H:%M:%S",
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
     default_dir = os.environ.get(
         "TRADINEBOTTE_STATUS_DIR", os.path.expanduser("~/tradinebotte")
