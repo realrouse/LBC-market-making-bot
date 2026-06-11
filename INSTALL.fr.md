@@ -329,8 +329,6 @@ quel navigateur. L'activer en ajoutant ces clés dans `config.json` :
 La page affiche le capital, le PnL total et journalier, le taux de
 victoire, les positions ouvertes et les 10 derniers trades résolus.
 Elle se recharge automatiquement toutes les 60 s.
-Un aperçu statique de la page rendue est disponible dans [docs/status_example.html](docs/status_example.html).
-
 Le bot crée le répertoire HTML automatiquement et y écrit un `.htaccess`.
 Le fichier `.htpasswd` est stocké dans `TRADINEBOTTE_DIR/.webstatus_htpasswd`
 (hors de la racine web).
@@ -392,6 +390,96 @@ Le `.htpasswd` généré par le bot utilise le format Apache `{SHA}`,
 
 Si `webstatuspage_path` pointe en dehors de `~/public_html`, s'assurer
 que le serveur web est configuré pour servir ce répertoire.
+
+
+## Tableau de bord de statut multi-bot
+
+`tradinebotte-status/generate_status.py` se connecte à tous les comptes de déploiement
+via SSH, lit `heartbeat.db` depuis le service collecteur, et produit une page HTML unique
+montrant l'état en temps réel de chaque bot sur tous les comptes.
+
+### Prérequis
+
+- Le service systemd utilisateur `tradinebotte-status.service` doit être actif sur le
+  premier compte de déploiement (le collecteur de heartbeats). Il écoute sur
+  `tcp://127.0.0.1:5562` les messages ZMQ de tous les bots et les écrit dans `heartbeat.db`.
+- Les identifiants SSH de tous les comptes doivent être présents dans
+  `~/.tradinebotte-test.conf` (même format que celui utilisé par tous les scripts de
+  déploiement).
+
+### Démarrage rapide
+
+```bash
+python3 tradinebotte-status/generate_status.py
+```
+
+Sans `--out` ni `$TRADINEBOTTE_STATUS_OUT`, la page est écrite dans
+`~/public_html/tradinebottestatus.html`. Le répertoire est créé automatiquement si absent.
+
+### Chemin de sortie
+
+Trois niveaux de configuration, évalués par ordre de priorité :
+
+| Priorité | Méthode | Notes |
+|---|---|---|
+| 1 | `--out /chemin/fichier.html` | Option CLI — prend le dessus sur tout |
+| 2 | `TRADINEBOTTE_STATUS_OUT=/chemin/fichier.html` | Variable d'environnement — dans le shell ou `Environment=` systemd |
+| 3 | `~/public_html/tradinebottestatus.html` | Valeur par défaut intégrée |
+
+Pour écrire sur la sortie standard (par exemple pour un pipeline) :
+
+```bash
+python3 tradinebotte-status/generate_status.py --out /dev/stdout
+```
+
+### Fichier de credentials
+
+Par défaut : `~/.tradinebotte-test.conf`. Surcharger avec `--conf` :
+
+```bash
+python3 tradinebotte-status/generate_status.py --conf /chemin/vers/autre.conf
+```
+
+### Contenu de la page
+
+- **Tableau des heartbeats** — une ligne par bot : compte, nom du bot, âge du dernier
+  heartbeat, statut, indicateur bounds, version déployée, et une colonne DETAILS avec les
+  champs spécifiques au type de bot :
+  - `live_bot` / `account_bot` — PnL journalier, capital (live_bot uniquement), trades
+    ouverts, horodatage du dernier book update
+  - `accumulation_bot` — BTC détenus, USDT disponible, prix d'entrée moyen, PnL réalisé
+    total
+  - `orderbook_bot` — positions ouvertes, PnL total, dernier prix
+  - `feed` — indicateur WebSocket connecté, messages traités au total, horodatage du
+    dernier book
+  - `indicators` — horodatage de la dernière publication
+- **Cartes par compte** — liste des trades actifs, trades récents résolus, métriques CEX
+- **Horodatage de génération** et temps de collecte total en secondes
+
+### Planification avec cron
+
+Pour regénérer la page automatiquement toutes les 5 minutes, ajouter dans la crontab
+(`crontab -e`) :
+
+```
+*/5 * * * * TRADINEBOTTE_STATUS_OUT=~/public_html/tradinebottestatus.html \
+    /home/<utilisateur>/tradinebotte/.venv/bin/python3 \
+    /home/<utilisateur>/tradinebotte/generate_status.py \
+    >> ~/tradinebotte/status_gen.log 2>&1
+```
+
+### Serveur web — Apache mod_userdir
+
+Si la sortie va dans `~/public_html/`, activer `mod_userdir` pour qu'Apache serve la page
+à l'adresse `http://serveur/~<utilisateur>/tradinebottestatus.html` :
+
+```bash
+sudo a2enmod userdir
+sudo systemctl reload apache2
+```
+
+Pour la protection par mot de passe du répertoire, voir
+[Page de statut web — Prérequis — Apache](#prérequis--apache).
 
 
 ## Lancement

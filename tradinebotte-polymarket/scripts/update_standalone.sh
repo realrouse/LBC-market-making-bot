@@ -28,7 +28,9 @@
 set -uo pipefail
 
 LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+GIT_HASH=$(git -C "$LOCAL_REPO" rev-parse --short HEAD 2>/dev/null || echo "unknown")
 SKIP_RESTART=false
+SKIP_VERIFY=false
 VERIFY_ONLY=false
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -45,6 +47,7 @@ FAILURES=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --skip-restart) SKIP_RESTART=true ;;
+        --skip-verify)  SKIP_VERIFY=true ;;
         --verify-only)  VERIFY_ONLY=true; SKIP_RESTART=true ;;
         -h|--help)
             grep '^#' "${BASH_SOURCE[0]}" | head -30 | sed 's/^# \?//'
@@ -79,6 +82,10 @@ SA_USER="${ALL_USERS[$SA_IDX]}"
 SA_PASS="${ALL_PASSWORDS[$SA_IDX]}"
 SVC_NAME="tradinebotte-live-${SA_USER}.service"
 
+# Account-0 is the heartbeat collector — used for post-deploy HB check.
+HB_USER="${ALL_USERS[0]}"
+HB_PASS="${ALL_PASSWORDS[0]}"
+
 # ─── SSH helpers ───────────────────────────────────────────────────────────────
 _ssh() {
     SSHPASS="$SA_PASS" /usr/bin/sshpass -e \
@@ -86,6 +93,14 @@ _ssh() {
         -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
         -o PreferredAuthentications=password \
         -p "$PORT" "$SA_USER@$SERVER" "$@" 2>&1
+}
+
+_ssh_hb() {
+    SSHPASS="$HB_PASS" /usr/bin/sshpass -e \
+        ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
+        -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
+        -o PreferredAuthentications=password \
+        -p "$PORT" "$HB_USER@$SERVER" "$@" 2>&1
 }
 
 _rsync() {
@@ -164,12 +179,15 @@ if [[ "$VERIFY_ONLY" == "false" ]]; then
     fi
 fi
 
+T_BEFORE=$(date +%s)   # epoch snapshot for post-deploy heartbeat check
+
 # ─── Step 2: restart ───────────────────────────────────────────────────────────
 if [[ "$SKIP_RESTART" == "false" ]]; then
     section "STEP 2 — RESTART"   # connection #3
     info "Stopping old bot and starting updated one..."
 
     RESTART_OUT=$(_ssh "
+        echo '${GIT_HASH}' > ${INSTALL_DIR}/version.stamp
         SVC=${SVC_NAME}
         INSTALL=${INSTALL_DIR}
 
@@ -185,13 +203,10 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
             && echo 'deps ok' || echo 'pip warning (non-fatal)'
         PYVER=\$(\"\$VENV/bin/python3\" -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')
         SITE=\$VENV/lib/python\${PYVER}/site-packages
-        if \"\$VENV/bin/pip\" install --quiet -e tradinetools 2>/dev/null; then
-            echo 'tradinetools ok (pip)'
-        else
-            rm -rf \"\$SITE/tradinetools\"
-            cp -r tradinetools/tradinetools \"\$SITE/tradinetools\"
-            echo 'tradinetools ok (copy)'
-        fi
+        mkdir -p \"\$SITE\"
+        rm -rf \"\$SITE/tradinetools\"
+        cp -r tradinetools/tradinetools \"\$SITE/tradinetools\"
+        echo 'tradinetools ok'
         \"\$VENV/bin/python3\" -c 'from tradinetools.zmq import ipc_socket_dir, make_pub; print(\"tradinetools import ok\")' 2>&1
 
         # XDG_RUNTIME_DIR is required for systemctl --user in non-interactive SSH sessions
@@ -246,6 +261,7 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
     fi
 fi
 
+if [[ "$SKIP_VERIFY" == "false" ]]; then
 # ─── Step 3: verify ────────────────────────────────────────────────────────────
 section "STEP 3 — VERIFY"   # connection #4
 VERIFY_OUT=$(_ssh "
@@ -290,6 +306,38 @@ fi
 ERROR_COUNT=$(echo "$VERIFY_OUT" | grep -cE '\[ERROR\]|\[CRITICAL\]' || true)
 [[ "$ERROR_COUNT" -eq 0 ]] && ok "No errors at startup" \
     || err "$ERROR_COUNT ERROR/CRITICAL line(s) in startup log"
+fi  # SKIP_VERIFY
+
+# ─── Step 4: heartbeat check ───────────────────────────────────────────────────
+# Poll heartbeat.db on the collector account for a fresh row from SA_USER.
+# Skipped when --skip-verify or --skip-restart is set (no restart happened).
+if [[ "$SKIP_VERIFY" == "false" && "$SKIP_RESTART" == "false" ]]; then
+    section "STEP 4 — HEARTBEAT CHECK"
+    info "Polling collector for fresh $SA_USER heartbeat (up to 180s)..."
+    _HB_PY=$(cat <<PYEOF
+import sqlite3,time,os,sys
+t=$T_BEFORE
+p=os.path.expanduser("~/tradinebotte/heartbeat.db")
+if not os.path.exists(p):
+    print("HB_NODB"); sys.exit(1)
+db=sqlite3.connect(p)
+for i in range(30):
+    r=db.execute("SELECT ts,status FROM heartbeats WHERE account=? AND ts>? ORDER BY ts DESC LIMIT 1",("$SA_USER",t)).fetchone()
+    if r: print("HB_OK ts="+str(r[0])+" status="+str(r[1])); sys.exit(0)
+    time.sleep(6)
+print("HB_TIMEOUT"); sys.exit(1)
+PYEOF
+)
+    _HB_B64=$(echo "$_HB_PY" | base64 -w0)
+    HB_OUT=$(_ssh_hb "echo '$_HB_B64' | base64 -d | python3")
+    if echo "$HB_OUT" | grep -q "HB_OK"; then
+        ok "$SA_USER: fresh heartbeat confirmed — $(echo "$HB_OUT" | grep -oE 'status=[^ ]+')"
+    elif echo "$HB_OUT" | grep -q "HB_NODB"; then
+        warn "heartbeat.db not found on collector — status_collector not deployed?"
+    else
+        warn "$SA_USER: no heartbeat within 180s — warmup may still be in progress"
+    fi
+fi  # STEP 4
 
 # ─── Report ────────────────────────────────────────────────────────────────────
 section "RESULT"

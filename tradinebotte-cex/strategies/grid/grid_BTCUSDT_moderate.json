@@ -13,8 +13,8 @@
     "connector":     "binance",
 
     "grid_symbol":          "BTCUSDT",
-    "grid_lower":           64564.0,
-    "grid_upper":           96846.0,
+    "grid_lower":           49000.0,
+    "grid_upper":           73500.0,
     "grid_levels":          30,
     "grid_order_size_usdt": 50.0,
 

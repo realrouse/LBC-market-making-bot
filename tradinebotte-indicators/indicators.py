@@ -76,6 +76,7 @@ from typing import Any, NamedTuple
 
 import aiohttp, websockets, zmq, zmq.asyncio
 
+from tradinetools import heartbeat_loop
 from tradinetools.zmq import make_pub, make_sub, make_rep, default_ipc_addr
 from tradinetools.math import (atr_last, bollinger_last, vwap_last,
                                 vol_zscore_last, rolling_max_last)
@@ -132,6 +133,9 @@ def _shift_addr(addr: str) -> str:
 logger = setup_logger("indicators", os.path.join(_INSTALL_DIR, "indicators.log"))
 
 VERBOSE = False
+
+# Heartbeat sentinel — updated by _publish(), read by the heartbeat lambda.
+_last_pub_ts: float = 0.0
 
 
 # ─── INDICATOR MATH (pure stdlib) ────────────────────────────────────────────
@@ -556,7 +560,9 @@ async def _seed_ohlcv_series(symbol: str, timeframe: str,
 
 def _publish(pub: zmq.asyncio.Socket, out: dict[str, Any]) -> None:
     """Send one enriched indicator message on the PUB socket (non-blocking)."""
+    global _last_pub_ts  # pylint: disable=global-statement
     pub.send_json({"v": 1, **out}, zmq.NOBLOCK)
+    _last_pub_ts = time.time()
     if VERBOSE:
         keys = [k for k in out if k not in ("t", "token_id", "asset",
                                              "timeframe", "stream_id", "ts")]
@@ -1933,6 +1939,11 @@ async def run(feed_addr: str, ind_addr: str, reg_addr: str,
     tasks.append(asyncio.create_task(
         _registration_task(actual_reg, pub, actual_min, active),
         name="registration",
+    ))
+
+    tasks.append(asyncio.create_task(
+        heartbeat_loop("indicators", _INSTALL_DIR, lambda: {"last_pub_ts": _last_pub_ts}),
+        name="heartbeat",
     ))
 
     try:

@@ -6,6 +6,33 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.81] — 2026-06-11
+
+### Fixed
+- **`scripts/deploy_all.sh` — 10-bot summary + `--restart-infra` flag**: the deploy summary now shows all 10 bots correctly (account-1's 3 services were counted as 1 step); added `--restart-infra` flag to restart account-1 systemd services (indicators + feed + account_bot) when those files change; by default account-1 receives rsync-only updates to avoid ~30 s disconnection of live bots during `RestartSec`
+- **pylint — all modified files at 10/10**: fixed W0603 (global-statement) in `indicators.py`, `feed.py`, `account_bot.py`; fixed subprocess `check=False`, unused `rc` → `_`, and missing `encoding=` in `generate_status.py`; added `connectors`, `strategy_engines` to `.pylintrc` `ignored-modules` (deploy-dir lazy imports absent from source tree)
+- **shellcheck -S warning on all modified shell scripts**: removed unused variables (`CYAN` in `bot_status.sh`, `RED`/`INSTALL` in `cleanup_server.sh`, orphaned `LEGACY_BOTS` array in `deploy_scalping_claude4.sh`); fixed SC2155 in `install_status_service.sh`; added SC1090 directives across deploy scripts
+
+### Changed
+- **`docs/GridTrading.md`** — translated from French to English (language-policy violation; French version preserved in `GridTrading.fr.md`)
+- **`docs/accumulation.md`** — updated to reflect `accumulation_bot.py` v1.5 / config v2.0: capital management tightened (`max_invested_pct` 0.90 → 0.65, new `max_avg_entry_mult=1.20`), 7-stream signal pipeline documented, P1–P6 all marked ✅ implemented, stale performance table replaced with monitoring SQL commands
+- **`docs/KellySizing.md`** — status corrected to "implemented, disabled by default" (`kelly_fraction=0.0` in `live_bot.py`)
+- **`docs/logging.md`** — added three new sections documenting log formats for `accumulation_bot.py`, `orderbook_bot.py`, and `status_collector.py`
+
+### Removed
+- **`docs/status_example.html`** — deleted stale HTML snapshot (was pinned to an old commit hash; live page is generated dynamically by `generate_status.py`)
+
+---
+
+## [0.80] — 2026-06-10
+
+### Added
+- **`tradinebotte-status/generate_status.py` — configurable default output path**: the script now writes to `~/public_html/tradinebottestatus.html` by default instead of stdout; the output directory is created automatically; the path is overridable via `--out /path/to/file.html` (CLI flag, highest priority) or the `TRADINEBOTTE_STATUS_OUT` environment variable (middle priority, useful for cron or systemd `Environment=`)
+- **`INSTALL.md`, `INSTALL.fr.md` — multi-bot status dashboard section**: new section documenting `generate_status.py` (output path configuration, prerequisites, page contents, cron scheduling, Apache mod_userdir setup)
+- **`README.md`, `README.fr.md` — multi-bot status dashboard feature bullet**: documents the heartbeat collector service and the HTML dashboard generator
+
+---
+
 ## [0.79] — 2026-06-09
 
 ### Added

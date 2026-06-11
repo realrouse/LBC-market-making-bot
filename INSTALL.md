@@ -320,8 +320,6 @@ Enable it by adding these keys to `config.json`:
 
 The page displays capital, total and daily PnL, win rate, open positions,
 and the 10 most recent resolved trades. It auto-refreshes every 60 s.
-A static preview of the rendered page is available at [docs/status_example.html](docs/status_example.html).
-
 The bot creates the HTML directory automatically and writes a `.htaccess` in
 it. The `.htpasswd` file is stored at `TRADINEBOTTE_DIR/.webstatus_htpasswd`
 (outside the web root).
@@ -382,6 +380,92 @@ also supports. Use the `TRADINEBOTTE_DIR/.webstatus_htpasswd` path.
 
 If you use a custom `webstatuspage_path` outside `~/public_html`, make sure
 your web server is configured to serve that directory.
+
+
+## Multi-bot status dashboard
+
+`tradinebotte-status/generate_status.py` connects to all deployment accounts via SSH,
+reads `heartbeat.db` from the status-collector service, and produces a single HTML page
+showing the live health of every bot across all accounts.
+
+### Prerequisites
+
+- The `tradinebotte-status.service` systemd user unit must be running on the first
+  deployment account (the heartbeat collector). It listens on `tcp://127.0.0.1:5562`
+  for ZMQ heartbeat messages from every bot and writes them to `heartbeat.db`.
+- SSH credentials for all accounts must be present in `~/.tradinebotte-test.conf`
+  (same format used by all deploy scripts).
+
+### Quick start
+
+```bash
+python3 tradinebotte-status/generate_status.py
+```
+
+Without `--out` or `$TRADINEBOTTE_STATUS_OUT` the page is written to
+`~/public_html/tradinebottestatus.html`. The directory is created automatically if absent.
+
+### Output path
+
+Three levels of configuration, evaluated in priority order:
+
+| Priority | Method | Notes |
+|---|---|---|
+| 1 | `--out /path/to/file.html` | CLI flag — overrides everything |
+| 2 | `TRADINEBOTTE_STATUS_OUT=/path/to/file.html` | Environment variable — set in shell or systemd `Environment=` |
+| 3 | `~/public_html/tradinebottestatus.html` | Built-in default |
+
+To write to stdout (e.g. for piping):
+
+```bash
+python3 tradinebotte-status/generate_status.py --out /dev/stdout
+```
+
+### Credentials file
+
+Default: `~/.tradinebotte-test.conf`. Override with `--conf`:
+
+```bash
+python3 tradinebotte-status/generate_status.py --conf /path/to/other.conf
+```
+
+### What the page shows
+
+- **Heartbeat table** — one row per bot: account label, bot name, age of last heartbeat,
+  status, bounds flag, deployed version, and a DETAILS column with bot-type-specific
+  payload fields:
+  - `live_bot` / `account_bot` — daily PnL, capital (live_bot only), open trades,
+    last book update timestamp
+  - `accumulation_bot` — BTC holdings, free USDT, average entry price, total realised PnL
+  - `orderbook_bot` — open positions, total PnL, last price
+  - `feed` — WebSocket connected flag, total messages processed, last book timestamp
+  - `indicators` — last publication timestamp
+- **Per-account cards** — active trade list, recent resolved trades, CEX metrics
+- **Generation timestamp** and total collection time in seconds
+
+### Scheduling with cron
+
+To regenerate the page automatically every 5 minutes, add to crontab (`crontab -e`):
+
+```
+*/5 * * * * TRADINEBOTTE_STATUS_OUT=~/public_html/tradinebottestatus.html \
+    /home/<user>/tradinebotte/.venv/bin/python3 \
+    /home/<user>/tradinebotte/generate_status.py \
+    >> ~/tradinebotte/status_gen.log 2>&1
+```
+
+### Web server — Apache mod_userdir
+
+If the output goes to `~/public_html/`, enable `mod_userdir` so Apache serves the page
+at `http://server/~<user>/tradinebottestatus.html`:
+
+```bash
+sudo a2enmod userdir
+sudo systemctl reload apache2
+```
+
+For password protection on the directory, see
+[Web Status Page — Prerequisites — Apache](#prerequisites--apache).
 
 
 ## Running

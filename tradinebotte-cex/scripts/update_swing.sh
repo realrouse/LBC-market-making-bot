@@ -23,6 +23,7 @@
 set -uo pipefail
 
 LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+GIT_HASH=$(git -C "$LOCAL_REPO" rev-parse --short HEAD 2>/dev/null || echo "unknown")
 SKIP_RESTART=false
 VERIFY_ONLY=false
 
@@ -183,6 +184,7 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
     info "Stopping old bot and starting updated one..."
 
     RESTART_OUT=$(_ssh "
+        echo '${GIT_HASH}' > ${INSTALL_DIR}/version.stamp
         INSTALL=$INSTALL_DIR
         export XDG_RUNTIME_DIR=/run/user/\$(id -u)
         cd \$INSTALL
@@ -190,7 +192,10 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
         echo 'updating dependencies...'
         if [ -d \$INSTALL/.venv ]; then VENV=\$INSTALL/.venv/bin; else VENV=\$INSTALL/venv/bin; fi
         \$VENV/pip install --quiet -r \$INSTALL/requirements.txt 2>/dev/null && echo 'deps ok' || echo 'pip warning (non-fatal)'
-        \$VENV/pip install --quiet -e \$INSTALL/tradinetools 2>/dev/null && echo 'tradinetools ok' || echo 'tradinetools warning (non-fatal)'
+        PYVER=\$(\$VENV/python3 -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')
+        SITE=\$(dirname \$VENV)/lib/python\${PYVER}/site-packages
+        mkdir -p \"\$SITE\" && rm -rf \"\$SITE/tradinetools\"
+        cp -r \$INSTALL/tradinetools/tradinetools \"\$SITE/tradinetools\" && echo 'tradinetools ok'
 
         if systemctl --user is-active tradinebotte-live.service >/dev/null 2>&1 \
            || systemctl --user is-enabled tradinebotte-live.service >/dev/null 2>&1; then

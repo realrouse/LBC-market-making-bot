@@ -84,4 +84,7 @@ disable=
 [TYPECHECK]
 # These packages are installed in the project venv but not in the system Python
 # that runs pylint; suppress the false-positive import-error they would raise.
-ignored-modules = websockets,zmq,py_clob_client
+# connectors/ and strategy_engines/ live alongside live_bot.py in the flat
+# deploy directory (tradinebotte-cex/); they are absent from the source tree
+# during lint runs.
+ignored-modules = websockets,zmq,py_clob_client,connectors,strategy_engines

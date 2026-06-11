@@ -15,9 +15,9 @@ import zmq
 import zmq.asyncio
 
 from tradinetools.zmq import (
-    make_pub, make_sub, make_rep, make_req,
+    make_pub, make_sub, make_rep, make_req, make_pull, make_push,
     warn_if_external_bind, ipc_socket_dir, default_ipc_addr,
-    PORT_FEED, PORT_INDICATORS, PORT_IND_REG,
+    PORT_FEED, PORT_INDICATORS, PORT_IND_REG, PORT_STATUS,
 )
 
 
@@ -230,9 +230,12 @@ class TestPortConstants(unittest.TestCase):
     def test_ind_reg_port(self):
         self.assertEqual(PORT_IND_REG, 5561)
 
+    def test_status_port(self):
+        self.assertEqual(PORT_STATUS, 5562)
+
     def test_ports_are_distinct(self):
-        ports = {PORT_FEED, PORT_INDICATORS, PORT_IND_REG}
-        self.assertEqual(len(ports), 3)
+        ports = {PORT_FEED, PORT_INDICATORS, PORT_IND_REG, PORT_STATUS}
+        self.assertEqual(len(ports), 4)
 
 
 class TestIpcSocketDir(unittest.TestCase):
@@ -385,6 +388,157 @@ class TestIpcRepReq(unittest.TestCase):
             self.assertEqual(mode, 0o600, f"Expected 0o600, got {oct(mode)}")
         finally:
             rep.close()
+
+
+class TestMakePullPushSocketType(unittest.TestCase):
+    """Socket-type checks for make_pull / make_push (no send/recv needed)."""
+
+    def setUp(self):
+        self.ctx = zmq.asyncio.Context()
+
+    def tearDown(self):
+        self.ctx.term()
+
+    def test_make_pull_returns_pull_socket(self):
+        port = _free_port()
+        sock = make_pull(self.ctx, f"tcp://127.0.0.1:{port}")
+        try:
+            self.assertEqual(sock.type, zmq.PULL)
+        finally:
+            sock.close()
+
+    def test_make_push_returns_push_socket(self):
+        port = _free_port()
+        pull = make_pull(self.ctx, f"tcp://127.0.0.1:{port}")
+        push = make_push(self.ctx, f"tcp://127.0.0.1:{port}")
+        try:
+            self.assertEqual(push.type, zmq.PUSH)
+        finally:
+            pull.close(); push.close()
+
+    def test_make_pull_no_security_warning_on_loopback(self):
+        port = _free_port()
+        with self.assertLogs("tradinetools.zmq", level="WARNING") as cm:
+            import logging
+            logging.getLogger("tradinetools.zmq").warning("_sentinel_")
+            sock = make_pull(self.ctx, f"tcp://127.0.0.1:{port}", name="STATUS")
+        sock.close()
+        self.assertFalse(any("SECURITY" in line for line in cm.output))
+
+
+class TestMakePullPushRoundtrip(unittest.IsolatedAsyncioTestCase):
+    """TCP PUSH/PULL roundtrip — the transport used for cross-user heartbeats."""
+
+    async def asyncSetUp(self):
+        self.ctx = zmq.asyncio.Context()
+
+    async def asyncTearDown(self):
+        self.ctx.term()
+
+    async def test_single_heartbeat_roundtrip(self):
+        port = _free_port()
+        pull = make_pull(self.ctx, f"tcp://127.0.0.1:{port}", name="STATUS")
+        push = make_push(self.ctx, f"tcp://127.0.0.1:{port}")
+        pull.setsockopt(zmq.RCVTIMEO, 1000)
+        await asyncio.sleep(0.05)
+
+        try:
+            msg = {
+                "account": "account-3", "bot_name": "accumulation_bot",
+                "version": "abc1234", "status": "ok",
+                "ts": 1749600000, "trades_today": 2, "pnl_today": 1.43,
+            }
+            await push.send_json(msg)
+            received = await pull.recv_json()
+            self.assertEqual(received["bot_name"], "accumulation_bot")
+            self.assertEqual(received["status"], "ok")
+            self.assertAlmostEqual(received["pnl_today"], 1.43)
+        finally:
+            pull.close(); push.close()
+
+    async def test_multiple_pushers_all_received(self):
+        """Multiple bots PUSHing simultaneously — PULL queues all messages."""
+        port = _free_port()
+        pull = make_pull(self.ctx, f"tcp://127.0.0.1:{port}", name="STATUS")
+        push1 = make_push(self.ctx, f"tcp://127.0.0.1:{port}")
+        push2 = make_push(self.ctx, f"tcp://127.0.0.1:{port}")
+        pull.setsockopt(zmq.RCVTIMEO, 1000)
+        await asyncio.sleep(0.05)
+
+        try:
+            await push1.send_json({"bot_name": "bot-a", "status": "ok"})
+            await push2.send_json({"bot_name": "bot-b", "status": "ok"})
+            r1 = await pull.recv_json()
+            r2 = await pull.recv_json()
+            names = {r1["bot_name"], r2["bot_name"]}
+            self.assertEqual(names, {"bot-a", "bot-b"})
+        finally:
+            pull.close(); push1.close(); push2.close()
+
+    async def test_fire_and_forget_no_reply_needed(self):
+        """PUSH does not block waiting for a reply (unlike REQ)."""
+        port = _free_port()
+        pull = make_pull(self.ctx, f"tcp://127.0.0.1:{port}")
+        push = make_push(self.ctx, f"tcp://127.0.0.1:{port}")
+        pull.setsockopt(zmq.RCVTIMEO, 1000)
+        await asyncio.sleep(0.05)
+
+        try:
+            for i in range(5):
+                await push.send_json({"seq": i})
+            received = [await pull.recv_json() for _ in range(5)]
+            self.assertEqual([r["seq"] for r in received], list(range(5)))
+        finally:
+            pull.close(); push.close()
+
+
+class TestIpcPullPushRoundtrip(unittest.IsolatedAsyncioTestCase):
+    """IPC PUSH/PULL roundtrip using a temp directory."""
+
+    async def asyncSetUp(self):
+        self.ctx = zmq.asyncio.Context()
+        self._tmpdir = tempfile.mkdtemp()
+
+    async def asyncTearDown(self):
+        self.ctx.term()
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    async def test_ipc_pull_push_roundtrip(self):
+        addr = f"ipc://{self._tmpdir}/test-status.sock"
+        pull = make_pull(self.ctx, addr, name="TEST-STATUS")
+        push = make_push(self.ctx, addr)
+        pull.setsockopt(zmq.RCVTIMEO, 1000)
+        await asyncio.sleep(0.05)
+
+        try:
+            msg = {"bot_name": "swing_bot", "status": "ok", "bounds_ok": True}
+            await push.send_json(msg)
+            received = await pull.recv_json()
+            self.assertEqual(received["bot_name"], "swing_bot")
+            self.assertTrue(received["bounds_ok"])
+        finally:
+            pull.close(); push.close()
+
+    async def test_ipc_pull_socket_file_is_0600(self):
+        addr = f"ipc://{self._tmpdir}/test-pull-perms.sock"
+        pull = make_pull(self.ctx, addr)
+        try:
+            mode = stat.S_IMODE(os.stat(f"{self._tmpdir}/test-pull-perms.sock").st_mode)
+            self.assertEqual(mode, 0o600, f"Expected 0o600, got {oct(mode)}")
+        finally:
+            pull.close()
+
+    async def test_ipc_stale_socket_cleaned_on_rebind(self):
+        sock_path = f"{self._tmpdir}/test-pull-stale.sock"
+        addr = f"ipc://{sock_path}"
+        with open(sock_path, "wb") as f:
+            f.write(b"stale")
+        pull = make_pull(self.ctx, addr)
+        try:
+            self.assertTrue(os.path.exists(sock_path))
+        finally:
+            pull.close()
 
 
 if __name__ == "__main__":

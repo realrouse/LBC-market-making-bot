@@ -18,8 +18,8 @@
     "trail_mode":    "bull",
 
     "grid_symbol":          "BTCUSDT",
-    "grid_lower":           68599.0,
-    "grid_upper":           92811.0,
+    "grid_lower":           52000.0,
+    "grid_upper":           70500.0,
     "grid_levels":          30,
     "grid_order_size_usdt": 50.0,
 

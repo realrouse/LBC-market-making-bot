@@ -771,7 +771,7 @@ async def _stats_loop(state: AccumState) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
-async def _run(p: dict, db: sqlite3.Connection) -> None:
+async def _run(p: dict, db: sqlite3.Connection, install_dir: str = "") -> None:
     state = AccumState(p=p, free_usdt=p["capital_usdt"])
     restored = _restore_state(state, db)
 
@@ -823,9 +823,23 @@ async def _run(p: dict, db: sqlite3.Connection) -> None:
                     p.get("scale_in_cooldown_min_s", p.get("min_scale_interval_s", 3600)),
                     p.get("scale_in_obi_strong_thresh", 0.80))
 
+        from tradinetools import heartbeat_loop
         tasks = [
             asyncio.create_task(_zmq_loop(state, db)),
             asyncio.create_task(_stats_loop(state)),
+            asyncio.create_task(
+                heartbeat_loop(
+                    "accumulation_bot",
+                    install_dir or None,
+                    lambda: {
+                        "bounds_ok":      state.free_usdt > 0,
+                        "holdings_btc":   round(state.holdings_btc, 6),
+                        "free_usdt":      round(state.free_usdt, 2),
+                        "avg_entry":      round(state.avg_entry, 2),
+                        "total_realized": round(state.total_realized, 2),
+                    },
+                )
+            ),
         ]
         try:
             await asyncio.gather(*tasks)
@@ -855,7 +869,7 @@ def main() -> None:
 
     db = init_db(install_dir / "live_accum.db")
     try:
-        asyncio.run(_run(p, db))
+        asyncio.run(_run(p, db, str(install_dir)))
     except KeyboardInterrupt:
         logger.info("Interrupted")
     finally:

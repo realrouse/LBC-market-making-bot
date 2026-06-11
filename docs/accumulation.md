@@ -1,7 +1,7 @@
 # BTC Accumulation Strategy — Design Document
 
-> Bot: `tradinebotte-cex/accumulation_bot.py` v1.3  
-> Strategy: `strategies/accumulation/btc_accumulation.json`  
+> Bot: `tradinebotte-cex/accumulation_bot.py` v1.5  
+> Strategy: `strategies/accumulation/btc_accumulation.json` (config v2.0)  
 > Conviction: long-only BTC spot, bull-run horizon (weeks to months)
 
 ---
@@ -29,24 +29,33 @@ regardless of profit-taking activity.
 | `capital_usdt`          | 1000   | Total capital envelope                        |
 | `initial_stake_usdt`    | 500    | Deployed unconditionally at startup           |
 | `scale_in_usdt`         | 100    | Base OBI dip buy (adaptive: 100–300 USDT)     |
-| `max_invested_pct`      | 0.90   | Hard cap: never invest more than 900 USDT     |
+| `max_invested_pct`      | 0.65   | Hard cap: never invest more than 650 USDT     |
+| `max_avg_entry_mult`    | 1.20   | Block scale-ins if price > 1.20× avg_entry    |
 | `min_holdings_pct`      | 0.50   | Floor: never sell below 50% of peak BTC held  |
 
-After the initial buy, ~500 USDT remains free. With max_invested_pct=90%, the bot can
-deploy up to 400 USDT more in scale-ins before hitting the cap (at current BTC price).
+After the initial buy, ~500 USDT remains free. With max_invested_pct=65%, the bot can
+deploy up to 150 USDT more in scale-ins before hitting the cap (at current BTC price).
+The `max_avg_entry_mult` guard prevents adding to a position where the current price
+has already significantly exceeded the average entry.
 
 ---
 
 ## 3. Signal Pipeline
 
-The bot consumes two ZMQ streams from the shared indicators service:
+The bot consumes multiple ZMQ streams from the shared indicators service:
 
 ```
-btc_scalping_spot   →  mid price, obi_ema, spread_bps
-btc_vwap_context    →  dip_score, dip_zone
+btc_scalping_spot  →  mid price, obi_ema, spread_bps (primary scale-in signal)
+btc_scalping_spot  →  vwap_dip_score, vwap_dip_zone  (VWAP gate)
+btc_macro_obi      →  macro OBI aggregate             (macro bear gate)
+btc_4h             →  rsi_4h                          (RSI overbought gate)
+fear_greed         →  fear_greed_val, fear_greed_label (sentiment gate)
+btc_liquidations   →  liq_long_usd, liq_short_usd     (liquidation gate)
+btc_ls_ratio       →  ls_ratio                        (L/S ratio gate)
 ```
 
 All signal computation lives in the indicators service; the bot only reads and acts.
+Six independent gates must all pass for a scale-in to execute (see §3.2).
 
 ### 3.1 Initial Buy
 
@@ -241,111 +250,66 @@ could gate out these events.
 
 ---
 
-## 10. Proposed Improvements (Prioritized)
+## 10. Improvements — Implementation Status
 
-### P1 — Macro OBI gate (HIGH — 1–2h)
+All P1–P6 from the original roadmap are implemented in v1.5 (config v2.0). P7
+(Earn yield tracking) remains open.
 
-Add subscription to `btc_macro_obi` stream. Block scale-ins when macro OBI < threshold
-(e.g., `macro_obi_block_thresh: -0.3`). Same pattern as `orderbook_bot.py`.
+### P1 — Macro OBI gate ✅ Implemented (v1.4)
 
-This prevents DCA-ing into a macro downtrend while still allowing opportunistic buys
-during brief spot dips in a broadly sideways or bullish regime.
+Subscribes to `btc_macro_obi` stream. Blocks scale-ins when
+`macro_obi < macro_obi_block_thresh` (default: -0.30).
+Config keys: `macro_obi_gate`, `macro_obi_block_thresh`, `macro_obi_stream_id`.
 
-```python
-# New DEFAULTS entry
-"macro_obi_gate":         True,
-"macro_obi_block_thresh": -0.30,
-"macro_obi_stream_id":    "btc_macro_obi",
+Addresses W5: prevents DCA-ing into macro downtrends.
 
-# In _check_obi_scale_in
-if p.get("macro_obi_gate", True) and state.macro_obi < p.get("macro_obi_block_thresh", -0.30):
-    return
-```
+### P2 — Configurable initial buy gate ✅ Implemented (v1.5)
 
-### P2 — Configurable initial buy gate (MEDIUM — 30min)
+`vwap_gate_initial: false` (default) preserves the unconditional first buy.
+Set to `true` to defer the initial buy until price is below VWAP.
+Addresses part of W1.
 
-Add `vwap_gate_initial: False` param. When `True`, the initial buy also respects the
-VWAP gate. Useful for deployments in uncertain market conditions.
+### P3 — Signal-adaptive cooldown ✅ Implemented (v1.4)
 
-```python
-# In _handle_indicator, initial buy block:
-if p.get("vwap_gate_initial", False):
-    if p.get("vwap_gate", True) and state.vwap_dip_score < 0.0:
-        return  # defer initial buy until below VWAP
-```
+`scale_in_cooldown_min_s=900` (15 min) for very strong OBI signals
+(`scale_in_obi_strong_thresh=0.80`). Base cooldown unchanged at 3600 s.
+Addresses W3.
 
-### P3 — Signal-adaptive cooldown (MEDIUM — 1h)
+### P4 — Pending rebuy expiry ✅ Implemented (v1.4)
 
-Replace the flat 1h cooldown with a signal-strength-based shortening:
+`rebuy_max_age_days=60`: rebuys older than 60 days are cancelled and the band
+re-arms. Addresses W4.
 
-```python
-"scale_in_cooldown_base_s":   3600,   # base cooldown (1h)
-"scale_in_cooldown_min_s":    900,    # floor at 15min for very strong signals
-"scale_in_obi_strong_thresh": 0.80,   # OBI below -0.80 → halved cooldown
+### P5 — Trailing rebuy price ✅ Implemented (v1.4)
 
-# In _check_obi_scale_in:
-cooldown = p["scale_in_cooldown_base_s"]
-if abs(state.obi_ema) >= p["scale_in_obi_strong_thresh"]:
-    cooldown = max(p["scale_in_cooldown_min_s"], cooldown // 2)
-if (ts_ms - state.last_buy_ts) / 1000.0 < cooldown:
-    return
-```
+`rebuy_trail_pct=0.005`: if price falls >0.5% past the rebuy target, the target
+trails down. Avoids catching a falling knife on the rebuy. Addresses W4.
 
-### P4 — Pending rebuy expiry (MEDIUM — 1h)
+### P6 — Configurable earn liquid buffer ✅ Implemented (v1.5)
 
-Pending rebuys that never fill leave a band permanently locked. Add an expiry:
+`earn_min_liquid_usdt=20.0` in the strategy JSON, passed through to
+`park_idle()` / `ensure_liquid()`. Addresses W6.
 
-```python
-"rebuy_max_age_days": 30,  # cancel pending rebuys older than 30 days
+### P7 — Periodic position report to DB (open)
 
-# Store ts_ms in PendingRebuy, prune in _check_rebuys
-```
-
-When a rebuy expires: `active_bands.discard(rb.band_pct)` so the band can retrigger
-in the next rally.
-
-### P5 — Trailing rebuy price (LOW — 2h)
-
-Instead of a fixed rebuy_price, trail it downward if price continues falling past the
-initial rebuy target:
-
-```python
-"rebuy_trail_pct": 0.005,  # if price falls >0.5% past rebuy_price, trail down
-
-# In _check_rebuys:
-for rb in state.pending_rebuys:
-    if price < rb.rebuy_price * (1 - p.get("rebuy_trail_pct", 0)):
-        rb.rebuy_price = price * (1 - small_buffer)  # trail
-```
-
-This avoids catching a falling knife on the rebuy.
-
-### P6 — Configurable earn liquid buffer (LOW — 20min)
-
-Move `MIN_LIQUID_USDT` to strategy JSON:
-
-```python
-"earn_min_liquid_usdt": 20.0,
-```
-
-Pass it through to `park_idle()` / `ensure_liquid()` calls.
-
-### P7 — Periodic position report to DB (LOW — 30min)
-
-Add a daily summary row to `accum_state` with realized PnL, Earn yield, and total
-portfolio value (BTC × price + free_usdt + earn_parked). Currently Earn yield is
-not tracked at all — the bot doesn't know how much USDT interest has accrued.
+Earn yield is still not tracked. The bot does not record how much USDT
+interest has accrued via Binance Flexible Earn.
 
 ---
 
-## 11. Live Performance Notes (as of 2026-05-30)
+## 11. Live Monitoring
 
-| Account        | Holdings   | Avg Entry | uPnL      | Free USDT |
-|----------------|------------|-----------|-----------|-----------|
-| Test account A | 0.009468   | 73929.91  | +0.18%    | 299.86    |
-| Test account B | 0.010885   | 77183.37  | −4.05%    | 159.70    |
+Query the SQLite database for current position state:
 
-Both in paper mode (no real orders). Account B's higher avg_entry reflects an earlier
-deployment when price was higher. Both have no pending rebuys or triggered bands,
-meaning BTC has not yet reached any of the +5/10/20/30/50% profit targets from their
-respective avg_entries.
+```bash
+# Current position snapshot
+sqlite3 ~/tradinebotte/live_accum.db \
+  "SELECT holdings_btc, avg_entry, realized_pnl, free_usdt FROM accum_state WHERE id=1;"
+
+# Recent buys/sells
+sqlite3 ~/tradinebotte/live_accum.db \
+  "SELECT side, qty_btc, price, ts_ms FROM accum_trades ORDER BY id DESC LIMIT 10;"
+```
+
+For a live heartbeat, use `bash tradinebotte/tradinebotte-status/scripts/bot_status.sh`
+which shows accumulation_bot status alongside all other bots.

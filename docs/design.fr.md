@@ -2,13 +2,86 @@
 
 > 🇬🇧 [English version](design.md)
 
-Ce document décrit l'architecture multi-processus de tradinebotte : comment
-les processus sont organisés, ce que chacun fait, et comment ils communiquent
-via ZeroMQ.
+Ce document décrit l'architecture multi-processus de tradinebotte : chaque
+processus, chaque socket ZeroMQ, chaque flux de données, et chaque service
+systemd.
 
 ---
 
-## 1. Modes de déploiement
+## 1. Diagramme d'architecture haute résolution
+
+```
+╔══════════════════════════════════════════════════════════════════════════════════════════════════╗
+║                                  SERVICES EXTERNES                                              ║
+║                                                                                                  ║
+║  wss://ws-subscriptions-clob.polymarket.com/ws/market   [Polymarket WebSocket]                  ║
+║  https://gamma-api.polymarket.com/markets               [Polymarket Gamma REST]                 ║
+║  https://clob.polymarket.com                            [Polymarket CLOB REST]                  ║
+║  wss://stream.binance.com   https://api.binance.com     [Binance WS + REST]                     ║
+║  https://polygon.drpc.org                               [Polygon RPC]                           ║
+╚══════╤══════════════════════════════════╤═══════════════╤════════════════════════════════════════╝
+       │ connexion WS unique              │               │ Binance WS/REST (klines, depth, trades)
+       ▼                                  │               ▼
+┌──────────────────────────────┐          │    ┌───────────────────────────────────────────────┐
+│         feed.py              │          │    │            indicators.py                      │
+│  tradinebotte-polymarket/    │          │    │     tradinebotte-indicators/                  │
+│  [tradinebotte-feed.service] │          │    │  [tradinebotte-indicators.service]            │
+│                              │          │    │                                               │
+│  PUB bind :5557              │◄─────────┘    │  SUB connect :5557   (événements feed)        │
+│  IPC: tradinebotte-feed.sock │               │  REP bind :5561      (enregistrement dyn.)   │
+└──────────────┬───────────────┘               │  PUB bind :5559      (indicateurs calculés)  │
+               │                               │  IPC: tradinebotte-indicators.sock            │
+               │  ZMQ PUB :5557                │       tradinebotte-ind-reg.sock               │
+               │  IPC (même utilisateur)       └───────────────────┬───────────────────────────┘
+               │  market/book/ping                                  │ ZMQ PUB :5559 IPC (même user)
+       ┌───────┴──────────────────┐                                 │ flux d'indicateurs
+       │                          │                                 │
+       ▼                          ▼                        ┌────────┴──────────────┐
+┌──────────────────────┐  ┌───────────────────┐           │                       │
+│    account_bot.py    │  │    live_bot.py     │           ▼                       ▼
+│ tradinebotte-polymar.│  │ tradinebotte-poly. │  ┌────────────────────┐  ┌────────────────────┐
+│ [tradinebotte-       │  │ (comptes 2–5,      │  │  orderbook_bot.py  │  │ accumulation_bot.py│
+│  account-<cpte>.svc] │  │  autonome)         │  │ tradinebotte-cex/  │  │ tradinebotte-cex/  │
+│                      │  │                    │  │                    │  │                    │
+│ SUB connect :5557    │  │ (WS direct)        │  │ SUB connect :5559  │  │ SUB connect :5559  │
+│ REQ connect :5561    │  │                    │  │                    │  │                    │
+│ PUSH → :5562 (HB)   │  │ PUSH → :5562 (HB)  │  │ PUSH → :5562 (HB)  │  │ PUSH → :5562 (HB)  │
+│                      │  │                    │  │                    │  │                    │
+│ live.db (SQLite WAL) │  │ live.db            │  │ live_ob.db         │  │ live_accum.db      │
+└──────────────────────┘  └───────────────────┘  └────────────────────┘  └────────────────────┘
+       │                          │                        │                        │
+       │   PUSH :5562             │   PUSH :5562           │   PUSH :5562           │   PUSH :5562
+       │   TCP loopback           │   TCP loopback         │   TCP loopback         │   TCP loopback
+       │   (cross-user)           │   (cross-user)         │   (cross-user)         │   (cross-user)
+       └──────────────────────────┴────────────────────────┴────────────────────────┘
+                                                │
+                        HEARTBEAT PUSH → tcp://127.0.0.1:5562
+                        (chaque bot, toutes les 3600 s, déclenché au démarrage)
+                                                │
+                                                ▼
+                              ┌─────────────────────────────────────────┐
+                              │         status_collector.py             │
+                              │     tradinebotte-status/                │
+                              │  [tradinebotte-status.service]          │
+                              │                                         │
+                              │  PULL bind tcp://127.0.0.1:5562         │
+                              │  heartbeat.db (SQLite — tous comptes)   │
+                              └─────────────────────────────────────────┘
+
+feed.py envoie aussi son propre heartbeat PUSH → :5562  ────────────────────────┘
+indicators.py envoie aussi le sien ─────────────────────────────────────────────┘
+
+─────────────────────────────────────────────────────────────────────────────────
+ Légende transport
+   IPC   ipc:///run/user/$UID/tradinebotte-<nom>.sock  (même utilisateur OS)
+   TCP   tcp://127.0.0.1:<port>                         (cross-user, même hôte)
+   TCP†  utiliser TRADINEBOTTE_PORT_BASE pour décaler tous les ports
+─────────────────────────────────────────────────────────────────────────────────
+```
+
+---
+
+## 2. Modes de déploiement
 
 Deux modes de déploiement existent. Ils partagent le même code et les mêmes
 fichiers de stratégie.
@@ -25,8 +98,8 @@ Polymarket WebSocket
 ```
 
 Un seul processus fait tout : maintient la connexion WebSocket, évalue les
-signaux, place les ordres, écrit la base de données. Utilisé pour les
-configurations mono-compte.
+signaux, place les ordres, écrit la base de données. Utilisé pour les comptes
+2–5 en production.
 
 ```bash
 python3 tradinebotte-polymarket/live_bot.py
@@ -70,16 +143,17 @@ se connecter.
 
 ---
 
-## 2. Inventaire des processus
+## 3. Inventaire des processus
 
 | Processus | Fichier | Rôle | Credentials | Socket ZMQ |
 |---|---|---|---|---|
-| `live_bot` | `tradinebotte-polymarket/live_bot.py` | Bot autonome : WebSocket + signal + ordres + BD | Clé privée requise | Aucun (pas de ZMQ) |
 | `feed` | `tradinebotte-polymarket/feed.py` | Relais WebSocket diffusion seule | **Aucune** | PUB bind `:5557` |
-| `account_bot` | `tradinebotte-polymarket/account_bot.py` | Logique de trading par compte | Clé privée requise | SUB connect `:5557` |
-| `indicators` | `tradinebotte-indicators/indicators.py` | Pipeline d'indicateurs partagé | Aucune | SUB connect `:5557`, PUB bind `:5559`, REP bind `:5561` |
-| `orderbook_bot` | `tradinebotte-cex/orderbook_bot.py` | Scalping OBI sur BTCUSDT spot + perp ; moteurs de stratégie interchangeables (OBI, DCA, Swing, SwingHold) | Clé API Binance (optionnelle en mode paper) | SUB connect `:5559` (consommateur indicators) |
-| `accumulation_bot` | `tradinebotte-cex/accumulation_bot.py` | Accumulation BTC spot long terme : achat initial + renforcement OBI + ladder de profits | Clé API Binance | SUB connect `:5559` (consommateur indicators) |
+| `account_bot` | `tradinebotte-polymarket/account_bot.py` | Logique de trading par compte | Clé privée requise | SUB connect `:5557`, REQ connect `:5561`, PUSH → `:5562` |
+| `live_bot` | `tradinebotte-polymarket/live_bot.py` | Bot autonome : WebSocket + signal + ordres + BD | Clé privée requise | PUSH → `:5562` (heartbeat uniquement) |
+| `indicators` | `tradinebotte-indicators/indicators.py` | Pipeline d'indicateurs techniques partagé | Aucune | SUB connect `:5557`, PUB bind `:5559`, REP bind `:5561`, PUSH → `:5562` |
+| `orderbook_bot` | `tradinebotte-cex/orderbook_bot.py` | Scalping OBI Binance ; moteurs interchangeables (OBI, DCA, Swing, SwingHold) | Clé API Binance (optionnelle en mode paper) | SUB connect `:5559`, PUSH → `:5562` |
+| `accumulation_bot` | `tradinebotte-cex/accumulation_bot.py` | Accumulation BTC spot long terme : achat initial + renforcement OBI + ladder de profits | Clé API Binance | SUB connect `:5559`, PUSH → `:5562` |
+| `status_collector` | `tradinebotte-status/status_collector.py` | Collecteur de heartbeats — reçoit les heartbeats de tous les bots | Aucune | PULL bind `:5562` |
 
 `orderbook_bot` et `accumulation_bot` sont des bots Binance dans le sous-service
 `tradinebotte-cex`. Ils ne participent pas à la topologie ZeroMQ feed/account-bot
@@ -92,7 +166,25 @@ sur `:5559`). Fichiers d'état : `live_ob.db` / `orderbook_bot.pid` /
 
 ---
 
-## 3. Topologie ZeroMQ
+## 4. Table des adresses ZMQ
+
+| Constante | Port | Patron | Direction | Adresse par défaut (IPC) | Remplacement TCP |
+|---|---|---|---|---|---|
+| `PORT_FEED` | 5557 | PUB (bind) / SUB (connect) | feed.py → account_bot.py, indicators.py | `ipc:///run/user/$UID/tradinebotte-feed.sock` | `tcp://127.0.0.1:5557` |
+| `PORT_FEED_ALT` | 5558 | PUB (bind) alternat | adresse alternative de feed.py | `ipc:///run/user/$UID/tradinebotte-feed-alt.sock` | `tcp://127.0.0.1:5558` |
+| `PORT_INDICATORS` | 5559 | PUB (bind) / SUB (connect) | indicators.py → orderbook_bot.py, accumulation_bot.py | `ipc:///run/user/$UID/tradinebotte-indicators.sock` | `tcp://127.0.0.1:5559` |
+| `PORT_IND_REG` | 5561 | REP (bind) / REQ (connect) | indicators.py ← account_bot.py (enregistrement) | `ipc:///run/user/$UID/tradinebotte-ind-reg.sock` | `tcp://127.0.0.1:5561` |
+| `PORT_STATUS` | 5562 | PULL (bind) / PUSH (connect) | status_collector.py ← tous les bots (heartbeats) | `tcp://127.0.0.1:5562` | (toujours TCP — cross-user) |
+
+**Règle de transport :** les ports 5557, 5558, 5559, 5561 utilisent IPC par
+défaut quand tous les processus partagent le même utilisateur OS. Définir
+`TRADINEBOTTE_PORT_BASE` pour basculer en TCP. Le port 5562 (heartbeat) utilise
+toujours TCP loopback car il reçoit des bots tournant sous des utilisateurs OS
+différents.
+
+---
+
+## 5. Topologie ZeroMQ (détaillée)
 
 ```
                 ┌──────────────────────────────────────────────────────┐
@@ -146,6 +238,8 @@ démarrage account_bot :
 | `zmq.SUB` connect | N → 1 réception | `account_bot.py`, `indicators.py` |
 | `zmq.REP` bind | serveur requête/réponse | `indicators.py` |
 | `zmq.REQ` connect | client requête/réponse | `account_bot.py` (au démarrage) |
+| `zmq.PUSH` connect | émetteur heartbeat | tous les bots |
+| `zmq.PULL` bind | récepteur heartbeat | `status_collector.py` |
 
 Tous les messages sont des objets JSON mono-frame. ZeroMQ garantit la
 livraison atomique de chaque frame — jamais de message partiel.
@@ -157,15 +251,192 @@ livraison atomique de chaque frame — jamais de message partiel.
 | `TRADINEBOTTE_FEED_ADDR` | IPC détecté auto. (`/run/user/$UID/tradinebotte-feed.sock`) | `feed.py` | `account_bot.py`, `indicators.py` |
 | `TRADINEBOTTE_INDICATORS_ADDR` | IPC détecté auto. (`/run/user/$UID/tradinebotte-indicators.sock`) | `indicators.py` PUB | tout consumer |
 | `TRADINEBOTTE_INDICATORS_REG_ADDR` | IPC détecté auto. (`/run/user/$UID/tradinebotte-ind-reg.sock`) | `indicators.py` REP | `account_bot.py` (REQ au démarrage) |
+| `TRADINEBOTTE_STATUS_ADDR` | `tcp://127.0.0.1:5562` | `status_collector.py` PULL | tous les bots (PUSH) |
 
-Les trois utilisent par défaut des sockets IPC Unix dans `/run/user/$UID/` (mode 0700
-imposé par systemd-logind — isolation par UID au niveau noyau). Utiliser
-`TRADINEBOTTE_PORT_BASE` pour basculer en TCP et faire tourner plusieurs stacks
-indépendants sur la même machine (ex. base=5557 pour le stack A, base=6557 pour le stack B).
+Les trois adresses feed/indicators utilisent par défaut des sockets IPC Unix
+dans `/run/user/$UID/` (mode 0700 imposé par systemd-logind — isolation par
+UID au niveau noyau). Utiliser `TRADINEBOTTE_PORT_BASE` pour basculer en TCP
+et faire tourner plusieurs stacks indépendants sur la même machine.
 
 ---
 
-## 4. Catalogue des messages
+## 6. Topologie de production
+
+Six comptes tournent sur le même serveur, chacun sous un utilisateur OS distinct.
+
+| Compte | Bots en cours | Version déployée |
+|---|---|---|
+| acct-1 | feed + indicators + account_bot + status_collector | ef5d23e (bots), bdff296 (status) |
+| acct-2 | live_bot (grille Polymarket) | bdff296 |
+| acct-3 | live_bot (grille Polymarket) + accumulation_bot (Binance) | bdff296 |
+| acct-4 | live_bot (Polymarket) + orderbook_bot + accumulation_bot (Binance) | bdff296 |
+| acct-5 | live_bot (swing Polymarket) | bdff296 |
+| acct-6 | indicators + feed + account_bot [test uniquement] | unknown |
+
+**acct-1** exécute l'Option B : feed diffuse vers account_bot ; pipeline indicators partagé.
+**acct-2 à acct-5** exécutent l'Option A : live_bot autonome par compte.
+**acct-6** reproduit le stack Option B pour les tests ; hors rotation de production.
+
+Tous les heartbeats de tous les comptes transitent vers `status_collector.py`
+sur acct-1 via `tcp://127.0.0.1:5562`. acct-1 est le seul détenteur de
+`heartbeat.db`.
+
+---
+
+## 7. Système de heartbeat
+
+### heartbeat_loop (tradinetools/__init__.py)
+
+Chaque bot exécute une tâche asyncio de fond (`heartbeat_loop`) au démarrage.
+
+```python
+async def heartbeat_loop(
+    bot_name: str,
+    install_dir: str | None,
+    get_extra: Callable[[], dict[str, Any]],
+    *,
+    interval: int = 3600,
+) -> None:
+```
+
+- **Déclenché immédiatement** au démarrage, puis toutes les `interval` secondes
+  (défaut 3600 s).
+- Construit un payload JSON via `build_heartbeat()` et l'envoie en une seule
+  frame ZMQ PUSH.
+- L'adresse est résolue depuis la variable `TRADINEBOTTE_STATUS_ADDR`, puis
+  `default_status_addr()` → `tcp://127.0.0.1:5562`.
+- Toutes les exceptions sont avalées (une panne du collecteur ne crashe jamais
+  un bot).
+- LINGER=0 garantit un arrêt propre même si le collecteur est inaccessible.
+
+### Schéma du payload heartbeat
+
+```json
+{
+  "ts":        1745664123,
+  "bot_name":  "account_bot",
+  "account":   "acct-1",
+  "version":   "ef5d23e",
+  "status":    "running",
+  "bounds_ok": true
+}
+```
+
+| Champ | Type | Description |
+|---|---|---|
+| `ts` | int | Horodatage Unix (secondes) à la construction du heartbeat |
+| `bot_name` | string | Nom du processus bot (`feed`, `account_bot`, `live_bot`, etc.) |
+| `account` | string | Depuis `TRADINEBOTTE_ACCOUNT`, puis `USER` ; identifie le compte OS |
+| `version` | string | Hash git court depuis `version.stamp` ou `TRADINEBOTTE_VERSION` |
+| `status` | string | Toujours `"running"` (futur : `"degraded"`, `"stopping"`) |
+| `bounds_ok` | bool\|null | Optionnel ; défini par les bots qui suivent les bornes de paramètres |
+
+### Schéma de heartbeat.db
+
+```sql
+CREATE TABLE heartbeats (
+    id        INTEGER PRIMARY KEY,
+    ts        INTEGER NOT NULL,
+    account   TEXT    NOT NULL,
+    bot_name  TEXT    NOT NULL,
+    version   TEXT,
+    status    TEXT,
+    bounds_ok INTEGER,      -- 0/1/NULL
+    payload   TEXT          -- blob JSON complet
+);
+```
+
+Index : `(account, bot_name)` et `ts`.
+
+### Transport : toujours TCP loopback
+
+Les heartbeats utilisent toujours `tcp://127.0.0.1:5562`. Les bots tournant
+sous des utilisateurs OS différents (acct-1 à acct-6) ne peuvent pas accéder
+aux sockets IPC de `/run/user/$UID/` d'un autre compte. TCP loopback est le
+seul transport permettant à tous les comptes d'atteindre le status_collector
+unique sur acct-1.
+
+### Outil de requête
+
+```bash
+# Depuis la machine opérateur — SSH sur acct-1 puis :
+python3 tradinebotte-status/heartbeat_query.py
+
+# Ou via le script wrapper (SSH + requête en une étape) :
+bash tradinebotte-status/scripts/heartbeat_status.sh
+
+# Rapport complet : heartbeats + états de services par compte :
+bash tradinebotte-status/scripts/bot_status.sh
+```
+
+---
+
+## 8. Services systemd (acct-1)
+
+acct-1 exécute quatre services utilisateur (`systemctl --user`). Les services
+utilisateur persistent entre les redémarrages grâce à `loginctl enable-linger`.
+
+| Nom du service | Gère | RestartSec | StartLimitBurst |
+|---|---|---|---|
+| `tradinebotte-feed.service` | `feed.py` | 10 s | 10 |
+| `tradinebotte-indicators.service` | `indicators.py` | 15 s | 5 |
+| `tradinebotte-account-<compte>.service` | `account_bot.py` | 30 s | 5 |
+| `tradinebotte-status.service` | `status_collector.py` | 15 s | — |
+
+Tous les services utilisent `Restart=on-failure`. Le service account déclare
+`Requires=tradinebotte-feed.service` et `After=tradinebotte-feed.service
+tradinebotte-indicators.service` — systemd impose ainsi l'ordre de démarrage.
+
+Le service status utilise `WantedBy=default.target` (portée utilisateur) ;
+les autres aussi en mode utilisateur.
+
+**Ordre de démarrage :**
+
+```
+1. tradinebotte-feed.service        → feed.py        bind :5557 (IPC)
+2. tradinebotte-indicators.service  → indicators.py  SUB→:5557 / bind :5559 :5561 (IPC)
+3. tradinebotte-account-<cpte>.svc  → account_bot.py SUB→:5557 REQ→:5561
+4. tradinebotte-status.service      → status_collector.py  PULL bind :5562 (TCP)
+```
+
+**Autres comptes** (acct-2 à acct-5) exécutent `live_bot.py` directement via
+un service utilisateur `tradinebotte-live.service` ou un service systemd simple,
+selon le mode de déploiement.
+
+---
+
+## 9. Référence des API externes
+
+| Service | Endpoint | Utilisé par |
+|---|---|---|
+| Polymarket WebSocket | `wss://ws-subscriptions-clob.polymarket.com/ws/market` | `feed.py`, `live_bot.py` |
+| Polymarket Gamma REST | `https://gamma-api.polymarket.com/markets` | `feed.py`, `live_bot.py` |
+| Polymarket CLOB REST | `https://clob.polymarket.com` | `account_bot.py`, `live_bot.py` |
+| Binance WebSocket | `wss://stream.binance.com` (klines, depth, aggTrade) | `indicators.py` |
+| Binance REST | `https://api.binance.com` | `indicators.py`, `accumulation_bot.py`, `orderbook_bot.py` |
+| Binance Futures REST | `https://fapi.binance.com` | `indicators.py` (funding, OI, ratio L/S, liquidations) |
+| Deribit REST | `https://www.deribit.com/api/v2/public/get_index_price` | `indicators.py` (DVOL) |
+| API Fear & Greed | `https://api.alternative.me/fng/` | `indicators.py` |
+| Polygon RPC | `https://polygon.drpc.org` | `account_bot.py`, `live_bot.py` |
+
+---
+
+## 10. Bases de données
+
+| Fichier | Bot | Contenu |
+|---|---|---|
+| `live.db` | `account_bot.py`, `live_bot.py` | SQLite WAL — `trades` (21 cols) + `snapshots` (snapshots carnet 5 s) |
+| `live_ob.db` | `orderbook_bot.py` | SQLite — trades et état de orderbook_bot |
+| `live_accum.db` | `accumulation_bot.py` | SQLite — état de accumulation_bot, niveaux de renforcement, ladder de profits |
+| `heartbeat.db` | `status_collector.py` (acct-1 uniquement) | SQLite — table `heartbeats`, tous comptes, tous bots |
+
+Chaque `live.db` / `live_ob.db` / `live_accum.db` est privé au compte qui en
+est propriétaire. `heartbeat.db` est partagé — il agrège les lignes de tous
+les comptes.
+
+---
+
+## 11. Catalogue des messages
 
 Tous les messages partagent un champ discriminant `"t"`.
 
@@ -194,8 +465,8 @@ les doublons comme des no-ops).
 | `question` | string | Titre du marché (≤80 caractères) |
 | `up_token_id` | string | ID du token UP/YES |
 | `dn_token_id` | string | ID du token DOWN/NO |
-| `start_ms` | int | Timestamp d'ouverture du marché (Unix ms) |
-| `end_ms` | int | Timestamp de fermeture du marché (Unix ms) |
+| `start_ms` | int | Horodatage d'ouverture du marché (Unix ms) |
+| `end_ms` | int | Horodatage de fermeture du marché (Unix ms) |
 
 Consommateurs : `account_bot.py` (enregistre le marché dans `BotState`).
 
@@ -353,7 +624,7 @@ défaut). L'indice va de 0 (Peur Extrême) à 100 (Avidité Extrême).
 |---|---|---|
 | `stream_id` | string | Toujours `"fear_greed"` (indépendant de l'actif) |
 | `fear_greed` | int | Valeur de l'indice 0–100 |
-| `fear_greed_label` | string | Libellé textuel : `"Extreme Fear"`, `"Fear"`, `"Neutral"`, `"Greed"`, `"Extreme Greed"` |
+| `fear_greed_label` | string | Libellé : `"Extreme Fear"`, `"Fear"`, `"Neutral"`, `"Greed"`, `"Extreme Greed"` |
 | `ts` | int | Horodatage de publication (Unix ms) |
 
 Consommateurs : tout processus souscrivant au port PUB des indicateurs.
@@ -363,8 +634,8 @@ Consommateurs : tout processus souscrivant au port PUB des indicateurs.
 ### `indicators` — open interest futures Binance (`source="binance_oi"`)
 
 Interrogé depuis `https://fapi.binance.com/futures/data/openInterestHist` toutes
-les 5 min (par défaut). Fournit l'OI absolu et la variation signée depuis le poll
-précédent.
+les 5 min (par défaut). Fournit l'OI absolu et la variation signée depuis le
+poll précédent.
 
 ```json
 {
@@ -387,7 +658,8 @@ précédent.
 | `oi_change_usd` | float | Delta OI en USD depuis le poll précédent |
 | `ts` | int | Horodatage de publication (Unix ms) |
 
-OI montant avec le prix = tendance ; OI qui chute = débouclage de positions / risque de retournement.
+OI montant avec le prix = tendance ; OI qui chute = débouclage / risque de
+retournement.
 
 ---
 
@@ -454,8 +726,8 @@ Consommateurs : tout processus souscrivant au port PUB des indicateurs.
 ### `indicators` — OBI et flux de trades Binance (`source="binance_scalping"`)
 
 Piloté par le stream Binance combiné `depth20@100ms` + `aggTrade`. Publié
-tous les `publish_every_n` events de profondeur (défaut 10). Calcule en temps
-réel l'OBI et le trade flow imbalance.
+tous les `publish_every_n` événements de profondeur (défaut 10). Calcule en
+temps réel l'OBI et le trade flow imbalance.
 
 ```json
 {
@@ -481,7 +753,7 @@ réel l'OBI et le trade flow imbalance.
 | `obi_decel` | float | Première différence de `obi_ema` (signal d'accélération) |
 | `spread_bps` | float | Spread bid/ask en points de base |
 | `tfi` | float | Trade flow imbalance sur `tfi_window_s` : `(buy_vol − sell_vol) / total_vol` ∈ [−1, +1] |
-| `realized_vol_bps` | float | Écart-type des log-rendements du prix mid en points de base (absent si données insuffisantes) |
+| `realized_vol_bps` | float | Écart-type des log-rendements du prix mid en points de base |
 | `ts` | int | Horodatage de publication (Unix ms) |
 
 ---
@@ -490,7 +762,8 @@ réel l'OBI et le trade flow imbalance.
 
 Maintient le carnet d'ordres spot Binance complet (jusqu'à 5 000 niveaux) via
 snapshot REST + diffs WebSocket incrémentiels avec resynchronisation complète
-en cas de gap. Publié tous les `publish_every_n` events de profondeur (défaut 10).
+en cas de gap. Publié tous les `publish_every_n` événements de profondeur
+(défaut 10).
 
 ```json
 {
@@ -521,7 +794,7 @@ en cas de gap. Publié tous les `publish_every_n` events de profondeur (défaut 
 |---|---|---|
 | `best_bid`, `best_ask`, `mid` | float | Prix top-of-book |
 | `spread_bps` | float | Spread en points de base |
-| `obi_N` | float | OBI à N niveaux pour chaque N dans `obi_levels_list` (ex. `obi_10`, `obi_100`, `obi_500`) |
+| `obi_N` | float | OBI à N niveaux pour chaque N dans `obi_levels_list` |
 | `cum_bid_vol_Xpct` / `cum_ask_vol_Xpct` | float | Quantité cumulée dans X% du mid côté achat/vente |
 | `wall_bid_price`, `wall_bid_qty` | float | Plus grand niveau acheteur unique dans `wall_range_pct` du mid |
 | `wall_ask_price`, `wall_ask_qty` | float | Plus grand niveau vendeur unique dans `wall_range_pct` du mid |
@@ -624,7 +897,7 @@ Consommateurs : tout processus souscrivant au port PUB des indicateurs.
 
 ---
 
-## 5. Mécanisme de démarrage automatique du feed
+## 12. Mécanisme de démarrage automatique du feed
 
 En mode multi-bot, la gestion manuelle du feed n'est pas nécessaire. Le
 premier `account_bot.py` à démarrer lance `feed.py` automatiquement.
@@ -686,20 +959,20 @@ account_bot démarre
 
 ---
 
-## 6. Isolation des processus
+## 13. Isolation des processus
 
 Chaque instance `account_bot.py` est un **processus OS distinct** avec sa
 propre copie du module `live_bot`. Cela garantit :
 
 | Ressource | Isolée ? | Notes |
 |---|---|---|
-| Base SQLite (`live.db`) | ✅ | `TRADINEBOTTE_DIR` distinct par compte |
-| Fichier log (`account.log`) | ✅ | `TRADINEBOTTE_DIR` distinct par compte |
-| Clé privée | ✅ | Lue depuis le `config.json` propre au compte |
-| Paramètres de stratégie | ✅ | Dossier `strategies/` distinct par compte |
-| État du capital | ✅ | `BotState` en mémoire, reconstruit depuis la BD locale |
-| Compteur stop-loss journalier | ✅ | Cache `state.daily_pnl` par processus |
-| Déduplication de signal | ✅ | Set `state.signalled` par processus |
+| Base SQLite (`live.db`) | Oui | `TRADINEBOTTE_DIR` distinct par compte |
+| Fichier log (`account.log`) | Oui | `TRADINEBOTTE_DIR` distinct par compte |
+| Clé privée | Oui | Lue depuis le `config.json` propre au compte |
+| Paramètres de stratégie | Oui | Dossier `strategies/` distinct par compte |
+| État du capital | Oui | `BotState` en mémoire, reconstruit depuis la BD locale |
+| Compteur stop-loss journalier | Oui | Cache `state.daily_pnl` par processus |
+| Déduplication de signal | Oui | Set `state.signalled` par processus |
 
 Le feed est entièrement **agnostique au signal** : il publie chaque mise à
 jour brute du carnet sans filtrage. L'évaluation du signal, le placement des
@@ -707,12 +980,12 @@ ordres et le suivi des trades se font indépendamment dans chaque bot de compte.
 
 ---
 
-## 7. Pipeline d'indicateurs
+## 14. Pipeline d'indicateurs
 
 `indicators.py` est un étage pipeline optionnel et sans état. Il ne trade pas.
 En production, il tourne en tant que service systemd `tradinebotte-indicators`
-avec `tradinebotte-indicators/strategies/indicators_all.json`, qui regroupe les 14 flux en
-un seul processus sur les ports 5559/5561.
+avec `tradinebotte-indicators/strategies/indicators_all.json`, qui regroupe les
+14 flux en un seul processus sur les ports 5559/5561.
 
 Le pipeline comporte trois catégories de flux :
 
@@ -754,7 +1027,7 @@ les consommateurs ne reçoivent jamais de données partielles.
 
 **Partage multi-bots** — `indicators.py` exécute une tâche asyncio par flux. Toute la sortie est diffusée sur un seul socket PUB ; les consommateurs filtrent par `stream_id`.
 
-**Enregistrement dynamique** — les flux peuvent être ajoutés à l'exécution sans redémarrer `indicators.py`. Chaque bot envoie un REQ au socket REP (`:5561`) avec ses besoins ; le serveur démarre la tâche si elle est nouvelle et répond avec le `stream_id` à écouter. Les flux déclarés dans la config JSON sont pré-chargés au démarrage ; les flux demandés par les bots s'ajoutent par-dessus.
+**Enregistrement dynamique** — les flux peuvent être ajoutés à l'exécution sans redémarrer `indicators.py`. Chaque bot envoie un REQ au socket REP (`:5561`) avec ses besoins ; le serveur démarre la tâche si elle est nouvelle et répond avec le `stream_id` à écouter.
 
 **Sources supportées pour l'enregistrement dynamique :** `"binance_ws"`,
 `"binance_scalping"`, `"binance_full_depth"`, `"binance_funding"`,
@@ -774,19 +1047,18 @@ TRADINEBOTTE_INDICATORS_CONFIG=tradinebotte-indicators/strategies/indicators_all
 python3 tradinebotte-polymarket/feed.py &
 python3 tradinebotte-indicators/indicators.py &
 # Un consommateur souscrit à :5559
-# (tout script Python avec zmq.SUB connectant tcp://127.0.0.1:5559)
 ```
 
 ---
 
-## 8. Ordre de démarrage
+## 15. Ordre de démarrage
 
 Pour l'Option B avec indicateurs :
 
 ```
 1. tradinebotte-polymarket/feed.py       bind  :5557   (service systemd, ou démarrage auto si feed_auto_start=true)
 2. tradinebotte-indicators/indicators.py SUB→  :5557   / bind :5559 + :5561  (service systemd, optionnel)
-3. tradinebotte-polymarket/account_bot   SUB→  :5557, REQ→ :5561 (enregistrement des flux d'indicateurs au démarrage)
+3. tradinebotte-polymarket/account_bot   SUB→  :5557, REQ→ :5561 (enregistrement des flux au démarrage)
 4. tradinebotte-cex/orderbook_bot        SUB→  :5559  (consommateur indicators)
 5. tradinebotte-cex/accumulation_bot     SUB→  :5559  (consommateur indicators)
 ```
@@ -800,15 +1072,18 @@ sont re-publiés au prochain refresh de 30 secondes.
 
 ---
 
-## 9. Récapitulatif des variables d'environnement
+## 16. Récapitulatif des variables d'environnement
 
 | Variable | Défaut | Portée | Description |
 |---|---|---|---|
-| `TRADINEBOTTE_PORT_BASE` | (non défini) | feed.py, account_bot.py, indicators.py | Quand défini, bascule tous les défauts d'adresse en TCP et décale les ports de `PORT_BASE − 5557`. Laisser non défini pour IPC (recommandé en déploiement mono-machine). |
-| `TRADINEBOTTE_FEED_ADDR` | IPC détecté auto. | feed.py, account_bot.py, indicators.py | Adresse ZMQ exacte du socket PUB feed. Remplace la détection automatique. Définir `PORT_BASE` pour activer TCP, ou définir cette variable directement pour un chemin TCP/IPC explicite. |
+| `TRADINEBOTTE_PORT_BASE` | (non défini) | feed.py, account_bot.py, indicators.py | Quand défini, bascule tous les défauts d'adresse en TCP et décale les ports de `PORT_BASE − 5557`. Laisser non défini pour IPC (recommandé en mono-machine). |
+| `TRADINEBOTTE_FEED_ADDR` | IPC détecté auto. | feed.py, account_bot.py, indicators.py | Adresse ZMQ exacte du socket PUB feed. Remplace la détection automatique. |
 | `TRADINEBOTTE_INDICATORS_ADDR` | IPC détecté auto. | indicators.py, account_bot.py | Adresse ZMQ PUB du service indicators. `indicators.py` la bind ; `account_bot.py` s'y abonne quand `indicators_streams` est défini. |
-| `TRADINEBOTTE_INDICATORS_REG_ADDR` | IPC détecté auto. | indicators.py, account_bot.py | Adresse ZMQ REP pour l'enregistrement dynamique de flux. `indicators.py` la bind ; `account_bot.py` y envoie des REQ subscribe au démarrage. |
+| `TRADINEBOTTE_INDICATORS_REG_ADDR` | IPC détecté auto. | indicators.py, account_bot.py | Adresse ZMQ REP pour l'enregistrement dynamique de flux. |
+| `TRADINEBOTTE_STATUS_ADDR` | `tcp://127.0.0.1:5562` | status_collector.py, tous les bots | Adresse PULL bind (collecteur) / PUSH connect (bots). Toujours TCP. |
 | `TRADINEBOTTE_DIR` | `~/tradinebotte` | account_bot.py, live_bot.py | Répertoire de données par compte (BD, log, config, stratégies) |
+| `TRADINEBOTTE_ACCOUNT` | (fallback `USER`) | tous les bots | Identifiant de compte écrit dans les payloads heartbeat |
+| `TRADINEBOTTE_VERSION` | (fallback version.stamp) | tous les bots | Hash git écrit dans les payloads heartbeat ; défini par les scripts de déploiement |
 
 ### Faire tourner deux piles indépendantes sur la même machine
 
@@ -822,13 +1097,9 @@ TRADINEBOTTE_PORT_BASE=6557 TRADINEBOTTE_INDICATORS_CONFIG=tradinebotte-indicato
   bash tradinebotte-indicators/scripts/start_indicators.sh &
 ```
 
-`TRADINEBOTTE_PORT_BASE` décale également les adresses déclarées dans les
-fichiers JSON de config du même offset — une seule variable déplace l'ensemble
-de la plage de ports d'une pile.
-
 ---
 
-## 10. ZeroMQ vs MQTT — analyse des compromis pour ce projet
+## 17. ZeroMQ vs MQTT — analyse des compromis pour ce projet
 
 ZeroMQ et MQTT implémentent tous deux du publish/subscribe, mais font des
 choix architecturaux opposés. Cette section explique pourquoi ZeroMQ a été
@@ -863,28 +1134,28 @@ feed.py                     feed.py
 |---|---|
 | **Aucun processus broker** | Aucun daemon supplémentaire à déployer, configurer, surveiller ou redémarrer. 3 points de défaillance en moins par serveur dédié. |
 | **Latence** | TCP loopback sans saut broker : ~10–50 µs contre ~1 ms via un broker MQTT local. Critique pour les messages `book` qui pilotent l'évaluation du signal au seuil 0,96. |
-| **Pas de données périmées** | ZeroMQ PUB/SUB ne retient aucun message. Un SUB qui se connecte tardivement manque les anciens messages — exactement ce que l'on veut : un `account_bot` redémarré après un crash ne doit pas recevoir des centaines de prix en file d'attente. |
+| **Pas de données périmées** | ZeroMQ PUB/SUB ne retient aucun message. Un SUB qui se connecte tardivement manque les anciens messages — exactement ce que l'on veut : un `account_bot` redémarré ne doit pas recevoir des centaines de prix en file d'attente. |
 | **Simplicité** | `pip install pyzmq` suffit ; aucun paquet broker, aucun fichier de config, aucune règle ACL. Une ligne pour bind, une pour connect. |
 | **High-water mark (HWM)** | Si un subscriber est lent, ZeroMQ abandonne silencieusement les messages à la HWM. Pour un flux de données de marché, abandonner est le bon comportement : un prix périmé est pire qu'aucun prix. |
-| **Déploiement localhost** | Tous les processus tournent sur le même serveur dédié. `tcp://127.0.0.1:*` ne nécessite ni auth, ni TLS, ni ACL réseau. Le modèle de sécurité MQTT (users, TLS, ACL) n'apporte rien ici. |
+| **Déploiement localhost** | Tous les processus tournent sur le même serveur dédié. `tcp://127.0.0.1:*` ne nécessite ni auth, ni TLS, ni ACL réseau. |
 
 ### Inconvénients de ZeroMQ dans notre cas
 
 | Critère | Détail |
 |---|---|
-| **Pas de persistance** | Un subscriber non connecté au moment de l'envoi ne recevra jamais le message. Ce n'est généralement pas un problème (`book` est continu ; `market` est re-publié toutes les 30 s) mais un `account_bot` fraîchement redémarré peut manquer le premier cycle d'annonces de marchés. |
-| **Pas de filtrage par topic côté broker** | ZeroMQ PUB envoie chaque message à tous les SUB connectés. Le filtrage se fait côté application (`if msg["stream_id"] != "btc_4h": continue`). Avec MQTT, le filtrage par topic au niveau du broker économise du CPU sur les flux haute fréquence quand il y a beaucoup de subscribers. Ce n'est pas un problème aujourd'hui (N ≤ 3 subscribers). |
-| **Pas de monitoring intégré** | Les brokers MQTT exposent un arbre de topics `$SYS` avec comptes de connexions, débit, profondeur de file. ZeroMQ n'a pas d'équivalent — le diagnostic nécessite une instrumentation applicative ou des outils externes. |
-| **Perte de messages à la reconnexion** | Après un redémarrage du feed, les SUB se reconnectent automatiquement mais perdent les messages publiés pendant le gap. Le refresh `market` toutes les 30 s atténue ce problème ; les gaps sur `book` sont acceptables. |
+| **Pas de persistance** | Un subscriber non connecté au moment de l'envoi ne recevra jamais le message. Ce n'est généralement pas un problème (`book` est continu ; `market` est re-publié toutes les 30 s). |
+| **Pas de filtrage par topic côté broker** | ZeroMQ PUB envoie chaque message à tous les SUB connectés. Le filtrage se fait côté application (`if msg["stream_id"] != "btc_4h": continue`). Ce n'est pas un problème aujourd'hui (N ≤ 3 subscribers). |
+| **Pas de monitoring intégré** | Les brokers MQTT exposent un arbre de topics `$SYS`. ZeroMQ n'a pas d'équivalent — le diagnostic nécessite une instrumentation applicative. |
+| **Perte de messages à la reconnexion** | Après un redémarrage du feed, les SUB se reconnectent automatiquement mais perdent les messages publiés pendant le gap. Le refresh `market` toutes les 30 s atténue ce problème. |
 
 ### Pourquoi MQTT serait moins adapté ici
 
 | Fonctionnalité MQTT | Notre situation |
 |---|---|
-| **Messages retenus** | On ne veut précisément *pas* qu'un `account_bot` fraîchement connecté reçoive le dernier prix en cache : il pourrait avoir plusieurs minutes d'ancienneté et corrompre la phase de warmup `min_ticks`. |
-| **QoS 1 / QoS 2** | Ajoute des aller-retours d'acquittement et des garanties at-least-once / exactly-once. Pour les prix en streaming, une livraison dupliquée est néfaste (les ticks comptés deux fois faussent l'historique des indicateurs). |
+| **Messages retenus** | On ne veut précisément *pas* qu'un `account_bot` fraîchement connecté reçoive le dernier prix en cache : il pourrait corrompre la phase de warmup `min_ticks`. |
+| **QoS 1 / QoS 2** | Ajoute des aller-retours d'acquittement. Pour les prix en streaming, une livraison dupliquée est néfaste (les ticks comptés deux fois faussent l'historique des indicateurs). |
 | **HA broker / clustering** | Notre architecture tourne sur un serveur dédié unique. La HA broker MQTT ajoute de la complexité sans aucun bénéfice. |
-| **Orienté WAN / IoT** | MQTT a été conçu pour des appareils contraints sur des réseaux peu fiables. Nos pipes sont du TCP loopback — il n'y a ni perte de paquets, ni limite de bande passante, ni problème de keep-alive à résoudre. |
+| **Orienté WAN / IoT** | MQTT a été conçu pour des appareils contraints sur des réseaux peu fiables. Nos pipes sont du TCP loopback. |
 
 ### Verdict
 
@@ -892,13 +1163,13 @@ ZeroMQ est le bon choix pour ce projet : il supprime le broker du chemin
 critique, élimine une classe entière de défaillances de déploiement, et fournit
 la sémantique sans-persistance, basse-latence que requiert un flux de carnets
 d'ordres haute fréquence. Le seul scénario où MQTT deviendrait intéressant
-serait une distribution des subscribers sur plusieurs hôtes (serveurs dédiés distincts) et
-un filtrage par topic au niveau du broker pour gérer la bande passante — un
+serait une distribution des subscribers sur plusieurs hôtes distincts et un
+filtrage par topic au niveau du broker pour gérer la bande passante — un
 scénario hors périmètre actuellement.
 
 ---
 
-## 11. Fichiers liés
+## 18. Fichiers liés
 
 | Fichier | Rôle |
 |---|---|
@@ -906,11 +1177,18 @@ scénario hors périmètre actuellement.
 | `tradinebotte-polymarket/feed.py` | Diffuseur ZMQ (Option B) |
 | `tradinebotte-polymarket/account_bot.py` | Abonné par compte + logique de trading |
 | `tradinebotte-indicators/indicators.py` | Étage pipeline d'indicateurs techniques |
-| `tradinebotte-cex/orderbook_bot.py` | Bot de scalping OBI Binance ; moteurs de stratégie interchangeables (OBI, DCA, Swing, SwingHold) |
+| `tradinebotte-cex/orderbook_bot.py` | Bot de scalping OBI Binance ; moteurs interchangeables (OBI, DCA, Swing, SwingHold) |
 | `tradinebotte-cex/accumulation_bot.py` | Bot d'accumulation BTC ; consommateur ZMQ du service indicators |
+| `tradinebotte-status/status_collector.py` | Collecteur de heartbeats ; service autonome sur acct-1 |
+| `tradinetools/tradinetools/__init__.py` | Tâche asyncio `heartbeat_loop` ; partagée par tous les bots |
+| `tradinetools/tradinetools/zmq.py` | Helpers ZMQ ; constantes de ports ; `default_status_addr()` |
 | `tradinebotte-indicators/strategies/indicators_all.json` | Config indicators unifiée de production (14 flux) |
 | `tradinebotte-cex/strategies/scalping/orderbook_btc.json` | Config de stratégie pour `orderbook_bot` |
 | `tradinebotte-cex/strategies/accumulation/btc_accumulation.json` | Config de stratégie pour `accumulation_bot` |
+| `tradinebotte-status/scripts/heartbeat_status.sh` | SSH sur acct-1, requête heartbeat.db |
+| `tradinebotte-status/scripts/bot_status.sh` | Rapport complet : heartbeats + états de services par compte |
+| `tradinebotte-status/heartbeat_query.py` | Requête heartbeat.db, affiche table BOUNDS/VERSION |
+| `tradinebotte-cex/scripts/deploy_all.sh` | Déploiement séquentiel sur tous les comptes de production |
 | `docs/multi.fr.md` | Guide de configuration Option B et stratégies par compte |
 | `docs/GridTrading.fr.md` | Architecture de la stratégie grid et config JSON |
 | `tradinebotte-polymarket/tests/test_multibot.py` | Tests d'intégration ZMQ pour feed + account_bot |

@@ -52,6 +52,7 @@ CONF="${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
 if [[ ! -f "$CONF" ]]; then
     echo -e "${RED}Missing configuration: $CONF${NC}"; exit 1
 fi
+# shellcheck source=/dev/null
 source "$CONF"
 
 SERVER="${TEST_SERVER:?}"
@@ -65,6 +66,7 @@ SC_USER="${ALL_USERS[$SC_IDX]}"
 SC_PASS="${ALL_PASSWORDS[$SC_IDX]}"
 
 LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+GIT_HASH=$(git -C "$LOCAL_REPO" rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
 _ssh() {
     SSHPASS="$SC_PASS" /usr/bin/sshpass -e \
@@ -132,11 +134,14 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
     section "STEP 2 — RESTART"
 
     REMOTE_CMD="cd $INSTALL_DIR"$'\n'
-    REMOTE_CMD+="
+    REMOTE_CMD+="echo '${GIT_HASH}' > $INSTALL_DIR/version.stamp
 echo 'updating dependencies...'
 if [ -d $INSTALL_DIR/.venv ]; then VENV=$INSTALL_DIR/.venv/bin; else VENV=$INSTALL_DIR/venv/bin; fi
 \$VENV/pip install --quiet -r $INSTALL_DIR/requirements.txt 2>/dev/null && echo 'deps ok' || echo 'pip warning (non-fatal)'
-\$VENV/pip install --quiet -e $INSTALL_DIR/tradinetools 2>/dev/null && echo 'tradinetools ok' || echo 'tradinetools warning (non-fatal)'
+PYVER=\$(\$VENV/python3 -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')
+SITE=\$(dirname \$VENV)/lib/python\${PYVER}/site-packages
+mkdir -p \"\$SITE\" && rm -rf \"\$SITE/tradinetools\"
+cp -r $INSTALL_DIR/tradinetools/tradinetools \"\$SITE/tradinetools\" && echo 'tradinetools ok'
 
 export XDG_RUNTIME_DIR=/run/user/\$(id -u)
 if systemctl --user is-active tradinebotte-accumulation.service >/dev/null 2>&1 \

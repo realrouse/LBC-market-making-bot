@@ -26,9 +26,6 @@ BOT_NAME="orderbook_bot"
 BOT_SCRIPT="orderbook_bot.py"
 BOT_STRATEGY="strategies/scalping/orderbook_btc.json"
 
-# Legacy bots to stop if still running
-LEGACY_BOTS=("scalping_candle_momentum" "scalping_meanrev" "scalping_breakout")
-
 SKIP_RESTART=false
 VERIFY_ONLY=false
 FAILURES=0
@@ -81,6 +78,7 @@ SC_USER="${ALL_USERS[$SC_IDX]}"
 SC_PASS="${ALL_PASSWORDS[$SC_IDX]}"
 
 LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+GIT_HASH=$(git -C "$LOCAL_REPO" rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
 # ─── SSH helpers ───────────────────────────────────────────────────────────────
 _ssh() {
@@ -162,7 +160,7 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
     info "Stopping legacy and current bots, starting orderbook_bot..."
 
     REMOTE_CMD="cd $INSTALL_DIR; mkdir -p strategies"$'\n'
-    REMOTE_CMD+="
+    REMOTE_CMD+="echo '${GIT_HASH}' > $INSTALL_DIR/version.stamp
 if [ ! -x venv/bin/python3 ] && [ ! -x .venv/bin/python3 ]; then
     echo 'Creating venv...'
     python3 -m venv venv
@@ -171,7 +169,10 @@ fi
 echo 'updating dependencies...'
 if [ -d $INSTALL_DIR/.venv ]; then VENV=$INSTALL_DIR/.venv/bin; else VENV=$INSTALL_DIR/venv/bin; fi
 \$VENV/pip install --quiet -r $INSTALL_DIR/requirements.txt 2>/dev/null && echo 'deps ok' || echo 'pip warning (non-fatal)'
-\$VENV/pip install --quiet -e $INSTALL_DIR/tradinetools 2>/dev/null && echo 'tradinetools ok' || echo 'tradinetools warning (non-fatal)'
+PYVER=\$(\$VENV/python3 -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')
+SITE=\$(dirname \$VENV)/lib/python\${PYVER}/site-packages
+mkdir -p \"\$SITE\" && rm -rf \"\$SITE/tradinetools\"
+cp -r $INSTALL_DIR/tradinetools/tradinetools \"\$SITE/tradinetools\" && echo 'tradinetools ok'
 "
     # Stop legacy candle/meanrev/breakout bots if still running (always)
     for LEGACY in scalping_candle_momentum scalping_meanrev scalping_breakout; do

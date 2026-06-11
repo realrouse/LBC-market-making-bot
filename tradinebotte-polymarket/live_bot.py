@@ -47,6 +47,7 @@ if os.path.isdir(_cex_dir) and _cex_dir not in sys.path:
 import api_polymarket as api
 import bot_utils
 from bot_utils import print_dashboard, write_web_status
+from tradinetools import heartbeat_loop
 from tradinetools.zmq import PORT_FEED, PORT_INDICATORS, PORT_IND_REG, default_ipc_addr
 
 # ─── STRATEGY DEFAULTS (module-level — tests reference these directly) ────────
@@ -891,6 +892,7 @@ class BotState:
         self._weekly_pnl_week: int = -1  # 7-day period index since Unix epoch
         # Batched snapshot commits — flushed every SNAPSHOT_COMMIT_SECS seconds.
         self.last_snapshot_commit_ts: float = 0.0
+        self.last_book_ts: float = 0.0       # epoch time of last processed book update
         # Circuit-breaker: suspend new entries after 3 consecutive CLOB failures.
         self.api_fail_streak: int = 0
         self.api_cooldown_until: float = 0.0
@@ -924,6 +926,7 @@ async def handle_book_update(state: BotState, parsed: dict[str, Any]) -> None:
     ts.ask_vol   = parsed["ask_vol"]
     ts.obi       = parsed["obi"]
     ts.last_update_ts = time.time()
+    state.last_book_ts = ts.last_update_ts
     # Dispatch to the active strategy.
     # state.strategy is None for the built-in threshold strategy (default),
     # or a GridStrategy/SwingStrategy instance for "grid"/"swing".
@@ -1692,7 +1695,27 @@ async def main() -> None:
                 state.strategy = _load_strat(config.strategy_type, config)
                 logger.info("  Algorithm   : %s", config.strategy_type)
                 await state.strategy.restore_from_db(state)
-            await ws_loop(state, session)
+            _hb_bot_name = {"grid": "grid_bot", "swing": "swing_bot"}.get(
+                config.strategy_type, "live_bot"
+            )
+            _hb_task = asyncio.create_task(
+                heartbeat_loop(
+                    _hb_bot_name,
+                    config.install_dir,
+                    lambda: {
+                        "bounds_ok":    state.daily_pnl >= -config.daily_stop_loss,
+                        "daily_pnl":    round(state.daily_pnl, 2),
+                        "capital":      round(state.capital, 2),
+                        "open_trades":  len(state.open_trades),
+                        "last_book_ts": state.last_book_ts,
+                    },
+                )
+            )
+            try:
+                await ws_loop(state, session)
+            finally:
+                _hb_task.cancel()
+                await asyncio.gather(_hb_task, return_exceptions=True)
     finally:
         conn.close()
 

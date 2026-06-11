@@ -1,10 +1,14 @@
 # Logging — canonical tag vocabulary
 
-All structured log lines emitted by tradinebotte services use a `[TAG]`
-bracket prefix so log parsers and alerting rules can match on a stable token
-rather than on a fragile substring of the human-readable message.
+Polymarket-side services (`live_bot.py`, `feed.py`, `account_bot.py`,
+`indicators.py`) use a `[TAG]` bracket prefix on structured log lines so
+log parsers and alerting rules can match on a stable token rather than on a
+fragile substring of the human-readable message.
 
-Two exceptions use visual-marker format instead of brackets (see
+CEX-side services (`accumulation_bot.py`, `orderbook_bot.py`) use a different
+prose-based convention described in their own sections below.
+
+Two Polymarket exceptions use visual-marker format instead of brackets (see
 [Visual-marker lines](#visual-marker-lines) below).
 
 ---
@@ -82,6 +86,57 @@ Indicators uses two tag conventions:
 field in the stream config (e.g. `[btc_full_depth_perp]`, `[btc_scalping]`,
 `[btc_kline_4h]`). Used for WS lifecycle, errors, resync, and data events
 specific to that stream.
+
+---
+
+---
+
+### `accumulation_bot.py`
+
+Uses fixed-width prose lines without `[TAG]` brackets. Key grep patterns:
+
+| Pattern | Level | Description |
+|---------|-------|-------------|
+| `BUY  ` | INFO | Buy executed. Fields: `qty_btc`, `price`, `[strategy_name]`, `avg`, `held`, `free`, `uPnL%`. |
+| `SELL ` | INFO | Sell executed. Fields: `qty_btc`, `price`, `[strategy_name]`, `realized`, `held`, `free`. |
+| `Band +X% skipped` | INFO | Profit band skipped — holdings at floor. |
+| `→ rebuy` | INFO | Pending rebuy created. Fields: `qty_btc`, `rebuy_price`, `spread`, `discount`. |
+| `Rebuy +X% expired` | INFO | Pending rebuy cancelled after `rebuy_max_age_days`. Band re-armed. |
+| `Scale-in skipped` | DEBUG | Max invested cap reached. |
+| `Scale-in blocked` | DEBUG | One of the six gates blocked the scale-in (OBI, RSI, F&G, Liq, L/S, VWAP). |
+
+Startup summary (INFO) shows all active gates and their thresholds.
+
+---
+
+### `orderbook_bot.py`
+
+Uses `[symbol] ACTION` prefix where `symbol` is the trading pair (e.g. `BTCUSDT`).
+
+| Pattern | Level | Description |
+|---------|-------|-------------|
+| `[SYMBOL] OPEN side @ price` | INFO | Position opened. Fields: `OBI`, `TFI`, `TP`, `SL`, `stake`. |
+| `[SYMBOL] CLOSE side @ price` | INFO | Position closed. Fields: `reason`, `PnL`, `capital`. |
+| `[SYMBOL] OBI=… TFI=… capital=…` | INFO | Periodic state snapshot (every N ticks). |
+| `[SYMBOL] VWAP:` | DEBUG | VWAP indicator update. |
+| `[SYMBOL] MacroOBI:` | DEBUG | Macro OBI gate update. |
+| `[SYMBOL] Liq:` | DEBUG | Liquidation gate update. |
+
+Startup summary (INFO) shows symbol, modes, OBI/TFI/VWAP/VolProfile/MacroOBI thresholds.
+
+---
+
+### `status_collector.py`
+
+Minimal prose logging:
+
+| Pattern | Level | Description |
+|---------|-------|-------------|
+| `status_collector listening on …` | INFO | Startup — ZMQ PULL socket bound, DB path. |
+| `pruned N heartbeat row(s)` | INFO | Yearly pruning of old heartbeat rows. |
+| `ZMQ recv error:` | WARNING | ZMQ receive exception, retrying in 5s. |
+| `Malformed heartbeat` | WARNING | Received payload is not valid JSON or not a dict. |
+| `status_collector stopped` | INFO | Clean shutdown. |
 
 ---
 

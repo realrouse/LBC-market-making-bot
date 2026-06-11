@@ -670,7 +670,7 @@ async def _stats_loop(states: list) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
-async def _run(p: dict, db: sqlite3.Connection) -> None:
+async def _run(p: dict, db: sqlite3.Connection, install_dir: str = "") -> None:
     modes  = p["modes"]
     states = [StreamState(m, p) for m in modes]
 
@@ -719,9 +719,22 @@ async def _run(p: dict, db: sqlite3.Connection) -> None:
                 if p.get("liq_gate") else "disabled")
     logger.info("Liq gate: %s", liq_mode)
 
+    from tradinetools import heartbeat_loop
     tasks = [
         asyncio.create_task(_zmq_loop(states, db, p)),
         asyncio.create_task(_stats_loop(states)),
+        asyncio.create_task(
+            heartbeat_loop(
+                "orderbook_bot",
+                install_dir or None,
+                lambda: {
+                    "bounds_ok":       any(s.last_price > 0 for s in states),
+                    "open_positions":  sum(1 for s in states if s.position is not None),
+                    "total_pnl":       round(sum(s.total_pnl for s in states), 2),
+                    "last_price":      max((s.last_price for s in states if s.last_price > 0), default=0.0),
+                },
+            )
+        ),
     ]
     try:
         await asyncio.gather(*tasks)
@@ -777,7 +790,7 @@ def main() -> None:
     logger.info("DB: %s", install_dir / "live_ob.db")
 
     try:
-        asyncio.run(_run(p, db))
+        asyncio.run(_run(p, db, str(install_dir)))
     except KeyboardInterrupt:
         logger.info("Interrupted")
 

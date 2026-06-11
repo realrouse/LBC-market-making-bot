@@ -6,6 +6,33 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.81] — 2026-06-11
+
+### Corrigé
+- **`scripts/deploy_all.sh` — résumé 10 bots + flag `--restart-infra`** : le résumé de déploiement affiche désormais correctement les 10 bots (les 3 services de account-1 étaient comptés comme 1 étape) ; ajout du flag `--restart-infra` pour redémarrer les services systemd de account-1 (indicators + feed + account_bot) quand ces fichiers changent ; par défaut account-1 reçoit seulement un rsync pour éviter ~30 s de déconnexion des live_bots pendant `RestartSec`
+- **pylint — tous les fichiers modifiés à 10/10** : correction W0603 (global-statement) dans `indicators.py`, `feed.py`, `account_bot.py` ; correction subprocess `check=False`, variable inutilisée `rc` → `_`, et `encoding=` manquant dans `generate_status.py` ; ajout de `connectors`, `strategy_engines` dans `ignored-modules` de `.pylintrc` (imports paresseux du répertoire de déploiement absents de l'arborescence source)
+- **shellcheck -S warning sur tous les scripts shell modifiés** : suppression des variables inutilisées (`CYAN` dans `bot_status.sh`, `RED`/`INSTALL` dans `cleanup_server.sh`, tableau orphelin `LEGACY_BOTS` dans `deploy_scalping_claude4.sh`) ; correction SC2155 dans `install_status_service.sh` ; ajout des directives SC1090 dans les scripts de déploiement
+
+### Modifié
+- **`docs/GridTrading.md`** — traduit du français vers l'anglais (violation de la règle de langue ; version française conservée dans `GridTrading.fr.md`)
+- **`docs/accumulation.md`** — mis à jour pour refléter `accumulation_bot.py` v1.5 / config v2.0 : gestion du capital resserrée (`max_invested_pct` 0.90 → 0.65, nouveau `max_avg_entry_mult=1.20`), pipeline de 7 flux de signaux documenté, P1–P6 tous marqués ✅ implémentés, table de performance obsolète remplacée par des commandes SQL de monitoring
+- **`docs/KellySizing.md`** — statut corrigé en "implémenté, désactivé par défaut" (`kelly_fraction=0.0` dans `live_bot.py`)
+- **`docs/logging.md`** — ajout de trois nouvelles sections documentant les formats de logs de `accumulation_bot.py`, `orderbook_bot.py` et `status_collector.py`
+
+### Supprimé
+- **`docs/status_example.html`** — snapshot HTML obsolète supprimé (était ancré sur un ancien hash de commit ; la page live est maintenant générée dynamiquement par `generate_status.py`)
+
+---
+
+## [0.80] — 2026-06-10
+
+### Ajouté
+- **`tradinebotte-status/generate_status.py` — chemin de sortie par défaut configurable** : le script écrit désormais dans `~/public_html/tradinebottestatus.html` par défaut au lieu de stdout ; le répertoire de sortie est créé automatiquement ; le chemin est surchargeable via `--out /chemin/fichier.html` (option CLI, priorité maximale) ou la variable d'environnement `TRADINEBOTTE_STATUS_OUT` (priorité intermédiaire, utile pour cron ou `Environment=` systemd)
+- **`INSTALL.md`, `INSTALL.fr.md` — section tableau de bord de statut multi-bot** : nouvelle section documentant `generate_status.py` (configuration du chemin de sortie, prérequis, contenu de la page, planification cron, configuration Apache mod_userdir)
+- **`README.md`, `README.fr.md` — bullet tableau de bord de statut multi-bot** : documente le service collecteur de heartbeats et le générateur de tableau de bord HTML
+
+---
+
 ## [0.79] — 2026-06-09
 
 ### Ajouté

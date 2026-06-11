@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC1090  # source "$CONF" path is determined at runtime
 # update_claude1.sh — Push a code update to the BTC 15M Polymarket account and verify services.
 #
 # This account runs three systemd user services (NOT a standalone live_bot):
@@ -19,6 +20,9 @@
 #   bash scripts/update_claude1.sh --restart-indicators --restart-feed --restart-account  # restart all three services
 
 set -uo pipefail
+
+LOCAL_REPO_C1="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+GIT_HASH=$(git -C "$LOCAL_REPO_C1" rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
 RESTART_INDICATORS=false
 RESTART_FEED=false
@@ -113,7 +117,7 @@ fi
 # ─── Run the standard update (rsync + optional live_bot restart) ──────────────
 # Note: update_standalone's VERIFY step reports a false negative on this account
 # (no standalone live_bot on this account — services are managed separately below).
-TEST_STANDALONE_USER_IDX=0 bash "$(dirname "$0")/update_standalone.sh" "${FORWARD_ARGS[@]}"
+TEST_STANDALONE_USER_IDX=0 bash "$(dirname "$0")/update_standalone.sh" --skip-verify "${FORWARD_ARGS[@]}"
 UPDATE_EXIT=$?
 
 # Abort on rsync failure only; the verify false-negative is expected and ignored.
@@ -135,12 +139,14 @@ _restart_service() {
     echo -e "\n${BOLD}${YELLOW}═══ RESTART ${label} ═══${NC}"
 
     local out
+    local _install_dir="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
     out=$(SSHPASS="$c1_pass" /usr/bin/sshpass -e \
         ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
         -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
         -o PreferredAuthentications=password \
         -p "$port" "$c1_user@$server" \
-        "export XDG_RUNTIME_DIR=/run/user/\$(id -u); \
+        "echo '${GIT_HASH}' > ${_install_dir}/version.stamp; \
+         export XDG_RUNTIME_DIR=/run/user/\$(id -u); \
          systemctl --user reset-failed ${svc} 2>/dev/null; \
          systemctl --user restart ${svc} 2>/dev/null \
          && echo 'restarted' \
@@ -200,14 +206,10 @@ if [[ "$RESTART_INDICATORS" == "true" ]]; then
 VENV=$_install_dir/.venv
 PYVER=\$(\$VENV/bin/python3 -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')
 SITE=\$VENV/lib/python\${PYVER}/site-packages
-if \$VENV/bin/python3 -m pip install --quiet -e $_install_dir/tradinetools 2>/dev/null; then
-    echo 'tradinetools ok (pip)'
-else
-    mkdir -p \$SITE
-    rm -rf \$SITE/tradinetools
-    cp -r $_install_dir/tradinetools/tradinetools \$SITE/tradinetools
-    echo 'tradinetools ok (copy)'
-fi
+mkdir -p \$SITE
+rm -rf \$SITE/tradinetools
+cp -r $_install_dir/tradinetools/tradinetools \$SITE/tradinetools
+echo 'tradinetools ok'
 \$VENV/bin/python3 -c 'from tradinetools.zmq import ipc_socket_dir, make_pub; print(\"import check ok\")' 2>&1
 " 2>&1 \
         && echo -e "${GREEN}  ✓ tradinetools installed in .venv${NC}" \
@@ -259,14 +261,10 @@ if [[ "$RESTART_FEED" == "true" ]]; then
 VENV=$_install_dir/.venv
 PYVER=\$(\$VENV/bin/python3 -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')
 SITE=\$VENV/lib/python\${PYVER}/site-packages
-if \$VENV/bin/python3 -m pip install --quiet -e $_install_dir/tradinetools 2>/dev/null; then
-    echo 'tradinetools ok (pip)'
-else
-    mkdir -p \$SITE
-    rm -rf \$SITE/tradinetools
-    cp -r $_install_dir/tradinetools/tradinetools \$SITE/tradinetools
-    echo 'tradinetools ok (copy)'
-fi
+mkdir -p \$SITE
+rm -rf \$SITE/tradinetools
+cp -r $_install_dir/tradinetools/tradinetools \$SITE/tradinetools
+echo 'tradinetools ok'
 \$VENV/bin/python3 -c 'from tradinetools.zmq import ipc_socket_dir, make_pub; print(\"import check ok\")' 2>&1
 " 2>&1 \
         && echo -e "${GREEN}  ✓ tradinetools installed in .venv${NC}" \
@@ -335,14 +333,10 @@ if [[ "$RESTART_ACCOUNT" == "true" ]]; then
 VENV=$_install_dir/.venv
 PYVER=\$(\$VENV/bin/python3 -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')
 SITE=\$VENV/lib/python\${PYVER}/site-packages
-if \$VENV/bin/python3 -m pip install --quiet -e $_install_dir/tradinetools 2>/dev/null; then
-    echo 'tradinetools ok (pip)'
-else
-    mkdir -p \$SITE
-    rm -rf \$SITE/tradinetools
-    cp -r $_install_dir/tradinetools/tradinetools \$SITE/tradinetools
-    echo 'tradinetools ok (copy)'
-fi
+mkdir -p \$SITE
+rm -rf \$SITE/tradinetools
+cp -r $_install_dir/tradinetools/tradinetools \$SITE/tradinetools
+echo 'tradinetools ok'
 \$VENV/bin/python3 -c 'from tradinetools.zmq import ipc_socket_dir, make_pub; print(\"import check ok\")' 2>&1
 " 2>&1 \
         && echo -e "${GREEN}  ✓ tradinetools installed in .venv${NC}" \

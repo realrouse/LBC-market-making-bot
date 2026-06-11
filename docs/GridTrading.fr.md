@@ -1,7 +1,7 @@
 # Grid Trading — Mode de fonctionnement et setup
 
 Ce fichier est la version française du document original.
-La version anglaise est `docs/GridTrading.md`.
+La version anglaise est [docs/GridTrading.md](GridTrading.md).
 
 ## Qu'est-ce que le grid trading ?
 

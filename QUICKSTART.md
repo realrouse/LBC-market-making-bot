@@ -24,6 +24,7 @@ tail -f ~/tradinebotte/live.log
 ```
 
 Monitor: `bash tradinebotte-polymarket/scripts/monitor.sh`  
+Multi-bot status page: `python3 tradinebotte-status/generate_status.py` → `~/public_html/tradinebottestatus.html`  
 Auto-restart on reboot: see [INSTALL.md — systemd setup](INSTALL.md#auto-start-with-systemd-recommended-for-dedicated-servers)
 
 **Stop:** `kill $(cat ~/tradinebotte/live.pid)` · or `systemctl --user stop tradinebotte-live.service` (user unit, no sudo)

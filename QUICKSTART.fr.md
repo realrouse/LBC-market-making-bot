@@ -24,6 +24,7 @@ tail -f ~/tradinebotte/live.log
 ```
 
 Monitoring : `bash tradinebotte-polymarket/scripts/monitor.sh`  
+Tableau de bord multi-bot : `python3 tradinebotte-status/generate_status.py` → `~/public_html/tradinebottestatus.html`  
 Redémarrage automatique au reboot : voir [INSTALL.fr.md — configuration systemd](INSTALL.fr.md#démarrage-automatique-avec-systemd-recommandé-pour-les-serveurs-dédiés)
 
 **Arrêt :** `kill $(cat ~/tradinebotte/live.pid)` · ou `systemctl --user stop tradinebotte-live.service` (unité user, sans sudo)
