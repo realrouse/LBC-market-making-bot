@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # deploy_all.sh — Deploy all bots sequentially across all accounts.
 #
-# 10 bots total across 5 accounts (same server — never run in parallel):
+# 11 bots total across 6 accounts (same server — never run in parallel):
 #   account-1  indicators + feed + account_bot  (Polymarket multibot infra)
 #   account-2  live_bot (Polymarket threshold)
 #   account-3  live_bot (Polymarket grid) + accumulation_bot
 #   account-4  live_bot (Polymarket) + orderbook_bot + accumulation_bot deepdip
 #   account-5  swing live_bot (CEX)
+#   account-6  grid live_bot (MEXC Futures BTC_USDT — simulation)
 #
 # Account-1 services are rsync-only by default: restarting indicators/feed
 # disconnects all other live_bots for ~30s (RestartSec). Use --restart-infra
@@ -103,10 +104,11 @@ run_step "account-4 — live_bot (Polymarket)"            "$PM/update_claude4.sh
 run_step "account-4 — orderbook_bot"                    "$CEX/deploy_scalping_claude4.sh"
 run_step "account-4 — accumulation_bot (deepdip)"       "$CEX/deploy_accumulation_claude4.sh"
 run_step "account-5 — swing live_bot"                   "$CEX/update_swing.sh"
+run_step "account-6 — grid live_bot (MEXC Futures sim)" "$CEX/deploy_grid_mexc.sh"
 
 show_heartbeat_status "HEARTBEAT — POST-DEPLOY SNAPSHOT"
 
-echo -e "\n${BOLD}${YELLOW}═══ DEPLOY ALL — SUMMARY (10 bots) ═══${NC}"
+echo -e "\n${BOLD}${YELLOW}═══ DEPLOY ALL — SUMMARY (11 bots) ═══${NC}"
 for i in "${!STEP_LABELS[@]}"; do
     case "${STEP_RESULTS[$i]}" in
         OK)     echo -e "${GREEN}  ✓ ${STEP_LABELS[$i]}${NC}" ;;
