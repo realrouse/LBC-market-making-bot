@@ -49,7 +49,8 @@ Stratégie cycle long terme : trois configs de production dans `tradinebotte-cex
 | Adaptateur | Exchange | Authentification |
 |---|---|---|
 | `api_binance.py` | Binance spot | HMAC-SHA256 |
-| `api_mexc.py` | MEXC spot | HMAC-SHA256 |
+| `api_mexc.py` | MEXC spot | HMAC-SHA256 (API v3 compatible Binance) |
+| `api_mexc_futures.py` | MEXC Futures perpétuel | HMAC-SHA256 (en-têtes ApiKey + Request-Time) |
 | `api_bitstamp.py` | Bitstamp spot | OAuth2 |
 
 Helpers partagés dans `api_common.py` : parsing du carnet d'ordres, signature HMAC, mode simulation. Ajouter un exchange ne nécessite qu'un nouveau fichier adaptateur. `validate()` dans `tradinebotte-cex/connectors/__init__.py` vérifie la compatibilité connecteur/stratégie au démarrage et lève une `RuntimeError` avec la liste complète des méthodes manquantes.

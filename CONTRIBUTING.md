@@ -62,6 +62,7 @@ tradinebotte/
 │   ├── orderbook_bot.py         # OBI scalping bot (v2.12)
 │   ├── api_binance.py           # Binance spot adapter
 │   ├── api_mexc.py              # MEXC spot adapter
+│   ├── api_mexc_futures.py      # MEXC Futures perpetual adapter
 │   ├── api_bitstamp.py          # Bitstamp spot adapter
 │   ├── api_common.py            # Shared helpers: parse_levels(), book_snapshot(), hmac_sign()
 │   ├── earn_manager.py          # Binance Simple Earn Flexible manager

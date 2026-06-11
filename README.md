@@ -49,7 +49,8 @@ Long-term cycle strategy: three production configs in `tradinebotte-cex/strategi
 | Adapter | Exchange | Auth |
 |---|---|---|
 | `api_binance.py` | Binance spot | HMAC-SHA256 |
-| `api_mexc.py` | MEXC spot | HMAC-SHA256 |
+| `api_mexc.py` | MEXC spot | HMAC-SHA256 (Binance-compat v3) |
+| `api_mexc_futures.py` | MEXC Futures perpetual | HMAC-SHA256 (ApiKey + Request-Time headers) |
 | `api_bitstamp.py` | Bitstamp spot | OAuth2 |
 
 Shared helpers in `api_common.py`: order book parsing, HMAC signing, dry-run mode. Adding an exchange requires only a new adapter file. `validate()` in `tradinebotte-cex/connectors/__init__.py` checks connector/strategy method compatibility at startup and raises `RuntimeError` with the full list of missing methods.
