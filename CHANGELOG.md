@@ -6,6 +6,17 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.82] — 2026-06-11
+
+### Added
+- **`scripts/prepare_release.sh` — pre-release checklist gate**: 7-step blocking/non-blocking gate mandatory before every merge to main; blocking: full unit test suite (all 6 sub-modules), pylint score gate (FAIL if < 9.90, WARN if < 10.00), shellcheck `-S warning` on all tracked `.sh` files, bilingual doc pair check (10 files); non-blocking: CHANGELOG freshness, data quality full scan, integration tests (skip with `--skip-integration`); optional `--tag v0.XX` flag creates a local git tag; colored per-step summary table; exits non-zero only on blocking failures
+- **`version.py` — project version**: canonical project-level version string (`__version__ = "0.82"`) at the repository root
+
+### Fixed
+- **shellcheck `-S warning` clean on all 40 tracked shell scripts**: SC2174 in 5 scripts (`install_indicators_service.sh`, `install_account_service.sh`, `install_feed_service.sh`, `start_account.sh`, `start_feed.sh`) — replaced `mkdir -p -m mode` with `mkdir -p` + `chmod`; SC1083/SC2140 in `collect_db.sh` (remote-shell escape context in SSH command string); SC2034 (unused `CYAN`) and SC2188 (bare `>` truncation without a command) in `test_all_accounts.sh`
+
+---
+
 ## [0.81] — 2026-06-11
 
 ### Fixed

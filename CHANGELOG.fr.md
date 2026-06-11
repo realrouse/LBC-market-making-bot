@@ -6,6 +6,17 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.82] — 2026-06-11
+
+### Ajouté
+- **`scripts/prepare_release.sh` — porte de pré-release** : contrôle obligatoire en 7 étapes avant tout merge vers main ; bloquant : suite complète de tests unitaires (les 6 sous-modules), seuil pylint (FAIL si < 9,90, WARN si < 10,00), shellcheck `-S warning` sur tous les `.sh` suivis par git, vérification des paires de documentation bilingues (10 fichiers) ; non-bloquant : fraîcheur du CHANGELOG, scan complet de qualité des données, tests d'intégration (contournement via `--skip-integration`) ; flag optionnel `--tag v0.XX` pour créer un tag git local ; tableau récapitulatif coloré par étape ; sortie non-zéro uniquement sur les échecs bloquants
+- **`version.py` — version du projet** : chaîne de version canonique au niveau dépôt (`__version__ = "0.82"`)
+
+### Corrigé
+- **shellcheck `-S warning` propre sur les 40 scripts shell suivis** : SC2174 dans 5 scripts (`install_indicators_service.sh`, `install_account_service.sh`, `install_feed_service.sh`, `start_account.sh`, `start_feed.sh`) — remplacement de `mkdir -p -m mode` par `mkdir -p` + `chmod` ; SC1083/SC2140 dans `collect_db.sh` (contexte d'échappement pour shell distant dans une commande SSH) ; SC2034 (variable `CYAN` inutilisée) et SC2188 (troncature `>` sans commande) dans `test_all_accounts.sh`
+
+---
+
 ## [0.81] — 2026-06-11
 
 ### Corrigé
