@@ -203,7 +203,7 @@ def parse_book_update(msg):
 
 # ── MARKET DISCOVERY ──────────────────────────────────────────────────────────
 
-async def get_markets(session, symbol=DEFAULT_SYMBOL):
+async def get_markets(session, symbol=DEFAULT_SYMBOL, **_):
     """
     Fetch current order book ticker for the given symbol from MEXC Futures REST.
     Returns a list with one normalized market dict.
