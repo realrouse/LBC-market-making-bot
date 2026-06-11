@@ -309,6 +309,20 @@ h3{color:#58a6ff;font-size:.9em;margin-bottom:8px}
 .badge.stale{background:#2d1f00;color:#d29922;border:1px solid #4a3800}
 .badge.dead{background:#1e0a0a;color:#f85149;border:1px solid #5a2020}
 .badge.open-b{background:#0d1a2a;color:#58a6ff;border:1px solid #1f3a5f}
+.badge.sim{background:#1a1f3a;color:#79b8ff;border:1px solid #264f78}
+.badge.live-mode{background:#0d2212;color:#3fb950;border:1px solid #2a4a30}
+
+.bot-rows{margin-top:8px;border-top:1px solid #21262d;padding-top:8px}
+.bot-row{display:flex;align-items:center;gap:5px;padding:3px 0;
+          border-bottom:1px solid #1c2029;font-size:.79em;flex-wrap:nowrap}
+.bot-row:last-child{border-bottom:none}
+.bot-name{color:#c9d1d9;min-width:120px;flex-shrink:0;font-size:.95em}
+.bot-detail{color:#8b949e;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.btc-price{font-size:.8em;color:#8b949e;margin-left:auto;display:flex;
+            align-items:center;gap:6px;white-space:nowrap}
+.btc-price .price{color:#e6a817;font-weight:600}
+.btc-price .chg.up{color:#3fb950}.btc-price .chg.dn{color:#f85149}
 
 .summary-bar{display:flex;gap:12px;flex-wrap:wrap;margin:12px 0}
 .sb-item{background:#161b22;border:1px solid #30363d;border-radius:6px;
@@ -327,8 +341,14 @@ _ACCOUNT_LABELS = [
     "acct-3 [poly+accum]",
     "acct-4 [poly+ob+accum]",
     "acct-5 [swing]",
-    "acct-6 [test]",
+    "acct-6 [grid-mexc-sim]",
 ]
+
+# Bots known to run in simulation mode (no real orders placed).
+# Key: (acct_short_label, bot_name) — acct_short = first word of _ACCOUNT_LABELS entry.
+_SIM_BOTS: set[tuple[str, str]] = {
+    ("acct-6", "grid_bot"),  # MEXC Futures — no API keys on remote; all orders sim_...
+}
 
 
 def _fmt_pnl(v) -> str:
@@ -431,6 +451,12 @@ def _render_payload_summary(bot_name: str, payload: dict, now: int) -> str:
     return " · ".join(parts) if parts else "—"
 
 
+def _mode_badge(acct_short: str, bot_name: str) -> str:
+    if (acct_short, bot_name) in _SIM_BOTS:
+        return "<span class='badge sim'>SIM</span>"
+    return "<span class='badge live-mode'>LIVE</span>"
+
+
 def _render_heartbeat_table(hb_rows: list) -> str:
     if not hb_rows:
         return "<p class='no-data'>No heartbeat data available</p>"
@@ -442,10 +468,13 @@ def _render_heartbeat_table(hb_rows: list) -> str:
         age_str = f"{age_min}min" if age_min < 120 else f"{age_min//60}h{age_min%60:02d}m"
         bounds_cls = "" if r["bounds_ok"] in ("ok", "-") else " style='color:#f85149'"
         acct_label = r.get("_label") or r["account"]
+        acct_short = acct_label.split()[0]
         detail = _render_payload_summary(r["bot_name"], r.get("payload", {}), now)
+        mode_cell = _mode_badge(acct_short, r["bot_name"])
         rows_html += (
             f"<tr>"
             f"<td><span class='badge {flag}'>{r['flag']}</span></td>"
+            f"<td>{mode_cell}</td>"
             f"<td>{escape(acct_label)}</td>"
             f"<td>{escape(r['bot_name'])}</td>"
             f"<td class='{flag}'>{age_str}</td>"
@@ -457,7 +486,7 @@ def _render_heartbeat_table(hb_rows: list) -> str:
     return (
         "<table class='hb-table'>"
         "<thead><tr>"
-        "<th>STATUS</th><th>ACCOUNT</th><th>BOT</th>"
+        "<th>STATUS</th><th>MODE</th><th>ACCOUNT</th><th>BOT</th>"
         "<th>AGE</th><th>BOUNDS</th><th>VERSION</th><th>DETAILS</th>"
         "</tr></thead>"
         f"<tbody>{rows_html}</tbody>"
@@ -511,7 +540,32 @@ def _render_trade_table(rows: list, db_type: str = "live") -> str:
     return html
 
 
-def _render_account_card(label: str, data: dict) -> str:
+def _render_bot_section(hb_rows: list, now: int) -> str:
+    """Per-bot row for each heartbeat in this account — shows all bots with mode + payload."""
+    if not hb_rows:
+        return ""
+    rows_html = ""
+    for r in hb_rows:
+        flag = r["flag"].lower()
+        acct_short = (r.get("_label") or "").split()[0]
+        bot = r["bot_name"]
+        age_min = r["age_s"] // 60
+        age_str = f"{age_min}min" if age_min < 120 else f"{age_min//60}h{age_min%60:02d}m"
+        detail = _render_payload_summary(bot, r.get("payload", {}), now)
+        mode_cell = _mode_badge(acct_short, bot)
+        rows_html += (
+            f"<div class='bot-row'>"
+            f"<span class='badge {flag}' style='font-size:.65em'>{r['flag']}</span>"
+            f"{mode_cell}"
+            f"<span class='bot-name'>{escape(bot)}</span>"
+            f"<span class='bot-detail'>{escape(detail)}"
+            f"<span style='color:#484f58;margin-left:6px'>· {age_str}</span></span>"
+            f"</div>"
+        )
+    return f"<div class='bot-rows'>{rows_html}</div>"
+
+
+def _render_account_card(label: str, data: dict, hb_rows: list | None = None) -> str:
     version = escape(data.get("version", "?"))
     error   = data.get("error", "")
 
@@ -617,9 +671,12 @@ def _render_account_card(label: str, data: dict) -> str:
             f"</div>"
         )
 
+    now = int(time.time())
+    bot_section = _render_bot_section(hb_rows or [], now)
+
     return (
         f"<div class='account'>"
-        f"{header}{services_html}{stats_html}{open_html}{trade_html}{cex_html}"
+        f"{header}{services_html}{stats_html}{open_html}{trade_html}{cex_html}{bot_section}"
         f"</div>"
     )
 
@@ -659,9 +716,29 @@ def _render_html(
         f"</div>"
     )
 
+    # BTC spot price from orderbook_bot heartbeat payload (zero extra API calls)
+    btc_price_html = ""
+    for r in heartbeats:
+        if r["bot_name"] == "orderbook_bot":
+            lp = r.get("payload", {}).get("last_price")
+            if lp:
+                btc_price_html = (
+                    f"<div class='btc-price'>"
+                    f"<span>BTC</span>"
+                    f"<span class='price'>${lp:,.0f}</span>"
+                    f"</div>"
+                )
+            break
+
     hb_html    = _render_heartbeat_table(heartbeats)
+
+    # Build per-account heartbeat rows (acct_short = first word of label, e.g. "acct-3")
+    def _acct_hb(label: str) -> list:
+        short = label.split()[0]
+        return [r for r in heartbeats if (r.get("_label") or "").split()[0] == short]
+
     cards_html = "".join(
-        _render_account_card(label, data)
+        _render_account_card(label, data, _acct_hb(label))
         for label, data in zip(_ACCOUNT_LABELS, accounts)
     )
 
@@ -678,7 +755,8 @@ def _render_html(
 <h1>
   <span class="dot {dot_cls}"></span>
   tradinebotte — {escape(status_text)}
-  <span style="font-size:.6em;color:#8b949e;font-weight:400;margin-left:auto">{ts_str}</span>
+  {btc_price_html}
+  <span style="font-size:.6em;color:#8b949e;font-weight:400">{ts_str}</span>
 </h1>
 {summary_bar}
 <h2>Infrastructure — Heartbeats</h2>
