@@ -357,11 +357,10 @@ _ACCOUNT_LABELS = [
     "acct-6 [grid-mexc-sim]",
 ]
 
-# Bots known to run in simulation mode (no real orders placed).
+# Bots running with REAL money — all others default to SIM.
 # Key: (acct_short_label, bot_name) — acct_short = first word of _ACCOUNT_LABELS entry.
-_SIM_BOTS: set[tuple[str, str]] = {
-    ("acct-6", "grid_bot"),  # MEXC Futures — no API keys on remote; all orders sim_...
-}
+# Add an entry here when a bot receives real credentials on the remote.
+_LIVE_BOTS: set[tuple[str, str]] = set()
 
 
 def _fmt_pnl(v) -> str:
@@ -465,9 +464,9 @@ def _render_payload_summary(bot_name: str, payload: dict, now: int) -> str:
 
 
 def _mode_badge(acct_short: str, bot_name: str) -> str:
-    if (acct_short, bot_name) in _SIM_BOTS:
-        return "<span class='badge sim'>SIM</span>"
-    return "<span class='badge live-mode'>LIVE</span>"
+    if (acct_short, bot_name) in _LIVE_BOTS:
+        return "<span class='badge live-mode'>LIVE</span>"
+    return "<span class='badge sim'>SIM</span>"
 
 
 def _render_heartbeat_table(hb_rows: list) -> str:
@@ -658,7 +657,7 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
             pnl_d     = p.get("daily_pnl")
             trades_o  = p.get("open_trades")
             acct_s    = (primary.get("_label") or "").split()[0]
-            is_sim    = (acct_s, primary["bot_name"]) in _SIM_BOTS
+            is_sim    = (acct_s, primary["bot_name"]) not in _LIVE_BOTS
             mode_cls  = "sim" if is_sim else "live-mode"
             mode_lbl  = "SIM" if is_sim else "LIVE"
             cap_str   = f"${cap:.0f}" if cap is not None else "—"
