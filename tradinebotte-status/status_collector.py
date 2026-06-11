@@ -49,6 +49,7 @@ CREATE INDEX IF NOT EXISTS idx_heartbeats_ts          ON heartbeats(ts);
 
 
 def open_db(db_path: str) -> sqlite3.Connection:
+    """Open (or create) the heartbeat DB and apply the schema. Returns the open connection."""
     db = sqlite3.connect(db_path, check_same_thread=False)
     db.executescript(_DB_SCHEMA)
     db.commit()
@@ -132,6 +133,7 @@ async def _recv_loop(
 
 
 async def run(status_addr: str, db_path: str) -> None:
+    """Bind the PULL socket, open the DB, and run the collector until SIGTERM/SIGINT."""
     ctx = zmq.asyncio.Context()
     db = open_db(db_path)
     stop = asyncio.Event()

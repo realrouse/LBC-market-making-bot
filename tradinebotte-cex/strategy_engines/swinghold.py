@@ -202,6 +202,7 @@ class SwingHoldStrategy:
 
     @staticmethod
     def ensure_schema(conn: sqlite3.Connection) -> None:
+        """Create SwingHold tables if they do not exist."""
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS swinghold_state (
                 symbol        TEXT PRIMARY KEY,
