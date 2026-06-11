@@ -9,6 +9,16 @@ process, every ZeroMQ socket, every data flow, and every systemd service unit.
 
 ## 1. High-resolution architecture diagram
 
+![tradinebotte three-layer architecture](architecture.png)
+
+> Three concentric rings: **ENGINE** (status_collector · feed · indicators) at the
+> centre, **BOTS** (Polymarket Option A/B · CEX) on the middle ring, and
+> **DATA SOURCES** (WebSocket APIs on the left, REST/RPC APIs on the right) on
+> the outer ring. Dashed red spokes = heartbeat PUSH → `:5562` TCP. Generated
+> by `docs/gen_architecture_diagram.py`.
+
+The ASCII diagram below shows the same topology with explicit socket addresses:
+
 ```
 ╔══════════════════════════════════════════════════════════════════════════════════════════════════╗
 ║                                    EXTERNAL SERVICES                                            ║

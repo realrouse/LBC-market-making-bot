@@ -10,6 +10,17 @@ systemd.
 
 ## 1. Diagramme d'architecture haute résolution
 
+![Diagramme d'architecture tradinebotte à trois couches](architecture.png)
+
+> Trois anneaux concentriques : **ENGINE** (status_collector · feed · indicators)
+> au centre, **BOTS** (Polymarket Option A/B · CEX) sur l'anneau intermédiaire, et
+> **DATA SOURCES** (APIs WebSocket à gauche, APIs REST/RPC à droite) sur l'anneau
+> extérieur. Les rayons pointillés rouges représentent les heartbeats PUSH → `:5562`
+> TCP. Généré par `docs/gen_architecture_diagram.py`.
+
+Le diagramme ASCII ci-dessous représente la même topologie avec les adresses de
+sockets explicites :
+
 ```
 ╔══════════════════════════════════════════════════════════════════════════════════════════════════╗
 ║                                  SERVICES EXTERNES                                              ║
