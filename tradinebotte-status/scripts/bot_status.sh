@@ -68,8 +68,8 @@ fi
 # ─── Helpers ───────────────────────────────────────────────────────────────────
 
 BOLD='\033[1m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
-RED='\033[0;31m'; CYAN='\033[0;36m'; NC='\033[0m'
-[[ "$COLOR" == false ]] && BOLD='' && YELLOW='' && GREEN='' && RED='' && CYAN='' && NC=''
+RED='\033[0;31m'; NC='\033[0m'
+[[ "$COLOR" == false ]] && BOLD='' && YELLOW='' && GREEN='' && RED='' && NC=''
 
 _ssh() {
     local user="$1" pass="$2"; shift 2

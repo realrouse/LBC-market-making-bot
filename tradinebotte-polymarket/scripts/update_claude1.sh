@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC1090  # source "$CONF" path is determined at runtime
 # update_claude1.sh — Push a code update to the BTC 15M Polymarket account and verify services.
 #
 # This account runs three systemd user services (NOT a standalone live_bot):

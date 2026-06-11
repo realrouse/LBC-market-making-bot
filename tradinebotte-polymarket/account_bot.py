@@ -264,7 +264,7 @@ def _register_from_market_msg(state: bot.BotState, msg: dict) -> None:
 
 async def _run(state: bot.BotState) -> None:
     """Main message loop: receive ZMQ messages from feed.py and dispatch to live_bot handlers."""
-    global _last_feed_msg_ts
+    global _last_feed_msg_ts  # pylint: disable=global-statement
     ctx  = zmq.asyncio.Context()
     sock = make_sub(ctx, _FEED_ADDR)
     logger.info("Connected to feed: %s", _FEED_ADDR)

@@ -1,24 +1,34 @@
 #!/usr/bin/env bash
 # deploy_all.sh — Deploy all bots sequentially across all accounts.
 #
-# Order (same server — never run in parallel):
-#   1. account-1  (Polymarket live_bot — update_claude1.sh)
-#   2. account-2  (Polymarket live_bot — update_claude2.sh)
-#   3. account-3  (Polymarket live_bot + accumulation_bot)
-#   4. account-4  (Polymarket live_bot + orderbook_bot + accumulation_bot deepdip)
-#   5. account-5  (swing live_bot — update_claude5.sh)
+# 10 bots total across 5 accounts (same server — never run in parallel):
+#   account-1  indicators + feed + account_bot  (Polymarket multibot infra)
+#   account-2  live_bot (Polymarket threshold)
+#   account-3  live_bot (Polymarket grid) + accumulation_bot
+#   account-4  live_bot (Polymarket) + orderbook_bot + accumulation_bot deepdip
+#   account-5  swing live_bot (CEX)
 #
-# Each script exits non-zero on failure; this script reports a summary
-# at the end and exits 1 if any account had failures.
+# Account-1 services are rsync-only by default: restarting indicators/feed
+# disconnects all other live_bots for ~30s (RestartSec). Use --restart-infra
+# when indicators.py, feed.py, or account_bot.py have changed.
 #
 # Usage:
 #   bash scripts/deploy_all.sh
-#   bash scripts/deploy_all.sh --skip-restart   # rsync only
-#   bash scripts/deploy_all.sh --verify-only    # status check, no changes
+#   bash scripts/deploy_all.sh --skip-restart     # rsync only, no bot restarts
+#   bash scripts/deploy_all.sh --verify-only      # status check, no changes
+#   bash scripts/deploy_all.sh --restart-infra  # also restart account-1 services
 
 set -uo pipefail
 
-ARGS=("$@")
+RESTART_INFRA=false
+FORWARD_ARGS=()
+
+for arg in "$@"; do
+    case "$arg" in
+        --restart-infra) RESTART_INFRA=true ;;
+        *) FORWARD_ARGS+=("$arg") ;;
+    esac
+done
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PM="$REPO/tradinebotte-polymarket/scripts"
@@ -32,6 +42,7 @@ FAILURES=0
 STEP_LABELS=()
 STEP_RESULTS=()
 
+# Run a real deploy step; tracks result and failure count.
 run_step() {
     local label="$1"
     local script="$2"
@@ -39,12 +50,18 @@ run_step() {
     local extra_args=("$@")
     STEP_LABELS+=("$label")
     echo -e "\n${BOLD}${YELLOW}▶▶▶ $label ▶▶▶${NC}"
-    if bash "$script" "${extra_args[@]}" "${ARGS[@]}"; then
+    if bash "$script" "${extra_args[@]}" "${FORWARD_ARGS[@]+"${FORWARD_ARGS[@]}"}"; then
         STEP_RESULTS+=("OK")
     else
         STEP_RESULTS+=("FAILED")
         FAILURES=$((FAILURES + 1))
     fi
+}
+
+# Add a display-only row to the summary (no actual execution, no failure count).
+add_row() {
+    STEP_LABELS+=("$1")
+    STEP_RESULTS+=("$2")
 }
 
 show_heartbeat_status() {
@@ -61,7 +78,24 @@ show_heartbeat_status() {
 
 show_heartbeat_status "HEARTBEAT — PRE-DEPLOY SNAPSHOT"
 
-run_step "account-1 — rsync (Polymarket)"                "$PM/update_claude1.sh" --skip-restart
+# ── Account-1: rsync only (default) or full service restart (--restart-infra)
+if [[ "$RESTART_INFRA" == "true" ]]; then
+    run_step "account-1 — full restart (indicators + feed + account_bot)" \
+        "$PM/update_claude1.sh" \
+        --restart-indicators --restart-feed --restart-account
+    _c1="${STEP_RESULTS[-1]}"
+    add_row "  └─ account-1 — indicators  (restarted)" "$_c1"
+    add_row "  └─ account-1 — feed        (restarted)" "$_c1"
+    add_row "  └─ account-1 — account_bot (restarted)" "$_c1"
+else
+    run_step "account-1 — rsync (indicators + feed + account_bot)" \
+        "$PM/update_claude1.sh" --skip-restart
+    add_row "  └─ account-1 — indicators  (rsync only — pass --restart-infra to restart)" "RSYNC"
+    add_row "  └─ account-1 — feed        (rsync only — pass --restart-infra to restart)" "RSYNC"
+    add_row "  └─ account-1 — account_bot (rsync only — pass --restart-infra to restart)" "RSYNC"
+fi
+
+# ── Accounts 2–5 ──────────────────────────────────────────────────────────────
 run_step "account-2 — live_bot (Polymarket)"            "$PM/update_claude2.sh"
 run_step "account-3 — live_bot (Polymarket)"            "$PM/update_claude3.sh"
 run_step "account-3 — accumulation_bot"                 "$CEX/deploy_accumulation_claude3.sh"
@@ -72,13 +106,13 @@ run_step "account-5 — swing live_bot"                   "$CEX/update_swing.sh"
 
 show_heartbeat_status "HEARTBEAT — POST-DEPLOY SNAPSHOT"
 
-echo -e "\n${BOLD}${YELLOW}═══ DEPLOY ALL — SUMMARY ═══${NC}"
+echo -e "\n${BOLD}${YELLOW}═══ DEPLOY ALL — SUMMARY (10 bots) ═══${NC}"
 for i in "${!STEP_LABELS[@]}"; do
-    if [[ "${STEP_RESULTS[$i]}" == "OK" ]]; then
-        echo -e "${GREEN}  ✓ ${STEP_LABELS[$i]}${NC}"
-    else
-        echo -e "${RED}  ✗ ${STEP_LABELS[$i]}${NC}"
-    fi
+    case "${STEP_RESULTS[$i]}" in
+        OK)     echo -e "${GREEN}  ✓ ${STEP_LABELS[$i]}${NC}" ;;
+        RSYNC)  echo -e "${YELLOW}  ~ ${STEP_LABELS[$i]}${NC}" ;;
+        FAILED) echo -e "${RED}  ✗ ${STEP_LABELS[$i]}${NC}" ;;
+    esac
 done
 
 if [[ $FAILURES -eq 0 ]]; then

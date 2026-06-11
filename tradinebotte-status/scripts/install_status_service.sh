@@ -92,7 +92,8 @@ ok "Unit installed to $UNIT_DEST"
 
 # ─── Reload + enable ───────────────────────────────────────────────────────────
 
-export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+XDG_RUNTIME_DIR="/run/user/$(id -u)"
+export XDG_RUNTIME_DIR
 
 systemctl --user daemon-reload
 ok "systemd user daemon reloaded"

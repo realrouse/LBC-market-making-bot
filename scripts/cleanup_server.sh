@@ -13,13 +13,13 @@ set -uo pipefail
 
 CONF="${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
 [[ -f "$CONF" ]] || { echo "Missing: $CONF"; exit 1; }
+# shellcheck source=/dev/null
 source "$CONF"
 
 PORT="${TEST_PORT:-22}"
 SERVER="${TEST_SERVER:?}"
-INSTALL="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; BOLD='\033[1m'; NC='\033[0m'
 section() { echo -e "\n${BOLD}${YELLOW}═══ $* ═══${NC}"; }
 ok()      { echo -e "${GREEN}  ✓ $*${NC}"; }

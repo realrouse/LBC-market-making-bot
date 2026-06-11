@@ -1,119 +1,122 @@
-# Grid Trading — Mode de fonctionnement et setup
+# Grid Trading — Operation and Setup
 
-## Qu'est-ce que le grid trading ?
+See [docs/GridTrading.fr.md](GridTrading.fr.md) for the French version.
 
-Le grid trading est une stratégie qui divise une plage de prix en niveaux
-régulièrement espacés (une « grille ») et place des ordres LIMIT BUY sous le
-prix courant et des ordres LIMIT SELL au-dessus. Chaque fois que le prix
-oscille entre deux niveaux, un cycle achat/vente se complète et génère un
-profit égal à l'espacement de la grille multiplié par la quantité échangée.
+## What is grid trading?
 
-La stratégie est **market-neutral** : elle ne parie pas sur une direction.
-Elle profite de la volatilité dans les deux sens, tant que le prix reste à
-l'intérieur de la plage `[grid_lower, grid_upper]`.
+Grid trading is a strategy that divides a price range into evenly spaced levels
+(a "grid") and places LIMIT BUY orders below the current price and LIMIT SELL
+orders above it. Each time the price oscillates between two levels, a buy/sell
+cycle completes and generates a profit equal to the grid spacing multiplied by
+the traded quantity.
+
+The strategy is **market-neutral**: it does not bet on a direction. It profits
+from volatility in both directions, as long as the price stays within the
+`[grid_lower, grid_upper]` range.
 
 ---
 
-## Différences avec la stratégie threshold (Polymarket)
+## Differences from the threshold strategy (Polymarket)
 
 | | Threshold | Grid |
 |---|---|---|
-| Marché | Polymarket binaire (UP/DOWN) | CEX spot continu (BTC/USDT) |
-| Échelle de prix | 0–1 (probabilité) | USDT absolu (~90 000–110 000) |
-| Positions | Une à la fois, résolution binaire | Plusieurs niveaux simultanés |
-| Durée | ~45–300 secondes | Indéfinie (tourne en continu) |
-| Signal d'entrée | `best_bid >= 0.96` | Prix croise un niveau de grille |
-| Profit | Valeur pari × (1 − frais) | Espacement × quantité − frais |
-| Source de données | WebSocket Polymarket | WebSocket Binance / MEXC |
+| Market | Polymarket binary (UP/DOWN) | CEX continuous spot (BTC/USDT) |
+| Price scale | 0–1 (probability) | Absolute USDT (~90,000–110,000) |
+| Positions | One at a time, binary resolution | Multiple levels simultaneously |
+| Duration | ~45–300 seconds | Indefinite (runs continuously) |
+| Entry signal | `best_bid >= 0.96` | Price crosses a grid level |
+| Profit | Bet value × (1 − fee) | Spacing × quantity − fees |
+| Data source | Polymarket WebSocket | Binance / MEXC WebSocket |
 
 ---
 
 ## Architecture
 
-### Fichiers concernés
+### Files involved
 
 ```
-bot/
-  strategies/
+tradinebotte-cex/
+  strategy_engines/
     __init__.py      ← factory load("grid", config) → GridStrategy
-    base.py          ← protocole Strategy (interface commune)
+    base.py          ← Strategy protocol (common interface)
     grid.py          ← GridStrategy, GridLevel, GridState
   connectors/
-    __init__.py      ← factory load("binance"|"mexc") → api_* module
-  api_binance.py     ← connecteur Binance (REST + WebSocket)
-  api_mexc.py        ← connecteur MEXC (REST + WebSocket)
-  live_bot.py        ← orchestrateur (charge stratégie + connecteur)
+    __init__.py      ← factory load("binance"|"mexc") → module api_*
+  api_binance.py     ← Binance connector (REST + WebSocket)
+  api_mexc.py        ← MEXC connector (REST + WebSocket)
 strategies/
-  grid_BTCUSDT.json  ← exemple de config grid
+  grid/
+    grid_BTCUSDT.json              ← example flat grid config
+    grid_BTCUSDT_bear_trailing.json ← bear/trailing variant (account-3)
 ```
 
-### Flux d'exécution
+### Execution flow
 
 ```
 main()
- ├─ make_config()          lit grid_BTCUSDT.json
- ├─ _load_connector("binance")   remplace api_polymarket par api_binance
+ ├─ make_config()                 reads the strategy JSON
+ ├─ _load_connector("binance")    selects api_binance module
  ├─ BotState(conn, config)
  ├─ load_strategy("grid", config) → GridStrategy(config)
- │    └─ calcule les niveaux de prix + valide les bornes
+ │    └─ computes price levels + validates bounds
  └─ ws_loop()
       └─ handle_book_update()
            └─ state.strategy.on_book_update(state, ts)
-                └─ GridStrategy.on_book_update() [voir algorithme]
+                └─ GridStrategy.on_book_update() [see algorithm]
 ```
 
 ---
 
-## Algorithme
+## Algorithm
 
-### Initialisation
+### Initialization
 
 ```
 grid_step = (grid_upper - grid_lower) / (grid_levels - 1)
-levels    = [grid_lower + i × grid_step  for i in 0..grid_levels-1]
+levels    = [grid_lower + i × grid_step  for i in 0 to grid_levels-1]
 ```
 
-Exemple : `grid_lower=90000`, `grid_upper=110000`, `grid_levels=21`
+Example: `grid_lower=90000`, `grid_upper=110000`, `grid_levels=21`
 → `grid_step = 1000` USDT
-→ niveaux = [90 000, 91 000, 92 000, …, 110 000]
+→ levels = [90,000, 91,000, 92,000, …, 110,000]
 
-### Placement initial (au premier tick)
+### Initial placement (on first tick)
 
-- Prix courant = 100 000 USDT
-- Ordres BUY placés à : 90 000, 91 000, …, 99 000
-- Ordres SELL placés à : 101 000, 102 000, …, 110 000
+- Current price = 100,000 USDT
+- BUY orders placed at: 90,000, 91,000, …, 99,000
+- SELL orders placed at: 101,000, 102,000, …, 110,000
 
-### Cycle complet (profit unitaire)
+### Complete cycle (unit profit)
 
 ```
-1. BUY fill à 99 000 USDT
-   → placer SELL à 100 000 USDT (= 99 000 + grid_step)
+1. BUY fill at 99,000 USDT
+   → place SELL at 100,000 USDT (= 99,000 + grid_step)
 
-2. SELL fill à 100 000 USDT
-   → profit brut = grid_step × qty_btc = 1000 × (50 / 99 000) ≈ 0.505 USDT
-   → placer BUY à 99 000 USDT (cycle recommence)
+2. SELL fill at 100,000 USDT
+   → gross profit = grid_step × qty_btc = 1,000 × (50 / 99,000) ≈ 0.505 USDT
+   → place BUY at 99,000 USDT (cycle restarts)
 ```
 
-### Stop-loss de grille
+### Grid stop-loss
 
-Si `best_bid < grid_lower` ou `best_bid > grid_upper` : annuler tous les
-ordres ouverts et arrêter la grille. Le bot loggue l'événement et s'arrête.
+If `best_bid < grid_lower` or `best_bid > grid_upper`: cancel all open orders
+and stop the grid. The bot logs the event and exits.
 
-### État par niveau (`GridLevel`)
+### Per-level state (`GridLevel`)
 
-| Champ | Type | Description |
+| Field | Type | Description |
 |---|---|---|
-| `price` | float | Prix de ce niveau en USDT |
-| `buy_order_id` | str \| None | ID de l'ordre BUY actif sur ce niveau |
-| `sell_order_id` | str \| None | ID de l'ordre SELL actif sur ce niveau |
+| `price` | float | This level's price in USDT |
+| `buy_order_id` | str \| None | Active BUY order ID on this level |
+| `sell_order_id` | str \| None | Active SELL order ID on this level |
 | `status` | str | `idle` \| `buy_placed` \| `sell_placed` \| `cycle_complete` |
-| `filled_at_ts` | float \| None | Timestamp Unix du dernier fill |
+| `filled_at_ts` | float \| None | Unix timestamp of the last fill |
 
 ---
 
 ## Configuration
 
-### Fichier de stratégie JSON
+### Strategy JSON file
 
 ```json
 {
@@ -134,99 +137,95 @@ ordres ouverts et arrêter la grille. Le bot loggue l'événement et s'arrête.
 }
 ```
 
-### Paramètres grid
+### Grid parameters
 
-| Clé | Type | Requis | Description |
+| Key | Type | Required | Description |
 |---|---|---|---|
-| `strategy_type` | string | oui | Doit être `"grid"` |
-| `connector` | string | oui | `"binance"` ou `"mexc"` |
-| `grid_symbol` | string | oui | Paire, ex. `"BTCUSDT"` |
-| `grid_lower` | float | oui | Borne basse de la grille (USDT, > 0) |
-| `grid_upper` | float | oui | Borne haute de la grille (USDT, > `grid_lower`) |
-| `grid_levels` | int | oui | Nombre de niveaux (≥ 2) |
-| `grid_order_size_usdt` | float | oui | Montant USDT par ordre (> 0) |
+| `strategy_type` | string | yes | Must be `"grid"` |
+| `connector` | string | yes | `"binance"` or `"mexc"` |
+| `grid_symbol` | string | yes | Pair, e.g. `"BTCUSDT"` |
+| `grid_lower` | float | yes | Grid lower bound (USDT, > 0) |
+| `grid_upper` | float | yes | Grid upper bound (USDT, > `grid_lower`) |
+| `grid_levels` | int | yes | Number of levels (≥ 2) |
+| `grid_order_size_usdt` | float | yes | USDT amount per order (> 0) |
 
-### Paramètres communs utilisés par le grid
+### Common parameters used by the grid
 
-| Clé | Description |
+| Key | Description |
 |---|---|
-| `capital_start` | Capital initial en USDT |
-| `daily_stop_loss` | Perte journalière maximale avant arrêt |
-| `hour_filter` | Filtre horaire (même format que threshold) |
+| `capital_start` | Initial capital in USDT |
+| `daily_stop_loss` | Maximum daily loss before stopping |
+| `hour_filter` | Hour filter (same format as threshold) |
 
-### Paramètres ignorés par le grid
+### Parameters ignored by the grid
 
-Les clés `signal_threshold`, `entry_max`, `min_secs_remaining`, `obi_reject_thresh`,
-`win_threshold`, `loss_threshold`, `min_ask_vol` sont des paramètres propres
-à la stratégie threshold sur Polymarket — elles n'ont pas de sens pour le grid.
+The keys `signal_threshold`, `entry_max`, `min_secs_remaining`, `obi_reject_thresh`,
+`win_threshold`, `loss_threshold`, `min_ask_vol` are specific to the Polymarket
+threshold strategy and are meaningless for the grid.
 
 ---
 
-## Variables d'environnement
+## Environment variables
 
 ### Binance
 
 ```bash
-export BINANCE_API_KEY="votre_clé_api"
-export BINANCE_API_SECRET="votre_secret_api"
+export BINANCE_API_KEY="your_api_key"
+export BINANCE_API_SECRET="your_api_secret"
 ```
 
 ### MEXC
 
 ```bash
-export MEXC_API_KEY="votre_clé_api"
-export MEXC_API_SECRET="votre_secret_api"
+export MEXC_API_KEY="your_api_key"
+export MEXC_API_SECRET="your_api_secret"
 ```
 
-En l'absence de ces variables, les ordres sont **simulés** (aucun ordre réel
-ne part, identique au comportement `--simulate` du bot Polymarket).
+In the absence of these variables, orders are **simulated** (no real orders are
+sent — identical behavior to `--simulate`).
 
 ---
 
-## Setup et lancement
+## Setup and launch
 
-### 1. Configurer l'exchange
+### 1. Configure the exchange
 
-Sur Binance ou MEXC, créer une clé API avec les permissions :
-- **Lecture** (obligatoire)
-- **Trading spot** (obligatoire pour les ordres réels)
-- **Retrait** : désactiver impérativement
+On Binance or MEXC, create an API key with the following permissions:
+- **Read** (mandatory)
+- **Spot trading** (mandatory for real orders)
+- **Withdrawal**: disable without exception
 
-### 2. Créer le fichier de stratégie
-
-Copier `strategies/grid/grid_BTCUSDT.json` et ajuster les bornes selon le prix
-actuel de BTC et la volatilité attendue :
+### 2. Create the strategy file
 
 ```bash
 cp strategies/grid/grid_BTCUSDT.json strategies/grid/grid_BTCUSDT_live.json
-# éditer grid_lower, grid_upper, grid_levels, grid_order_size_usdt
+# adjust grid_lower, grid_upper, grid_levels, grid_order_size_usdt
 ```
 
-Règle empirique pour le calibrage :
-- `grid_lower` / `grid_upper` : couvrir 10–20 % de part et d'autre du prix
-  courant (ex. BTC à 100k → [88k, 112k])
-- `grid_levels` : 20–50 niveaux → `grid_step` de 500–2000 USDT
-- `grid_order_size_usdt` : au moins 10 × `grid_step` de capital disponible
-  pour ne pas se retrouver à court de fonds si tous les BUY se remplissent
+Calibration rules:
+- `grid_lower` / `grid_upper`: cover 10–20% on each side of the current price
+  (e.g. BTC at 100k → [88k, 112k])
+- `grid_levels`: 20–50 levels → `grid_step` of 500–2,000 USDT
+- `grid_order_size_usdt`: budget at least 10 × `grid_step` of available capital
+  to avoid running out of funds if all BUY orders fill
 
-### 3. Référencer la stratégie dans config.json
+### 3. Reference the strategy in config.json
 
 ```json
 {
-    "strategy": "/chemin/vers/strategies/grid/grid_BTCUSDT_live.json"
+    "strategy": "/path/to/strategies/grid/grid_BTCUSDT_live.json"
 }
 ```
 
-### 4. Lancer en simulation d'abord
+### 4. Test in simulation
 
 ```bash
 BINANCE_API_KEY="" BINANCE_API_SECRET="" bash scripts/start_bot.sh --simulate
 ```
 
-Vérifier les logs pour confirmer que `GridStrategy` charge correctement
-et que les niveaux sont calculés.
+Verify in the logs that `GridStrategy` loads correctly and that levels are computed.
 
-### 5. Lancer en production
+### 5. Launch in production
 
 ```bash
 export BINANCE_API_KEY="..."
@@ -236,95 +235,94 @@ bash scripts/start_bot.sh
 
 ---
 
-## Calcul de rentabilité
+## Profitability calculation
 
-### Profit par cycle
+### Profit per cycle
 
 ```
-qty_btc      = grid_order_size_usdt / prix_achat
-profit_brut  = grid_step × qty_btc
-frais_achat  = prix_achat × qty_btc × fee_rate
-frais_vente  = (prix_achat + grid_step) × qty_btc × fee_rate
-profit_net   = profit_brut − frais_achat − frais_vente
+qty_btc      = grid_order_size_usdt / buy_price
+gross_profit = grid_step × qty_btc
+buy_fee      = buy_price × qty_btc × fee_rate
+sell_fee     = (buy_price + grid_step) × qty_btc × fee_rate
+net_profit   = gross_profit − buy_fee − sell_fee
 ```
 
-Exemple (Binance, fee_rate = 0.1%) :
+Example (Binance, fee_rate = 0.1%):
 ```
 grid_order_size = 50 USDT
-prix_achat      = 99 000 USDT
-qty_btc         = 50 / 99 000 = 0.000505 BTC
-grid_step       = 1 000 USDT
+buy_price       = 99,000 USDT
+qty_btc         = 50 / 99,000 = 0.000505 BTC
+grid_step       = 1,000 USDT
 
-profit_brut = 1 000 × 0.000505 = 0.505 USDT
-frais       ≈ 0.10 USDT  (0.1% × 2 × ~50 USDT)
-profit_net  ≈ 0.40 USDT par cycle
+gross_profit = 1,000 × 0.000505 = 0.505 USDT
+fees         ≈ 0.10 USDT  (0.1% × 2 × ~50 USDT)
+net_profit   ≈ 0.40 USDT per cycle
 ```
 
-### Fréquence des cycles
+### Cycle frequency
 
-Dépend entièrement de la volatilité. Sur BTC/USDT avec un `grid_step` de
-1 000 USDT et une volatilité journalière de ±3 000 USDT, on peut s'attendre
-à 6–15 cycles par niveau actif par jour.
+Depends on volatility. On BTC/USDT with a `grid_step` of 1,000 USDT and a
+daily volatility of ±3,000 USDT, expect 6–15 cycles per active level per day.
 
-### Risque principal : sortie de grille
+### Main risk: grid breakout
 
-Si le prix sort de `[grid_lower, grid_upper]`, tous les ordres BUY sont
-remplis (prix descend) ou tous les SELL (prix monte), et la grille doit
-être reconfigurée. La perte maximale correspond au coût d'achat de tous
-les niveaux BUY si le prix s'effondre.
+If the price leaves `[grid_lower, grid_upper]`, all BUY orders are filled
+(price falls) or all SELL orders (price rises), and the grid must be
+reconfigured. The maximum theoretical loss equals the purchase cost of all BUY
+levels if the price collapses.
 
 ```
-perte_max_théorique = grid_levels × grid_order_size_usdt
+max_theoretical_loss = grid_levels × grid_order_size_usdt
 ```
 
-Avec 20 niveaux à 50 USDT = 1 000 USDT de capital engagé maximum.
+With 20 levels at 50 USDT = 1,000 USDT maximum capital at risk.
 
 ---
 
-## État d'implémentation
+## Implementation status
 
-| Composant | État |
+| Component | Status |
 |---|---|
-| `GridStrategy.__init__()` — calcul des niveaux | ✅ Implémenté |
-| `GridStrategy.level_at_price()` — lookup par prix | ✅ Implémenté |
-| `GridState`, `GridLevel` — structures de données | ✅ Implémenté |
-| Validation des paramètres (bornes, niveaux, taille) | ✅ Implémenté |
-| `connectors.load("binance")` / `load("mexc")` | ✅ Implémenté |
-| `strategies.load("grid", config)` — factory | ✅ Implémenté |
-| Routage dans `handle_book_update()` | ✅ Implémenté |
-| `_initialise_grid()` — placement initial des ordres | ✅ Implémenté |
-| `_poll_fills()` — détection des fills par REST | ✅ Implémenté |
-| `_on_buy_filled()` / `_on_sell_filled()` — counter-orders | ✅ Implémenté |
-| `_check_stop_loss()` — annulation si hors grille | ✅ Implémenté |
-| `_save_state()` — persistance SQLite (`grid_state` + `grid_levels`) | ✅ Implémenté |
-| `restore_from_db()` — reprise au redémarrage + réconciliation exchange | ✅ Implémenté |
-| WebSocket user data stream (fills en temps réel) | ✅ Implémenté |
+| `GridStrategy.__init__()` — level computation | ✅ Implemented |
+| `GridStrategy.level_at_price()` — price lookup | ✅ Implemented |
+| `GridState`, `GridLevel` — data structures | ✅ Implemented |
+| Parameter validation (bounds, levels, size) | ✅ Implemented |
+| `connectors.load("binance")` / `load("mexc")` | ✅ Implemented |
+| `strategies.load("grid", config)` — factory | ✅ Implemented |
+| Routing in `handle_book_update()` | ✅ Implemented |
+| `_initialise_grid()` — initial order placement | ✅ Implemented |
+| `_poll_fills()` — fill detection via REST | ✅ Implemented |
+| `_on_buy_filled()` / `_on_sell_filled()` — counter-orders | ✅ Implemented |
+| `_check_stop_loss()` — cancel if outside grid | ✅ Implemented |
+| `_save_state()` — SQLite persistence (`grid_state` + `grid_levels`) | ✅ Implemented |
+| `restore_from_db()` — restart recovery + exchange reconciliation | ✅ Implemented |
+| WebSocket user data stream (real-time fills) | ✅ Implemented |
 
 ---
 
-## Ajouter un connecteur CEX
+## Adding a CEX connector
 
-Pour brancher un exchange autre que Binance ou MEXC :
+To connect an exchange other than Binance or MEXC:
 
-1. Créer `bot/api_monexchange.py` en copiant `api_binance.py`
-2. Implémenter les 8 fonctions de l'interface (voir `bot/connectors/__init__.py`)
-3. Ajouter l'entrée dans `bot/connectors/__init__.py` :
+1. Create `tradinebotte-cex/api_myexchange.py` by copying `api_binance.py`
+2. Implement the 8 interface functions (see `tradinebotte-cex/connectors/__init__.py`)
+3. Add the entry in `tradinebotte-cex/connectors/__init__.py`:
    ```python
-   _REGISTRY["monexchange"] = "api_monexchange"
+   _REGISTRY["myexchange"] = "api_myexchange"
    ```
-4. Utiliser `"connector": "monexchange"` dans le JSON de stratégie
+4. Use `"connector": "myexchange"` in the strategy JSON
 
 ---
 
-## Fichiers liés
+## Related files
 
-| Fichier | Rôle |
+| File | Role |
 |---|---|
-| `bot/strategy_engines/grid.py` | Implémentation `GridStrategy` |
-| `bot/strategy_engines/__init__.py` | Factory de stratégies |
-| `bot/strategy_engines/base.py` | Protocole `Strategy` (interface) |
-| `bot/connectors/__init__.py` | Factory de connecteurs |
-| `bot/api_binance.py` | Connecteur Binance REST + WebSocket |
-| `bot/api_mexc.py` | Connecteur MEXC REST + WebSocket |
-| `bot/live_bot.py` | Orchestrateur — `_load_connector()`, routage |
-| `strategies/grid/grid_BTCUSDT.json` | Config d'exemple BTC/USDT Binance |
+| `tradinebotte-cex/strategy_engines/grid.py` | `GridStrategy` implementation |
+| `tradinebotte-cex/strategy_engines/__init__.py` | Strategy factory |
+| `tradinebotte-cex/strategy_engines/base.py` | `Strategy` protocol (interface) |
+| `tradinebotte-cex/connectors/__init__.py` | Connector factory |
+| `tradinebotte-cex/api_binance.py` | Binance REST + WebSocket connector |
+| `tradinebotte-cex/api_mexc.py` | MEXC REST + WebSocket connector |
+| `strategies/grid/grid_BTCUSDT.json` | Example BTC/USDT Binance config |
+| `docs/AdaptedGridTrading.md` | Bear/bull/lateral grid variants |

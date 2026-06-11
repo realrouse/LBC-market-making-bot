@@ -164,14 +164,14 @@ def _ssh(user: str, password: str, server: str, port: int, cmd: str) -> tuple[st
             f"{user}@{server}",
             cmd,
         ],
-        capture_output=True, text=True, env=env,
+        capture_output=True, text=True, env=env, check=False,
     )
     return result.stdout, result.returncode
 
 
 def _collect_account(user: str, password: str, server: str, port: int) -> dict:
     cmd = f"python3 - <<'__PYEOF__'\n{_REMOTE_COLLECT}\n__PYEOF__"
-    stdout, rc = _ssh(user, password, server, port, cmd)
+    stdout, _ = _ssh(user, password, server, port, cmd)
     if not stdout.strip():
         return {"version": "?", "services": [], "live": None, "ob": None, "accum": None,
                 "heartbeats": None, "error": "unreachable"}
@@ -230,7 +230,7 @@ def _load_conf(path: str) -> dict:
     def _bash_eval(expr: str) -> str:
         r = subprocess.run(
             ["bash", "-c", f"source {path} 2>/dev/null; {expr}"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, check=False,
         )
         return r.stdout.strip()
 
@@ -701,7 +701,14 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Generate tradinebotte HTML status page")
     parser.add_argument("--conf", default=os.path.expanduser("~/.tradinebotte-test.conf"))
-    parser.add_argument("--out", default=None, help="Output file (default: stdout)")
+    _default_out = os.path.expanduser(
+        os.environ.get("TRADINEBOTTE_STATUS_OUT", "~/public_html/tradinebottestatus.html")
+    )
+    parser.add_argument(
+        "--out",
+        default=_default_out,
+        help="Output file (default: ~/public_html/tradinebottestatus.html or $TRADINEBOTTE_STATUS_OUT)",
+    )
     args = parser.parse_args()
 
     if not os.path.exists(args.conf):
@@ -755,7 +762,8 @@ def main() -> None:
     )
 
     if args.out:
-        with open(args.out, "w") as f:
+        os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+        with open(args.out, "w", encoding="utf-8") as f:
             f.write(html)
         print(f"Written to {args.out}", file=sys.stderr)
     else:

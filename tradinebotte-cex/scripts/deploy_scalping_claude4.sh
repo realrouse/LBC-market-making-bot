@@ -26,9 +26,6 @@ BOT_NAME="orderbook_bot"
 BOT_SCRIPT="orderbook_bot.py"
 BOT_STRATEGY="strategies/scalping/orderbook_btc.json"
 
-# Legacy bots to stop if still running
-LEGACY_BOTS=("scalping_candle_momentum" "scalping_meanrev" "scalping_breakout")
-
 SKIP_RESTART=false
 VERIFY_ONLY=false
 FAILURES=0

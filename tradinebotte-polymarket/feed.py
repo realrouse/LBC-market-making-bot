@@ -183,7 +183,7 @@ async def _run_ws(sock: zmq.asyncio.Socket, session: aiohttp.ClientSession) -> N
     every book-update message to subscribers via the PUB socket until the connection
     drops.  _market_refresh and _ping_loop run as concurrent background tasks.
     """
-    global _ws_connected, _last_book_ts, _msgs_total
+    global _ws_connected, _last_book_ts, _msgs_total  # pylint: disable=global-statement
     if VERBOSE:
         logger.debug("[WS] calling get_markets...")
     markets = await api.get_markets(session)

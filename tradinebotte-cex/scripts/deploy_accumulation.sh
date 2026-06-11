@@ -52,6 +52,7 @@ CONF="${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
 if [[ ! -f "$CONF" ]]; then
     echo -e "${RED}Missing configuration: $CONF${NC}"; exit 1
 fi
+# shellcheck source=/dev/null
 source "$CONF"
 
 SERVER="${TEST_SERVER:?}"

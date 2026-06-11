@@ -1,7 +1,8 @@
 # Kelly Fractionnel — Sizing dynamique des mises
 
 > Contexte : remplacement du `STAKE = $10` fixe par une mise proportionnelle
-> au signal et au capital courant. Statut : **non implémenté** (roadmap v0.3).
+> au signal et au capital courant.
+> Statut : **implémenté, désactivé par défaut** (`kelly_fraction=0.0` dans `live_bot.py`).
 
 ---
 
@@ -68,11 +69,27 @@ croissance légèrement moins rapide. Standard dans le trading quantitatif.
 
 ---
 
-## Ce que ça changerait dans le bot
+## Implémentation dans live_bot.py
 
-**Situation actuelle :** `STAKE = $10` fixe, indépendant du signal.
+**Situation actuelle :** Kelly est implémenté mais désactivé par défaut.
 
-**Avec Kelly fractionnel :**
+Paramètres de stratégie (depuis la v0.41) :
+
+```json
+"kelly_fraction":   0.0,   // 0 = désactivé ; typique : 0.25–0.50
+"kelly_min_trades": 30     // bootstrap : Kelly n'est activé qu'après N trades résolus
+```
+
+Quand `kelly_fraction > 0` et `n_trades >= kelly_min_trades` :
+
+```
+f*    = (p × b - q) / b   avec p = best_bid, b = (1-best_ask)/best_ask
+stake = kelly_fraction × f* × capital, plafonné à eff_max
+```
+
+Si `f* <= 0` (edge négatif), le trade est ignoré et un log `[KELLY]` est émis.
+
+**Avec Kelly activé (fraction=0.25) — estimations :**
 
 | Signal (`best_bid`) | Mise estimée |
 |---|---|
@@ -81,22 +98,8 @@ croissance légèrement moins rapide. Standard dans le trading quantitatif.
 | 0.985 (signal fort) | ~$12–15 |
 | Capital réduit après pertes | Mises automatiquement réduites |
 
-La mise serait bornée pour éviter les cas extrêmes :
-
-```python
-mise = min(STAKE_MAX, max(STAKE_MIN, kelly_stake))
-```
-
-Paramètres à ajouter dans le JSON de stratégie :
-
-```json
-"kelly": {
-    "enabled": false,
-    "fraction": 0.25,
-    "stake_min": 2.0,
-    "stake_max": 25.0
-}
-```
+La mise est bornée par `stake_max` et `stake_max_pct_capital` (paramètres
+communs à toutes les stratégies).
 
 ---
 
@@ -108,10 +111,12 @@ confiants — ou parce que le marché est mal coté. Kelly amplifie les erreurs
 sur `p` : une surestimation systématique de `p` produit des ruines plus
 rapides qu'une mise fixe conservative.
 
-**Pré-requis avant activation :**
+**Pré-requis avant activation en production :**
 - Dataset de backtest suffisamment large (≥ 500 trades simulés)
 - Estimation empirique de `p` réelle vs `best_bid` (calibration)
 - Validation walk-forward pour détecter l'overfitting
+- `kelly_min_trades` assurent un bootstrap : la mise plate est utilisée jusqu'à
+  ce que suffisamment de trades soient résolus pour estimer `p` de façon fiable
 
 ---
 

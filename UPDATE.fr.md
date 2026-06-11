@@ -170,6 +170,15 @@ TRADINEBOTTE_DIR=~/account-b bash tradinebotte-polymarket/scripts/start_account.
 
 ---
 
+## Tableau de bord de statut multi-bot — chemin de sortie
+
+Depuis la v0.80, `generate_status.py` écrit dans `~/public_html/tradinebottestatus.html`
+par défaut au lieu de stdout. Si la sortie était redirigée dans un script ou une crontab,
+ajouter `--out /dev/stdout` pour retrouver le comportement précédent, ou définir
+`TRADINEBOTTE_STATUS_OUT` avec le chemin souhaité.
+
+---
+
 ## Vérifier la mise à jour
 
 ```bash

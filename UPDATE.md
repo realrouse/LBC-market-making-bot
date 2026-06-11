@@ -175,6 +175,15 @@ TRADINEBOTTE_DIR=~/account-b bash tradinebotte-polymarket/scripts/start_account.
 
 ---
 
+## Multi-bot status dashboard — output path
+
+Since v0.80, `generate_status.py` writes to `~/public_html/tradinebottestatus.html`
+by default instead of stdout. If you were piping the output in a script or cron job,
+add `--out /dev/stdout` (or `--out -`) to restore the previous behaviour, or set
+`TRADINEBOTTE_STATUS_OUT` to your preferred path.
+
+---
+
 ## Verify the update
 
 ```bash

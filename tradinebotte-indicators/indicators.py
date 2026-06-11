@@ -560,7 +560,7 @@ async def _seed_ohlcv_series(symbol: str, timeframe: str,
 
 def _publish(pub: zmq.asyncio.Socket, out: dict[str, Any]) -> None:
     """Send one enriched indicator message on the PUB socket (non-blocking)."""
-    global _last_pub_ts
+    global _last_pub_ts  # pylint: disable=global-statement
     pub.send_json({"v": 1, **out}, zmq.NOBLOCK)
     _last_pub_ts = time.time()
     if VERBOSE:
