@@ -17,11 +17,13 @@ Four independent subsystems communicate over ZMQ IPC sockets:
 
 An optional Polymarket connector (`tradinebotte-polymarket/`) targets BTC prediction markets on Polygon — see [Polymarket module](#polymarket-module) below.
 
+See [docs/design.md](docs/design.md) for the full process architecture and ZMQ message-flow reference.
+
 ## CEX Trading Bots
 
 ### Accumulation bot v1.5
 
-[`tradinebotte-cex/accumulation_bot.py`] — OBI dip-buy with profit-ladder ratchet. Monitors real-time order book imbalance via ZMQ; enters BTC/USDT on configurable dip thresholds with adaptive scale-in and rebuy trailing stop. Four optional signal gates: Fear & Greed (`fear_greed_gate`), Liquidations (`liq_gate`), Long/Short Ratio (`ls_ratio_gate`), RSI 4h (`rsi4h_gate`). Earn buffer via `earn_buffer_usd`; VWAP gate on initial buy only. Configured via `tradinebotte-cex/strategies/accumulation/btc_accumulation.json`.
+[`tradinebotte-cex/accumulation_bot.py`] — OBI dip-buy with profit-ladder ratchet. Monitors real-time order book imbalance via ZMQ; enters BTC/USDT on configurable dip thresholds with adaptive scale-in and rebuy trailing stop. Four optional signal gates: Fear & Greed (`fear_greed_gate`), Liquidations (`liq_gate`), Long/Short Ratio (`ls_ratio_gate`), RSI 4h (`rsi4h_gate`). Earn buffer via `earn_buffer_usd`; VWAP gate on initial buy only. Configured via `tradinebotte-cex/strategies/accumulation/btc_accumulation.json`. See [docs/accumulation.md](docs/accumulation.md) for the full strategy design document.
 
 ### OBI Scalping bot v2.12
 
@@ -38,7 +40,7 @@ Pluggable engines under `tradinebotte-cex/strategy_engines/`:
 | **SwingHold** (`swinghold.py`) | Swing entries with fractional sells at each resistance; holds remainder for long-term accumulation |
 | **DCA** (`dca.py`) | Timed DCA buys at configurable intervals with TP and optional SL |
 
-See [`docs/AdaptedGridTrading.md`](docs/AdaptedGridTrading.md) for grid strategy documentation and backtest results.
+See [`docs/AdaptedGridTrading.md`](docs/AdaptedGridTrading.md) for grid strategy backtest results and selection guide, and [`docs/GridTrading.md`](docs/GridTrading.md) for operation and setup.
 
 Long-term cycle strategy: three production configs in `tradinebotte-cex/strategies/longterm/` (V1: ×24.0, Calmar 0.54 / V2: ×24.2, Calmar 0.54 / V3: halving-relative tiers, Calmar 0.75). Backtest via `analysis/backtest_cycle_strategy.py`.
 
@@ -66,6 +68,8 @@ Shared helpers in `api_common.py`: order book parsing, HMAC signing, dry-run mod
 
 Optional shared SQLite orderbook database (`orderbook_current` + `orderbook_snapshots`), configurable per stream via `db_path`, `bucket_size_usd`, `db_write_every_n`, `history_retention_h`.
 
+See [docs/indicators.md](docs/indicators.md) for the full reference guide.
+
 ## Monitoring
 
 `tradinebotte-status/status_collector.py` — standalone heartbeat collector (ZMQ port 5562):
@@ -73,6 +77,7 @@ Optional shared SQLite orderbook database (`orderbook_current` + `orderbook_snap
 - Receives per-bot heartbeats, writes to SQLite, prunes rows older than one year
 - `generate_status.py` polls all deployment accounts via SSH and writes a single HTML health page showing bot health, service versions, and payload details (PnL, position counts, WebSocket connectivity)
 - Default output: `~/public_html/tradinebottestatus.html`, overridable via `--out` or `$TRADINEBOTTE_STATUS_OUT`
+- See [docs/logging.md](docs/logging.md) for the canonical log tag vocabulary used by alerting and log parsers
 
 ## Deployment
 
@@ -127,8 +132,8 @@ python3 analysis/download_btc_history.py --start 2024-10-15 --end 2025-01-15  # 
 
 - **`live_bot.py`** — single-file async state machine; entry on `best_bid >= 0.95`; WIN at bid ≥ 0.99, LOSS at bid ≤ 0.01; daily stop-loss ($30), crash recovery (restores unresolved trades on startup), optional HTML status page with HTTP Basic Auth
 - **`feed.py` + `account_bot.py`** — multi-bot WebSocket sharing via ZMQ IPC; each `account_bot.py` trades with a fully isolated SQLite DB, log, and config
-- **Strategy files**: `tradinebotte-polymarket/strategies/polymarket_BTC5M.json`; `polymarket_BTC5M_piste3.json` adds dynamic stake scaling (`bid_alpha`), OBI rejection, and weekly stop-loss
-- **Database** `live.db` (SQLite WAL): `trades` table (21 columns — full signal context through resolution), `snapshots` table (5-second price snapshots for post-analysis)
+- **Strategy files**: `tradinebotte-polymarket/strategies/polymarket_BTC5M.json`; `polymarket_BTC5M_piste3.json` adds dynamic stake scaling (`bid_alpha`), OBI rejection, and weekly stop-loss; see [docs/KellySizing.md](docs/KellySizing.md) for the fractional Kelly sizing design
+- **Database** `live.db` (SQLite WAL): `trades` table (21 columns — full signal context through resolution), `snapshots` table (5-second price snapshots for post-analysis); see [docs/snapshots.md](docs/snapshots.md) for schema and query reference
 - **Useful queries**:
 
 ```bash
@@ -162,6 +167,8 @@ bash scripts/run_tests.sh
 ```
 
 1163 tests across 6 suites. No network access or credentials required — in-memory SQLite for every test.
+
+See [docs/HOWTO_tests_and_backtests.md](docs/HOWTO_tests_and_backtests.md) for a practical guide to running tests and backtests.
 
 ## Notes
 
