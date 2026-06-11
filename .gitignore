@@ -33,6 +33,9 @@ config.json
 # Private AI context — contains infrastructure details, keep local only
 docs/CONTEXT_AI.md
 
+# Claude Code guidance file — contains infrastructure rules and private context, keep local only
+CLAUDE.md
+
 # Integration test configuration — contains server addresses and passwords
 scripts/test_multibot.conf
 
