@@ -730,12 +730,16 @@ async def _run(p: dict, db: sqlite3.Connection, install_dir: str = "") -> None:
             if st.position is not None:
                 pos = st.position
                 # Estimate PnL at last known mid-price; fall back to entry if no tick seen.
-                mid = st.last_price if st.last_price > 0 else pos.entry_price
-                qty = pos.stake / pos.entry_price
+                mid      = st.last_price if st.last_price > 0 else pos.entry_price
+                p        = st.p
+                fee_rate = p[f"maker_fee_{st.mode}"] if p.get("use_limit_orders") \
+                           else p[f"fee_{st.mode}"]
+                exit_val = pos.qty * mid
+                fee_exit = exit_val * fee_rate
                 if pos.direction == "long":
-                    pnl_net = (mid - pos.entry_price) * qty - pos.fee_entry
+                    pnl_net = exit_val - fee_exit - pos.stake - pos.fee_entry
                 else:
-                    pnl_net = (pos.entry_price - mid) * qty - pos.fee_entry
+                    pnl_net = pos.stake - exit_val - fee_exit - pos.fee_entry
                 capital_after = pos.capital_before + pnl_net
                 db.execute("""
                     UPDATE ob_trades

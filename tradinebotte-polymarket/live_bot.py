@@ -802,7 +802,8 @@ class TokenState:
                  "bid_history", "obi_history")
 
     def __init__(self, token_id: str, market_id: str, direction: str, question: str,
-                 market_start_ms: int, market_end_ms: int) -> None:
+                 market_start_ms: int, market_end_ms: int,
+                 vol_window: int = VOL_WINDOW) -> None:
         self.token_id = token_id
         self.market_id = market_id
         self.direction = direction
@@ -818,8 +819,8 @@ class TokenState:
         self.last_update_ts = 0.0; self.last_snapshot_ts = 0.0
         # Rolling windows sampled every SNAPSHOT_INTERVAL seconds.
         # Used by the volatility filter in check_signal to detect choppy markets.
-        self.bid_history: deque[float] = deque(maxlen=VOL_WINDOW)
-        self.obi_history: deque[float] = deque(maxlen=VOL_WINDOW)
+        self.bid_history: deque[float] = deque(maxlen=vol_window)
+        self.obi_history: deque[float] = deque(maxlen=vol_window)
 
     @property
     def secs_remaining(self) -> float:
@@ -1402,7 +1403,8 @@ def register_market(state: BotState, market: dict[str, Any]) -> list[str]:
     new = []
     for tid, d in ((up, "UP"), (dn, "DOWN")):
         if tid not in state.tokens:
-            state.tokens[tid] = TokenState(tid, mid, d, q, sm, em)
+            state.tokens[tid] = TokenState(tid, mid, d, q, sm, em,
+                                              vol_window=state.config.vol_window)
             new.append(tid)
     state.market_tokens[mid] = {"UP": up, "DOWN": dn}
     return new

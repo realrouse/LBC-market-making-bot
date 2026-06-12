@@ -256,7 +256,8 @@ def _register_from_market_msg(state: bot.BotState, msg: dict) -> None:
     is_new = mid not in state.market_tokens
     for tid, direction in ((up, "UP"), (dn, "DOWN")):
         if tid not in state.tokens:
-            state.tokens[tid] = bot.TokenState(tid, mid, direction, q, sm, em)
+            state.tokens[tid] = bot.TokenState(tid, mid, direction, q, sm, em,
+                                                   vol_window=state.config.vol_window)
     state.market_tokens[mid] = {"UP": up, "DOWN": dn}
     if VERBOSE and is_new:
         logger.debug("[MARKET] registered: %s %s", mid[:16], q[:50])
@@ -365,7 +366,7 @@ async def main() -> None:
         if not _reached:
             logger.error(
                 "Feed not reachable on %s after %d attempts — "
-                "is the feed service running? (sudo systemctl start tradinebotte-feed)",
+                "is the feed service running? (systemctl --user start tradinebotte-feed)",
                 _FEED_ADDR, _retries,
             )
             sys.exit(1)
