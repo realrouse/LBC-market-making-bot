@@ -227,13 +227,18 @@ Full results and parameter recommendations in `notes/backtest_20260608.txt`.
   Duplicate of `tradinetools.zmq.warn_if_external_bind`; no callers remained in production code
   (all callers import from tradinetools directly). Function deleted. (v0.57)
 
-### MEDIUM — Open
+- **[A05-M1] DONE — Pass `config.vol_window` to `TokenState.__init__`**
+  `live_bot.py` and `account_bot.py` — `TokenState.__init__` now accepts `vol_window: int = VOL_WINDOW`
+  keyword arg; `register_market()` and `_register_from_market_msg()` both pass
+  `vol_window=state.config.vol_window`. `deque(maxlen=vol_window)` now reflects the JSON config
+  instead of the hardcoded constant. (dev branch, audit session 2026-06-12)
 
-- **[A05-M1] `TokenState` deque size hardcoded to module constant `VOL_WINDOW`**
-  `live_bot.py` — `bid_history` and `obi_history` use `deque(maxlen=VOL_WINDOW)` (always 12)
-  regardless of `config.vol_window`. Setting `vol_filter.window` in the strategy JSON has no
-  effect on the actual rolling window. Fix: pass `config.vol_window` to `TokenState.__init__`
-  and use it as the `maxlen`. No deployed config exercises this today (no JSON sets `window`).
+- **[A05-M5] DONE — Weekly stop-loss boundary already Monday-aligned**
+  Code audit (2026-06-12) confirmed `live_bot.py` already uses
+  `today_week = (_dt - timedelta(days=_dt.weekday())).toordinal()` — ISO-week Monday boundary,
+  not the epoch-Thursday window cited in the original finding. No code change required.
+
+### MEDIUM — Open
 
 - **[A05-M2] Capital guard uses base stake, ignores dynamic stake scaling**
   `live_bot.py:1171` — `state.capital - len(state.open_trades) * cfg.stake` assumes the base
@@ -248,16 +253,16 @@ Full results and parameter recommendations in `notes/backtest_20260608.txt`.
   is never enforced. Either migrate callers to use the typed schemas (gaining `from_dict` safety
   and version checking) or remove the module to avoid confusion.
 
-- **[A05-M5] Weekly stop-loss period boundary not calendar-aligned**
-  `live_bot.py:1127` — `int(time.time() // (7 * 86400))` counts 7-day windows since the Unix
-  epoch (1970-01-01 = Thursday), so "week" boundaries fall on Thursdays. With `weekly_stop_loss`
-  active in `piste3.json`, halts may occur at counter-intuitive times. Fix: use ISO week number
-  or anchor to the last Monday midnight UTC.
-
 - **[A05-M6] `sys.path.insert` inside `post_order` — already mitigated by H-1 cache**
   The `if _site not in sys.path` guard in `_init_clob_client` prevents duplicate inserts.
   Residual concern: `sysconfig` / `sys` are now top-level imports in `api_polymarket.py` (added
   with H-1). No further action required unless the lazy-import approach is revisited.
+
+### LOW — Done
+
+- **[A05-L3] DONE — `account_bot.py` error message corrected to `systemctl --user`**
+  Hardcoded `(sudo systemctl start tradinebotte-feed)` replaced with
+  `(systemctl --user start tradinebotte-feed)`. (dev branch, audit session 2026-06-12)
 
 ### LOW — Open
 
@@ -269,10 +274,6 @@ Full results and parameter recommendations in `notes/backtest_20260608.txt`.
 - **[A05-L2] Status HTML timestamps in local time, not UTC**
   `bot_utils.py` — `datetime.fromtimestamp(ts_ms / 1000)` without `tz=timezone.utc`.
   Inconsistent with the rest of the codebase. Fix: add `tz=timezone.utc` or label the column.
-
-- **[A05-L3] `account_bot.py` error message suggests wrong `systemctl` command**
-  The hardcoded `(sudo systemctl start tradinebotte-feed)` hint is incorrect for accounts
-  running feed as a user service. Remove the hardcoded command or make it conditional.
 
 - **[A05-L4] `BotConfig` hour-filter range annotations are untyped bare `list`**
   `live_bot.py` — `weekday_utc_ranges: list` and `weekend_utc_ranges: list` should be
