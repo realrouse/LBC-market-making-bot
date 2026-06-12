@@ -757,7 +757,7 @@ async def _run(p: dict, db: sqlite3.Connection, install_dir: str = "") -> None:
     state = AccumState(p=p, free_usdt=p["capital_usdt"])
     restored = _restore_state(state, db)
 
-    async with aiohttp.ClientSession() as http_session:
+    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=10)) as http_session:
         if p.get("earn_enabled", True):
             state.earn = EarnManager(http_session)
 

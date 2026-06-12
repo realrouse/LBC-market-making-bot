@@ -51,6 +51,7 @@ CREATE INDEX IF NOT EXISTS idx_heartbeats_ts          ON heartbeats(ts);
 def open_db(db_path: str) -> sqlite3.Connection:
     """Open (or create) the heartbeat DB and apply the schema. Returns the open connection."""
     db = sqlite3.connect(db_path, check_same_thread=False)
+    db.execute("PRAGMA journal_mode=WAL")
     db.executescript(_DB_SCHEMA)
     db.commit()
     return db
