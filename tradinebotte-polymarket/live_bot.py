@@ -1191,7 +1191,9 @@ async def check_signal(state: BotState, ts: TokenState, _t_ws: Optional[float] =
                          vol_bid, range_bid, obi_vol, ts.market_id[:12])
             state.rejection_stats.vol_filter += 1
             return
-    if state.capital - len(state.open_trades) * cfg.stake < cfg.stake:
+    _eff_stake = (min(cfg.stake_max, cfg.stake_max_pct_capital * state.capital)
+                  if cfg.stake_max_pct_capital > 0 else cfg.stake_max)
+    if state.capital - len(state.open_trades) * _eff_stake < _eff_stake:
         state.rejection_stats.capital += 1; return
     if state.daily_pnl < -cfg.daily_stop_loss: state.rejection_stats.daily_stop += 1; return
     if cfg.weekly_stop_loss > 0 and state.weekly_pnl < -cfg.weekly_stop_loss:

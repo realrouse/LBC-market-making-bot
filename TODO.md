@@ -240,12 +240,12 @@ Full results and parameter recommendations in `notes/backtest_20260608.txt`.
 
 ### MEDIUM — Open
 
-- **[A05-M2] Capital guard uses base stake, ignores dynamic stake scaling**
-  `live_bot.py:1171` — `state.capital - len(state.open_trades) * cfg.stake` assumes the base
-  stake per trade, but with `stake_bid_alpha` / Kelly the effective stake can be significantly
-  larger. Harmless with the current live params (max $15 vs guard's $10 assumption), but
-  logically wrong. Fix: replace `cfg.stake` with `min(cfg.stake_max, cfg.stake_max_pct_capital
-  * capital)` (or `cfg.stake_max` as a conservative upper bound).
+- **[A05-M2] DONE — Capital guard uses worst-case effective stake**
+  `live_bot.py` — replaced `cfg.stake` with
+  `min(cfg.stake_max, stake_max_pct_capital × capital) if pct > 0 else cfg.stake_max`,
+  mirroring the pattern already used in `compute_stake()`. Guard now assumes the maximum
+  possible stake per open trade, preventing entry when capital would be exhausted under
+  dynamic scaling. 360 tests pass. (dev branch, 2026-06-12)
 
 - **[A05-M4] `tradinetools/schemas.py` has no production callers**
   `MarketMessage`, `BookMessage`, `IndicatorsMessage` etc. are tested but never imported in
