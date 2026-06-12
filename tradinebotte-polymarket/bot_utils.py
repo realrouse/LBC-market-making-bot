@@ -1,14 +1,5 @@
 #!/usr/bin/env python3
-"""
-Utility helpers for live_bot: log dashboard and web status page.
-
-Configuration (WEBSTATUS_* / INSTALL_DIR) is injected by live_bot after its
-config.json is loaded:
-    import bot_utils
-    bot_utils.WEBSTATUS_ENABLED = True
-    bot_utils.INSTALL_DIR       = "/home/user/tradinebotte"
-    ...
-"""
+"""Utility helpers for live_bot: log dashboard and web status page."""
 
 import html, logging, logging.handlers, os, sqlite3, sys
 from datetime import datetime, timezone
@@ -49,26 +40,18 @@ def _today_ms_utc() -> int:
         .timestamp() * 1000
     )
 
-# ─── WEB STATUS CONFIG (set by live_bot after config load) ───────────────────
-WEBSTATUS_ENABLED:  bool = False
-WEBSTATUS_PATH:     str  = ""
-WEBSTATUS_USER:     str  = "tradinebot"
-WEBSTATUS_PASSWORD: str  = ""
-INSTALL_DIR:        str  = ""
-
-
 # ─── DASHBOARD ───────────────────────────────────────────────────────────────
 
-def print_dashboard(state: Any) -> None:
+def print_dashboard(state: Any, config: Any) -> None:
     """Log a periodic summary of bot status to the log file."""
     logger.info("=" * 65)
-    logger.info("  LIVE BOT  %s", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    logger.info("  LIVE BOT  %s UTC", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"))
     logger.info("  Capital=$%.2f  PnL=$%+.2f  Trades=%d  WR=%.1f%%",
                 state.capital, state.total_pnl, state.total_trades, state.win_rate)
     logger.info("  Tokens=%d  Markets=%d  Open=%d",
                 len(state.tokens), len(state.market_tokens), len(state.open_trades))
     logger.info("=" * 65)
-    write_web_status(state)
+    write_web_status(state, config)
 
 
 # ─── WEB STATUS PAGE ─────────────────────────────────────────────────────────
@@ -80,18 +63,18 @@ def _htpasswd(password: str) -> str:
     return _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
 
 
-def setup_htaccess(html_path: str) -> None:
+def setup_htaccess(html_path: str, config: Any) -> None:
     """
-    Create .htaccess in the HTML directory and .htpasswd in INSTALL_DIR.
+    Create .htaccess in the HTML directory and .htpasswd in config.install_dir.
     .htpasswd lives outside the web root so it cannot be downloaded.
-    Skipped silently if WEBSTATUS_PASSWORD is not configured.
+    Skipped silently if config.webstatus_password is not set.
     """
-    if not WEBSTATUS_PASSWORD:
+    if not config.webstatus_password:
         return
-    htpasswd_path = os.path.join(INSTALL_DIR, ".webstatus_htpasswd")
+    htpasswd_path = os.path.join(config.install_dir, ".webstatus_htpasswd")
     htaccess_path = os.path.join(os.path.dirname(html_path), ".htaccess")
     with open(htpasswd_path, "w", encoding="utf-8") as f:
-        f.write(f"{WEBSTATUS_USER}:{_htpasswd(WEBSTATUS_PASSWORD)}\n")
+        f.write(f"{config.webstatus_user}:{_htpasswd(config.webstatus_password)}\n")
     os.chmod(htpasswd_path, 0o640)
     if not os.path.exists(htaccess_path):
         with open(htaccess_path, "w", encoding="utf-8") as f:
@@ -115,7 +98,7 @@ def _status_html_trade_rows(conn: sqlite3.Connection) -> str:
         return '<tr><td colspan="8" style="color:#8b949e">No resolved trades</td></tr>'
     parts = []
     for tid, direction, outcome, entry, pnl, cap, ts_ms, question in rows:
-        ts_str = datetime.fromtimestamp(ts_ms / 1000).strftime("%H:%M:%S") if ts_ms else "—"
+        ts_str = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).strftime("%H:%M:%S") if ts_ms else "—"
         css = "win" if outcome == "WIN" else "loss"
         q_safe  = html.escape(question or "")
         q_short = q_safe[:42] + ("…" if len(q_safe) > 42 else "")
@@ -131,7 +114,7 @@ def _status_html_trade_rows(conn: sqlite3.Connection) -> str:
 
 def generate_status_html(state: Any) -> str:
     """Build a self-contained HTML status page from current bot state."""
-    now_str  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_str  = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     today_ms = _today_ms_utc()
     daily_row = state.conn.execute(
         "SELECT COALESCE(SUM(pnl_net),0), "
@@ -189,24 +172,24 @@ def generate_status_html(state: Any) -> str:
         '</div>\n'
         '<h2>10 latest resolved trades</h2>\n'
         '<table>\n'
-        '<thead><tr><th>#</th><th>Time</th><th>Direction</th><th>Result</th>'
+        '<thead><tr><th>#</th><th>Time (UTC)</th><th>Direction</th><th>Result</th>'
         '<th>Entry</th><th>PnL</th><th>Capital</th><th>Market</th></tr></thead>\n'
         f'<tbody>{trade_rows}</tbody>\n'
         '</table>\n'
-        f'<div class="footer">Last updated: {now_str} — '
+        f'<div class="footer">Last updated: {now_str} UTC — '
         'Auto-refresh every 60&nbsp;s</div>\n'
         '</body>\n</html>\n'
     )
 
 
-def write_web_status(state: Any) -> None:
-    """Write the HTML status page to disk. No-op when WEBSTATUS_ENABLED is false."""
-    if not WEBSTATUS_ENABLED:
+def write_web_status(state: Any, config: Any) -> None:
+    """Write the HTML status page to disk. No-op when config.webstatus_enabled is false."""
+    if not config.webstatus_enabled:
         return
     try:
-        os.makedirs(os.path.dirname(os.path.abspath(WEBSTATUS_PATH)), exist_ok=True)
-        setup_htaccess(WEBSTATUS_PATH)
-        with open(WEBSTATUS_PATH, "w", encoding="utf-8") as f:
+        os.makedirs(os.path.dirname(os.path.abspath(config.webstatus_path)), exist_ok=True)
+        setup_htaccess(config.webstatus_path, config)
+        with open(config.webstatus_path, "w", encoding="utf-8") as f:
             f.write(generate_status_html(state))
     except Exception as e:
         logger.warning("Web status page error: %s", e)

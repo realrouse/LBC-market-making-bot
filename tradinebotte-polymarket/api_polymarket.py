@@ -7,7 +7,7 @@ To add a new exchange in the future, create api_<exchange>.py with the same
 public API surface and change the single import line in live_bot.py.
 """
 
-import json, logging, os, sysconfig, sys, uuid
+import hashlib, json, logging, os, sysconfig, sys, uuid
 from datetime import datetime, timezone, timedelta
 import aiohttp
 
@@ -235,8 +235,8 @@ async def get_markets(session, *, tag_id: int = GAMMA_TAG_5M, window_minutes: in
 
 # ─── ORDER PLACEMENT ──────────────────────────────────────────────────────────
 
-# Keyed by (private_key, install_dir) — built once on first order, reused thereafter.
-# Avoids EIP-712 key derivation (create_or_derive_api_creds) on every trade call.
+# Keyed by (sha256(private_key)[:16], install_dir) — built once on first order, reused thereafter.
+# Key is a hash digest, not the raw private key, so the key material is never stored in the dict.
 _clob_clients: dict = {}
 
 
@@ -274,7 +274,7 @@ async def post_order(session, token_id, price, size_usdc, *, private_key, instal
         logger.warning("POLY_PRIVATE_KEY not set — order simulated")
         return f"sim_{uuid.uuid4().hex[:12]}"
     try:
-        cache_key = (private_key, install_dir)
+        cache_key = (hashlib.sha256(private_key.encode()).hexdigest()[:16], install_dir)
         if cache_key not in _clob_clients:
             _clob_clients[cache_key] = _init_clob_client(private_key, install_dir)
         _client, OrderArgs = _clob_clients[cache_key]

@@ -234,8 +234,8 @@ class BotConfig:
     # Hour filter
     hour_filter_enabled:  bool = HOUR_FILTER_ENABLED
     us_holiday_filter:    bool = US_HOLIDAY_FILTER
-    weekday_utc_ranges:   list = field(default_factory=list)
-    weekend_utc_ranges:   list = field(default_factory=list)
+    weekday_utc_ranges:   list[tuple[int, int]] = field(default_factory=list)
+    weekend_utc_ranges:   list[tuple[int, int]] = field(default_factory=list)
     us_weekly_open:       bool = US_WEEKLY_OPEN
     us_weekly_close:      bool = US_WEEKLY_CLOSE
 
@@ -611,13 +611,6 @@ def make_config(simulate: bool = False, no_log: bool = False,
         market_tag_id=market_tag_id,
         market_window_mins=market_window_mins,
     )
-
-    # Sync display config to bot_utils so its functions read the correct values.
-    bot_utils.WEBSTATUS_ENABLED  = webstatus_enabled
-    bot_utils.WEBSTATUS_PATH     = webstatus_path
-    bot_utils.WEBSTATUS_USER     = webstatus_user
-    bot_utils.WEBSTATUS_PASSWORD = webstatus_password
-    bot_utils.INSTALL_DIR        = install_dir
 
     return config
 
@@ -1356,7 +1349,7 @@ def close_trade(state: BotState, ts: TokenState, trade_id: int, outcome: str) ->
         _icon, _outcome, trade_id, ts.direction, ts.market_id[:12],
         pn, roi, state.win_rate, state.capital, duration_s
     )
-    write_web_status(state)
+    write_web_status(state, state.config)
 
 def save_snapshot(state: BotState, ts: TokenState) -> None:
     """Insert a snapshot row without committing — caller batches commits via handle_book_update."""
@@ -1525,7 +1518,7 @@ async def _run_ws(state: BotState, session: aiohttp.ClientSession) -> None:
                 now = time.time()
                 if now - ld >= state.config.dashboard_interval:
                     ld = now
-                    print_dashboard(state)
+                    print_dashboard(state, state.config)
 
                 try:
                     msgs = json.loads(raw)

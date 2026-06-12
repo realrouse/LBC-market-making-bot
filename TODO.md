@@ -131,10 +131,10 @@
 
 ### CRITICAL — Open
 
-- **[C-2]** Private key used as Python dict key in `api_polymarket.py`
-  The Polymarket private key is passed as a plain Python dict key (hashable, immutable, stays in
-  memory until GC). Should be wrapped in a non-hashable container or zeroed after use. Fix: replace
-  the dict-key usage with an explicit lookup by key index or use a dedicated credentials object.
+- **[C-2] DONE — Private key replaced by SHA-256 digest as cache key**
+  `api_polymarket.py` — `cache_key = (private_key, install_dir)` replaced with
+  `cache_key = (hashlib.sha256(private_key.encode()).hexdigest()[:16], install_dir)`.
+  Raw key material is no longer stored as a Python dict key. (dev branch, audit session 2026-06-12)
 
 ### HIGH — Open
 
@@ -247,11 +247,16 @@ Full results and parameter recommendations in `notes/backtest_20260608.txt`.
   possible stake per open trade, preventing entry when capital would be exhausted under
   dynamic scaling. 360 tests pass. (dev branch, 2026-06-12)
 
-- **[A05-M4] `tradinetools/schemas.py` has no production callers**
-  `MarketMessage`, `BookMessage`, `IndicatorsMessage` etc. are tested but never imported in
-  `feed.py`, `account_bot.py`, or `indicators.py` (all use raw dicts). Version field `"v": 1`
-  is never enforced. Either migrate callers to use the typed schemas (gaining `from_dict` safety
-  and version checking) or remove the module to avoid confusion.
+- **[A05-M4] DONE (partial) — `MarketMessage` and `PingMessage` migrated to production callers**
+  `feed.py` now uses `MarketMessage(...).to_dict()` and `PingMessage(...).to_dict()` for all
+  publish sites; `account_bot.py._register_from_market_msg` uses `MarketMessage.from_dict()`.
+  Wire format gains `"v": 1` (backward-compatible — all consumers use `.get()`).
+  Intentionally skipped: `BookMessage` (hot path — `get_type_hints()` overhead per tick);
+  `IndicatorsMessage` (14+ polymorphic stream types, marginal gain).
+  Stale schemas — **cannot migrate without breaking the live protocol**: `RegisterRequest` /
+  `RegisterReply` define `{t, stream_id, bot_id}` but the live protocol uses
+  `{cmd, asset, timeframe, source, indicators}` / `{status, stream_id}`. These need to either
+  be corrected to match the live protocol or deleted. (dev branch, audit session 2026-06-12)
 
 - **[A05-M6] `sys.path.insert` inside `post_order` — already mitigated by H-1 cache**
   The `if _site not in sys.path` guard in `_init_clob_client` prevents duplicate inserts.
@@ -266,18 +271,25 @@ Full results and parameter recommendations in `notes/backtest_20260608.txt`.
 
 ### LOW — Open
 
-- **[A05-L1] `make_config()` mutates `bot_utils` module state**
-  `live_bot.py:597` — `bot_utils.WEBSTATUS_ENABLED = …` etc. are injected after config load.
-  Creates an implicit call-order dependency that hinders test isolation. Clean fix: pass a
-  config object to `write_web_status` / `print_dashboard` instead of global side effects.
+- **[A05-L1] DONE — `bot_utils` module globals removed; config passed explicitly**
+  Removed `WEBSTATUS_ENABLED / PATH / USER / PASSWORD` and `INSTALL_DIR` module-level globals
+  from `bot_utils.py`. `write_web_status(state, config)`, `setup_htaccess(html_path, config)`,
+  and `print_dashboard(state, config)` now receive `config: Any` directly. `make_config()` in
+  `live_bot.py` no longer mutates module state — the 5 injection lines removed. Call sites
+  updated: `write_web_status(state, state.config)` and `print_dashboard(state, state.config)`.
+  (dev branch, audit session 2026-06-12)
 
-- **[A05-L2] Status HTML timestamps in local time, not UTC**
-  `bot_utils.py` — `datetime.fromtimestamp(ts_ms / 1000)` without `tz=timezone.utc`.
-  Inconsistent with the rest of the codebase. Fix: add `tz=timezone.utc` or label the column.
+- **[A05-L2] DONE — Status HTML and dashboard log timestamps now UTC**
+  `bot_utils.py` — added `tz=timezone.utc` to all three non-UTC calls: `datetime.now()` in
+  `print_dashboard` (log line), `datetime.fromtimestamp(ts_ms / 1000)` in
+  `_status_html_trade_rows` (trade table), and `datetime.now()` in `generate_status_html`
+  (page header/footer). HTML table header updated to "Time (UTC)"; footer label updated to
+  "Last updated: … UTC". (dev branch, audit session 2026-06-12)
 
-- **[A05-L4] `BotConfig` hour-filter range annotations are untyped bare `list`**
-  `live_bot.py` — `weekday_utc_ranges: list` and `weekend_utc_ranges: list` should be
-  `list[tuple[int, int]]` for mypy correctness.
+- **[A05-L4] DONE — `BotConfig` hour-filter range annotations typed**
+  `live_bot.py` — `weekday_utc_ranges: list` and `weekend_utc_ranges: list` changed to
+  `list[tuple[int, int]]`, matching the module-level constant declarations at lines 76-77.
+  (dev branch, audit session 2026-06-12)
 
 ---
 

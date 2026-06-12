@@ -35,6 +35,7 @@ import zmq, zmq.asyncio
 from tradinetools import heartbeat_loop
 from tradinetools.logging import setup_logger
 from tradinetools.zmq import make_req, make_sub, default_ipc_addr
+from tradinetools.schemas import MarketMessage
 
 # Set by _parse_args() before live_bot import — used throughout for debug logs.
 VERBOSE = False
@@ -239,12 +240,13 @@ def _register_indicators_sync(config: "bot.BotConfig") -> None:
 
 def _register_from_market_msg(state: bot.BotState, msg: dict) -> None:
     """Build a TokenState pair from a feed "market" message."""
-    mid = msg.get("market_id", "")
-    up  = msg.get("up_token_id", "")
-    dn  = msg.get("dn_token_id", "")
-    q   = msg.get("question", "")[:80]
-    sm  = int(msg.get("start_ms", 0))
-    em  = int(msg.get("end_ms", 0))
+    m   = MarketMessage.from_dict(msg)
+    mid = m.market_id
+    up  = m.up_token_id
+    dn  = m.dn_token_id
+    q   = m.question[:80]
+    sm  = m.start_ms
+    em  = m.end_ms
     if not mid or not up or not dn:
         if VERBOSE:
             logger.debug("[MARKET] incomplete msg ignored: %s", msg)
