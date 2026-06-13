@@ -30,7 +30,7 @@ import math
 import sqlite3
 import sys
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List
 
 REPO_ROOT  = Path(__file__).resolve().parent.parent
 DEFAULT_DB = REPO_ROOT / "data" / "live_ob_2026-05-26.db"

@@ -6,6 +6,23 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.84] — 2026-06-13
+
+### Corrigé
+- **`tradinebotte-indicators/indicators.py` — boucle infinie de resynchronisation `btc_full_depth_perp`** : la vérification du flux live utilisait un garde strict `pu == last_update_id` qui identifiait incorrectement l'événement bridge Binance comme un écart de séquence, provoquant 163 resyncs en 10 jours ; corrigé avec un flag `first_live` qui accepte `0 <= pu < last_update_id` exactement une fois à la reconnexion (l'événement bridge enjambe par conception le point de snapshot), puis impose la continuité stricte ; la garde `pu >= 0` rejette la valeur par défaut `pu=-1` pour les événements sans ce champ ; 0 resync depuis le déploiement
+- **`tradinebotte-indicators/indicators.py` — pré-buffer révoqué** : le pré-buffer de 500 ms introduit lors de la session précédente était inefficace (quand le snapshot REST arrive plus vite qu'un tick WS, le buffer est périmé et l'événement bridge déclenche quand même l'ancienne vérification) ; remplacé par la correction de l'événement bridge ci-dessus
+- **`tradinebotte-indicators/indicators.py` — bruit de traceback websockets supprimé** : `logging.getLogger("websockets").setLevel(logging.ERROR)` dans `main()` empêche la bibliothèque websockets v16.0 d'écrire `TimeoutError: timed out while closing connection` directement sur stderr via son gestionnaire `lastResort`
+- **`tradinebotte-indicators/indicators.py` — message d'erreur REST aggTrade** : le `except Exception` nu a été remplacé par un log incluant `type(exc).__name__: exc` afin que les erreurs REST ne soient plus enregistrées comme messages vides
+- **`~/tradinebotte/strategies/indicators/indicators_all.json` (config serveur)** — suppression du paramètre `db_path` périmé dans les configs de flux `btc_full_depth` et `btc_full_depth_perp` ; le chemin `/data1/tmp/orderbook.db` se trouve hors de `TRADINEBOTTE_DIR` et provoquait une entrée `ERROR` à chaque redémarrage du service ; la fonctionnalité orderbook DB était de fait désactivée
+
+### Ajouté
+- **`tradinebotte-indicators/tests/test_indicators.py` — 3 nouveaux tests pour la gestion de l'événement bridge dans `_binance_full_depth_task`** : `test_bridge_event_not_resynced` (l'événement bridge est accepté, pas de resync), `test_genuine_forward_gap_still_resyncs` (un vrai écart déclenche bien un resync), `test_normal_continuation_no_resync` (la continuité stricte est imposée après l'événement bridge)
+
+### Modifié
+- **Nettoyages pylint** — suppression des imports inutilisés (`Iterator` dans `backtest_orderbook.py`, `Optional`/`Tuple` dans `calibrate_obi_proxy.py`, `math`/`Optional` dans `scripts/backtest_accumulation.py`, `math`/`MagicMock` dans `tests/test_scalping.py`, `uuid` dans `strategy_engines/dca.py`, `sqlite3` dans `tradinebotte-status/tests/test_status_collector.py`) ; ajout de `encoding="utf-8"` à tous les appels `open()` dans `tradinetools/tests/test_version_stamp.py` ; score pylint 9,89 → 9,90
+
+---
+
 ## [0.83] — 2026-06-11
 
 ### Ajouté

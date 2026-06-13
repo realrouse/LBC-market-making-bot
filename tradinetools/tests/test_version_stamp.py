@@ -21,7 +21,7 @@ class TestReadVersionStampEnvVar(unittest.TestCase):
     def test_env_var_takes_priority_over_file(self):
         with tempfile.TemporaryDirectory() as d:
             stamp = os.path.join(d, "version.stamp")
-            with open(stamp, "w") as f:
+            with open(stamp, "w", encoding="utf-8") as f:
                 f.write("file_hash")
             os.environ["TRADINEBOTTE_VERSION"] = "env_hash"
             self.assertEqual(read_version_stamp(install_dir=d), "env_hash")
@@ -33,7 +33,7 @@ class TestReadVersionStampEnvVar(unittest.TestCase):
     def test_empty_env_var_falls_through_to_file(self):
         with tempfile.TemporaryDirectory() as d:
             stamp = os.path.join(d, "version.stamp")
-            with open(stamp, "w") as f:
+            with open(stamp, "w", encoding="utf-8") as f:
                 f.write("file_hash")
             os.environ["TRADINEBOTTE_VERSION"] = ""
             self.assertEqual(read_version_stamp(install_dir=d), "file_hash")
@@ -50,14 +50,14 @@ class TestReadVersionStampFile(unittest.TestCase):
     def test_reads_stamp_from_install_dir(self):
         with tempfile.TemporaryDirectory() as d:
             stamp = os.path.join(d, "version.stamp")
-            with open(stamp, "w") as f:
+            with open(stamp, "w", encoding="utf-8") as f:
                 f.write("e983770")
             self.assertEqual(read_version_stamp(install_dir=d), "e983770")
 
     def test_strips_trailing_newline(self):
         with tempfile.TemporaryDirectory() as d:
             stamp = os.path.join(d, "version.stamp")
-            with open(stamp, "w") as f:
+            with open(stamp, "w", encoding="utf-8") as f:
                 f.write("e983770\n")
             self.assertEqual(read_version_stamp(install_dir=d), "e983770")
 
@@ -83,15 +83,15 @@ class TestReadVersionStampFile(unittest.TestCase):
     def test_empty_stamp_file_returns_unknown(self):
         with tempfile.TemporaryDirectory() as d:
             stamp = os.path.join(d, "version.stamp")
-            with open(stamp, "w") as f:
+            with open(stamp, "w", encoding="utf-8") as f:
                 f.write("")
             self.assertEqual(read_version_stamp(install_dir=d), "unknown")
 
     def test_install_dir_takes_priority_over_cwd(self):
         with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
-            with open(os.path.join(d1, "version.stamp"), "w") as f:
+            with open(os.path.join(d1, "version.stamp"), "w", encoding="utf-8") as f:
                 f.write("hash_install")
-            with open(os.path.join(d2, "version.stamp"), "w") as f:
+            with open(os.path.join(d2, "version.stamp"), "w", encoding="utf-8") as f:
                 f.write("hash_cwd")
             orig_cwd = os.getcwd()
             try:
