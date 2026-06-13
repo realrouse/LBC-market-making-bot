@@ -18,7 +18,7 @@
     "grid_levels":          30,
     "grid_order_size_usdt": 50.0,
 
-    "capital_start": 1500.0,
+    "capital_start": 2000.0,
     "stake":           50.0,
     "daily_stop_loss": 150.0,
 

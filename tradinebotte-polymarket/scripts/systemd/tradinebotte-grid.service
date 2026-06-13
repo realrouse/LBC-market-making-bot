@@ -1,0 +1,19 @@
+[Unit]
+Description=tradinebotte — CEX grid bot
+After=network.target
+Wants=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+Environment=TRADINEBOTTE_DIR=%h/tradinebotte-grid
+WorkingDirectory=%h/tradinebotte
+ExecStart=%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/live_bot.py
+Restart=on-failure
+RestartSec=30
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=default.target
