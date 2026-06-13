@@ -64,6 +64,9 @@ if [[ ! -f "$CONF" ]]; then
     echo "  cp scripts/test_multibot.conf.example ~/.tradinebotte-test.conf"
     exit 1
 fi
+# Callers (update_claude2.sh etc.) set TEST_STANDALONE_USER_IDX=N in the env
+# before calling this script. Preserve that override before source() overwrites it.
+_SA_IDX_CALLER="${TEST_STANDALONE_USER_IDX:-}"
 # shellcheck source=/dev/null
 source "$CONF"
 
@@ -73,7 +76,7 @@ ALL_USERS=("${TEST_USERS[@]:?TEST_USERS missing in $CONF}")
 ALL_PASSWORDS=("${TEST_PASSWORDS[@]:?TEST_PASSWORDS missing in $CONF}")
 INSTALL_DIR="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
 
-SA_IDX="${TEST_STANDALONE_USER_IDX:-2}"
+SA_IDX="${_SA_IDX_CALLER:-${TEST_STANDALONE_USER_IDX:-2}}"
 if [[ "$SA_IDX" -ge "${#ALL_USERS[@]}" ]]; then
     echo "ERROR: TEST_STANDALONE_USER_IDX=$SA_IDX is out of range"
     exit 1
