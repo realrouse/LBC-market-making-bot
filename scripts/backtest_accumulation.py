@@ -17,11 +17,10 @@ Usage:
   python3 scripts/backtest_accumulation.py --trades   # show trade log
 """
 
-import argparse, json, math, sys, time, urllib.request
+import argparse, json, sys, time, urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 # ── CLI ────────────────────────────────────────────────────────────────────
 ap = argparse.ArgumentParser(description="Accumulation strategy backtest")

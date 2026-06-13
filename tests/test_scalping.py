@@ -13,12 +13,11 @@ Covers:
 All tests are offline — no real DB files required.
 """
 
-import math
 import os
 import sys
 import sqlite3
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "analysis"))
 import backtest_scalping as bs

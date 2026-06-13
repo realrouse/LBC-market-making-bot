@@ -234,8 +234,8 @@ class BotConfig:
     # Hour filter
     hour_filter_enabled:  bool = HOUR_FILTER_ENABLED
     us_holiday_filter:    bool = US_HOLIDAY_FILTER
-    weekday_utc_ranges:   list = field(default_factory=list)
-    weekend_utc_ranges:   list = field(default_factory=list)
+    weekday_utc_ranges:   list[tuple[int, int]] = field(default_factory=list)
+    weekend_utc_ranges:   list[tuple[int, int]] = field(default_factory=list)
     us_weekly_open:       bool = US_WEEKLY_OPEN
     us_weekly_close:      bool = US_WEEKLY_CLOSE
 
@@ -612,13 +612,6 @@ def make_config(simulate: bool = False, no_log: bool = False,
         market_window_mins=market_window_mins,
     )
 
-    # Sync display config to bot_utils so its functions read the correct values.
-    bot_utils.WEBSTATUS_ENABLED  = webstatus_enabled
-    bot_utils.WEBSTATUS_PATH     = webstatus_path
-    bot_utils.WEBSTATUS_USER     = webstatus_user
-    bot_utils.WEBSTATUS_PASSWORD = webstatus_password
-    bot_utils.INSTALL_DIR        = install_dir
-
     return config
 
 
@@ -802,7 +795,8 @@ class TokenState:
                  "bid_history", "obi_history")
 
     def __init__(self, token_id: str, market_id: str, direction: str, question: str,
-                 market_start_ms: int, market_end_ms: int) -> None:
+                 market_start_ms: int, market_end_ms: int,
+                 vol_window: int = VOL_WINDOW) -> None:
         self.token_id = token_id
         self.market_id = market_id
         self.direction = direction
@@ -818,8 +812,8 @@ class TokenState:
         self.last_update_ts = 0.0; self.last_snapshot_ts = 0.0
         # Rolling windows sampled every SNAPSHOT_INTERVAL seconds.
         # Used by the volatility filter in check_signal to detect choppy markets.
-        self.bid_history: deque[float] = deque(maxlen=VOL_WINDOW)
-        self.obi_history: deque[float] = deque(maxlen=VOL_WINDOW)
+        self.bid_history: deque[float] = deque(maxlen=vol_window)
+        self.obi_history: deque[float] = deque(maxlen=vol_window)
 
     @property
     def secs_remaining(self) -> float:
@@ -1190,7 +1184,9 @@ async def check_signal(state: BotState, ts: TokenState, _t_ws: Optional[float] =
                          vol_bid, range_bid, obi_vol, ts.market_id[:12])
             state.rejection_stats.vol_filter += 1
             return
-    if state.capital - len(state.open_trades) * cfg.stake < cfg.stake:
+    _eff_stake = (min(cfg.stake_max, cfg.stake_max_pct_capital * state.capital)
+                  if cfg.stake_max_pct_capital > 0 else cfg.stake_max)
+    if state.capital - len(state.open_trades) * _eff_stake < _eff_stake:
         state.rejection_stats.capital += 1; return
     if state.daily_pnl < -cfg.daily_stop_loss: state.rejection_stats.daily_stop += 1; return
     if cfg.weekly_stop_loss > 0 and state.weekly_pnl < -cfg.weekly_stop_loss:
@@ -1353,7 +1349,7 @@ def close_trade(state: BotState, ts: TokenState, trade_id: int, outcome: str) ->
         _icon, _outcome, trade_id, ts.direction, ts.market_id[:12],
         pn, roi, state.win_rate, state.capital, duration_s
     )
-    write_web_status(state)
+    write_web_status(state, state.config)
 
 def save_snapshot(state: BotState, ts: TokenState) -> None:
     """Insert a snapshot row without committing — caller batches commits via handle_book_update."""
@@ -1402,7 +1398,8 @@ def register_market(state: BotState, market: dict[str, Any]) -> list[str]:
     new = []
     for tid, d in ((up, "UP"), (dn, "DOWN")):
         if tid not in state.tokens:
-            state.tokens[tid] = TokenState(tid, mid, d, q, sm, em)
+            state.tokens[tid] = TokenState(tid, mid, d, q, sm, em,
+                                              vol_window=state.config.vol_window)
             new.append(tid)
     state.market_tokens[mid] = {"UP": up, "DOWN": dn}
     return new
@@ -1422,7 +1419,7 @@ async def ws_loop(state: BotState, session: aiohttp.ClientSession) -> None:
             await _run_ws(state, session)
             backoff = 1
         except Exception as e:
-            logger.warning("WS error — reconnecting in %ds: %s", backoff, e)
+            logger.warning("WS error — reconnecting in %ds: %s", backoff, e, exc_info=True)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60)
 
@@ -1454,7 +1451,7 @@ async def _market_refresh_loop(state: BotState, session: aiohttp.ClientSession, 
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.warning("Market refresh error: %s", e)
+            logger.warning("Market refresh error: %s", e, exc_info=True)
 
 
 async def _run_ws(state: BotState, session: aiohttp.ClientSession) -> None:
@@ -1521,7 +1518,7 @@ async def _run_ws(state: BotState, session: aiohttp.ClientSession) -> None:
                 now = time.time()
                 if now - ld >= state.config.dashboard_interval:
                     ld = now
-                    print_dashboard(state)
+                    print_dashboard(state, state.config)
 
                 try:
                     msgs = json.loads(raw)
@@ -1633,7 +1630,7 @@ async def main() -> None:
     _start_str = datetime.fromtimestamp(_BOT_START, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     logger.info("=" * 65)
     if config.simulate:
-        logger.warning("  SIMULATION MODE — data isolated in %s", config.install_dir)
+        logger.info("  SIMULATION MODE — data isolated in %s", config.install_dir)
     logger.info(
         "  LIVE BOT v0.41 | start=%s UTC | up %dh%02dm%02ds"
         " | thresh=%.2f stake=$%.0f minAskVol=%.0f",
@@ -1645,7 +1642,7 @@ async def main() -> None:
                     os.path.basename(config.strategy_loaded),
                     config.strategy_type, config.connector)
     else:
-        logger.warning("  Strategy: file not found — using defaults")
+        logger.info("  Strategy: file not found — using defaults")
     if config.connector == "polymarket":
         _tf = "15M" if config.market_tag_id == api.GAMMA_TAG_15M else "5M"
         logger.info("  Markets: BTC Up/Down %s (tag=%d, window=±%dmin)",
@@ -1678,7 +1675,7 @@ async def main() -> None:
     if config.weekly_stop_loss > 0:
         logger.info("  Weekly stop-loss: $%.0f", config.weekly_stop_loss)
     if not config.private_key:
-        logger.warning("  POLY_PRIVATE_KEY not set — orders SIMULATED")
+        logger.info("  POLY_PRIVATE_KEY not set — orders SIMULATED")
     logger.info("=" * 65)
     conn = init_db(config)
     try:

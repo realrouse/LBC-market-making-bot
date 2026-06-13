@@ -21,10 +21,11 @@ import importlib
 from types import ModuleType
 
 _REGISTRY: dict[str, str] = {
-    "polymarket": "api_polymarket",
-    "binance":    "api_binance",
-    "mexc":       "api_mexc",
-    "bitstamp":   "api_bitstamp",
+    "polymarket":   "api_polymarket",
+    "binance":      "api_binance",
+    "mexc":         "api_mexc",
+    "mexc_futures": "api_mexc_futures",
+    "bitstamp":     "api_bitstamp",
 }
 
 _STRATEGY_REQUIREMENTS: dict[str, list[str]] = {

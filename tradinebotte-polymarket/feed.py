@@ -33,6 +33,7 @@ import api_polymarket as api
 from tradinetools import heartbeat_loop
 from tradinetools.zmq import make_pub, default_ipc_addr
 from tradinetools.logging import setup_logger
+from tradinetools.schemas import MarketMessage, PingMessage
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────
 _PORT_BASE = os.environ.get("TRADINEBOTTE_PORT_BASE")
@@ -134,15 +135,14 @@ async def _market_refresh(sock: zmq.asyncio.Socket,
                 if tids:
                     mid = api.get_market_id(m)
                     reg = registered.get(mid, {})
-                    _pub_json(sock, {
-                        "t": "market",
-                        "market_id": mid,
-                        "question":  reg.get("question", ""),
-                        "up_token_id": reg.get("up", ""),
-                        "dn_token_id": reg.get("dn", ""),
-                        "start_ms":  reg.get("start_ms", 0),
-                        "end_ms":    reg.get("end_ms", 0),
-                    })
+                    _pub_json(sock, MarketMessage(
+                        market_id=mid,
+                        question=reg.get("question", ""),
+                        up_token_id=reg.get("up", ""),
+                        dn_token_id=reg.get("dn", ""),
+                        start_ms=reg.get("start_ms", 0),
+                        end_ms=reg.get("end_ms", 0),
+                    ).to_dict())
             if new_ids:
                 for i in range(0, len(new_ids), api.WS_BATCH_SIZE):
                     await ws.send(api.make_subscribe_msg(new_ids[i:i + api.WS_BATCH_SIZE]))
@@ -172,7 +172,7 @@ async def _ping_loop(sock: zmq.asyncio.Socket) -> None:
     while True:
         await asyncio.sleep(PING_INTERVAL)
         try:
-            _pub_json(sock, {"t": "ping", "ts": int(time.time() * 1000)})
+            _pub_json(sock, PingMessage(ts=int(time.time() * 1000)).to_dict())
         except Exception:
             pass
 
@@ -198,15 +198,14 @@ async def _run_ws(sock: zmq.asyncio.Socket, session: aiohttp.ClientSession) -> N
         if tids:
             mid = api.get_market_id(m)
             reg = registered.get(mid, {})
-            _pub_json(sock, {
-                "t": "market",
-                "market_id": mid,
-                "question":  reg.get("question", ""),
-                "up_token_id": reg.get("up", ""),
-                "dn_token_id": reg.get("dn", ""),
-                "start_ms":  reg.get("start_ms", 0),
-                "end_ms":    reg.get("end_ms", 0),
-            })
+            _pub_json(sock, MarketMessage(
+                market_id=mid,
+                question=reg.get("question", ""),
+                up_token_id=reg.get("up", ""),
+                dn_token_id=reg.get("dn", ""),
+                start_ms=reg.get("start_ms", 0),
+                end_ms=reg.get("end_ms", 0),
+            ).to_dict())
 
     all_token_ids = list(token_meta.keys())
     if not all_token_ids:

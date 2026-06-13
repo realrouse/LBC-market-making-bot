@@ -162,8 +162,8 @@ _restart_service() {
     fi
 }
 
-# ─── Restart tradinebotte-indicators if requested ──────────────────────────────
-if [[ "$RESTART_INDICATORS" == "true" ]]; then
+# ─── Shared tradinetools rsync+install (runs once for all requested restarts) ──
+if [[ "$RESTART_INDICATORS" == "true" || "$RESTART_FEED" == "true" || "$RESTART_ACCOUNT" == "true" ]]; then
     RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; NC='\033[0m'
     LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
     CONF="${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
@@ -175,74 +175,8 @@ if [[ "$RESTART_INDICATORS" == "true" ]]; then
     _install_dir="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
     _ssh_opts="-p $_port -o StrictHostKeyChecking=yes -o PreferredAuthentications=password"
 
-    echo -e "\n${BOLD}${YELLOW}═══ RSYNC indicators + tradinetools ═══${NC}"
+    echo -e "\n${BOLD}${YELLOW}═══ RSYNC tradinetools ═══${NC}"
 
-    # Push the new indicators.py to the flat install directory
-    SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
-        rsync -az \
-        -e "ssh $_ssh_opts" \
-        "$LOCAL_REPO/tradinebotte-indicators/indicators.py" \
-        "$_c1_user@$_server:$_install_dir/indicators.py" 2>&1 \
-        && echo -e "${GREEN}  ✓ indicators.py synced${NC}" \
-        || { echo -e "${RED}  ✗ rsync indicators.py failed${NC}"; exit 1; }
-
-    # Push tradinetools (service uses .venv, not venv — install separately)
-    SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
-        rsync -az \
-        --exclude='__pycache__' --exclude='*.pyc' --exclude='*.egg-info' \
-        -e "ssh $_ssh_opts" \
-        "$LOCAL_REPO/tradinetools/" \
-        "$_c1_user@$_server:$_install_dir/tradinetools/" 2>&1 \
-        && echo -e "${GREEN}  ✓ tradinetools synced${NC}" \
-        || { echo -e "${RED}  ✗ rsync tradinetools failed${NC}"; exit 1; }
-
-    # Install tradinetools in the .venv used by the systemd service.
-    # .venv may have no pip script — fall back to direct site-packages copy.
-    SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
-        ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
-        -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
-        -o PreferredAuthentications=password \
-        -p "$_port" "$_c1_user@$_server" "
-VENV=$_install_dir/.venv
-PYVER=\$(\$VENV/bin/python3 -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')
-SITE=\$VENV/lib/python\${PYVER}/site-packages
-mkdir -p \$SITE
-rm -rf \$SITE/tradinetools
-cp -r $_install_dir/tradinetools/tradinetools \$SITE/tradinetools
-echo 'tradinetools ok'
-\$VENV/bin/python3 -c 'from tradinetools.zmq import ipc_socket_dir, make_pub; print(\"import check ok\")' 2>&1
-" 2>&1 \
-        && echo -e "${GREEN}  ✓ tradinetools installed in .venv${NC}" \
-        || echo -e "${RED}  ✗ tradinetools install failed${NC}"
-
-    _restart_service "tradinebotte-indicators" "INDICATORS" "PUB bind|scalping|ERROR"
-fi
-
-# ─── Restart tradinebotte-feed if requested ────────────────────────────────────
-if [[ "$RESTART_FEED" == "true" ]]; then
-    RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; NC='\033[0m'
-    LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-    CONF="${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
-    source "$CONF"
-    _c1_user="${TEST_USERS[0]}"
-    _c1_pass="${TEST_PASSWORDS[0]}"
-    _server="${TEST_SERVER:?}"
-    _port="${TEST_PORT:-22}"
-    _install_dir="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
-    _ssh_opts="-p $_port -o StrictHostKeyChecking=yes -o PreferredAuthentications=password"
-
-    echo -e "\n${BOLD}${YELLOW}═══ RSYNC feed + tradinetools ═══${NC}"
-
-    # Push the new feed.py to the flat install directory
-    SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
-        rsync -az \
-        -e "ssh $_ssh_opts" \
-        "$LOCAL_REPO/tradinebotte-polymarket/feed.py" \
-        "$_c1_user@$_server:$_install_dir/feed.py" 2>&1 \
-        && echo -e "${GREEN}  ✓ feed.py synced${NC}" \
-        || { echo -e "${RED}  ✗ rsync feed.py failed${NC}"; exit 1; }
-
-    # Push tradinetools
     SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
         rsync -az \
         --exclude='__pycache__' --exclude='*.pyc' --exclude='*.egg-info' \
@@ -269,6 +203,58 @@ echo 'tradinetools ok'
 " 2>&1 \
         && echo -e "${GREEN}  ✓ tradinetools installed in .venv${NC}" \
         || echo -e "${RED}  ✗ tradinetools install failed${NC}"
+fi
+
+# ─── Restart tradinebotte-indicators if requested ──────────────────────────────
+if [[ "$RESTART_INDICATORS" == "true" ]]; then
+    RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; NC='\033[0m'
+    LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+    CONF="${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
+    source "$CONF"
+    _c1_user="${TEST_USERS[0]}"
+    _c1_pass="${TEST_PASSWORDS[0]}"
+    _server="${TEST_SERVER:?}"
+    _port="${TEST_PORT:-22}"
+    _install_dir="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
+    _ssh_opts="-p $_port -o StrictHostKeyChecking=yes -o PreferredAuthentications=password"
+
+    echo -e "\n${BOLD}${YELLOW}═══ RSYNC indicators ═══${NC}"
+
+    # Push the new indicators.py to the flat install directory
+    SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
+        rsync -az \
+        -e "ssh $_ssh_opts" \
+        "$LOCAL_REPO/tradinebotte-indicators/indicators.py" \
+        "$_c1_user@$_server:$_install_dir/indicators.py" 2>&1 \
+        && echo -e "${GREEN}  ✓ indicators.py synced${NC}" \
+        || { echo -e "${RED}  ✗ rsync indicators.py failed${NC}"; exit 1; }
+
+    _restart_service "tradinebotte-indicators" "INDICATORS" "PUB bind|scalping|ERROR"
+fi
+
+# ─── Restart tradinebotte-feed if requested ────────────────────────────────────
+if [[ "$RESTART_FEED" == "true" ]]; then
+    RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; NC='\033[0m'
+    LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+    CONF="${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
+    source "$CONF"
+    _c1_user="${TEST_USERS[0]}"
+    _c1_pass="${TEST_PASSWORDS[0]}"
+    _server="${TEST_SERVER:?}"
+    _port="${TEST_PORT:-22}"
+    _install_dir="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
+    _ssh_opts="-p $_port -o StrictHostKeyChecking=yes -o PreferredAuthentications=password"
+
+    echo -e "\n${BOLD}${YELLOW}═══ RSYNC feed ═══${NC}"
+
+    # Push the new feed.py to the flat install directory
+    SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
+        rsync -az \
+        -e "ssh $_ssh_opts" \
+        "$LOCAL_REPO/tradinebotte-polymarket/feed.py" \
+        "$_c1_user@$_server:$_install_dir/feed.py" 2>&1 \
+        && echo -e "${GREEN}  ✓ feed.py synced${NC}" \
+        || { echo -e "${RED}  ✗ rsync feed.py failed${NC}"; exit 1; }
 
     _restart_service "tradinebotte-feed.service" "FEED" "connected|bind|ERROR"
 fi
@@ -286,7 +272,7 @@ if [[ "$RESTART_ACCOUNT" == "true" ]]; then
     _install_dir="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
     _ssh_opts="-p $_port -o StrictHostKeyChecking=yes -o PreferredAuthentications=password"
 
-    echo -e "\n${BOLD}${YELLOW}═══ RSYNC account_bot + tradinetools ═══${NC}"
+    echo -e "\n${BOLD}${YELLOW}═══ RSYNC account_bot ═══${NC}"
 
     # Push account_bot.py to both the flat install dir and bot/ subdir (service uses bot/)
     SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
@@ -313,34 +299,6 @@ if [[ "$RESTART_ACCOUNT" == "true" ]]; then
         "$_c1_user@$_server:$_install_dir/bot/live_bot.py" 2>&1 \
         && echo -e "${GREEN}  ✓ live_bot.py synced (bot/)${NC}" \
         || echo -e "${YELLOW}  ! bot/live_bot.py sync skipped${NC}"
-
-    # Push tradinetools
-    SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
-        rsync -az \
-        --exclude='__pycache__' --exclude='*.pyc' --exclude='*.egg-info' \
-        -e "ssh $_ssh_opts" \
-        "$LOCAL_REPO/tradinetools/" \
-        "$_c1_user@$_server:$_install_dir/tradinetools/" 2>&1 \
-        && echo -e "${GREEN}  ✓ tradinetools synced${NC}" \
-        || { echo -e "${RED}  ✗ rsync tradinetools failed${NC}"; exit 1; }
-
-    # Install tradinetools in .venv; fall back to direct copy if pip is absent
-    SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
-        ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
-        -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
-        -o PreferredAuthentications=password \
-        -p "$_port" "$_c1_user@$_server" "
-VENV=$_install_dir/.venv
-PYVER=\$(\$VENV/bin/python3 -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')
-SITE=\$VENV/lib/python\${PYVER}/site-packages
-mkdir -p \$SITE
-rm -rf \$SITE/tradinetools
-cp -r $_install_dir/tradinetools/tradinetools \$SITE/tradinetools
-echo 'tradinetools ok'
-\$VENV/bin/python3 -c 'from tradinetools.zmq import ipc_socket_dir, make_pub; print(\"import check ok\")' 2>&1
-" 2>&1 \
-        && echo -e "${GREEN}  ✓ tradinetools installed in .venv${NC}" \
-        || echo -e "${RED}  ✗ tradinetools install failed${NC}"
 
     _restart_service "tradinebotte-account-${_c1_user}.service" "ACCOUNT BOT" "ACCOUNT BOT|Connected to feed|ERROR"
 fi

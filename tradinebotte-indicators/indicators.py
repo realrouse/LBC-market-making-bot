@@ -622,7 +622,7 @@ async def _binance_kline_task(spec: StreamSpec, pub: zmq.asyncio.Socket,
                     })
         except Exception as exc:           # pylint: disable=broad-except
             logger.warning("[%s] WS error (%s) — reconnect in %ds",
-                           spec.id, exc, backoff)
+                           spec.id, exc, backoff, exc_info=True)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60)
 
@@ -888,7 +888,7 @@ async def _binance_liquidations_task(spec: StreamSpec, pub: zmq.asyncio.Socket) 
                     _publish_window(ts_ms)
         except Exception as exc:          # pylint: disable=broad-except
             logger.warning("[%s] liquidations WS error (%s) — reconnect in %ds",
-                           spec.id, exc, backoff)
+                           spec.id, exc, backoff, exc_info=True)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60)
 
@@ -933,7 +933,8 @@ async def _perp_agg_trade_rest_loop(
                             qty if is_maker else 0.0,
                         ))
             except Exception as exc:
-                logger.warning("[%s] aggTrade REST error: %s", stream_id, exc)
+                logger.warning("[%s] aggTrade REST error: %s: %s",
+                               stream_id, type(exc).__name__, exc)
             await asyncio.sleep(poll_s)
 
 
@@ -1091,7 +1092,7 @@ async def _binance_scalping_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> N
 
         except Exception as exc:          # pylint: disable=broad-except
             logger.warning("[%s] scalping WS error (%s) — reconnect in %ds",
-                           spec.id, exc, backoff)
+                           spec.id, exc, backoff, exc_info=True)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60)
 
@@ -1309,7 +1310,6 @@ async def _binance_full_depth_task(spec: StreamSpec, pub: zmq.asyncio.Socket) ->
                 logger.info("[%s] full depth WS connected → %s", spec.id, ws_url)
                 backoff = 5
 
-                # Buffer events while REST snapshot is in flight
                 event_buffer: list[dict[str, Any]] = []
                 async with aiohttp.ClientSession() as session:
                     snap_task = asyncio.create_task(
@@ -1365,6 +1365,7 @@ async def _binance_full_depth_task(spec: StreamSpec, pub: zmq.asyncio.Socket) ->
                     continue
 
                 # Live diff stream
+                first_live = True
                 while True:
                     try:
                         raw = await asyncio.wait_for(ws.recv(), timeout=_WS_RECV_TIMEOUT_S)
@@ -1382,9 +1383,17 @@ async def _binance_full_depth_task(spec: StreamSpec, pub: zmq.asyncio.Socket) ->
                     if market == "perp":
                         pu = int(ev.get("pu", -1))
                         if pu != last_update_id:
-                            logger.warning("[%s] futures pu=%d expected %d — resync",
-                                           spec.id, pu, last_update_id)
-                            break
+                            if first_live and 0 <= pu < last_update_id:
+                                # Bridge event: spans the snapshot point (pu < lastUpdateId < u).
+                                # The snapshot already incorporates the gap — apply once, then
+                                # enforce strict pu continuity for all subsequent events.
+                                # pu >= 0 guard rejects missing-field default (-1) as invalid.
+                                pass
+                            else:
+                                logger.warning("[%s] futures pu=%d expected %d — resync",
+                                               spec.id, pu, last_update_id)
+                                break
+                        first_live = False
                     else:
                         if U != last_update_id + 1:
                             logger.warning("[%s] sequence gap U=%d expected %d — resync",
@@ -1481,7 +1490,7 @@ async def _binance_full_depth_task(spec: StreamSpec, pub: zmq.asyncio.Socket) ->
 
         except Exception as exc:            # pylint: disable=broad-except
             logger.warning("[%s] full depth error (%s) — reconnect in %ds",
-                           spec.id, exc, backoff)
+                           spec.id, exc, backoff, exc_info=True)
         await asyncio.sleep(backoff)
         backoff = min(backoff * 2, 60)
 
@@ -1985,6 +1994,11 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     global VERBOSE  # pylint: disable=global-statement
     args = _parse_args()
+    # Suppress close-timeout warnings from the websockets library (e.g. "timed out
+    # while closing connection") that fire when a dead connection is torn down after
+    # a keepalive ping timeout.  Those tracebacks bypass our logger and appear as
+    # raw stderr lines in the log; ERROR-level still captures genuine library errors.
+    logging.getLogger("websockets").setLevel(logging.ERROR)
     if args.verbose:
         VERBOSE = True
         logging.getLogger().setLevel(logging.DEBUG)

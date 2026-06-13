@@ -13,6 +13,7 @@ def sma_last(series, n):
 
 
 def ema_last(series, n):
+    """EMA(n) seeded from the SMA of the first n values. Returns None when len(series) < n."""
     if len(series) < n:
         return None
     k = 2.0 / (n + 1)
@@ -23,6 +24,7 @@ def ema_last(series, n):
 
 
 def atr_last(highs, lows, closes, n):
+    """ATR(n) using EMA of True Range. Requires len(closes) >= n+1 (one extra bar for TR)."""
     if len(closes) < n + 1:
         return None
     trs = []

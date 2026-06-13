@@ -69,29 +69,13 @@ import argparse
 import asyncio
 import json
 import logging
-import logging.handlers
+import os
 import sqlite3
 import sys
 import time
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
-
-def _setup_logging(log_path: Path) -> None:
-    root = logging.getLogger()
-    root.setLevel(logging.INFO)
-    fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s",
-                            datefmt="%Y-%m-%d %H:%M:%S")
-    if sys.stdout.isatty():
-        sh = logging.StreamHandler(sys.stdout)
-        sh.setFormatter(fmt)
-        root.addHandler(sh)
-    fh = logging.handlers.RotatingFileHandler(
-        log_path, maxBytes=5_000_000, backupCount=3, encoding="utf-8")
-    fh.setFormatter(fmt)
-    root.addHandler(fh)
+from tradinetools.logging import setup_root_logger
 
 logger = logging.getLogger("orderbook_bot")
 
@@ -192,6 +176,8 @@ def init_db(db_path: Path) -> sqlite3.Connection:
         )""")
     conn.commit()
     for table, col in (("ob_snapshots", "tfi"), ("ob_trades", "entry_tfi")):
+        # Paranoia guard: if this loop is ever extended, the f-string below must not
+        # accept arbitrary table/column names that could act as SQL injection.
         assert table in {"ob_snapshots", "ob_trades"} and col in {"tfi", "entry_tfi"}
         try:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} REAL")
@@ -663,7 +649,7 @@ async def _stats_loop(states: list) -> None:
             wr  = f"{st.wins}/{st.total_trades}" if st.total_trades else "0/0"
             pos = (f"{st.position.direction.upper()}@{st.position.entry_price:.2f}"
                    if st.position else "flat")
-            logger.info("[%s] OBI=%.3f  TFI=%+.3f  capital=%.2f  W/T=%s  PnL=%+.4f  %s",
+            logger.debug("[%s] OBI=%.3f  TFI=%+.3f  capital=%.2f  W/T=%s  PnL=%+.4f  %s",
                         st.mode, st.obi_ema, st.tfi, st.capital, wr, st.total_pnl, pos)
 
 # ---------------------------------------------------------------------------
@@ -744,12 +730,16 @@ async def _run(p: dict, db: sqlite3.Connection, install_dir: str = "") -> None:
             if st.position is not None:
                 pos = st.position
                 # Estimate PnL at last known mid-price; fall back to entry if no tick seen.
-                mid = st.last_price if st.last_price > 0 else pos.entry_price
-                qty = pos.stake / pos.entry_price
+                mid      = st.last_price if st.last_price > 0 else pos.entry_price
+                p        = st.p
+                fee_rate = p[f"maker_fee_{st.mode}"] if p.get("use_limit_orders") \
+                           else p[f"fee_{st.mode}"]
+                exit_val = pos.qty * mid
+                fee_exit = exit_val * fee_rate
                 if pos.direction == "long":
-                    pnl_net = (mid - pos.entry_price) * qty - pos.fee_entry
+                    pnl_net = exit_val - fee_exit - pos.stake - pos.fee_entry
                 else:
-                    pnl_net = (pos.entry_price - mid) * qty - pos.fee_entry
+                    pnl_net = pos.stake - exit_val - fee_exit - pos.fee_entry
                 capital_after = pos.capital_before + pnl_net
                 db.execute("""
                     UPDATE ob_trades
@@ -785,7 +775,13 @@ def main() -> None:
     install_dir = Path(args.dir) if args.dir else Path.home() / "tradinebotte"
     install_dir.mkdir(parents=True, exist_ok=True)
 
-    _setup_logging(install_dir / "orderbook_bot.log")
+    setup_root_logger(install_dir / "orderbook_bot.log")
+    try:
+        from version import __version__ as _ver  # pylint: disable=import-outside-toplevel
+    except ImportError:
+        _ver = "?"
+    logger.info("tradinebotte v%s orderbook_bot PID=%d starting — dir=%s",
+                _ver, os.getpid(), install_dir)
     db = init_db(install_dir / "live_ob.db")
     logger.info("DB: %s", install_dir / "live_ob.db")
 

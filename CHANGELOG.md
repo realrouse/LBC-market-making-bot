@@ -6,6 +6,43 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.84] — 2026-06-13
+
+### Fixed
+- **`tradinebotte-indicators/indicators.py` — `btc_full_depth_perp` infinite resync loop**: the live stream check used a strict `pu == last_update_id` guard that misidentified the Binance bridge event as a sequence gap, causing 163 resyncs over 10 days; fixed with a `first_live` flag that accepts `0 <= pu < last_update_id` exactly once on reconnect (bridge event spans the snapshot point by design), then enforces strict continuity; `pu >= 0` guard rejects the `pu=-1` default for events missing the field; 0 resyncs since deploy
+- **`tradinebotte-indicators/indicators.py` — pre-buffer reverted**: the 500 ms pre-buffer introduced in the previous session was ineffective (when the REST snapshot arrives faster than one WS tick, the buffer is stale and the bridge event still triggers the old check); replaced with the bridge event fix above
+- **`tradinebotte-indicators/indicators.py` — websockets traceback noise suppressed**: `logging.getLogger("websockets").setLevel(logging.ERROR)` in `main()` prevents the websockets v16.0 `TimeoutError: timed out while closing connection` from being written directly to stderr by the library's `lastResort` handler
+- **`tradinebotte-indicators/indicators.py` — aggTrade REST fallback error message**: changed bare `except Exception` log to include `type(exc).__name__: exc` so REST errors are no longer logged as empty messages
+- **`~/tradinebotte/strategies/indicators/indicators_all.json` (server config)** — removed stale `db_path` parameter from `btc_full_depth` and `btc_full_depth_perp` stream configs; the path `/data1/tmp/orderbook.db` is outside `TRADINEBOTTE_DIR` and caused an `ERROR` log on every service restart; the orderbook DB feature was effectively disabled regardless
+
+### Added
+- **`tradinebotte-indicators/tests/test_indicators.py` — 3 new tests for `_binance_full_depth_task` bridge event handling**: `test_bridge_event_not_resynced` (bridge event accepted, no resync), `test_genuine_forward_gap_still_resyncs` (real gap still triggers resync), `test_normal_continuation_no_resync` (strict continuity after bridge event enforced)
+
+### Changed
+- **Pylint cleanups** — removed unused imports (`Iterator` from `backtest_orderbook.py`, `Optional`/`Tuple` from `calibrate_obi_proxy.py`, `math`/`Optional` from `scripts/backtest_accumulation.py`, `math`/`MagicMock` from `tests/test_scalping.py`, `uuid` from `strategy_engines/dca.py`, `sqlite3` from `tradinebotte-status/tests/test_status_collector.py`); added `encoding="utf-8"` to all `open()` calls in `tradinetools/tests/test_version_stamp.py`; score 9.89 → 9.90
+
+---
+
+## [0.83] — 2026-06-11
+
+### Added
+- **`tradinebotte-cex/api_mexc_futures.py` — MEXC Futures perpetual adapter**: full connector for `contract.mexc.com` REST + WebSocket; symbol format `BTC_USDT` (underscore); auth via `ApiKey` + `Request-Time` + `Signature` HMAC-SHA256 headers; contract size 0.001 BTC; taker fee 0.06 %; `post_order()` converts USDT notional to integer contract count; simulation mode automatic when `MEXC_FUTURES_API_KEY`/`MEXC_FUTURES_API_SECRET` env vars are absent; WS private auth via JSON login message (no URL-embedded listenKey); `parse_user_stream_msg()` maps MEXC side codes (1–4) to standard BUY/SELL; implements full grid/swing connector interface (`get_open_orders`, `cancel_order`, `get_order_status`, `get_listen_key`, `keepalive_listen_key`, `make_user_stream_url`, `parse_user_stream_msg`)
+- **`tradinebotte-cex/connectors/__init__.py` — `mexc_futures` registry entry**: `"mexc_futures": "api_mexc_futures"` added to the connector registry; `validate()` enforces interface at startup
+- **`tradinebotte-cex/strategies/grid/grid_BTC_USDT_mexc_futures.json` — MEXC Futures grid config**: 21-level static grid $82k–$124k (±20% from $103k reference), $100/order (≈ 1 contract at $100k), $2100 capital, $200 daily stop-loss; simulation mode by default (no API keys on the test account)
+- **`tradinebotte-cex/scripts/deploy_grid_mexc.sh` — MEXC Futures grid bot deploy script**: deploys and restarts the grid bot on the test account (index 5 in `TEST_USERS`); systemd `tradinebotte-live.service` installed on first run (copied from the rsynced template), `systemctl --user restart` on subsequent runs; nohup fallback if service activation fails; `/proc/$P/exe` guard on all `pgrep` kills; `--skip-restart` and `--verify-only` flags
+- **55 new tests in `tests/test_api_cex.py`**: `TestMexcFuturesComputeFee`, `TestMexcFuturesMetadata`, `TestMexcFuturesParseBookUpdate`, `TestMexcFuturesMakeSubscribeMsg`, `TestMexcFuturesPostOrderSimulated`, `TestMexcFuturesGetOrderStatus`, `TestMexcFuturesCancelOrder`, `TestMexcFuturesGetOpenOrders`, `TestMexcFuturesParseUserStreamMsg`, `TestMexcFuturesUserStream`, `TestMexcFuturesRegistry`; mexc_futures included in all adapter contract loops; total test count: 181 in this file, 400 in the core suite — all passing
+
+### Changed
+- **`tradinebotte-cex/scripts/deploy_all.sh` — 11-bot summary**: added `run_step "account-6 — grid live_bot (MEXC Futures sim)"` after account-5 swing step; header and summary line updated from 10 to 11 bots
+- **`tradinebotte-status/scripts/bot_status.sh` — account-6 label updated**: `"acct-6 [test]"` → `"acct-6 [grid-mexc-sim]"`
+- **`README.md`, `README.fr.md` — adapter table updated**: `api_mexc_futures.py` row added
+- **`CONTRIBUTING.md`, `CONTRIBUTING.fr.md` — project structure updated**: `api_mexc_futures.py` added to the CEX adapter file list
+
+### Fixed
+- **`tradinebotte-cex/api_mexc.py` — `get_markets()` accepted unexpected kwargs**: added `**_` to absorb Polymarket-originated kwargs (`tag_id`, `window_minutes`) passed by `live_bot.py`; same fix applied to `api_mexc_futures.py`; fixes `TypeError` when the grid bot called `get_markets()` during startup
+
+---
+
 ## [0.82] — 2026-06-11
 
 ### Added

@@ -131,10 +131,10 @@
 
 ### CRITICAL — Open
 
-- **[C-2]** Private key used as Python dict key in `api_polymarket.py`
-  The Polymarket private key is passed as a plain Python dict key (hashable, immutable, stays in
-  memory until GC). Should be wrapped in a non-hashable container or zeroed after use. Fix: replace
-  the dict-key usage with an explicit lookup by key index or use a dedicated credentials object.
+- **[C-2] DONE — Private key replaced by SHA-256 digest as cache key**
+  `api_polymarket.py` — `cache_key = (private_key, install_dir)` replaced with
+  `cache_key = (hashlib.sha256(private_key.encode()).hexdigest()[:16], install_dir)`.
+  Raw key material is no longer stored as a Python dict key. (dev branch, audit session 2026-06-12)
 
 ### HIGH — Open
 
@@ -227,56 +227,69 @@ Full results and parameter recommendations in `notes/backtest_20260608.txt`.
   Duplicate of `tradinetools.zmq.warn_if_external_bind`; no callers remained in production code
   (all callers import from tradinetools directly). Function deleted. (v0.57)
 
+- **[A05-M1] DONE — Pass `config.vol_window` to `TokenState.__init__`**
+  `live_bot.py` and `account_bot.py` — `TokenState.__init__` now accepts `vol_window: int = VOL_WINDOW`
+  keyword arg; `register_market()` and `_register_from_market_msg()` both pass
+  `vol_window=state.config.vol_window`. `deque(maxlen=vol_window)` now reflects the JSON config
+  instead of the hardcoded constant. (dev branch, audit session 2026-06-12)
+
+- **[A05-M5] DONE — Weekly stop-loss boundary already Monday-aligned**
+  Code audit (2026-06-12) confirmed `live_bot.py` already uses
+  `today_week = (_dt - timedelta(days=_dt.weekday())).toordinal()` — ISO-week Monday boundary,
+  not the epoch-Thursday window cited in the original finding. No code change required.
+
 ### MEDIUM — Open
 
-- **[A05-M1] `TokenState` deque size hardcoded to module constant `VOL_WINDOW`**
-  `live_bot.py` — `bid_history` and `obi_history` use `deque(maxlen=VOL_WINDOW)` (always 12)
-  regardless of `config.vol_window`. Setting `vol_filter.window` in the strategy JSON has no
-  effect on the actual rolling window. Fix: pass `config.vol_window` to `TokenState.__init__`
-  and use it as the `maxlen`. No deployed config exercises this today (no JSON sets `window`).
+- **[A05-M2] DONE — Capital guard uses worst-case effective stake**
+  `live_bot.py` — replaced `cfg.stake` with
+  `min(cfg.stake_max, stake_max_pct_capital × capital) if pct > 0 else cfg.stake_max`,
+  mirroring the pattern already used in `compute_stake()`. Guard now assumes the maximum
+  possible stake per open trade, preventing entry when capital would be exhausted under
+  dynamic scaling. 360 tests pass. (dev branch, 2026-06-12)
 
-- **[A05-M2] Capital guard uses base stake, ignores dynamic stake scaling**
-  `live_bot.py:1171` — `state.capital - len(state.open_trades) * cfg.stake` assumes the base
-  stake per trade, but with `stake_bid_alpha` / Kelly the effective stake can be significantly
-  larger. Harmless with the current live params (max $15 vs guard's $10 assumption), but
-  logically wrong. Fix: replace `cfg.stake` with `min(cfg.stake_max, cfg.stake_max_pct_capital
-  * capital)` (or `cfg.stake_max` as a conservative upper bound).
-
-- **[A05-M4] `tradinetools/schemas.py` has no production callers**
-  `MarketMessage`, `BookMessage`, `IndicatorsMessage` etc. are tested but never imported in
-  `feed.py`, `account_bot.py`, or `indicators.py` (all use raw dicts). Version field `"v": 1`
-  is never enforced. Either migrate callers to use the typed schemas (gaining `from_dict` safety
-  and version checking) or remove the module to avoid confusion.
-
-- **[A05-M5] Weekly stop-loss period boundary not calendar-aligned**
-  `live_bot.py:1127` — `int(time.time() // (7 * 86400))` counts 7-day windows since the Unix
-  epoch (1970-01-01 = Thursday), so "week" boundaries fall on Thursdays. With `weekly_stop_loss`
-  active in `piste3.json`, halts may occur at counter-intuitive times. Fix: use ISO week number
-  or anchor to the last Monday midnight UTC.
+- **[A05-M4] DONE (partial) — `MarketMessage` and `PingMessage` migrated to production callers**
+  `feed.py` now uses `MarketMessage(...).to_dict()` and `PingMessage(...).to_dict()` for all
+  publish sites; `account_bot.py._register_from_market_msg` uses `MarketMessage.from_dict()`.
+  Wire format gains `"v": 1` (backward-compatible — all consumers use `.get()`).
+  Intentionally skipped: `BookMessage` (hot path — `get_type_hints()` overhead per tick);
+  `IndicatorsMessage` (14+ polymorphic stream types, marginal gain).
+  Stale schemas — **cannot migrate without breaking the live protocol**: `RegisterRequest` /
+  `RegisterReply` define `{t, stream_id, bot_id}` but the live protocol uses
+  `{cmd, asset, timeframe, source, indicators}` / `{status, stream_id}`. These need to either
+  be corrected to match the live protocol or deleted. (dev branch, audit session 2026-06-12)
 
 - **[A05-M6] `sys.path.insert` inside `post_order` — already mitigated by H-1 cache**
   The `if _site not in sys.path` guard in `_init_clob_client` prevents duplicate inserts.
   Residual concern: `sysconfig` / `sys` are now top-level imports in `api_polymarket.py` (added
   with H-1). No further action required unless the lazy-import approach is revisited.
 
+### LOW — Done
+
+- **[A05-L3] DONE — `account_bot.py` error message corrected to `systemctl --user`**
+  Hardcoded `(sudo systemctl start tradinebotte-feed)` replaced with
+  `(systemctl --user start tradinebotte-feed)`. (dev branch, audit session 2026-06-12)
+
 ### LOW — Open
 
-- **[A05-L1] `make_config()` mutates `bot_utils` module state**
-  `live_bot.py:597` — `bot_utils.WEBSTATUS_ENABLED = …` etc. are injected after config load.
-  Creates an implicit call-order dependency that hinders test isolation. Clean fix: pass a
-  config object to `write_web_status` / `print_dashboard` instead of global side effects.
+- **[A05-L1] DONE — `bot_utils` module globals removed; config passed explicitly**
+  Removed `WEBSTATUS_ENABLED / PATH / USER / PASSWORD` and `INSTALL_DIR` module-level globals
+  from `bot_utils.py`. `write_web_status(state, config)`, `setup_htaccess(html_path, config)`,
+  and `print_dashboard(state, config)` now receive `config: Any` directly. `make_config()` in
+  `live_bot.py` no longer mutates module state — the 5 injection lines removed. Call sites
+  updated: `write_web_status(state, state.config)` and `print_dashboard(state, state.config)`.
+  (dev branch, audit session 2026-06-12)
 
-- **[A05-L2] Status HTML timestamps in local time, not UTC**
-  `bot_utils.py` — `datetime.fromtimestamp(ts_ms / 1000)` without `tz=timezone.utc`.
-  Inconsistent with the rest of the codebase. Fix: add `tz=timezone.utc` or label the column.
+- **[A05-L2] DONE — Status HTML and dashboard log timestamps now UTC**
+  `bot_utils.py` — added `tz=timezone.utc` to all three non-UTC calls: `datetime.now()` in
+  `print_dashboard` (log line), `datetime.fromtimestamp(ts_ms / 1000)` in
+  `_status_html_trade_rows` (trade table), and `datetime.now()` in `generate_status_html`
+  (page header/footer). HTML table header updated to "Time (UTC)"; footer label updated to
+  "Last updated: … UTC". (dev branch, audit session 2026-06-12)
 
-- **[A05-L3] `account_bot.py` error message suggests wrong `systemctl` command**
-  The hardcoded `(sudo systemctl start tradinebotte-feed)` hint is incorrect for accounts
-  running feed as a user service. Remove the hardcoded command or make it conditional.
-
-- **[A05-L4] `BotConfig` hour-filter range annotations are untyped bare `list`**
-  `live_bot.py` — `weekday_utc_ranges: list` and `weekend_utc_ranges: list` should be
-  `list[tuple[int, int]]` for mypy correctness.
+- **[A05-L4] DONE — `BotConfig` hour-filter range annotations typed**
+  `live_bot.py` — `weekday_utc_ranges: list` and `weekend_utc_ranges: list` changed to
+  `list[tuple[int, int]]`, matching the module-level constant declarations at lines 76-77.
+  (dev branch, audit session 2026-06-12)
 
 ---
 

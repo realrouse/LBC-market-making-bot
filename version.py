@@ -1,2 +1,2 @@
 """Project-level semantic version for tradinebotte."""
-__version__ = "0.82"
+__version__ = "0.84"

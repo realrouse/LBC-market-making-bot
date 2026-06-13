@@ -25,8 +25,21 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from html import escape
+
+
+def _fetch_btc_24h(symbol: str = "BTCUSDT") -> dict:
+    """Fetch 24h ticker stats from Binance public REST API. Returns {} on any error."""
+    url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "tradinebotte-status/1.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.loads(resp.read())
+    except Exception:
+        return {}
 
 # ─── Remote data-collection snippet (runs via SSH on each account) ────────────
 
@@ -35,6 +48,8 @@ import sqlite3, json, os, time, subprocess, sys
 
 now = int(time.time())
 today_start_ms = (now - (now % 86400)) * 1000
+week_start_ms  = (now - 7 * 86400) * 1000
+month_start_ms = (now - 30 * 86400) * 1000
 data = {"version": "?", "services": [], "live": None, "ob": None, "accum": None,
         "heartbeats": None}
 
@@ -96,6 +111,18 @@ data["live"] = _qdb("~/tradinebotte/live.db", {
     "today": (
         f"SELECT sum(pnl_net) p, count(*) t FROM trades"
         f" WHERE outcome IN ('WIN','LOSS') AND entry_ts_ms >= {today_start_ms}"
+    ),
+    "week": (
+        f"SELECT sum(pnl_net) p, count(*) t FROM trades"
+        f" WHERE outcome IN ('WIN','LOSS') AND entry_ts_ms >= {week_start_ms}"
+    ),
+    "month": (
+        f"SELECT sum(pnl_net) p, count(*) t FROM trades"
+        f" WHERE outcome IN ('WIN','LOSS') AND entry_ts_ms >= {month_start_ms}"
+    ),
+    "lifetime": (
+        "SELECT sum(pnl_net) p, count(*) t FROM trades"
+        " WHERE outcome IN ('WIN','LOSS')"
     ),
     "recent": (
         "SELECT id, entry_ts_ms/1000 entry_ts, direction,"
@@ -257,68 +284,120 @@ body{font-family:'SF Mono',Menlo,monospace;background:#0d1117;color:#c9d1d9;
      padding:20px;font-size:13px;line-height:1.5}
 a{color:#58a6ff;text-decoration:none}
 h1{color:#58a6ff;font-size:1.3em;padding-bottom:10px;border-bottom:1px solid #30363d;
-   display:flex;align-items:center;gap:10px}
+   display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 h2{color:#8b949e;font-size:.85em;text-transform:uppercase;letter-spacing:1.5px;
    margin:28px 0 10px;padding-bottom:5px;border-bottom:1px solid #21262d}
-h3{color:#58a6ff;font-size:.9em;margin-bottom:8px}
 
-.dot{width:9px;height:9px;border-radius:50%;display:inline-block}
+/* ── Status dot ───────────────────────────────────────── */
+.dot{width:9px;height:9px;border-radius:50%;display:inline-block;flex-shrink:0}
 .dot.ok{background:#3fb950;box-shadow:0 0 6px #3fb95088;animation:pulse 2s infinite}
 .dot.warn{background:#d29922}
 .dot.bad{background:#f85149}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 
-.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));
-       gap:10px;margin-bottom:6px}
-.card{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:12px 14px}
-.card .lbl{font-size:.7em;color:#8b949e;text-transform:uppercase;letter-spacing:.8px}
-.card .val{font-size:1.25em;font-weight:700;margin-top:3px}
+/* ── Tooltip system ───────────────────────────────────── */
+.tt{position:relative;cursor:default}
+.tt .tip{
+  visibility:hidden;opacity:0;pointer-events:none;
+  position:absolute;left:0;top:calc(100% + 5px);z-index:300;
+  background:#1c2029;border:1px solid #30363d;border-radius:7px;
+  padding:12px 16px;min-width:260px;max-width:480px;
+  font-size:.93em;color:#c9d1d9;line-height:1.9;white-space:normal;
+  box-shadow:0 8px 28px rgba(0,0,0,.65);
+  transition:opacity .13s ease,visibility .13s ease}
+.tt:hover .tip{visibility:visible;opacity:1}
+.tt .tip.tip-up{top:auto;bottom:calc(100% + 5px)}
+.tip-label{color:#8b949e;font-size:.88em;margin-bottom:5px;display:block}
+.tip-row{color:#c9d1d9;margin:2px 0}
+.tip-dim{color:#484f58;margin-top:6px;font-size:.86em}
 
-.accounts{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px;
-           margin-top:8px}
+/* ── Summary bar ──────────────────────────────────────── */
+.summary-bar{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}
+.sb-item{background:#161b22;border:1px solid #30363d;border-radius:6px;
+          padding:10px 16px;display:flex;flex-direction:column}
+.sb-item .lbl{font-size:.65em;color:#8b949e;text-transform:uppercase;letter-spacing:.9px}
+.sb-item .val{font-size:1.3em;font-weight:700;margin-top:3px}
+
+/* ── Heartbeat pills ──────────────────────────────────── */
+.hb-pills{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.bot-pill{display:inline-flex;align-items:center;gap:5px;
+          background:#161b22;border:1px solid #30363d;border-radius:20px;
+          padding:4px 11px 4px 7px;
+          transition:border-color .15s,background .15s}
+.bot-pill:hover{border-color:#58a6ff55;background:#1c2029}
+.pill-name{font-size:.83em;color:#c9d1d9;font-weight:600}
+.pill-acct{font-size:.72em;color:#484f58}
+.pill-metric{font-size:.83em;margin-left:2px}
+
+/* ── Account grid ─────────────────────────────────────── */
+.accounts{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));
+           gap:14px;margin-top:8px}
 .account{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px}
-.account-header{display:flex;align-items:center;justify-content:space-between;
-                margin-bottom:10px}
-.account-header .name{font-weight:700;color:#c9d1d9}
-.account-header .ver{font-size:.72em;color:#58a6ff;background:#1f3a5f;
-                      padding:2px 7px;border-radius:10px}
-.svc-list{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px}
-.svc{font-size:.75em;padding:2px 8px;border-radius:10px;border:1px solid}
-.svc.ok{color:#3fb950;border-color:#2a4a30;background:#0d2212}
-.svc.bad{color:#f85149;border-color:#5a2020;background:#1e0a0a}
 
-.hb-table{width:100%;border-collapse:collapse;font-size:.82em;margin-top:4px}
-.hb-table th{background:#161b22;color:#8b949e;padding:5px 10px;text-align:left;
-             border-bottom:1px solid #30363d;white-space:nowrap}
-.hb-table td{padding:4px 10px;border-bottom:1px solid #1c2029;white-space:nowrap}
-.hb-table tr:last-child td{border-bottom:none}
-.hb-detail{color:#8b949e;font-size:.8em;white-space:nowrap}
-.alive{color:#3fb950}.stale{color:#d29922}.dead{color:#f85149}
+/* account header — service dots shown inline, full list on hover */
+.account-header{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.account-header .name{font-weight:700;color:#c9d1d9;flex:1;min-width:0;
+                       overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.svc-dots{display:flex;gap:4px;align-items:center;flex-shrink:0}
+.svc-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.svc-dot.ok{background:#3fb950}.svc-dot.bad{background:#f85149}
 
-.tr-table{width:100%;border-collapse:collapse;font-size:.78em;margin-top:6px}
+/* ── Big metrics ──────────────────────────────────────── */
+.big-metrics{display:flex;gap:10px;margin:8px 0 6px}
+.metric-big{flex:1;background:#0d1117;border-radius:6px;padding:10px 13px;min-width:0}
+.metric-big .lbl{font-size:.63em;color:#8b949e;text-transform:uppercase;letter-spacing:.9px}
+.metric-big .val{font-size:1.8em;font-weight:700;margin-top:2px;
+                  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.metric-sub{font-size:.72em;color:#8b949e;margin-top:2px}
+
+/* ── Compact bot rows in account cards ────────────────── */
+.bot-rows{margin-top:8px;border-top:1px solid #21262d;padding-top:6px}
+.bot-row{display:flex;align-items:center;gap:5px;padding:3px 2px;
+          border-bottom:1px solid #1c2029;font-size:.8em}
+.bot-row:last-child{border-bottom:none}
+.bot-row:hover{background:#1c2029;border-radius:4px}
+.bot-name{color:#c9d1d9;min-width:108px;flex-shrink:0}
+.bot-metric{color:#8b949e;flex:1;text-align:right;font-size:.88em;
+             white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ── Trade tables ─────────────────────────────────────── */
+.tr-table{width:100%;border-collapse:collapse;font-size:.77em;margin-top:6px}
 .tr-table th{background:#0d1117;color:#8b949e;padding:4px 8px;text-align:left;
              border-bottom:1px solid #30363d;white-space:nowrap}
 .tr-table td{padding:3px 8px;border-bottom:1px solid #161b22}
 .tr-table tr:hover td{background:#1c2029}
-.win{color:#3fb950}.loss{color:#f85149}.open-t{color:#d29922}
-.pnl-pos{color:#3fb950}.pnl-neg{color:#f85149}
+details summary{cursor:pointer;color:#8b949e;font-size:.78em;
+                 padding:4px 0;user-select:none}
+details summary:hover{color:#c9d1d9}
 
-.badge{display:inline-block;font-size:.68em;padding:1px 6px;border-radius:8px;
-       font-weight:600;vertical-align:middle}
+/* ── Badges ───────────────────────────────────────────── */
+.badge{display:inline-block;font-size:.67em;padding:1px 6px;border-radius:8px;
+       font-weight:600;vertical-align:middle;white-space:nowrap}
 .badge.alive{background:#0d2212;color:#3fb950;border:1px solid #2a4a30}
 .badge.stale{background:#2d1f00;color:#d29922;border:1px solid #4a3800}
 .badge.dead{background:#1e0a0a;color:#f85149;border:1px solid #5a2020}
 .badge.open-b{background:#0d1a2a;color:#58a6ff;border:1px solid #1f3a5f}
+.badge.sim{background:#1a1f3a;color:#79b8ff;border:1px solid #264f78}
+.badge.live-mode{background:#0d2212;color:#3fb950;border:1px solid #2a4a30}
 
-.summary-bar{display:flex;gap:12px;flex-wrap:wrap;margin:12px 0}
-.sb-item{background:#161b22;border:1px solid #30363d;border-radius:6px;
-          padding:8px 14px;display:flex;flex-direction:column}
-.sb-item .lbl{font-size:.68em;color:#8b949e;text-transform:uppercase;letter-spacing:.8px}
-.sb-item .val{font-size:1.1em;font-weight:700;margin-top:2px}
+/* ── Colours ──────────────────────────────────────────── */
+.alive{color:#3fb950}.stale{color:#d29922}.dead{color:#f85149}
+.win{color:#3fb950}.loss{color:#f85149}.open-t{color:#d29922}
+.pnl-pos{color:#3fb950}.pnl-neg{color:#f85149}
 
+/* ── BTC price in header ──────────────────────────────── */
+.btc-price{font-size:.78em;color:#8b949e;margin-left:auto;display:flex;
+            align-items:center;gap:6px;white-space:nowrap}
+.btc-price .price{color:#e6a817;font-weight:700;font-size:1.05em}
+.btc-price .chg.up{color:#3fb950}.btc-price .chg.dn{color:#f85149}
+
+/* ── Open trade badges ────────────────────────────────── */
+.open-trades{margin:4px 0;font-size:.8em}
+
+/* ── Footer ───────────────────────────────────────────── */
 .footer{margin-top:28px;font-size:.72em;color:#484f58;border-top:1px solid #21262d;
          padding-top:10px}
-.no-data{color:#484f58;font-style:italic;font-size:.82em;padding:6px 0}
+.no-data{color:#484f58;font-style:italic;font-size:.82em;padding:4px 0}
 """
 
 _ACCOUNT_LABELS = [
@@ -327,8 +406,13 @@ _ACCOUNT_LABELS = [
     "acct-3 [poly+accum]",
     "acct-4 [poly+ob+accum]",
     "acct-5 [swing]",
-    "acct-6 [test]",
+    "acct-6 [grid-mexc-sim]",
 ]
+
+# Bots running with REAL money — all others default to SIM.
+# Key: (acct_short_label, bot_name) — acct_short = first word of _ACCOUNT_LABELS entry.
+# Add an entry here when a bot receives real credentials on the remote.
+_LIVE_BOTS: set[tuple[str, str]] = set()
 
 
 def _fmt_pnl(v) -> str:
@@ -431,38 +515,78 @@ def _render_payload_summary(bot_name: str, payload: dict, now: int) -> str:
     return " · ".join(parts) if parts else "—"
 
 
-def _render_heartbeat_table(hb_rows: list) -> str:
+def _mode_badge(acct_short: str, bot_name: str) -> str:
+    if (acct_short, bot_name) in _LIVE_BOTS:
+        return "<span class='badge live-mode'>LIVE</span>"
+    return "<span class='badge sim'>SIM</span>"
+
+
+def _key_metric(bot_name: str, payload: dict) -> str:
+    """Return the single most important display value for a bot heartbeat pill."""
+    if bot_name in ("live_bot", "grid_bot", "swing_bot", "account_bot"):
+        pnl = payload.get("daily_pnl")
+        if pnl is not None:
+            sign = "+" if pnl >= 0 else "-"
+            return f"{sign}${abs(pnl):.2f}"
+    elif bot_name == "accumulation_bot":
+        btc = payload.get("holdings_btc")
+        if btc is not None:
+            return f"{btc:.4f} BTC"
+    elif bot_name == "orderbook_bot":
+        tp = payload.get("total_pnl")
+        if tp is not None:
+            sign = "+" if tp >= 0 else "-"
+            return f"{sign}${abs(tp):.2f}"
+    return ""
+
+
+def _render_heartbeat_pills(hb_rows: list) -> str:
+    """Compact pill-grid: status+mode+name always visible; full details on hover."""
     if not hb_rows:
         return "<p class='no-data'>No heartbeat data available</p>"
     now = int(time.time())
-    rows_html = ""
+    pills = ""
     for r in hb_rows:
         flag = r["flag"].lower()
+        acct_label = r.get("_label") or r["account"]
+        acct_short = acct_label.split()[0]
+        bot = r["bot_name"]
         age_min = r["age_s"] // 60
         age_str = f"{age_min}min" if age_min < 120 else f"{age_min//60}h{age_min%60:02d}m"
-        bounds_cls = "" if r["bounds_ok"] in ("ok", "-") else " style='color:#f85149'"
-        acct_label = r.get("_label") or r["account"]
-        detail = _render_payload_summary(r["bot_name"], r.get("payload", {}), now)
-        rows_html += (
-            f"<tr>"
-            f"<td><span class='badge {flag}'>{r['flag']}</span></td>"
-            f"<td>{escape(acct_label)}</td>"
-            f"<td>{escape(r['bot_name'])}</td>"
-            f"<td class='{flag}'>{age_str}</td>"
-            f"<td{bounds_cls}>{escape(r['bounds_ok'])}</td>"
-            f"<td style='color:#58a6ff;font-size:.9em'>{escape(r['version'])}</td>"
-            f"<td class='hb-detail'>{escape(detail)}</td>"
-            f"</tr>"
+        detail = _render_payload_summary(bot, r.get("payload", {}), now)
+        km = _key_metric(bot, r.get("payload", {}))
+        bounds_ok = r["bounds_ok"]
+        bounds_warn = bounds_ok not in ("ok", "-", "")
+        mode = _mode_badge(acct_short, bot)
+        km_cls = ""
+        if km.startswith("+"):
+            km_cls = " pnl-pos"
+        elif km.startswith("-"):
+            km_cls = " pnl-neg"
+        km_html = (
+            f"<span class='pill-metric{km_cls}'>{escape(km)}</span>" if km else ""
         )
-    return (
-        "<table class='hb-table'>"
-        "<thead><tr>"
-        "<th>STATUS</th><th>ACCOUNT</th><th>BOT</th>"
-        "<th>AGE</th><th>BOUNDS</th><th>VERSION</th><th>DETAILS</th>"
-        "</tr></thead>"
-        f"<tbody>{rows_html}</tbody>"
-        "</table>"
-    )
+        tip_content = (
+            f"<span class='tip-label'>{escape(acct_short)} · {escape(bot)}</span>"
+            f"<div class='tip-row'>{escape(detail)}</div>"
+            f"<div class='tip-dim'>"
+            f"age {age_str}"
+            + (f" · <span style='color:#f85149'>bounds {escape(bounds_ok)}</span>" if bounds_warn
+               else f" · bounds {escape(bounds_ok)}")
+            + f" · v={escape(r['version'])}"
+            f"</div>"
+        )
+        pills += (
+            f"<div class='bot-pill tt'>"
+            f"<span class='badge {flag}' style='font-size:.63em'>{r['flag']}</span>"
+            f"{mode}"
+            f"<span class='pill-name'>{escape(bot)}</span>"
+            f"<span class='pill-acct'>{escape(acct_short)}</span>"
+            f"{km_html}"
+            f"<div class='tip'>{tip_content}</div>"
+            f"</div>"
+        )
+    return f"<div class='hb-pills'>{pills}</div>"
 
 
 def _render_services(services: list) -> str:
@@ -511,54 +635,140 @@ def _render_trade_table(rows: list, db_type: str = "live") -> str:
     return html
 
 
-def _render_account_card(label: str, data: dict) -> str:
+def _render_bot_section(hb_rows: list, now: int) -> str:
+    """Compact per-bot rows — status+mode+name+key metric always visible; details on hover."""
+    if not hb_rows:
+        return ""
+    rows_html = ""
+    for r in hb_rows:
+        flag = r["flag"].lower()
+        acct_short = (r.get("_label") or "").split()[0]
+        bot = r["bot_name"]
+        age_min = r["age_s"] // 60
+        age_str = f"{age_min}min" if age_min < 120 else f"{age_min//60}h{age_min%60:02d}m"
+        detail = _render_payload_summary(bot, r.get("payload", {}), now)
+        mode_cell = _mode_badge(acct_short, bot)
+        km = _key_metric(bot, r.get("payload", {}))
+        km_cls = " pnl-pos" if km.startswith("+") else (" pnl-neg" if km.startswith("-") else "")
+        km_html = f"<span class='bot-metric{km_cls}'>{escape(km)}</span>" if km else ""
+        tip_content = (
+            f"<div class='tip-row'>{escape(detail)}</div>"
+            f"<div class='tip-dim'>age {age_str} · v={escape(r['version'])}</div>"
+        )
+        rows_html += (
+            f"<div class='bot-row tt'>"
+            f"<span class='badge {flag}' style='font-size:.62em'>{r['flag']}</span>"
+            f"{mode_cell}"
+            f"<span class='bot-name'>{escape(bot)}</span>"
+            f"{km_html}"
+            f"<div class='tip tip-up'>{tip_content}</div>"
+            f"</div>"
+        )
+    return f"<div class='bot-rows'>{rows_html}</div>"
+
+
+def _render_account_card(label: str, data: dict, hb_rows: list | None = None) -> str:
     version = escape(data.get("version", "?"))
     error   = data.get("error", "")
 
+    # Service dots: compact colored circles in header; full names on hover
+    services = data.get("services", [])
+    if services:
+        dots = "".join(
+            f"<span class='svc-dot {'ok' if s['active'] else 'bad'}'></span>"
+            for s in services
+        )
+        svc_tip_rows = "".join(
+            f"<div class='tip-row'>"
+            f"<span class='{'alive' if s['active'] else 'dead'}'>"
+            f"{'✓' if s['active'] else '✗'}</span> {escape(s['unit'])}"
+            f"</div>"
+            for s in services
+        )
+        svc_dots_html = (
+            f"<div class='tt svc-dots'>"
+            f"{dots}"
+            f"<div class='tip tip-up'>"
+            f"<span class='tip-label'>Services</span>{svc_tip_rows}"
+            f"</div>"
+            f"</div>"
+        )
+    else:
+        svc_dots_html = ""
+
     header = (
         f"<div class='account-header'>"
+        f"<div class='tt' style='flex:1;min-width:0'>"
         f"<span class='name'>{escape(label)}</span>"
-        f"<span class='ver'>v={version}</span>"
+        f"<div class='tip tip-up'><span class='tip-dim'>v={version}</span></div>"
+        f"</div>"
+        f"{svc_dots_html}"
         f"</div>"
     )
 
     if error == "unreachable":
         return f"<div class='account'>{header}<p class='no-data'>⚠ unreachable</p></div>"
 
-    services_html = _render_services(data.get("services", []))
+    # Determine whether this account runs Polymarket bots (live_bot / account_bot).
+    _POLY_BOT_NAMES = {"live_bot", "account_bot"}
+    has_poly = any(r["bot_name"] in _POLY_BOT_NAMES for r in (hb_rows or []))
 
     live = data.get("live")
     stats_html = ""
     trade_html = ""
     open_html  = ""
-    if live:
+
+    if live and has_poly:
         totals    = (live.get("totals") or [{}])[0]
         cap_row   = (live.get("capital") or [{}])[0]
         today_row = (live.get("today") or [{}])[0]
+        week_row  = (live.get("week") or [{}])[0]
+        month_row = (live.get("month") or [{}])[0]
+        life_row  = (live.get("lifetime") or [{}])[0]
         w         = totals.get("w", 0) or 0
         l         = totals.get("l", 0) or 0
         t         = totals.get("t", 0) or 0
         cap       = cap_row.get("capital")
         today_pnl = today_row.get("p")
         today_t   = today_row.get("t", 0) or 0
+        week_pnl  = week_row.get("p")
+        week_t    = week_row.get("t", 0) or 0
+        month_pnl = month_row.get("p")
+        month_t   = month_row.get("t", 0) or 0
+        life_pnl  = life_row.get("p")
+        life_t    = life_row.get("t", 0) or 0
         cap_str   = f"${cap:.2f}" if cap is not None else "—"
+        pnl_sign  = "+" if (today_pnl or 0) >= 0 else "-"
+        pnl_cls   = "pnl-pos" if (today_pnl or 0) >= 0 else "pnl-neg"
+        pnl_str   = (f"{pnl_sign}${abs(today_pnl):.2f}" if today_pnl is not None else "—")
         stats_html = (
-            f"<div class='cards' style='grid-template-columns:repeat(4,1fr);gap:6px;margin:8px 0'>"
-            f"<div class='card'><div class='lbl'>Capital</div><div class='val'>{cap_str}</div></div>"
-            f"<div class='card'><div class='lbl'>Win rate</div><div class='val'>{_wr(w, l)}</div></div>"
-            f"<div class='card'><div class='lbl'>Trades</div><div class='val'>{t}</div></div>"
-            f"<div class='card'><div class='lbl'>Today ({today_t}T)</div>"
-            f"<div class='val'>{_fmt_pnl(today_pnl)}</div></div>"
+            f"<div class='big-metrics'>"
+            f"<div class='metric-big tt'>"
+            f"<div class='lbl'>Capital</div>"
+            f"<div class='val'>{cap_str}</div>"
+            f"<div class='metric-sub'>{_wr(w, l)} · {t}T</div>"
+            f"<div class='tip tip-up'>"
+            f"<span class='tip-label'>All-time</span>"
+            f"<div class='tip-row'>Win rate {_wr(w, l)}</div>"
+            f"<div class='tip-row'>Total trades {t}</div>"
+            f"</div></div>"
+            f"<div class='metric-big tt'>"
+            f"<div class='lbl'>Today PnL</div>"
+            f"<div class='val {pnl_cls}'>{pnl_str}</div>"
+            f"<div class='metric-sub'>{today_t}T today</div>"
+            f"<div class='tip tip-up'>"
+            f"<span class='tip-label'>PnL breakdown</span>"
+            f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>Today</span>"
+            f" {_fmt_pnl(today_pnl)} · {today_t}T</div>"
+            f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>7 days</span>"
+            f" {_fmt_pnl(week_pnl)} · {week_t}T</div>"
+            f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>30 days</span>"
+            f" {_fmt_pnl(month_pnl)} · {month_t}T</div>"
+            f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>Lifetime</span>"
+            f" {_fmt_pnl(life_pnl)} · {life_t}T</div>"
+            f"</div></div>"
             f"</div>"
         )
-        recent = live.get("recent", [])
-        if recent:
-            trade_html = (
-                f"<details><summary style='cursor:pointer;color:#8b949e;font-size:.8em;"
-                f"margin:6px 0'>Last {len(recent)} trades ▾</summary>"
-                f"{_render_trade_table(recent, 'live')}"
-                f"</details>"
-            )
         open_trades = live.get("open", [])
         if open_trades:
             def _ep(r):
@@ -569,8 +779,48 @@ def _render_account_card(label: str, data: dict) -> str:
                 f"#{r['id']} {r.get('direction','')} {_ep(r)}</span>"
                 for r in open_trades
             )
-            open_html = (
-                f"<div style='margin:4px 0'><span style='color:#d29922'>▶ Open:</span> {badges}</div>"
+            open_html = f"<div class='open-trades'><span style='color:#d29922'>▶ Open:</span> {badges}</div>"
+        recent = live.get("recent", [])
+        if recent:
+            trade_html = (
+                f"<details><summary>Last {len(recent)} trades ▾</summary>"
+                f"{_render_trade_table(recent, 'live')}"
+                f"</details>"
+            )
+
+    elif not has_poly:
+        # CEX-only account: big metrics from heartbeat payload
+        primary = next(
+            (r for r in (hb_rows or []) if r["bot_name"] in ("grid_bot", "swing_bot")),
+            None,
+        )
+        if primary:
+            p          = primary.get("payload", {})
+            cap        = p.get("capital")
+            pnl_d      = p.get("daily_pnl")
+            trades_o   = p.get("open_trades")
+            acct_s     = (primary.get("_label") or "").split()[0]
+            is_sim     = (acct_s, primary["bot_name"]) not in _LIVE_BOTS
+            mode_badge = _mode_badge(acct_s, primary["bot_name"])
+            cap_str    = f"${cap:.0f}" if cap is not None else "—"
+            pnl_sign   = "+" if (pnl_d or 0) >= 0 else "-"
+            pnl_cls    = "pnl-pos" if (pnl_d or 0) >= 0 else "pnl-neg"
+            pnl_str    = f"{pnl_sign}${abs(pnl_d):.2f}" if pnl_d is not None else "—"
+            stats_html = (
+                f"<div class='big-metrics'>"
+                f"<div class='metric-big tt'>"
+                f"<div class='lbl'>Capital</div>"
+                f"<div class='val'>{cap_str}</div>"
+                f"<div class='metric-sub'>{mode_badge}</div>"
+                f"<div class='tip tip-up'>"
+                f"<div class='tip-row'>Open orders: {trades_o if trades_o is not None else '—'}</div>"
+                f"</div></div>"
+                f"<div class='metric-big'>"
+                f"<div class='lbl'>Today PnL</div>"
+                f"<div class='val {pnl_cls}'>{pnl_str}</div>"
+                f"<div class='metric-sub'>open: {trades_o if trades_o is not None else '—'}</div>"
+                f"</div>"
+                f"</div>"
             )
 
     cex_html = ""
@@ -581,45 +831,43 @@ def _render_account_card(label: str, data: dict) -> str:
         ow = ob_tot.get("w", 0) or 0
         ol = ob_tot.get("l", 0) or 0
         cex_html += (
-            f"<div style='margin-top:8px'>"
-            f"<span style='color:#8b949e;font-size:.75em;text-transform:uppercase;"
-            f"letter-spacing:1px'>orderbook_bot</span>"
-            f" — {ob_tot.get('t', 0)} trades · WR: {_wr(ow, ol)}"
+            f"<div style='margin-top:6px;font-size:.8em'>"
+            f"<span style='color:#8b949e;text-transform:uppercase;letter-spacing:.8px;"
+            f"font-size:.85em'>orderbook_bot</span>"
+            f" — {ob_tot.get('t', 0)}T · WR {_wr(ow, ol)}"
             f"</div>"
         )
         if ob_recent:
             cex_html += (
-                f"<details><summary style='cursor:pointer;color:#8b949e;font-size:.78em;"
-                f"margin:4px 0'>Recent ob trades ▾</summary>"
+                f"<details><summary>Recent ob trades ▾</summary>"
                 f"{_render_trade_table(ob_recent, 'ob')}"
                 f"</details>"
             )
     accum = data.get("accum")
     if accum:
-        accum_tot  = (accum.get("totals")    or [{}])[0]
         accum_port = (accum.get("portfolio") or [{}])[0]
-        btc = accum_port.get("holdings_btc")
+        accum_tot  = (accum.get("totals") or [{}])[0]
+        btc  = accum_port.get("holdings_btc")
         usdt = accum_port.get("free_usdt")
         avg  = accum_port.get("avg_entry")
-        port_str = ""
-        if btc is not None:
-            port_str = (
-                f" · <span style='color:#58a6ff'>{btc:.6f} BTC</span>"
-                f" · free ${usdt:.2f}" if usdt is not None else ""
-            )
-            if avg is not None:
-                port_str += f" · avg ${avg:.2f}"
+        btc_str  = f"{btc:.6f} BTC" if btc is not None else "—"
+        usdt_str = f" · ${usdt:.0f} free" if usdt is not None else ""
+        avg_str  = f" · avg ${avg:.0f}" if avg is not None else ""
         cex_html += (
-            f"<div style='margin-top:6px'>"
-            f"<span style='color:#8b949e;font-size:.75em;text-transform:uppercase;"
-            f"letter-spacing:1px'>accumulation_bot</span>"
-            f" — {accum_tot.get('t', 0)} trades{port_str}"
+            f"<div style='margin-top:4px;font-size:.8em'>"
+            f"<span style='color:#8b949e;text-transform:uppercase;letter-spacing:.8px;"
+            f"font-size:.85em'>accum_bot</span>"
+            f" — <span style='color:#58a6ff'>{btc_str}</span>{usdt_str}{avg_str}"
+            f" · {accum_tot.get('t', 0)}T"
             f"</div>"
         )
 
+    now = int(time.time())
+    bot_section = _render_bot_section(hb_rows or [], now)
+
     return (
         f"<div class='account'>"
-        f"{header}{services_html}{stats_html}{open_html}{trade_html}{cex_html}"
+        f"{header}{stats_html}{open_html}{trade_html}{cex_html}{bot_section}"
         f"</div>"
     )
 
@@ -646,10 +894,39 @@ def _render_html(
     svc_cls    = "alive" if svc_issues == 0 else "dead"
     unr_cls    = "alive" if unreachable == 0 else "dead"
 
+    # Aggregate PnL across all Polymarket accounts for each time window
+    def _sum_pnl(key: str) -> float:
+        return sum(
+            float((acc.get("live") or {}).get(key, [{}])[0].get("p") or 0)
+            for acc in accounts if acc.get("live")
+        )
+
+    today_pnl_total = _sum_pnl("today")
+    week_pnl_total  = _sum_pnl("week")
+    month_pnl_total = _sum_pnl("month")
+    life_pnl_total  = _sum_pnl("lifetime")
+    pnl_sign    = "+" if today_pnl_total >= 0 else ""
+    pnl_val_cls = "pnl-pos" if today_pnl_total >= 0 else "pnl-neg"
+
     summary_bar = (
         f"<div class='summary-bar'>"
         f"<div class='sb-item'><div class='lbl'>Bots alive</div>"
         f"<div class='val {alive_cls}'>{alive_bots}/{total_bots}</div></div>"
+        f"<div class='sb-item tt'>"
+        f"<div class='lbl'>Today PnL</div>"
+        f"<div class='val {pnl_val_cls}'>{pnl_sign}${today_pnl_total:.2f}</div>"
+        f"<div class='tip'>"
+        f"<span class='tip-label'>PnL breakdown (all accounts)</span>"
+        f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>Today</span>"
+        f" {_fmt_pnl(today_pnl_total)}</div>"
+        f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>7 days</span>"
+        f" {_fmt_pnl(week_pnl_total)}</div>"
+        f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>30 days</span>"
+        f" {_fmt_pnl(month_pnl_total)}</div>"
+        f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>Lifetime</span>"
+        f" {_fmt_pnl(life_pnl_total)}</div>"
+        f"</div>"
+        f"</div>"
         f"<div class='sb-item'><div class='lbl'>HB issues</div>"
         f"<div class='val {hb_cls}'>{hb_issues}</div></div>"
         f"<div class='sb-item'><div class='lbl'>Svc issues</div>"
@@ -659,9 +936,50 @@ def _render_html(
         f"</div>"
     )
 
-    hb_html    = _render_heartbeat_table(heartbeats)
+    # BTC 24h: try Binance API first, fall back to orderbook_bot heartbeat payload
+    btc_24h   = _fetch_btc_24h()
+    btc_price = float(btc_24h.get("lastPrice") or 0)
+    btc_chg   = float(btc_24h.get("priceChangePercent") or 0)
+    btc_high  = float(btc_24h.get("highPrice") or 0)
+    btc_low   = float(btc_24h.get("lowPrice") or 0)
+    if not btc_price:
+        for r in heartbeats:
+            if r["bot_name"] == "orderbook_bot":
+                lp = r.get("payload", {}).get("last_price")
+                if lp:
+                    btc_price = float(lp)
+                break
+    if btc_price:
+        chg_cls  = "up" if btc_chg >= 0 else "dn"
+        chg_sign = "+" if btc_chg >= 0 else ""
+        chg_html = (
+            f"<span class='chg {chg_cls}'>{chg_sign}{btc_chg:.2f}%</span>"
+            if btc_24h else ""
+        )
+        range_html = (
+            f"<span style='color:#484f58;font-size:.88em'>H&thinsp;${btc_high:,.0f}"
+            f" &nbsp; L&thinsp;${btc_low:,.0f}</span>"
+            if btc_high else ""
+        )
+        btc_price_html = (
+            f"<div class='btc-price'>"
+            f"<span>BTC</span>"
+            f"<span class='price'>${btc_price:,.0f}</span>"
+            f"{chg_html}{range_html}"
+            f"</div>"
+        )
+    else:
+        btc_price_html = ""
+
+    hb_html    = _render_heartbeat_pills(heartbeats)
+
+    # Build per-account heartbeat rows (acct_short = first word of label, e.g. "acct-3")
+    def _acct_hb(label: str) -> list:
+        short = label.split()[0]
+        return [r for r in heartbeats if (r.get("_label") or "").split()[0] == short]
+
     cards_html = "".join(
-        _render_account_card(label, data)
+        _render_account_card(label, data, _acct_hb(label))
         for label, data in zip(_ACCOUNT_LABELS, accounts)
     )
 
@@ -678,7 +996,8 @@ def _render_html(
 <h1>
   <span class="dot {dot_cls}"></span>
   tradinebotte — {escape(status_text)}
-  <span style="font-size:.6em;color:#8b949e;font-weight:400;margin-left:auto">{ts_str}</span>
+  {btc_price_html}
+  <span style="font-size:.6em;color:#8b949e;font-weight:400">{ts_str}</span>
 </h1>
 {summary_bar}
 <h2>Infrastructure — Heartbeats</h2>
@@ -688,8 +1007,15 @@ def _render_html(
 {cards_html}
 </div>
 <div class="footer">
-  Generated {ts_str} · collection {collection_s:.1f}s · auto-refresh every 60s
+  Generated {ts_str} · collection {collection_s:.1f}s
+  · <span id="rf-ct">refresh in 60s</span>
 </div>
+<script>
+(function(){{
+  var t=60,el=document.getElementById('rf-ct');
+  setInterval(function(){{t--;if(t<=0)t=60;el&&(el.textContent='refresh in '+t+'s');}},1000);
+}})();
+</script>
 </body>
 </html>"""
 

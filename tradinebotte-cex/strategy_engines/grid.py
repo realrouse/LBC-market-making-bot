@@ -53,7 +53,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-logger = logging.getLogger("live")
+logger = logging.getLogger(__name__)
 
 STRATEGY_TYPE = "grid"
 

@@ -32,11 +32,10 @@ from __future__ import annotations
 import logging
 import sqlite3
 import time
-import uuid
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-logger = logging.getLogger("live")
+logger = logging.getLogger(__name__)
 
 STRATEGY_TYPE = "dca"
 

@@ -1,0 +1,310 @@
+# Contributing
+
+> 🇫🇷 [Version française](CONTRIBUTING.fr.md)
+
+## Table of contents
+
+- [Development setup](#development-setup)
+- [Project structure](#project-structure)
+- [Running tests](#running-tests)
+- [Code quality](#code-quality)
+- [Git workflow](#git-workflow)
+- [Commit message style](#commit-message-style)
+- [Release process](#release-process)
+- [Language policy](#language-policy)
+- [Bilingual documentation rule](#bilingual-documentation-rule)
+- [Security rules](#security-rules)
+- [Adding an exchange adapter](#adding-an-exchange-adapter)
+- [Adding a strategy engine](#adding-a-strategy-engine)
+
+---
+
+## Development setup
+
+**Prerequisites**: Python 3.8+, Linux or macOS.
+
+```bash
+git clone https://github.com/neofutur/tradinebotte.git
+cd tradinebotte
+
+# Install the shared library as an editable package (required by all subsystems)
+pip install -e tradinetools/
+
+# Install dev dependencies (pylint, mypy, pip-audit)
+pip install -r requirements-dev.txt
+```
+
+Preferred: use `uv` for a faster isolated virtualenv:
+
+```bash
+uv venv .venv
+source .venv/bin/activate
+uv pip install -r requirements-dev.txt
+pip install -e tradinetools/
+```
+
+The test runner (`scripts/run_tests.sh`) auto-detects `.venv` at the project root.
+
+**Activate the pre-commit hook** (one-time per clone — blocks commits that expose infrastructure details):
+
+```bash
+git config core.hooksPath .git-hooks
+```
+
+---
+
+## Project structure
+
+```
+tradinebotte/
+├── tradinebotte-cex/            # CEX trading bots and strategy engines
+│   ├── accumulation_bot.py      # OBI dip-buy bot (v1.5)
+│   ├── orderbook_bot.py         # OBI scalping bot (v2.12)
+│   ├── api_binance.py           # Binance spot adapter
+│   ├── api_mexc.py              # MEXC spot adapter
+│   ├── api_mexc_futures.py      # MEXC Futures perpetual adapter
+│   ├── api_bitstamp.py          # Bitstamp spot adapter
+│   ├── api_common.py            # Shared helpers: parse_levels(), book_snapshot(), hmac_sign()
+│   ├── earn_manager.py          # Binance Simple Earn Flexible manager
+│   ├── connectors/__init__.py   # validate() — connector/strategy compatibility check
+│   ├── strategy_engines/        # Pluggable strategy engines
+│   │   ├── base.py              # BaseStrategy interface
+│   │   ├── grid.py              # Grid (static / trail=bear / trail=bull)
+│   │   ├── swing.py             # Swing with EMA200 + ATR + RSI filters
+│   │   ├── swinghold.py         # SwingHold — fractional sells, long-term hold
+│   │   └── dca.py               # Timed DCA with TP/SL
+│   ├── strategies/              # JSON config files per strategy
+│   └── tests/                   # CEX-specific unit tests
+│
+├── tradinebotte-indicators/     # ZMQ signal pipeline
+│   ├── indicators.py            # Main pipeline (RSI, EMA, OBI, TFI, liquidations)
+│   ├── strategies/              # Stream config files (indicators_all.json, ...)
+│   └── tests/
+│
+├── tradinebotte-polymarket/     # Polymarket prediction-market connector
+│   ├── live_bot.py              # Async state machine bot
+│   ├── feed.py                  # WebSocket feed (ZMQ PUB)
+│   ├── account_bot.py           # Per-account bot (ZMQ SUB)
+│   ├── api_polymarket.py        # Polymarket CLOB adapter
+│   ├── strategies/              # JSON strategy files
+│   └── tests/
+│
+├── tradinebotte-status/         # Health monitoring
+│   ├── status_collector.py      # Heartbeat collector (ZMQ → SQLite)
+│   └── generate_status.py       # HTML dashboard generator
+│
+├── tradinetools/                # Shared library (pip install -e tradinetools/)
+│   └── tradinetools/
+│       ├── math.py              # sma_last, ema_last, atr_last, bollinger_last, ...
+│       ├── zmq.py               # ZMQ socket factories
+│       ├── logging.py           # setup_root_logger(), setup_logger()
+│       └── schemas.py           # Versioned message dataclasses
+│
+├── analysis/                    # Backtesting and analysis scripts
+├── scripts/                     # Install, deploy, test, release scripts
+├── tests/                       # Core test suite (CEX strategies, API adapters, ...)
+├── docs/                        # Documentation (see docs/ reference below)
+├── requirements.txt             # Runtime dependencies
+├── requirements-dev.txt         # Dev dependencies (pylint, mypy, pip-audit)
+└── version.py                   # Single source of truth for version number
+```
+
+### docs/ reference
+
+| File | Contents |
+|---|---|
+| [`docs/design.md`](docs/design.md) | Process architecture and ZMQ message-flow |
+| [`docs/accumulation.md`](docs/accumulation.md) | Accumulation bot strategy design |
+| [`docs/indicators.md`](docs/indicators.md) | Indicators pipeline reference |
+| [`docs/GridTrading.md`](docs/GridTrading.md) | Grid strategy operation and setup |
+| [`docs/AdaptedGridTrading.md`](docs/AdaptedGridTrading.md) | Grid backtest results and selection guide |
+| [`docs/snapshots.md`](docs/snapshots.md) | Snapshots table schema and query reference |
+| [`docs/logging.md`](docs/logging.md) | Canonical log tag vocabulary |
+| [`docs/KellySizing.md`](docs/KellySizing.md) | Fractional Kelly sizing design |
+| [`docs/multi.md`](docs/multi.md) | Multi-bot WebSocket architecture |
+| [`docs/HOWTO_tests_and_backtests.md`](docs/HOWTO_tests_and_backtests.md) | Practical test and backtest guide |
+
+---
+
+## Running tests
+
+```bash
+bash scripts/run_tests.sh
+```
+
+1163 tests across 6 suites. No network access or credentials required — in-memory SQLite for every test.
+
+The script also runs pylint on all tracked `.py` files. To run a single suite directly:
+
+```bash
+# Core suite (CEX strategies, API adapters, backtest engine)
+python3 -m unittest discover -s tests/ -p "test_*.py" -v
+
+# Specific subsystem
+python3 -m unittest discover -s tradinebotte-cex/tests/ -p "test_*.py" -v
+python3 -m unittest discover -s tradinebotte-indicators/tests/ -p "test_*.py" -v
+python3 -m unittest discover -s tradinebotte-polymarket/tests/ -p "test_*.py" -v
+python3 -m unittest discover -s tradinebotte-status/tests/ -p "test_*.py" -v
+python3 -m unittest discover -s tradinetools/tests/ -p "test_*.py" -v
+```
+
+New code must include tests. No exception for strategy logic, API adapters, or new utility functions.
+
+---
+
+## Code quality
+
+```bash
+# Linter — target: ≥ 9.90/10; anything below blocks release
+pylint tradinebotte-cex tradinebotte-indicators tradinebotte-polymarket tradinebotte-status tradinetools
+
+# Type checker — must report 0 errors
+mypy tradinebotte-polymarket tradinebotte-cex tradinebotte-indicators tradinetools --ignore-missing-imports
+
+# Shell scripts — must be shellcheck-clean at warning level
+shellcheck -S warning scripts/*.sh tradinebotte-*/scripts/*.sh
+```
+
+All three are run automatically by `scripts/prepare_release.sh`. Pylint below 9.90 blocks release.
+
+---
+
+## Git workflow
+
+- `main` — stable releases only; never push directly
+- `dev` — active development; all work targets `dev`
+- Feature branches: branch off `dev`, open a PR targeting `dev`
+- Merge `dev → main` only after running `scripts/prepare_release.sh` (see [Release process](#release-process))
+
+---
+
+## Commit message style
+
+```
+type: brief description in imperative mood
+
+Optional longer body if the why isn't obvious.
+```
+
+Types used in this project:
+
+| Prefix | When to use |
+|---|---|
+| `fix:` | Bug fix |
+| `feat:` | New feature |
+| `refactor:` | Code restructure without behaviour change |
+| `docs:` | Documentation changes only |
+| `test:` | New or updated tests |
+| `scripts:` | Build, deploy, or tooling scripts |
+| `logging:` | Logging-only changes |
+| `release(vX.Y):` | Release preparation commit |
+
+Keep the subject line under 72 characters. Reference issues or PRs in the body when relevant, not in the subject.
+
+---
+
+## Release process
+
+Before every merge from `dev` to `main`:
+
+```bash
+bash scripts/prepare_release.sh
+```
+
+The script runs 7 checks in order:
+
+| Step | Check | Blocking? |
+|---|---|---|
+| 1 | Unit tests (all 6 suites) | Yes |
+| 2 | Pylint score ≥ 9.90 | Yes |
+| 3 | Shellcheck clean on all `.sh` files | Yes |
+| 4 | All 10 bilingual doc files present | Yes |
+| 5 | CHANGELOG freshness (latest entry = today) | Warning |
+| 6 | Data quality scan on `data/*.db` | Warning |
+| 7 | Integration tests (if config present) | Warning |
+
+Optional flags:
+- `--skip-integration` — skip step 7 when the test environment is unavailable
+- `--tag v0.XX` — create a git tag after a successful run
+
+**Never merge `dev → main` without a green run.**
+
+---
+
+## Language policy
+
+The project is **bilingual at the documentation level** and **English-only at the code level**:
+
+| Artifact | Language |
+|---|---|
+| `README.md`, `CHANGELOG.md`, `INSTALL.md`, `QUICKSTART.md`, `UPDATE.md`, `CONTRIBUTING.md` | English |
+| `README.fr.md`, `CHANGELOG.fr.md`, `INSTALL.fr.md`, `QUICKSTART.fr.md`, `UPDATE.fr.md`, `CONTRIBUTING.fr.md` | French |
+| Source code (`.py`, `.sh`, `.json`) | **English only** |
+| Code comments | **English only** |
+| Log messages | **English only** |
+| Docstrings | **English only** |
+
+Never write French in source code, comments, log messages, or docstrings.
+
+---
+
+## Bilingual documentation rule
+
+Documentation is maintained as paired EN/FR files. **Both files in a pair must be updated in the same commit** — never modify one without updating its counterpart:
+
+| English | French |
+|---|---|
+| `README.md` | `README.fr.md` |
+| `CHANGELOG.md` | `CHANGELOG.fr.md` |
+| `INSTALL.md` | `INSTALL.fr.md` |
+| `QUICKSTART.md` | `QUICKSTART.fr.md` |
+| `UPDATE.md` | `UPDATE.fr.md` |
+| `CONTRIBUTING.md` | `CONTRIBUTING.fr.md` |
+
+`prepare_release.sh` step 4 verifies all 10 files are present and blocks the release if any are missing.
+
+---
+
+## Security rules
+
+Never include the following in any public file (README, CHANGELOG, INSTALL, commit messages, etc.):
+
+- Server hostnames or domain names
+- IP addresses
+- Deployment usernames
+- Passwords or API tokens
+
+Use generic descriptions instead: "the deployment accounts", "the production VPS", "the test server".
+
+The pre-commit hook in `.git-hooks/pre-commit` blocks commits that contain known sensitive patterns. Activate it once per clone:
+
+```bash
+git config core.hooksPath .git-hooks
+```
+
+---
+
+## Adding an exchange adapter
+
+1. Create `tradinebotte-cex/api_<exchange>.py` implementing the same interface as `api_binance.py`:
+   - `get_markets(session, symbol)` → order book snapshot
+   - `post_order(session, symbol, side, quantity, price)` → order ID
+   - `post_market_order(session, symbol, side, quantity)` → order ID
+   - Shared utilities from `api_common.py`: `parse_levels()`, `book_snapshot()`, `hmac_sign()`
+
+2. Add tests in `tests/test_api_cex.py` covering happy path, HTTP error codes, and network failures.
+
+3. The compatibility check in `tradinebotte-cex/connectors/__init__.py` (`validate()`) will automatically verify that the new adapter exposes all methods required by the chosen strategy. No manual wiring needed.
+
+---
+
+## Adding a strategy engine
+
+1. Create `tradinebotte-cex/strategy_engines/<name>.py` subclassing `BaseStrategy` from `base.py`.
+   Implement at minimum: `on_tick()`, `on_fill()`, `restore_state()`.
+
+2. Create a JSON config skeleton in `tradinebotte-cex/strategies/<name>/` documenting every parameter.
+
+3. Add tests in `tradinebotte-cex/tests/test_strategy_engines.py` covering entry logic, exit logic, SL/TP, and state restore on restart.
+
+4. If the strategy consumes indicator data, subscribe to the ZMQ PUB from `indicators.py` — see `docs/design.md` for the message format.

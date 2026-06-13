@@ -62,7 +62,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-logger = logging.getLogger("live")
+logger = logging.getLogger(__name__)
 
 STRATEGY_TYPE = "swinghold"
 
@@ -202,6 +202,7 @@ class SwingHoldStrategy:
 
     @staticmethod
     def ensure_schema(conn: sqlite3.Connection) -> None:
+        """Create SwingHold tables if they do not exist."""
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS swinghold_state (
                 symbol        TEXT PRIMARY KEY,

@@ -19,17 +19,15 @@ To switch live_bot.py to Binance:
     import api_binance as api   # line 62 in live_bot.py
 """
 
-import hashlib
-import hmac
 import json
 import logging
 import os
 import time
 import uuid
-from urllib.parse import urlencode
 import aiohttp
+from api_common import book_snapshot, hmac_sign as _sign, parse_levels
 
-logger = logging.getLogger("live")
+logger = logging.getLogger(__name__)
 
 # ─── ENDPOINTS ────────────────────────────────────────────────────────────────
 # Public endpoints (https://data-api.binance.vision) require no API credentials
@@ -140,38 +138,12 @@ def parse_book_update(msg):
     if not bids_raw and not asks_raw:
         return None
 
-    def pl(lst):
-        """Parse price-level list into (price, size) float tuples, skipping zeros/malformed."""
-        r = []
-        for item in lst:
-            try:
-                p, s = float(item[0]), float(item[1])
-                if p > 0 and s > 0:
-                    r.append((p, s))
-            except Exception:  # pylint: disable=broad-exception-caught
-                continue
-        return r
-
-    bids = sorted(pl(bids_raw), reverse=True)
-    asks = sorted(pl(asks_raw))
+    bids = sorted(parse_levels(bids_raw), reverse=True)
+    asks = sorted(parse_levels(asks_raw))
     if not bids and not asks:
         return None
 
-    bb = bids[0][0] if bids else 0.0
-    ba = asks[0][0] if asks else float("inf")
-    bv = sum(s for _, s in bids[:5])
-    av = sum(s for _, s in asks[:5])
-    tv = bv + av
-    obi = (bv - av) / tv if tv > 0 else 0.0
-    return {
-        "token_id": symbol,
-        "best_bid": bb,
-        "best_ask": ba,
-        "spread": max(0.0, ba - bb),
-        "bid_vol": bv,
-        "ask_vol": av,
-        "obi": obi,
-    }
+    return book_snapshot(bids, asks, symbol)
 
 
 # ─── MARKET DISCOVERY ─────────────────────────────────────────────────────────
@@ -188,7 +160,7 @@ async def get_markets(session, symbol=DEFAULT_SYMBOL, **_):
             timeout=aiohttp.ClientTimeout(total=10),
         ) as resp:
             if resp.status != 200:
-                logger.warning("Binance API error : %d", resp.status)
+                logger.warning("Binance get_markets error %d [symbol=%s]", resp.status, symbol)
                 return []
             # content_type=None: bypass aiohttp's MIME check — some APIs omit charset
             data = await resp.json(content_type=None)
@@ -201,17 +173,8 @@ async def get_markets(session, symbol=DEFAULT_SYMBOL, **_):
             "ask_qty":  float(data.get("askQty", 0)),
         }]
     except Exception as e:  # pylint: disable=broad-exception-caught
-        logger.warning("Binance fetch error : %s", e)
+        logger.warning("Binance get_markets fetch error [symbol=%s]: %s", symbol, e)
         return []
-
-
-# ─── SIGNING ──────────────────────────────────────────────────────────────────
-
-def _sign(params: dict, secret: str) -> str:
-    """HMAC-SHA256 signature over the URL-encoded query string."""
-    query = urlencode(params)
-    return hmac.new(secret.encode("utf-8"), query.encode("utf-8"),
-                    hashlib.sha256).hexdigest()
 
 
 # ─── ORDER PLACEMENT ──────────────────────────────────────────────────────────
@@ -266,12 +229,14 @@ async def post_order(session, symbol, price, size_usdc, *,
         ) as resp:
             data = await resp.json(content_type=None)  # bypass MIME check
             if resp.status != 200:
-                logger.error("Binance order error %d : %.300s", resp.status, data)
+                logger.error("Binance order error %d [%s %s qty=%.6f @ %.2f]: code=%s msg=%s",
+                             resp.status, _side, _sym, quantity, price,
+                             data.get("code"), data.get("msg", str(data)[:200]))
                 return None
             oid = str(data.get("orderId", ""))
             return oid or None
     except Exception as e:  # pylint: disable=broad-exception-caught
-        logger.error("Binance post_order error : %s", e)
+        logger.error("Binance post_order error [%s %s @ %.2f]: %s", _side, _sym, price, e)
         return None
 
 
@@ -312,11 +277,13 @@ async def post_market_order(session, symbol, quantity, *, side="SELL",
         ) as resp:
             data = await resp.json(content_type=None)
             if resp.status != 200:
-                logger.error("Binance market order error %d : %.300s", resp.status, data)
+                logger.error("Binance market order error %d [%s %s qty=%.6f]: code=%s msg=%s",
+                             resp.status, _side, _sym, quantity,
+                             data.get("code"), data.get("msg", str(data)[:200]))
                 return None
             return str(data.get("orderId", "")) or None
     except Exception as e:  # pylint: disable=broad-exception-caught
-        logger.error("Binance post_market_order error : %s", e)
+        logger.error("Binance post_market_order error [%s %s qty=%.6f]: %s", _side, _sym, quantity, e)
         return None
 
 

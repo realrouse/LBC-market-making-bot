@@ -26,7 +26,7 @@ import sys
 from dataclasses import dataclass, field
 from itertools import product
 from pathlib import Path
-from typing import Iterator, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 REPO_ROOT   = Path(__file__).resolve().parent.parent
 DEFAULT_DB  = REPO_ROOT / "data" / "live_ob_2026-05-26.db"

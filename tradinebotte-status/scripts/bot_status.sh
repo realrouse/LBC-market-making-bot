@@ -117,7 +117,7 @@ declare -a LABELS=(
     "acct-3 [poly+accum]"
     "acct-4 [poly+ob+accum]"
     "acct-5 [swing]"
-    "acct-6 [test]"
+    "acct-6 [grid-mexc-sim]"
 )
 
 for IDX in 0 1 2 3 4 5; do
