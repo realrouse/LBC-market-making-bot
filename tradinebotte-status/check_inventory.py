@@ -9,6 +9,8 @@ Offline checks (default, no network):
     - required fields present; account_idx is an int; kind in {bot, service}; is_live bool
     - (account_idx, bot_name) pairs are unique
     - deploy_script paths exist in the repo
+    - deploy-pipeline drift: inventory deploy_scripts match the scripts deploy_all.sh
+      invokes (bidirectional, minus _PIPELINE_EXCEPTIONS deployed independently)
 
 Live checks (--live, sequential SSH per account — never parallel, same-server rule):
     - account_idx resolves to a real account via TEST_USERS in the conf
@@ -29,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 import tomllib
@@ -36,6 +39,11 @@ import tomllib
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO = os.path.dirname(_HERE)
 DEFAULT_INVENTORY = os.path.join(_REPO, "inventory.toml")
+DEPLOY_ALL = os.path.join(_REPO, "tradinebotte-cex", "scripts", "deploy_all.sh")
+# Scripts excluded from the inventory<->deploy_all set-compare (both directions):
+#   deploy_status_service.sh — in inventory, deployed independently (not via deploy_all)
+#   heartbeat_status.sh      — invoked by deploy_all as a status snapshot, not a bot deploy
+_PIPELINE_EXCEPTIONS = {"deploy_status_service.sh", "heartbeat_status.sh"}
 
 _REQUIRED = ("account_idx", "bot_name", "kind")
 _KINDS = {"bot", "service"}
@@ -73,6 +81,33 @@ def check_offline(rows: list[dict]) -> list[str]:
         ds = r.get("deploy_script")
         if ds and not os.path.isfile(os.path.join(_REPO, ds)):
             problems.append(f"{tag}: deploy_script not found in repo: {ds}")
+    return problems
+
+
+# ─── Deploy-pipeline drift (offline, repo-only) ──────────────────────────────
+
+def check_deploy_pipeline(rows: list[dict]) -> list[str]:
+    """Bidirectional set-compare: inventory deploy_scripts vs scripts deploy_all.sh invokes.
+
+    Catches "added a bot to inventory but forgot the pipeline" and the reverse, without
+    parsing deploy_all's orchestration.  Scripts in _PIPELINE_EXCEPTIONS are deployed
+    independently and are not expected in deploy_all.sh.
+    """
+    problems: list[str] = []
+    if not os.path.isfile(DEPLOY_ALL):
+        return [f"deploy_all.sh not found at {DEPLOY_ALL}"]
+    with open(DEPLOY_ALL, encoding="utf-8") as fh:
+        src = fh.read()
+
+    inv_scripts = {os.path.basename(r["deploy_script"])
+                   for r in rows if r.get("deploy_script")}
+    # deploy_all invokes scripts as "$PM/foo.sh" / "$CEX/foo.sh" / "$STATUS/foo.sh"
+    invoked = set(re.findall(r'\$(?:PM|CEX|STATUS)/([a-z0-9_]+\.sh)', src))
+
+    for s in sorted(inv_scripts - _PIPELINE_EXCEPTIONS - invoked):
+        problems.append(f"inventory deploy_script not invoked by deploy_all.sh: {s}")
+    for s in sorted(invoked - _PIPELINE_EXCEPTIONS - inv_scripts):
+        problems.append(f"deploy_all.sh invokes a script absent from inventory: {s}")
     return problems
 
 
@@ -223,7 +258,7 @@ def main() -> None:
         print(f"FAIL: no [[bot]] entries in {args.inventory}")
         sys.exit(1)
 
-    problems = check_offline(rows)
+    problems = check_offline(rows) + check_deploy_pipeline(rows)
     if args.live:
         problems += check_live(rows, args.conf)
 
