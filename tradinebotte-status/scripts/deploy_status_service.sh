@@ -30,6 +30,7 @@ set -uo pipefail
 
 LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 GIT_HASH=$(git -C "$LOCAL_REPO" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+source "$LOCAL_REPO/tradinebotte-status/scripts/record_deploy.sh"
 
 COLLECTOR_IDX=0
 SKIP_RESTART=false
@@ -257,6 +258,8 @@ else
 fi
 
 # ─── Summary ───────────────────────────────────────────────────────────────────
+
+tbnt_record_deploy "$COLL_USER" status_collector "$([[ $FAILURES -eq 0 ]] && echo OK || echo FAILED)"
 
 echo ""
 if [[ $FAILURES -eq 0 ]]; then

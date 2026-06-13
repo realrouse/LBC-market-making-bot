@@ -161,8 +161,8 @@ data["accum"] = _qdb("~/tradinebotte/live_accum.db", {
     ),
 })
 
-# heartbeat.db exists only on the status-collector account (account-1)
-data["heartbeats"] = _qdb("~/tradinebotte/heartbeat.db", {
+# Heartbeats now live in the shared state DB (read on the collector account, account-1).
+data["heartbeats"] = _qdb("/data1/tradinebotte-shared/database/tradinebotte.db", {
     "rows": (
         "SELECT account, bot_name, max(ts) as last_ts,"
         " status, bounds_ok, version, payload"

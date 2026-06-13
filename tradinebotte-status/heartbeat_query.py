@@ -158,10 +158,10 @@ def main() -> None:
     parser.add_argument(
         "--db",
         default=os.environ.get(
-            "TRADINEBOTTE_STATUS_DIR",
-            os.path.expanduser("~/tradinebotte"),
-        ) + "/heartbeat.db",
-        help="Path to heartbeat.db (default %(default)s)",
+            "TRADINEBOTTE_DB",
+            "/data1/tradinebotte-shared/database/tradinebotte.db",
+        ),
+        help="Path to the shared state DB (default %(default)s)",
     )
     parser.add_argument(
         "--stale-after",

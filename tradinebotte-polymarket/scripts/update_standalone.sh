@@ -29,6 +29,7 @@ set -uo pipefail
 
 LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 GIT_HASH=$(git -C "$LOCAL_REPO" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+source "$LOCAL_REPO/tradinebotte-status/scripts/record_deploy.sh"
 SKIP_RESTART=false
 SKIP_VERIFY=false
 VERIFY_ONLY=false
@@ -350,6 +351,7 @@ fi  # STEP 4
 
 # ─── Report ────────────────────────────────────────────────────────────────────
 section "RESULT"
+tbnt_record_deploy "$SA_USER" live_bot "$([[ $FAILURES -eq 0 ]] && echo OK || echo FAILED)"
 if [[ $FAILURES -eq 0 ]]; then
     echo -e "${BOLD}${GREEN}  SUCCESS — $SA_USER updated and running${NC}"
     exit 0

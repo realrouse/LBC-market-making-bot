@@ -79,6 +79,7 @@ SC_PASS="${ALL_PASSWORDS[$SC_IDX]}"
 
 LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 GIT_HASH=$(git -C "$LOCAL_REPO" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+source "$LOCAL_REPO/tradinebotte-status/scripts/record_deploy.sh"
 
 # ─── SSH helpers ───────────────────────────────────────────────────────────────
 _ssh() {
@@ -277,6 +278,7 @@ fi
 
 # ─── Report ────────────────────────────────────────────────────────────────────
 section "RESULT"
+tbnt_record_deploy "$SC_USER" orderbook_bot "$([[ $FAILURES -eq 0 ]] && echo OK || echo FAILED)"
 if [[ $FAILURES -eq 0 ]]; then
     echo -e "${BOLD}${GREEN}  SUCCESS — $SC_USER: orderbook_bot running${NC}"
     echo -e "  Log  : $INSTALL_DIR/orderbook_bot.log"

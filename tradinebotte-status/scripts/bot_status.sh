@@ -54,6 +54,7 @@ PORT="${TEST_PORT:-22}"
 ALL_USERS=("${TEST_USERS[@]:?TEST_USERS missing in $CONF}")
 ALL_PASSWORDS=("${TEST_PASSWORDS[@]:?TEST_PASSWORDS missing in $CONF}")
 INSTALL_DIR="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
+SHARED_DB="${TRADINEBOTTE_DB:-/data1/tradinebotte-shared/database/tradinebotte.db}"
 
 if [[ ! -x "$(command -v sshpass)" ]]; then
     echo "sshpass not found — apt-get install sshpass" >&2; exit 1
@@ -88,7 +89,7 @@ echo -e "${BOLD}${YELLOW}═══ BOT STATUS — $(date -u '+%Y-%m-%d %H:%M UTC
 echo -e "\n${BOLD}${YELLOW}─── HEARTBEATS ───${NC}"
 
 HB_ARGS=(
-    "--db"          "${INSTALL_DIR}/heartbeat.db"
+    "--db"          "${SHARED_DB}"
     "--stale-after" "$STALE_AFTER"
     "--dead-after"  "$DEAD_AFTER"
 )

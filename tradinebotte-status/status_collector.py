@@ -29,33 +29,9 @@ import zmq.asyncio
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "tradinetools"))
 from tradinetools.zmq import default_status_addr, make_pull
+from tradinetools.db import open_db
 
 logger = logging.getLogger("status_collector")
-
-_DB_SCHEMA = """
-CREATE TABLE IF NOT EXISTS heartbeats (
-    id        INTEGER PRIMARY KEY,
-    ts        INTEGER NOT NULL,
-    account   TEXT    NOT NULL,
-    bot_name  TEXT    NOT NULL,
-    version   TEXT,
-    status    TEXT,
-    bounds_ok INTEGER,
-    payload   TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_heartbeats_account_bot ON heartbeats(account, bot_name);
-CREATE INDEX IF NOT EXISTS idx_heartbeats_ts          ON heartbeats(ts);
-"""
-
-
-def open_db(db_path: str) -> sqlite3.Connection:
-    """Open (or create) the heartbeat DB and apply the schema. Returns the open connection."""
-    db = sqlite3.connect(db_path, check_same_thread=False)
-    db.execute("PRAGMA journal_mode=WAL")
-    db.executescript(_DB_SCHEMA)
-    db.commit()
-    return db
-
 
 def store_heartbeat(db: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Extract indexed columns and write one heartbeat row.
@@ -174,13 +150,19 @@ def main() -> None:
     default_dir = os.environ.get(
         "TRADINEBOTTE_STATUS_DIR", os.path.expanduser("~/tradinebotte")
     )
+    default_db = os.environ.get("TRADINEBOTTE_DB")  # explicit shared-DB path, if set
     default_addr = os.environ.get("TRADINEBOTTE_STATUS_ADDR", default_status_addr())
 
     parser = argparse.ArgumentParser(description="tradinebotte heartbeat collector")
     parser.add_argument(
         "--dir",
         default=default_dir,
-        help="Install directory — heartbeat.db is written here",
+        help="Install directory — heartbeat.db is written here when --db is unset",
+    )
+    parser.add_argument(
+        "--db",
+        default=default_db,
+        help="Explicit DB path (the shared state DB). Overrides --dir/heartbeat.db.",
     )
     parser.add_argument(
         "--status-addr",
@@ -188,8 +170,12 @@ def main() -> None:
         help="ZMQ PULL bind address (default %(default)s)",
     )
     args = parser.parse_args()
-    os.makedirs(args.dir, exist_ok=True)
-    asyncio.run(run(args.status_addr, os.path.join(args.dir, "heartbeat.db")))
+    if args.db:
+        db_path = args.db
+    else:
+        os.makedirs(args.dir, exist_ok=True)
+        db_path = os.path.join(args.dir, "heartbeat.db")
+    asyncio.run(run(args.status_addr, db_path))
 
 
 if __name__ == "__main__":
