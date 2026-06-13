@@ -10,6 +10,7 @@ from indicators import (
     derive_stream_id, parse_subscribe_request, _handle_subscribe,
     _SOURCES_WITHOUT_INDICATORS, _DEFAULT_POLL_INTERVALS, _VALID_SOURCES,
     _shift_addr, _PORT_SHIFT, _REG_ADDR,
+    _binance_full_depth_task,
 )
 
 
@@ -1239,6 +1240,120 @@ class TestOHLCVIndicatorTypesValidation(unittest.TestCase):
         for t in sorted(_OHLCV_INDICATOR_TYPES):
             spec = IndicatorSpec.from_dict({"type": t, "period": 14})
             self.assertEqual(spec.type, t)
+
+
+class TestFullDepthBridgeEvent(unittest.IsolatedAsyncioTestCase):
+    """Verify the Binance futures depth sync bridge-event behaviour.
+
+    When the buffer is all-stale (all u <= lastUpdateId), the first live event
+    typically has pu < lastUpdateId because the WS stream lags the REST snapshot.
+    This is the documented Binance "bridge" event; it must NOT trigger a resync.
+    A genuine forward gap (pu > lastUpdateId) must still resync.
+    """
+
+    def _make_spec(self) -> StreamSpec:
+        return StreamSpec.from_dict({
+            "id": "btc_test_perp",
+            "source": "binance_full_depth",
+            "asset": "BTCUSDT",
+            "params": {"market": "perp", "publish_every_n": 100},
+        })
+
+    def _make_ws_harness(self, snapshot_last_id: int, live_events: list):
+        """Return (fake_connect ctx-mgr, fake_fetch_snapshot coroutine)."""
+        import asyncio
+        import contextlib
+
+        live_idx = [0]
+        snapshot_done = [False]
+
+        async def mock_recv():
+            if not snapshot_done[0]:
+                await asyncio.sleep(1)  # blocks until cancelled by wait_for timeout
+            if live_idx[0] < len(live_events):
+                ev = live_events[live_idx[0]]
+                live_idx[0] += 1
+                return ev
+            await asyncio.sleep(1000)
+
+        class _FakeWS:
+            async def recv(self):
+                return await mock_recv()
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *_):
+                return False
+
+        @contextlib.asynccontextmanager
+        async def fake_connect(*args, **kwargs):
+            yield _FakeWS()
+
+        async def fake_fetch(*args, **kwargs):
+            snapshot_done[0] = True
+            return {
+                "lastUpdateId": snapshot_last_id,
+                "bids": [["50000.0", "10.0"]],
+                "asks": [["50001.0", "10.0"]],
+            }
+
+        return fake_connect, fake_fetch
+
+    async def _run(self, live_events: list, snapshot_last_id: int = 1_000_000) -> list:
+        """Run the task with given live events; return list of warning messages."""
+        from unittest.mock import patch, MagicMock
+        import asyncio
+
+        fake_connect, fake_fetch = self._make_ws_harness(snapshot_last_id, live_events)
+        spec = self._make_spec()
+        mock_pub = MagicMock()
+        warnings_seen = []
+
+        with patch("indicators.websockets.connect", new=fake_connect), \
+             patch("indicators._fetch_depth_snapshot", new=fake_fetch), \
+             patch("indicators.logger") as mock_log:
+            mock_log.warning.side_effect = lambda *a, **kw: warnings_seen.append(
+                a[0] % a[1:] if len(a) > 1 else a[0]
+            )
+            try:
+                await asyncio.wait_for(_binance_full_depth_task(spec, mock_pub), timeout=1.0)
+            except asyncio.TimeoutError:
+                pass
+
+        return warnings_seen
+
+    async def test_bridge_event_not_resynced(self):
+        """pu < lastUpdateId < u on first live event must not trigger a resync."""
+        bridge = json.dumps({
+            "e": "depthUpdate", "U": 900_001, "u": 1_000_050, "pu": 900_000,
+            "b": [["50000.0", "1.5"]], "a": [["50001.0", "1.5"]],
+        })
+        normal = json.dumps({
+            "e": "depthUpdate", "U": 1_000_051, "u": 1_000_100, "pu": 1_000_050,
+            "b": [["50000.0", "2.0"]], "a": [["50001.0", "2.0"]],
+        })
+        warnings = await self._run([bridge, normal])
+        resync = [w for w in warnings if "resync" in w]
+        self.assertEqual([], resync, f"Unexpected resync for bridge event: {resync}")
+
+    async def test_genuine_forward_gap_still_resyncs(self):
+        """pu > lastUpdateId (genuine forward gap) must still trigger a resync."""
+        gap_event = json.dumps({
+            "e": "depthUpdate", "U": 1_100_001, "u": 1_100_050, "pu": 1_100_000,
+            "b": [["50000.0", "1.5"]], "a": [["50001.0", "1.5"]],
+        })
+        warnings = await self._run([gap_event])
+        resync = [w for w in warnings if "resync" in w]
+        self.assertGreater(len(resync), 0, "Expected resync warning for genuine gap, none logged")
+
+    async def test_normal_continuation_no_resync(self):
+        """A live event with pu == lastUpdateId (perfect continuity) must not resync."""
+        perfect = json.dumps({
+            "e": "depthUpdate", "U": 1_000_001, "u": 1_000_050, "pu": 1_000_000,
+            "b": [["50000.0", "1.5"]], "a": [["50001.0", "1.5"]],
+        })
+        warnings = await self._run([perfect])
+        resync = [w for w in warnings if "resync" in w]
+        self.assertEqual([], resync, f"Unexpected resync for perfect continuation: {resync}")
 
 
 if __name__ == "__main__":
