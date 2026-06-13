@@ -216,9 +216,11 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
         if systemctl --user is-active tradinebotte-live.service >/dev/null 2>&1 \
            || systemctl --user is-enabled tradinebotte-live.service >/dev/null 2>&1; then
             echo 'detected user service: tradinebotte-live.service'
-            # Kill any nohup orphans before restarting so no stale process holds the DB
+            # Kill nohup Polymarket orphans only — skip grid_bot (TRADINEBOTTE_DIR=*-grid)
             for P in \$(pgrep -u \"\$(whoami)\" -f \"live_bot\" 2>/dev/null || true); do
                 if readlink /proc/\"\$P\"/exe 2>/dev/null | grep -q python; then
+                    _ENVDIR=\$(xargs -0 -n1 < /proc/\"\$P\"/environ 2>/dev/null | grep '^TRADINEBOTTE_DIR=' | cut -d= -f2- || true)
+                    if echo \"\$_ENVDIR\" | grep -q '\\-grid'; then continue; fi
                     kill \"\$P\" 2>/dev/null && echo \"killed stale live_bot pid=\$P\"
                 fi
             done
@@ -227,10 +229,12 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
                 && echo 'systemd restarted' \
                 || echo 'user service restart failed'
         else
-            # Nohup path — kill ALL stale instances (PID file + orphans from prior sessions)
+            # Nohup path — kill stale Polymarket instances only (skip grid_bot)
             PID_FILE=\$INSTALL/live.pid
             for P in \$(pgrep -u \"\$(whoami)\" -f \"live_bot\" 2>/dev/null || true); do
                 if readlink /proc/\"\$P\"/exe 2>/dev/null | grep -q python; then
+                    _ENVDIR=\$(xargs -0 -n1 < /proc/\"\$P\"/environ 2>/dev/null | grep '^TRADINEBOTTE_DIR=' | cut -d= -f2- || true)
+                    if echo \"\$_ENVDIR\" | grep -q '\\-grid'; then continue; fi
                     kill \"\$P\" 2>/dev/null && echo \"killed stale live_bot pid=\$P\"
                 fi
             done
@@ -268,11 +272,13 @@ VERIFY_OUT=$(_ssh "
     export XDG_RUNTIME_DIR=/run/user/\$(id -u)
     SVC=${SVC_NAME}
     echo '=== process ==='
-    # Use pgrep to find the live_bot process — avoids D-Bus dependency of
-    # 'systemctl show --property=MainPID' which hangs in non-interactive SSH.
+    # Use pgrep to find the Polymarket live_bot process (skip grid_bot via TRADINEBOTTE_DIR).
+    # Avoids D-Bus dependency of 'systemctl show --property=MainPID' (hangs in SSH).
     MPID=\"\"
     for P in \$(pgrep -u \"\$(whoami)\" -f 'live_bot' 2>/dev/null || true); do
         if readlink /proc/\"\$P\"/exe 2>/dev/null | grep -q python; then
+            _ENVDIR=\$(xargs -0 -n1 < /proc/\"\$P\"/environ 2>/dev/null | grep '^TRADINEBOTTE_DIR=' | cut -d= -f2- || true)
+            if echo \"\$_ENVDIR\" | grep -q '\\-grid'; then continue; fi
             MPID=\$P; break
         fi
     done

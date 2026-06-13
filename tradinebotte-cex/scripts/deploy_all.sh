@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # deploy_all.sh — Deploy all bots sequentially across all accounts.
 #
-# 11 bots total across 6 accounts (same server — never run in parallel):
+# 12 bots total across 6 accounts (same server — never run in parallel):
 #   account-1  indicators + feed + account_bot  (Polymarket multibot infra)
 #   account-2  live_bot (Polymarket threshold)
-#   account-3  live_bot (Polymarket grid) + accumulation_bot
+#   account-3  live_bot (Polymarket grid) + accumulation_bot + grid_bot (Binance CEX sim)
 #   account-4  live_bot (Polymarket) + orderbook_bot + accumulation_bot deepdip
 #   account-5  swing live_bot (CEX)
 #   account-6  grid live_bot (MEXC Futures BTC_USDT — simulation)
@@ -100,6 +100,7 @@ fi
 run_step "account-2 — live_bot (Polymarket)"            "$PM/update_claude2.sh"
 run_step "account-3 — live_bot (Polymarket)"            "$PM/update_claude3.sh"
 run_step "account-3 — accumulation_bot"                 "$CEX/deploy_accumulation_claude3.sh"
+run_step "account-3 — grid_bot (Binance CEX sim)"       "$CEX/deploy_grid_claude3.sh"
 run_step "account-4 — live_bot (Polymarket)"            "$PM/update_claude4.sh"
 run_step "account-4 — orderbook_bot"                    "$CEX/deploy_scalping_claude4.sh"
 run_step "account-4 — accumulation_bot (deepdip)"       "$CEX/deploy_accumulation_claude4.sh"
@@ -108,7 +109,7 @@ run_step "account-6 — grid live_bot (MEXC Futures sim)" "$CEX/deploy_grid_mexc
 
 show_heartbeat_status "HEARTBEAT — POST-DEPLOY SNAPSHOT"
 
-echo -e "\n${BOLD}${YELLOW}═══ DEPLOY ALL — SUMMARY (11 bots) ═══${NC}"
+echo -e "\n${BOLD}${YELLOW}═══ DEPLOY ALL — SUMMARY (12 bots) ═══${NC}"
 for i in "${!STEP_LABELS[@]}"; do
     case "${STEP_RESULTS[$i]}" in
         OK)     echo -e "${GREEN}  ✓ ${STEP_LABELS[$i]}${NC}" ;;
