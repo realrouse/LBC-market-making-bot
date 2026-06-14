@@ -820,6 +820,7 @@ async def _run(p: dict, db: sqlite3.Connection, install_dir: str = "") -> None:
                         "avg_entry":      round(state.avg_entry, 2),
                         "total_realized": round(state.total_realized, 2),
                     },
+                    mode="sim",  # paper trading only — no real exchange connector
                 )
             ),
         ]

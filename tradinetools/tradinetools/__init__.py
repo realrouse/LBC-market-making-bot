@@ -51,10 +51,16 @@ def build_heartbeat(
     bot_name: str,
     install_dir: str | None,
     extra: dict[str, Any],
+    *,
+    mode: str | None = None,
 ) -> dict[str, Any]:
     """Build a heartbeat payload dict.
 
     The `account` field resolves from TRADINEBOTTE_ACCOUNT env var first, then USER.
+    `mode` is the bot's self-reported real-vs-sim mode ("live" | "sim"), decided at
+    startup from a deterministic credential/config signal — never the runtime order-id
+    heuristic (a freshly-restarted sim bot with no open orders would mislabel as live).
+    When None the field is omitted (e.g. infra services with no sim/live concept).
     The `extra` dict is merged last so bot-specific fields (bounds_ok, etc.) override
     defaults if there is a name collision.
     """
@@ -66,6 +72,8 @@ def build_heartbeat(
         "version": read_version_stamp(install_dir),
         "status": "running",
     }
+    if mode is not None:
+        payload["mode"] = mode
     payload.update(extra)
     return payload
 
@@ -75,6 +83,7 @@ async def heartbeat_loop(
     install_dir: str | None,
     get_extra: Callable[[], dict[str, Any]],
     *,
+    mode: str | None = None,
     interval: int = 3600,
     warmup_interval: int = 60,
     warmup_count: int = 3,
@@ -113,7 +122,7 @@ async def heartbeat_loop(
     try:
         while True:
             try:
-                payload = build_heartbeat(bot_name, install_dir, get_extra())
+                payload = build_heartbeat(bot_name, install_dir, get_extra(), mode=mode)
                 await sock.send(json.dumps(payload).encode())
             except Exception as exc:
                 _hb_logger.warning("heartbeat send failed: %s", exc)

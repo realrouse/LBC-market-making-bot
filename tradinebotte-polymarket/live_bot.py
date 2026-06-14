@@ -1695,6 +1695,11 @@ async def main() -> None:
             _hb_bot_name = {"grid": "grid_bot", "swing": "swing_bot"}.get(
                 config.strategy_type, "live_bot"
             )
+            # Startup mode signal: Polymarket (threshold) places real orders only with a
+            # private_key; CEX strategies (grid/swing) have no real exchange connector and
+            # are always simulated. Decided here, not from runtime order ids.
+            _hb_mode = "live" if (config.strategy_type == "threshold"
+                                  and config.private_key) else "sim"
             _hb_task = asyncio.create_task(
                 heartbeat_loop(
                     _hb_bot_name,
@@ -1706,6 +1711,7 @@ async def main() -> None:
                         "open_trades":  len(state.open_trades),
                         "last_book_ts": state.last_book_ts,
                     },
+                    mode=_hb_mode,
                 )
             )
             try:

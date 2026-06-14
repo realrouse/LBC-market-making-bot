@@ -177,7 +177,61 @@ def check_live(rows: list[dict], conf: str) -> list[str]:
                 problems.append(f"{account}: expected unit not active/loaded: {unit}")
 
     problems += check_heartbeat_keys(rows, server, port, users, passwords)
+    problems += check_mode_mismatch(rows, server, port, users, passwords)
     return problems
+
+
+def check_mode_mismatch(rows, server, port, users, passwords) -> list[str]:
+    """Compare inventory.is_live (declared intent) with the mode each bot self-reports.
+
+    is_live is intent; the heartbeat `mode` field is observed truth.  A bot reporting a
+    mode that contradicts its declared is_live is flagged.  Bots that don't yet report a
+    mode (mode-reporting not deployed) are silently skipped — not an error.
+    """
+    problems: list[str] = []
+    if not users:
+        return problems
+    modes = _remote_heartbeat_modes(server, port, users[0], passwords[0], COLLECTOR_DB)
+    if modes is None:
+        return problems
+    for r in rows:
+        if r.get("kind", "bot") != "bot" or r.get("is_live") is None:
+            continue
+        expected = "live" if r["is_live"] else "sim"
+        reported = modes.get((r["account"], r["bot_name"]))
+        if reported and reported != expected:
+            problems.append(
+                f"is_live mismatch: {r['account']}/{r['bot_name']} "
+                f"inventory declares {expected}, bot reports {reported}"
+            )
+    return problems
+
+
+def _remote_heartbeat_modes(server, port, user, password, db_path) -> dict | None:
+    """{(account, bot_name): mode} from the latest heartbeat payload (mode may be absent)."""
+    py = (
+        "import sqlite3,json; "
+        f"d=sqlite3.connect('{db_path}'); "
+        "rows=d.execute('SELECT account,bot_name,payload,max(ts) FROM heartbeats "
+        "GROUP BY account,bot_name').fetchall(); "
+        "[print(a+chr(9)+b+chr(9)+str((json.loads(p) if p else {}).get('mode') or '')) "
+        "for a,b,p,_ in rows]"
+    )
+    env = dict(os.environ, SSHPASS=password)
+    out = subprocess.run(
+        ["sshpass", "-e", "ssh", "-o", "StrictHostKeyChecking=yes",
+         "-o", "ConnectTimeout=10", "-o", "PreferredAuthentications=password",
+         "-p", port, f"{user}@{server}", f"python3 -c \"{py}\""],
+        capture_output=True, text=True, env=env,
+    )
+    if out.returncode != 0:
+        return None
+    modes = {}
+    for ln in out.stdout.splitlines():
+        parts = ln.split("\t")
+        if len(parts) == 3:
+            modes[(parts[0], parts[1])] = parts[2] or None
+    return modes
 
 
 def check_heartbeat_keys(rows, server, port, users, passwords) -> list[str]:
