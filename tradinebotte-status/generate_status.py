@@ -170,6 +170,20 @@ data["heartbeats"] = _qdb("/data1/tradinebotte-shared/database/tradinebotte.db",
     ),
 })
 
+# Desired-state inventory + latest deploy per bot (same shared DB, account-1 only).
+data["inventory"] = _qdb("/data1/tradinebotte-shared/database/tradinebotte.db", {
+    "rows": (
+        "SELECT account, bot_name, kind, bot_type, is_live"
+        " FROM inventory WHERE enabled=1 ORDER BY account, bot_name"
+    ),
+})
+data["deploys"] = _qdb("/data1/tradinebotte-shared/database/tradinebotte.db", {
+    "rows": (
+        "SELECT account, bot_name, max(ts) as last_ts, git_hash, result"
+        " FROM deploys GROUP BY account, bot_name"
+    ),
+})
+
 print(json.dumps(data))
 """
 
@@ -872,11 +886,101 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
     )
 
 
+def _fmt_age(secs: int) -> str:
+    if secs < 0:
+        return "—"
+    if secs < 3600:
+        return f"{secs // 60}m"
+    if secs < 86400:
+        return f"{secs // 3600}h"
+    return f"{secs // 86400}d"
+
+
+# Status colours (matches the page's dark palette).
+_C_OK, _C_WARN, _C_BAD, _C_MUTE = "#3fb950", "#d29922", "#f85149", "#8b949e"
+
+
+def _render_expected_actual(inventory: list, deploys: list, heartbeats: list,
+                            user_to_label: dict) -> str:
+    """Additive section: every EXPECTED bot (from inventory) vs what actually reports.
+
+    Surfaces bots that are expected but silent (no heartbeat at all → MISSING, today
+    invisible), declared-vs-reported mode mismatches, and the latest deploy per bot.
+    """
+    if not inventory:
+        return ""
+    hb_by  = {(r["account"], r["bot_name"]): r for r in heartbeats}
+    dep_by = {(d["account"], d["bot_name"]): d for d in deploys}
+    now = int(time.time())
+    n_missing = n_mismatch = 0
+    body = []
+    for inv in sorted(inventory, key=lambda r: (r.get("account", ""), r.get("bot_name", ""))):
+        acct, bot = inv.get("account", ""), inv.get("bot_name", "")
+        label = user_to_label.get(acct, acct)
+        hb = hb_by.get((acct, bot))
+
+        kind = inv.get("kind", "bot") or "bot"
+        if hb is None:
+            # A bot that never reported is a real problem (today it would be invisible);
+            # a service that never reports is fine — its liveness is the systemctl section
+            # below (the collector cannot heartbeat itself).
+            if kind == "service":
+                flag, fcol = "n/a", _C_MUTE
+            else:
+                flag, fcol = "MISSING", _C_BAD
+                n_missing += 1
+        else:
+            flag = hb["flag"]
+            fcol = {"ALIVE": _C_OK, "STALE": _C_WARN}.get(flag, _C_BAD)
+
+        is_live  = inv.get("is_live")
+        declared = "—" if is_live is None else ("live" if is_live else "sim")
+        reported = (hb or {}).get("payload", {}).get("mode") if hb else None
+        if reported and is_live is not None and reported != declared:
+            mode_cell = f"<span style='color:{_C_BAD}'>{escape(declared)}≠{escape(reported)}</span>"
+            n_mismatch += 1
+        else:
+            mode_cell = escape(declared)
+
+        dep = dep_by.get((acct, bot))
+        if dep:
+            dep_cell = (f"{escape((dep.get('git_hash') or '?')[:7])} "
+                        f"{escape(str(dep.get('result') or ''))} "
+                        f"<span style='color:{_C_MUTE}'>({_fmt_age(now - int(dep['last_ts']))})</span>")
+        else:
+            dep_cell = f"<span style='color:{_C_MUTE}'>—</span>"
+
+        body.append(
+            f"<tr><td>{escape(label)}</td><td>{escape(bot)}</td>"
+            f"<td style='color:{_C_MUTE}'>{escape(inv.get('kind','') or '')}</td>"
+            f"<td>{mode_cell}</td>"
+            f"<td style='color:{fcol};font-weight:600'>{escape(flag)}</td>"
+            f"<td>{dep_cell}</td></tr>"
+        )
+
+    note = []
+    if n_missing:
+        note.append(f"<span style='color:{_C_BAD}'>{n_missing} expected but silent</span>")
+    if n_mismatch:
+        note.append(f"<span style='color:{_C_BAD}'>{n_mismatch} mode mismatch</span>")
+    sub = "  ·  ".join(note) if note else f"<span style='color:{_C_OK}'>all expected bots present</span>"
+    return (
+        f"<h2>Expected vs Actual <span style='font-size:.5em;color:{_C_MUTE};font-weight:400'>"
+        f"{len(inventory)} declared · {sub}</span></h2>"
+        "<table class='hb-table'><thead><tr>"
+        "<th>acct</th><th>bot</th><th>kind</th><th>mode</th><th>heartbeat</th><th>last deploy</th>"
+        "</tr></thead><tbody>" + "".join(body) + "</tbody></table>"
+    )
+
+
 def _render_html(
     heartbeats: list,
     accounts: list,
     generated_at: datetime,
     collection_s: float,
+    inventory: list | None = None,
+    deploys: list | None = None,
+    user_to_label: dict | None = None,
 ) -> str:
     hb_issues  = sum(1 for r in heartbeats if r["flag"] != "ALIVE")
     svc_issues = sum(1 for acc in accounts for svc in acc.get("services", []) if not svc["active"])
@@ -983,6 +1087,9 @@ def _render_html(
         for label, data in zip(_ACCOUNT_LABELS, accounts)
     )
 
+    expected_html = _render_expected_actual(
+        inventory or [], deploys or [], heartbeats, user_to_label or {})
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1000,6 +1107,7 @@ def _render_html(
   <span style="font-size:.6em;color:#8b949e;font-weight:400">{ts_str}</span>
 </h1>
 {summary_bar}
+{expected_html}
 <h2>Infrastructure — Heartbeats</h2>
 {hb_html}
 <h2>Accounts — Services &amp; Trades</h2>
@@ -1080,11 +1188,21 @@ def main() -> None:
     user_to_label = {u: lbl.split()[0] for u, lbl in zip(users, _ACCOUNT_LABELS)}
     heartbeats = _classify_heartbeats(raw_rows, user_to_label)
 
+    # Inventory + latest deploys also come from account-1 (the shared state DB)
+    def _rows(key: str) -> list:
+        blob = accounts_data[0].get(key) or {}
+        return blob.get("rows", []) if isinstance(blob, dict) else []
+    inventory_rows = _rows("inventory")
+    deploy_rows    = _rows("deploys")
+
     html = _render_html(
         heartbeats=heartbeats,
         accounts=accounts_data,
         generated_at=datetime.now(tz=timezone.utc),
         collection_s=elapsed,
+        inventory=inventory_rows,
+        deploys=deploy_rows,
+        user_to_label=user_to_label,
     )
 
     if args.out:
