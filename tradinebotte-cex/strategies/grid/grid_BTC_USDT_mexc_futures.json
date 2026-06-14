@@ -1,20 +1,20 @@
 {
     "_name": "Grid BTC/USDT — MEXC Futures perpetual (simulation)",
-    "_description": "Grid test on MEXC Futures BTC_USDT perpetual. Simulation mode is automatic when MEXC_FUTURES_API_KEY/SECRET are absent. Contract size: 0.001 BTC per contract. At $100k: 1 contract ≈ $100 notional — minimum effective order at this price. Bounds ±20% from $103k reference; recalibrate grid_lower/grid_upper when BTC moves significantly. Capital must equal grid_levels × grid_order_size_usdt.",
+    "_description": "Grid test on MEXC Futures BTC_USDT perpetual. Simulation mode is automatic when MEXC_FUTURES_API_KEY/SECRET are absent. Contract size: 0.001 BTC per contract. Bounds ±20% from a ~$64k reference (recalibrated 2026-06-14 — the prior $103k bounds were far above spot and the static grid stop-lossed on the first tick); recalibrate grid_lower/grid_upper again when BTC moves significantly. Capital must equal grid_levels × grid_order_size_usdt.",
     "_purpose": "API validation test — connector api_mexc_futures.py, symbol BTC_USDT (underscore format), signature scheme verification, WS depth parsing.",
     "_contract_info": {
         "symbol":        "BTC_USDT",
         "contract_size": "0.001 BTC per contract",
-        "price_ref":     "$103,000 (2026-06-11)",
-        "min_notional":  "~$100 (1 contract at $100k price)"
+        "price_ref":     "$64,000 (2026-06-14)",
+        "min_notional":  "~$64 (1 contract at $64k price)"
     },
 
     "strategy_type": "grid",
     "connector":     "mexc_futures",
 
     "grid_symbol":          "BTC_USDT",
-    "grid_lower":           82000.0,
-    "grid_upper":           124000.0,
+    "grid_lower":           51000.0,
+    "grid_upper":           77000.0,
     "grid_levels":          21,
     "grid_order_size_usdt": 100.0,
 

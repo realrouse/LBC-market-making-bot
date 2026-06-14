@@ -143,18 +143,27 @@ def make_subscribe_msg(symbols):
     """
     Return a JSON subscribe message for MEXC Futures full-depth streams.
 
-    Strips any ":SHORT" suffix. MEXC Futures depth subscriptions take one symbol
-    per message; if multiple symbols are requested a JSON array is returned.
+    Strips any ":SHORT"/":SELL" suffix and de-duplicates. A grid registers both
+    an UP and a DOWN token for one market, and both map to the same underlying
+    symbol. MEXC Futures accepts only ONE subscribe object per frame — sending a
+    JSON array is rejected with {"channel":"rs.error","data":"invalid message"},
+    which left the grid with no depth feed (last_book_ts stuck at 0).
     """
-    clean = [s.split(":")[0] for s in symbols]
-    if len(clean) == 1:
+    seen = []
+    for s in symbols:
+        clean = s.split(":")[0]
+        if clean not in seen:
+            seen.append(clean)
+    if len(seen) == 1:
         return json.dumps({
             "method": "sub.depth.full",
-            "param":  {"symbol": clean[0], "limit": 5},
+            "param":  {"symbol": seen[0], "limit": 5},
         })
+    # Multiple distinct symbols would each need their own frame (set WS_BATCH_SIZE=1);
+    # grids subscribe a single underlying symbol, so this path is not exercised today.
     return json.dumps([
         {"method": "sub.depth.full", "param": {"symbol": p, "limit": 5}}
-        for p in clean
+        for p in seen
     ])
 
 
