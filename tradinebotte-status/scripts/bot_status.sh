@@ -116,7 +116,7 @@ declare -a LABELS=(
     "acct-1 [poly+cex+status]"
     "acct-2 [poly]"
     "acct-3 [poly+accum]"
-    "acct-4 [poly+ob+accum]"
+    "acct-4 [poly+accum]"
     "acct-5 [swing]"
     "acct-6 [grid-mexc-sim]"
 )
