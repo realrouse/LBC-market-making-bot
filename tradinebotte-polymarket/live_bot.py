@@ -47,7 +47,10 @@ if os.path.isdir(_cex_dir) and _cex_dir not in sys.path:
 import api_polymarket as api
 import bot_utils
 from bot_utils import print_dashboard, write_web_status
-from tradinetools import heartbeat_loop
+from tradinetools import (
+    heartbeat_loop, control_loop, Command,
+    write_reset_marker, consume_reset_marker,
+)
 from tradinetools.zmq import PORT_FEED, PORT_INDICATORS, PORT_IND_REG, default_ipc_addr
 
 # ─── STRATEGY DEFAULTS (module-level — tests reference these directly) ────────
@@ -1698,6 +1701,22 @@ async def main() -> None:
     if not config.private_key:
         logger.info("  POLY_PRIVATE_KEY not set — orders SIMULATED")
     logger.info("=" * 65)
+
+    # Self-reported mode (decided from config, never runtime order ids): threshold
+    # places real orders only with a private_key; CEX grid/swing are always sim.
+    _hb_mode = "live" if (config.strategy_type == "threshold" and config.private_key) else "sim"
+    _is_live = _hb_mode == "live"
+    _hb_bot_name = {"grid": "grid_bot", "swing": "swing_bot"}.get(
+        config.strategy_type, "live_bot")
+
+    # Apply a pending operator reset BEFORE opening the DB so the wipe is atomic at
+    # cold start. Sim-only: a live bot must never honour a reset marker.
+    if not _is_live:
+        _reset_cap = consume_reset_marker(config.install_dir, _hb_bot_name, config.db_path)
+        if _reset_cap is not None:
+            config.capital_start = _reset_cap
+            logger.warning("RESET applied — fresh state, starting capital=$%.2f", _reset_cap)
+
     conn = init_db(config)
     try:
         state = BotState(conn, config)
@@ -1713,14 +1732,6 @@ async def main() -> None:
                 state.strategy = _load_strat(config.strategy_type, config)
                 logger.info("  Algorithm   : %s", config.strategy_type)
                 await state.strategy.restore_from_db(state)
-            _hb_bot_name = {"grid": "grid_bot", "swing": "swing_bot"}.get(
-                config.strategy_type, "live_bot"
-            )
-            # Startup mode signal: Polymarket (threshold) places real orders only with a
-            # private_key; CEX strategies (grid/swing) have no real exchange connector and
-            # are always simulated. Decided here, not from runtime order ids.
-            _hb_mode = "live" if (config.strategy_type == "threshold"
-                                  and config.private_key) else "sim"
             def _hb_payload() -> dict[str, Any]:
                 pnl_total, trades_total = cumulative_pnl(state)
                 return {
@@ -1741,11 +1752,35 @@ async def main() -> None:
                     mode=_hb_mode,
                 )
             )
+
+            def _reset_handler(cmd_args: dict[str, Any]) -> dict[str, Any]:
+                """Sim-only: record a reset and hard-exit so systemd restarts cold,
+                wiping state and starting from `capital`. Guarded by control_loop."""
+                cap = float(cmd_args.get("capital", config.capital_start))
+                if cap <= 0:
+                    raise ValueError("capital must be > 0")
+                write_reset_marker(config.install_dir, _hb_bot_name, cap)
+                logger.warning("RESET requested via control plane — capital=$%.2f, "
+                               "exiting for systemd restart", cap)
+                # exit AFTER the reply is sent; non-zero trips Restart=on-failure.
+                asyncio.get_running_loop().call_later(0.5, os._exit, 1)
+                return {"capital": cap, "wiped_on_restart": True, "restart_in_s": 30}
+
+            _ctl_task = asyncio.create_task(
+                control_loop(
+                    _hb_bot_name,
+                    {"reset": Command(_reset_handler, destructive=True,
+                                      help="wipe state + restart with given --capital (sim only)")},
+                    mode=_hb_mode,
+                    is_live=_is_live,
+                )
+            )
             try:
                 await ws_loop(state, session)
             finally:
                 _hb_task.cancel()
-                await asyncio.gather(_hb_task, return_exceptions=True)
+                _ctl_task.cancel()
+                await asyncio.gather(_hb_task, _ctl_task, return_exceptions=True)
     finally:
         conn.close()
 

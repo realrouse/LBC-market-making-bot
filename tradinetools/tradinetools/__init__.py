@@ -304,21 +304,23 @@ async def control_loop(
 # bot (Restart=on-failure → must exit non-zero), and consume_reset_marker() does
 # the backup + wipe atomically at cold start with nothing else running.
 
-_RESET_MARKER = ".reset_request.json"
+def reset_marker_path(install_dir: str, bot_name: str) -> str:
+    """Path of the pending-reset marker for one bot.
+
+    Keyed on bot_name, not just install_dir: several bots can share an install
+    dir (e.g. live_bot + accumulation_bot in ~/tradinebotte), so a per-dir marker
+    would let a reset of one bot wipe another.
+    """
+    return os.path.join(install_dir, f".reset_request_{bot_name}.json")
 
 
-def reset_marker_path(install_dir: str) -> str:
-    """Path of the pending-reset marker inside a bot's install dir."""
-    return os.path.join(install_dir, _RESET_MARKER)
-
-
-def write_reset_marker(install_dir: str, capital: float) -> str:
+def write_reset_marker(install_dir: str, bot_name: str, capital: float) -> str:
     """Record a pending reset (new starting capital), written atomically.
 
     Called by the reset command handler right before it hard-exits. The actual
     wipe happens at next boot via consume_reset_marker().
     """
-    path = reset_marker_path(install_dir)
+    path = reset_marker_path(install_dir, bot_name)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump({"capital": float(capital), "ts": int(time.time())}, f)
@@ -328,11 +330,12 @@ def write_reset_marker(install_dir: str, capital: float) -> str:
 
 def consume_reset_marker(
     install_dir: str,
+    bot_name: str,
     db_path: str | None,
     *,
     backup_dir: str | None = None,
 ) -> float | None:
-    """At boot, BEFORE opening the DB: apply a pending reset if one exists.
+    """At boot, BEFORE opening the DB: apply this bot's pending reset if any.
 
     Backs up then removes db_path (and its -wal/-shm sidecars) and returns the
     override starting capital. Returns None when no reset is pending. The wipe
@@ -342,7 +345,7 @@ def consume_reset_marker(
     reset is aborted (returns None) — never destroy data we could not back up.
     Idempotent: the marker is always removed, so a restart loop never re-wipes.
     """
-    path = reset_marker_path(install_dir)
+    path = reset_marker_path(install_dir, bot_name)
     if not os.path.exists(path):
         return None
 
