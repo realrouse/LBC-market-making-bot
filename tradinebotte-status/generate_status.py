@@ -6,9 +6,9 @@ Collects data via one sequential SSH per account (6 total):
   - live.db trade stats (accounts 1, 2, 3, 4)
   - live_ob.db orderbook stats (account 4)
   - live_accum.db accumulation stats (accounts 3, 4)
-  - heartbeat.db liveness table (account 1 only — the status collector)
+  - shared state DB: heartbeats + inventory + deploys (account 1 — the status collector)
 
-No dependency on heartbeat_query.py — reads heartbeat.db directly.
+No dependency on heartbeat_query.py — reads the shared state DB directly.
 
 Usage:
   python3 tradinebotte-status/generate_status.py > status.html

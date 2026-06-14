@@ -319,7 +319,7 @@ ERROR_COUNT=$(echo "$VERIFY_OUT" | grep -cE '\[ERROR\]|\[CRITICAL\]' || true)
 fi  # SKIP_VERIFY
 
 # ─── Step 4: heartbeat check ───────────────────────────────────────────────────
-# Poll heartbeat.db on the collector account for a fresh row from SA_USER.
+# Poll the shared state DB on the collector account for a fresh row from SA_USER.
 # Skipped when --skip-verify or --skip-restart is set (no restart happened).
 if [[ "$SKIP_VERIFY" == "false" && "$SKIP_RESTART" == "false" ]]; then
     section "STEP 4 — HEARTBEAT CHECK"
@@ -327,7 +327,7 @@ if [[ "$SKIP_VERIFY" == "false" && "$SKIP_RESTART" == "false" ]]; then
     _HB_PY=$(cat <<PYEOF
 import sqlite3,time,os,sys
 t=$T_BEFORE
-p=os.path.expanduser("~/tradinebotte/heartbeat.db")
+p=os.environ.get("TRADINEBOTTE_DB","/data1/tradinebotte-shared/database/tradinebotte.db")
 if not os.path.exists(p):
     print("HB_NODB"); sys.exit(1)
 db=sqlite3.connect(p)

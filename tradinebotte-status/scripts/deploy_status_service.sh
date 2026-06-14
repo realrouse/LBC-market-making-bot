@@ -235,17 +235,18 @@ VERIFY_OUT=$(_ssh "
     systemctl --user status '${SVC_NAME}' --no-pager -n 5 2>&1 || true
     echo '--- version stamp ---'
     cat ${INSTALL_DIR}/version.stamp 2>/dev/null || echo '(no version.stamp)'
-    echo '--- heartbeat.db rows ---'
-    if [ -f ${INSTALL_DIR}/heartbeat.db ]; then
+    echo '--- state DB heartbeat rows ---'
+    _DBP=\"\${TRADINEBOTTE_DB:-/data1/tradinebotte-shared/database/tradinebotte.db}\"
+    if [ -f \"\$_DBP\" ]; then
         python3 -c \"
-import sqlite3, os
-db = sqlite3.connect(os.path.expanduser('${INSTALL_DIR}/heartbeat.db'))
+import sqlite3
+db = sqlite3.connect('\$_DBP')
 cnt = db.execute('SELECT count(*) FROM heartbeats').fetchone()[0]
 print(f'  {cnt} total row(s) in heartbeats table')
 db.close()
 \" 2>/dev/null || echo '  (could not query DB)'
     else
-        echo '  heartbeat.db not yet created (waiting for first bot heartbeat)'
+        echo \"  state DB not found at \$_DBP\"
     fi
 " 2>&1)
 echo "$VERIFY_OUT"
