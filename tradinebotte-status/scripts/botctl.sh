@@ -15,8 +15,11 @@
 # Read-only commands (ping/status/help) run unconditionally. Destructive commands
 # (reset) are refused unless BOTH sources agree the bot is simulation:
 #   - inventory.is_live = 0   (in the shared state DB)
-#   - latest heartbeat mode = "sim" and fresh (< 5 min)
-# and the operator passes --yes. Any ambiguity (live, missing, stale) → refused.
+#   - latest heartbeat mode = "sim", present and not ancient (< 2h — heartbeats are
+#     hourly in steady state, so this matches the status page's "alive" window)
+# and the operator passes --yes. Any ambiguity (live, missing, ancient) → refused.
+# The authoritative protection is the bot's own in-process guard, which refuses a
+# reset whenever it is live regardless of what this pre-check decides.
 #
 # Examples:
 #   bash botctl.sh 5 grid_bot ping
@@ -30,7 +33,8 @@ ok()   { echo -e "${GREEN}✓ $*${NC}"; }
 warn() { echo -e "${YELLOW}! $*${NC}"; }
 
 DESTRUCTIVE_CMDS=" reset "          # space-delimited set
-FRESH_MAX_S=300                     # heartbeat freshness window for destructive cmds
+# Heartbeats are hourly in steady state; 2h matches the status page "alive" window.
+FRESH_MAX_S="${BOTCTL_FRESH_MAX_S:-7200}"
 
 # ── Args ────────────────────────────────────────────────────────────────────────
 [[ $# -ge 3 ]] || { err "usage: botctl.sh <account_idx> <bot_name> <cmd> [--capital N] [--yes]"; exit 2; }
@@ -94,8 +98,11 @@ fi
 # ── Build and run the remote ctl_client invocation ───────────────────────────────
 REMOTE_ARGS="--bot $BOT --cmd $CMD"
 [[ -n "$CAPITAL" ]] && REMOTE_ARGS="$REMOTE_ARGS --capital $CAPITAL"
+# inventory stores install_dir with a literal "~"; a quoted "~" is NOT expanded by
+# the remote shell, so rewrite the leading ~/ to $HOME/ (expanded remotely).
+REMOTE_DIR="${INSTALL_DIR/#\~\//\$HOME/}"
 # Pick the bot's venv python (.venv vs venv), then run the client as the bot user.
-REMOTE_CMD="cd \"$INSTALL_DIR\" || exit 9
+REMOTE_CMD="cd \"$REMOTE_DIR\" || exit 9
 PY=.venv/bin/python; [ -x \"\$PY\" ] || PY=venv/bin/python
 \"\$PY\" -m tradinetools.ctl_client $REMOTE_ARGS"
 
