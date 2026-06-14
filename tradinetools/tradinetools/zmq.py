@@ -104,6 +104,20 @@ def make_rep(ctx: zmq.Context, addr: str, name: str = "REP") -> zmq.Socket:
     return sock
 
 
+def make_rep_async(ctx: "zmq.asyncio.Context", addr: str, name: str = "REP") -> "zmq.asyncio.Socket":
+    """Bind an async REP socket to addr (IPC chmod 0600) and return it.
+
+    Async counterpart of make_rep(), for the control-plane loop that lives in the
+    bot's asyncio event loop alongside heartbeat_loop.
+    """
+    warn_if_external_bind(addr, name)
+    _prepare_ipc_bind(addr)
+    sock = ctx.socket(zmq.REP)
+    sock.bind(addr)
+    _chmod_ipc(addr)
+    return sock
+
+
 def make_req(ctx: zmq.Context, addr: str) -> zmq.Socket:
     """Connect a synchronous REQ socket to addr and return it."""
     sock = ctx.socket(zmq.REQ)
