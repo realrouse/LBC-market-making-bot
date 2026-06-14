@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from strategy_engines.swing     import SwingStrategy      # pylint: disable=wrong-import-position
 from strategy_engines.dca       import DCAStrategy        # pylint: disable=wrong-import-position
 from strategy_engines.swinghold import SwingHoldStrategy  # pylint: disable=wrong-import-position
+from strategy_engines.grid      import GridStrategy, GridLevel  # pylint: disable=wrong-import-position
 
 
 # ── Minimal config fixtures ──────────────────────────────────────────────────
@@ -71,6 +72,16 @@ class _ShCfg:
     connector = "binance"
 
 
+class _GridCfg:
+    grid_symbol          = "BTCUSDT"
+    grid_lower           = 100.0
+    grid_upper           = 104.0
+    grid_levels          = 5        # step = (104-100)/(5-1) = 1.0
+    grid_order_size_usdt = 50.0
+    connector            = "binance"
+    grid_trail_mode      = "static"
+
+
 def _swing():
     return SwingStrategy(_SwingCfg())
 
@@ -79,6 +90,9 @@ def _dca():
 
 def _sh():
     return SwingHoldStrategy(_ShCfg())
+
+def _grid():
+    return GridStrategy(_GridCfg())
 
 def _state():
     """Minimal state-like object backed by an in-memory SQLite."""
@@ -499,6 +513,97 @@ class TestSwingHoldResistances(unittest.TestCase):
 
     def test_next_resistance_none_when_entry_above_all(self):
         self.assertIsNone(self.s._next_resistance(90000.0, 0))
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# GridStrategy — cycle accounting (regression: PnL was stuck at $0)
+# ════════════════════════════════════════════════════════════════════════════
+
+# DDL mirrors live_bot.py (migration v2 + v3) so save/restore can be exercised.
+_GRID_SCHEMA = """
+CREATE TABLE grid_state (
+    symbol TEXT PRIMARY KEY, grid_lower REAL, grid_upper REAL, grid_step REAL,
+    order_size_usdt REAL, total_cycles INTEGER DEFAULT 0,
+    total_profit_usd REAL DEFAULT 0.0, initialised INTEGER DEFAULT 0,
+    halted INTEGER DEFAULT 0, updated_at REAL);
+CREATE TABLE grid_levels (
+    symbol TEXT, level_price REAL, buy_order_id TEXT, sell_order_id TEXT,
+    buy_price REAL, sell_price REAL, status TEXT DEFAULT 'idle',
+    filled_at_ts REAL, updated_at REAL, entry_price REAL,
+    PRIMARY KEY (symbol, level_price));
+"""
+
+
+class TestGridCycleAccounting(unittest.IsolatedAsyncioTestCase):
+
+    async def asyncSetUp(self):
+        _fake_api.post_order  = AsyncMock(return_value="sim_x")
+        _fake_api.compute_fee = MagicMock(return_value=0.0)
+        self.g     = _grid()
+        self.state = _state()
+
+    async def test_buy_fill_records_entry_price(self):
+        lvl = self.g.levels[0]                  # price 100
+        lvl.buy_price = 100.0
+        lvl.status    = "buy_placed"
+        await self.g._on_buy_filled(self.state, lvl)
+        self.assertEqual(lvl.status, "sell_placed")
+        self.assertAlmostEqual(lvl.sell_price, 101.0)   # buy + step(1.0)
+        self.assertAlmostEqual(lvl.entry_price, 100.0)  # entry remembered
+
+    async def test_buy_then_sell_counts_cycle_and_books_profit(self):
+        lvl = self.g.levels[0]
+        lvl.buy_price = 100.0
+        lvl.status    = "buy_placed"
+        await self.g._on_buy_filled(self.state, lvl)    # → SELL at 101, entry 100
+        await self.g._on_sell_filled(self.state, lvl)   # SELL fills
+        # qty = 50/100 = 0.5 ; profit = (101-100)*0.5 = 0.5 (fees 0)
+        self.assertEqual(self.g.grid.total_cycles, 1)
+        self.assertAlmostEqual(self.g.grid.total_profit_usd, 0.5)
+        self.assertIsNone(lvl.entry_price)              # cleared after booking
+
+    async def test_profit_is_net_of_fees(self):
+        _fake_api.compute_fee = MagicMock(return_value=0.1)  # 0.1 per side
+        lvl = self.g.levels[0]
+        lvl.buy_price = 100.0
+        lvl.status    = "buy_placed"
+        await self.g._on_buy_filled(self.state, lvl)
+        await self.g._on_sell_filled(self.state, lvl)
+        # gross 0.5 − 2×0.1 fees = 0.3
+        self.assertAlmostEqual(self.g.grid.total_profit_usd, 0.3)
+
+    async def test_init_placed_sell_does_not_count_cycle(self):
+        """A SELL placed at init (no prior BUY → entry_price None) must not book PnL."""
+        lvl = self.g.levels[3]                  # price 103
+        lvl.sell_price  = 103.0
+        lvl.entry_price = None
+        lvl.status      = "sell_placed"
+        await self.g._on_sell_filled(self.state, lvl)
+        self.assertEqual(self.g.grid.total_cycles, 0)
+        self.assertAlmostEqual(self.g.grid.total_profit_usd, 0.0)
+
+
+class TestGridEntryPricePersistence(unittest.IsolatedAsyncioTestCase):
+
+    async def asyncSetUp(self):
+        _fake_api.post_order  = AsyncMock(return_value="sim_x")
+        _fake_api.compute_fee = MagicMock(return_value=0.0)
+        self.state = _state()
+        self.state.conn.executescript(_GRID_SCHEMA)
+
+    async def test_entry_price_survives_save_and_restore(self):
+        g1  = _grid()
+        lvl = g1.levels[0]
+        lvl.buy_price = 100.0
+        lvl.status    = "buy_placed"
+        await g1._on_buy_filled(self.state, lvl)        # entry_price = 100, sell_placed
+        g1._save_state(self.state.conn)
+
+        g2 = _grid()
+        await g2.restore_from_db(self.state)
+        restored = g2.levels[0]
+        self.assertEqual(restored.status, "sell_placed")
+        self.assertAlmostEqual(restored.entry_price, 100.0)
 
 
 if __name__ == "__main__":

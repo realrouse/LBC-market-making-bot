@@ -466,15 +466,25 @@ def _render_payload_summary(bot_name: str, payload: dict, now: int) -> str:
 
     parts = []
     if bot_name in ("live_bot", "grid_bot", "swing_bot"):
-        pnl = payload.get("daily_pnl")
-        if pnl is not None:
-            parts.append(f"pnl=${pnl:+.2f}")
+        # Cumulative realized PnL is the headline; daily shown alongside.
+        # Fall back to daily_pnl for heartbeats from bots predating pnl_total.
+        pt = payload.get("pnl_total")
+        if pt is not None:
+            parts.append(f"pnl=${pt:+.2f}")
+        dp = payload.get("daily_pnl")
+        if dp is not None:
+            # When pnl_total is present it is the headline (pnl=); daily becomes day=.
+            # For old heartbeats without pnl_total, daily is shown as pnl=.
+            parts.append(f"day=${dp:+.2f}" if pt is not None else f"pnl=${dp:+.2f}")
+        tt = payload.get("trades_total")
+        if tt is not None:
+            parts.append(f"trades={tt}")
         cap = payload.get("capital")
         if cap is not None:
             parts.append(f"cap=${cap:.0f}")
         ot = payload.get("open_trades")
         if ot is not None:
-            parts.append(f"trades={ot}")
+            parts.append(f"open={ot}")
         ts = payload.get("last_book_ts")
         if ts:
             parts.append(f"book={_ago(ts)}")

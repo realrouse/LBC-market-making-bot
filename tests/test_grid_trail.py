@@ -45,7 +45,7 @@ def _make_db(saved_lower: float, saved_upper: float, saved_step: float,
     conn.execute(
         "CREATE TABLE grid_levels "
         "(symbol, level_price, buy_order_id, sell_order_id, "
-        " buy_price, sell_price, status, filled_at_ts)"
+        " buy_price, sell_price, status, filled_at_ts, entry_price)"
     )
     conn.execute(
         "INSERT INTO grid_state VALUES (?,?,?,?,?,?,?,?,?)",

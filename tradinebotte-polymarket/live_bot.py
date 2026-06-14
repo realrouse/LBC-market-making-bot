@@ -742,6 +742,9 @@ CREATE TABLE IF NOT EXISTS grid_levels (
     PRIMARY KEY (symbol, level_price)
 );
 """,
+    # v3: entry price of the BUY a SELL is closing, so a completed BUY→SELL cycle
+    # can book its PnL. Without it, GridStrategy never counted a cycle (PnL stuck $0).
+    3: "ALTER TABLE grid_levels ADD COLUMN entry_price REAL;\n",
 }
 
 
@@ -902,6 +905,24 @@ class BotState:
         """Win rate as a percentage, 0.0 if no resolved trades."""
         t = self.wins + self.losses
         return (self.wins / t * 100) if t else 0.0
+
+
+def cumulative_pnl(state: "BotState") -> tuple[float, int]:
+    """Realized cumulative PnL and completed-trade count for the active strategy.
+
+    Sourced from the persisted, restart-restored state (grid_state for grid,
+    swing_state for swing, the threshold trades table otherwise), so the cumulative
+    survives restarts — only the operator reset command zeroes it. Exported on the
+    heartbeat so the status page shows the real cumulative, not just the daily PnL.
+    """
+    strat = getattr(state, "strategy", None)
+    grid = getattr(strat, "grid", None)
+    if grid is not None:
+        return float(grid.total_profit_usd), int(grid.total_cycles)
+    sw = getattr(strat, "sw", None)
+    if sw is not None:
+        return float(sw.total_pnl), int(sw.total_trades)
+    return float(state.total_pnl), int(state.total_trades)
 
 
 # ─── WEBSOCKET MESSAGE HANDLING ───────────────────────────────────────────────
@@ -1700,17 +1721,23 @@ async def main() -> None:
             # are always simulated. Decided here, not from runtime order ids.
             _hb_mode = "live" if (config.strategy_type == "threshold"
                                   and config.private_key) else "sim"
+            def _hb_payload() -> dict[str, Any]:
+                pnl_total, trades_total = cumulative_pnl(state)
+                return {
+                    "bounds_ok":    state.daily_pnl >= -config.daily_stop_loss,
+                    "daily_pnl":    round(state.daily_pnl, 2),
+                    "pnl_total":    round(pnl_total, 2),
+                    "trades_total": trades_total,
+                    "capital":      round(state.capital, 2),
+                    "open_trades":  len(state.open_trades),
+                    "last_book_ts": state.last_book_ts,
+                }
+
             _hb_task = asyncio.create_task(
                 heartbeat_loop(
                     _hb_bot_name,
                     config.install_dir,
-                    lambda: {
-                        "bounds_ok":    state.daily_pnl >= -config.daily_stop_loss,
-                        "daily_pnl":    round(state.daily_pnl, 2),
-                        "capital":      round(state.capital, 2),
-                        "open_trades":  len(state.open_trades),
-                        "last_book_ts": state.last_book_ts,
-                    },
+                    _hb_payload,
                     mode=_hb_mode,
                 )
             )

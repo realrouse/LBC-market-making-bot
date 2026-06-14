@@ -73,6 +73,10 @@ class GridLevel:
     sell_order_id:  Optional[str]   = None
     buy_price:      Optional[float] = None   # actual price of the active BUY order
     sell_price:     Optional[float] = None   # actual price of the active SELL order
+    # Entry price of the BUY that this SELL is closing. Set when a BUY fills and a
+    # counter-SELL is placed; read back when that SELL fills to book the cycle PnL.
+    # Stays None for SELLs placed at init (no prior BUY) so they never count a cycle.
+    entry_price:    Optional[float] = None
     # idle | buy_placed | sell_placed
     status:         str             = "idle"
     filled_at_ts:   Optional[float] = None
@@ -201,13 +205,14 @@ class GridStrategy:
                 """
                 INSERT INTO grid_levels
                     (symbol, level_price, buy_order_id, sell_order_id,
-                     buy_price, sell_price, status, filled_at_ts, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     buy_price, sell_price, entry_price, status, filled_at_ts, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(symbol, level_price) DO UPDATE SET
                     buy_order_id  = excluded.buy_order_id,
                     sell_order_id = excluded.sell_order_id,
                     buy_price     = excluded.buy_price,
                     sell_price    = excluded.sell_price,
+                    entry_price   = excluded.entry_price,
                     status        = excluded.status,
                     filled_at_ts  = excluded.filled_at_ts,
                     updated_at    = excluded.updated_at
@@ -215,7 +220,7 @@ class GridStrategy:
                 (
                     self.grid.symbol, lvl.price,
                     lvl.buy_order_id, lvl.sell_order_id,
-                    lvl.buy_price,    lvl.sell_price,
+                    lvl.buy_price,    lvl.sell_price, lvl.entry_price,
                     lvl.status,       lvl.filled_at_ts, now,
                 ),
             )
@@ -296,7 +301,7 @@ class GridStrategy:
         level_rows = conn.execute(
             """
             SELECT level_price, buy_order_id, sell_order_id,
-                   buy_price, sell_price, status, filled_at_ts
+                   buy_price, sell_price, entry_price, status, filled_at_ts
             FROM grid_levels WHERE symbol = ?
             ORDER BY level_price
             """,
@@ -309,7 +314,7 @@ class GridStrategy:
             if r is None:
                 continue
             (_, lvl.buy_order_id, lvl.sell_order_id,
-             lvl.buy_price, lvl.sell_price,
+             lvl.buy_price, lvl.sell_price, lvl.entry_price,
              lvl.status, lvl.filled_at_ts) = r
 
         if self.grid.halted:
@@ -653,6 +658,7 @@ class GridStrategy:
         if oid:
             lvl.sell_order_id = oid
             lvl.sell_price    = sell_p
+            lvl.entry_price   = buy_p   # remember the entry so the SELL can book PnL
             lvl.status        = "sell_placed"
             logger.info(
                 "GridStrategy [%s] BUY fill %.2f → SELL %.2f [%s]",
@@ -668,10 +674,11 @@ class GridStrategy:
     async def _on_sell_filled(self, state: Any, lvl: GridLevel) -> None:
         """SELL at lvl.sell_price filled → account PnL, place BUY at sell_price − grid_step."""
         sell_p   = lvl.sell_price or lvl.price
-        buy_p    = lvl.buy_price                        # None for init-placed SELLs
+        buy_p    = lvl.entry_price                      # None for init-placed SELLs
         new_buy  = round(sell_p - self.grid.grid_step, 2)
 
-        # PnL only counted when a full BUY→SELL cycle completes
+        # PnL only counted when a full BUY→SELL cycle completes (entry_price set by
+        # the preceding BUY fill). SELLs placed at init have no entry → no cycle.
         profit = 0.0
         if buy_p is not None and new_buy > 0:
             qty      = self.grid.order_size_usdt / buy_p
@@ -684,6 +691,7 @@ class GridStrategy:
         lvl.sell_order_id = None
         lvl.sell_price    = None
         lvl.buy_price     = None
+        lvl.entry_price   = None
         lvl.filled_at_ts  = time.time()
 
         if new_buy < self.grid.grid_lower:

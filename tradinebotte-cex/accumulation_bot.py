@@ -819,6 +819,10 @@ async def _run(p: dict, db: sqlite3.Connection, install_dir: str = "") -> None:
                         "free_usdt":      round(state.free_usdt, 2),
                         "avg_entry":      round(state.avg_entry, 2),
                         "total_realized": round(state.total_realized, 2),
+                        # Unified cumulative-PnL field (alias of total_realized) so the
+                        # status page reads one key across all bots. Persisted +
+                        # restored at boot → survives restarts.
+                        "pnl_total":      round(state.total_realized, 2),
                     },
                     mode="sim",  # paper trading only — no real exchange connector
                 )

@@ -10,6 +10,7 @@ Run with:
 
 import logging, os, sys, time, sqlite3, unittest
 from datetime import datetime, timezone, timedelta
+from types import SimpleNamespace
 from unittest.mock import patch
 
 # Redirect all bot I/O to ~/tmp so tests never touch /opt or write credentials.
@@ -1956,7 +1957,7 @@ class TestGridFills(unittest.TestCase):
         s   = self._make_strategy()
         lvl = s.level_at_price(99000.0)
         # Simulate the level after a full BUY→SELL cycle
-        lvl.buy_price     = 99000.0
+        lvl.entry_price   = 99000.0   # entry recorded by the preceding BUY fill
         lvl.sell_order_id = "sim_sell1"
         lvl.sell_price    = 100000.0
         lvl.status        = "sell_placed"
@@ -1975,7 +1976,7 @@ class TestGridFills(unittest.TestCase):
     def test_sell_filled_profit_positive(self):
         s   = self._make_strategy()
         lvl = s.level_at_price(99000.0)
-        lvl.buy_price     = 99000.0
+        lvl.entry_price   = 99000.0   # entry recorded by the preceding BUY fill
         lvl.sell_order_id = "sim_sell1"
         lvl.sell_price    = 100000.0
         lvl.status        = "sell_placed"
@@ -2060,7 +2061,7 @@ class TestGridSimFillDetection(unittest.TestCase):
     def test_sim_sell_fill_detected(self):
         s   = self._make_strategy()
         lvl = s.level_at_price(99000.0)
-        lvl.buy_price     = 99000.0
+        lvl.entry_price   = 99000.0   # entry recorded by the preceding BUY fill
         lvl.sell_order_id = "sim_sell1"
         lvl.sell_price    = 100000.0
         lvl.status        = "sell_placed"
@@ -3319,6 +3320,29 @@ class TestMarketRefreshLoop(unittest.IsolatedAsyncioTestCase):
 
         # Loop survived the error — no tokens added, but no crash
         self.assertEqual(len(self.state.tokens), 0)
+
+
+class TestCumulativePnl(unittest.TestCase):
+    """cumulative_pnl() sources the right persisted totals per strategy type."""
+
+    def test_threshold_uses_state_totals(self):
+        st = make_state()
+        st.strategy   = None          # built-in threshold strategy
+        st.total_pnl  = 12.5
+        st.total_trades = 7
+        self.assertEqual(bot.cumulative_pnl(st), (12.5, 7))
+
+    def test_grid_uses_grid_state(self):
+        st = make_state()
+        st.strategy = SimpleNamespace(
+            grid=SimpleNamespace(total_profit_usd=3.25, total_cycles=4))
+        self.assertEqual(bot.cumulative_pnl(st), (3.25, 4))
+
+    def test_swing_uses_swing_state(self):
+        st = make_state()
+        st.strategy = SimpleNamespace(
+            sw=SimpleNamespace(total_pnl=-1.5, total_trades=2))
+        self.assertEqual(bot.cumulative_pnl(st), (-1.5, 2))
 
 
 if __name__ == "__main__":
