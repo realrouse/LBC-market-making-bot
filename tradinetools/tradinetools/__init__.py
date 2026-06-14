@@ -5,6 +5,7 @@ import inspect
 import json
 import logging
 import os
+import shutil
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -295,3 +296,84 @@ async def control_loop(
     finally:
         sock.close(linger=0)
         ctx.term()
+
+
+# ─── RESET (sim-only, restart variant) ────────────────────────────────────────
+# The `reset` command does NOT wipe state in-process — that would race the bot's
+# own _save_state. Instead it drops a marker and hard-exits; systemd restarts the
+# bot (Restart=on-failure → must exit non-zero), and consume_reset_marker() does
+# the backup + wipe atomically at cold start with nothing else running.
+
+_RESET_MARKER = ".reset_request.json"
+
+
+def reset_marker_path(install_dir: str) -> str:
+    """Path of the pending-reset marker inside a bot's install dir."""
+    return os.path.join(install_dir, _RESET_MARKER)
+
+
+def write_reset_marker(install_dir: str, capital: float) -> str:
+    """Record a pending reset (new starting capital), written atomically.
+
+    Called by the reset command handler right before it hard-exits. The actual
+    wipe happens at next boot via consume_reset_marker().
+    """
+    path = reset_marker_path(install_dir)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"capital": float(capital), "ts": int(time.time())}, f)
+    os.replace(tmp, path)   # atomic on POSIX
+    return path
+
+
+def consume_reset_marker(
+    install_dir: str,
+    db_path: str | None,
+    *,
+    backup_dir: str | None = None,
+) -> float | None:
+    """At boot, BEFORE opening the DB: apply a pending reset if one exists.
+
+    Backs up then removes db_path (and its -wal/-shm sidecars) and returns the
+    override starting capital. Returns None when no reset is pending. The wipe
+    runs at cold start with no other task live, so it cannot race _save_state.
+
+    Fail-safe: if the backup cannot be written, the DB is left intact and the
+    reset is aborted (returns None) — never destroy data we could not back up.
+    Idempotent: the marker is always removed, so a restart loop never re-wipes.
+    """
+    path = reset_marker_path(install_dir)
+    if not os.path.exists(path):
+        return None
+
+    capital = None
+    try:
+        with open(path, encoding="utf-8") as f:
+            capital = json.load(f).get("capital")
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        _ctl_logger.warning("reset marker unreadable (%s) — proceeding", exc)
+
+    if db_path and os.path.exists(db_path):
+        bdir = backup_dir or os.path.join(install_dir, "backups")
+        try:
+            os.makedirs(bdir, exist_ok=True)
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            dst = os.path.join(bdir, f"{os.path.basename(db_path)}.{stamp}.reset.bak")
+            shutil.copy2(db_path, dst)
+            _ctl_logger.info("reset: backed up %s -> %s", db_path, dst)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            _ctl_logger.warning(
+                "reset: backup failed (%s) — DB left intact, reset aborted", exc)
+            os.remove(path)
+            return None
+        for suffix in ("", "-wal", "-shm"):
+            p = db_path + suffix
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except OSError as exc:
+                _ctl_logger.warning("reset: could not remove %s: %s", p, exc)
+
+    os.remove(path)
+    _ctl_logger.info("reset: state wiped, new starting capital=%s", capital)
+    return float(capital) if capital is not None else None
