@@ -4,7 +4,6 @@
 Collects data via one sequential SSH per account (6 total):
   - systemd service states + version stamp (all accounts)
   - live.db trade stats (accounts 1, 2, 3, 4)
-  - live_ob.db orderbook stats (account 4)
   - live_accum.db accumulation stats (accounts 3, 4)
   - shared state DB: heartbeats + inventory + deploys (account 1 — the status collector)
 
@@ -50,7 +49,7 @@ now = int(time.time())
 today_start_ms = (now - (now % 86400)) * 1000
 week_start_ms  = (now - 7 * 86400) * 1000
 month_start_ms = (now - 30 * 86400) * 1000
-data = {"version": "?", "services": [], "live": None, "ob": None, "accum": None,
+data = {"version": "?", "services": [], "live": None, "accum": None,
         "heartbeats": None}
 
 try:
@@ -136,22 +135,6 @@ data["live"] = _qdb("~/tradinebotte/live.db", {
     ),
 })
 
-# live_ob.db: orderbook CEX bot — table ob_trades, exit_ts_ms NULL = open
-data["ob"] = _qdb("~/tradinebotte/live_ob.db", {
-    "totals": (
-        "SELECT count(*) t,"
-        " sum(CASE WHEN pnl_net > 0 THEN 1 ELSE 0 END) w,"
-        " sum(CASE WHEN pnl_net <= 0 THEN 1 ELSE 0 END) l"
-        " FROM ob_trades WHERE exit_ts_ms IS NOT NULL"
-    ),
-    "recent": (
-        "SELECT id, entry_ts_ms/1000 entry_ts, direction,"
-        " CASE WHEN pnl_net > 0 THEN 'WIN' ELSE 'LOSS' END result,"
-        " entry_price, pnl_net pnl, capital_after capital"
-        " FROM ob_trades WHERE exit_ts_ms IS NOT NULL ORDER BY id DESC LIMIT 5"
-    ),
-})
-
 # live_accum.db: accumulation bot — table accum_trades
 data["accum"] = _qdb("~/tradinebotte/live_accum.db", {
     "totals": "SELECT count(*) t FROM accum_trades",
@@ -214,12 +197,12 @@ def _collect_account(user: str, password: str, server: str, port: int) -> dict:
     cmd = f"python3 - <<'__PYEOF__'\n{_REMOTE_COLLECT}\n__PYEOF__"
     stdout, _ = _ssh(user, password, server, port, cmd)
     if not stdout.strip():
-        return {"version": "?", "services": [], "live": None, "ob": None, "accum": None,
+        return {"version": "?", "services": [], "live": None, "accum": None,
                 "heartbeats": None, "error": "unreachable"}
     try:
         return json.loads(stdout.strip())
     except json.JSONDecodeError:
-        return {"version": "?", "services": [], "live": None, "ob": None, "accum": None,
+        return {"version": "?", "services": [], "live": None, "accum": None,
                 "heartbeats": None, "error": "parse_error"}
 
 
@@ -418,7 +401,7 @@ _ACCOUNT_LABELS = [
     "acct-1 [poly+cex+status]",
     "acct-2 [poly]",
     "acct-3 [poly+accum]",
-    "acct-4 [poly+ob+accum]",
+    "acct-4 [poly+accum]",
     "acct-5 [swing]",
     "acct-6 [grid-mexc-sim]",
 ]
@@ -511,16 +494,6 @@ def _render_payload_summary(bot_name: str, payload: dict, now: int) -> str:
         r = payload.get("total_realized")
         if r is not None:
             parts.append(f"pnl=${r:+.2f}")
-    elif bot_name == "orderbook_bot":
-        op = payload.get("open_positions")
-        if op is not None:
-            parts.append(f"pos={op}")
-        tp = payload.get("total_pnl")
-        if tp is not None:
-            parts.append(f"pnl=${tp:+.2f}")
-        lp = payload.get("last_price")
-        if lp:
-            parts.append(f"${lp:,.0f}")
     elif bot_name == "feed":
         ws = payload.get("ws_connected")
         if ws is not None:
@@ -556,11 +529,6 @@ def _key_metric(bot_name: str, payload: dict) -> str:
         btc = payload.get("holdings_btc")
         if btc is not None:
             return f"{btc:.4f} BTC"
-    elif bot_name == "orderbook_bot":
-        tp = payload.get("total_pnl")
-        if tp is not None:
-            sign = "+" if tp >= 0 else "-"
-            return f"{sign}${abs(tp):.2f}"
     return ""
 
 
@@ -848,25 +816,6 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
             )
 
     cex_html = ""
-    ob = data.get("ob")
-    if ob:
-        ob_tot    = (ob.get("totals") or [{}])[0]
-        ob_recent = ob.get("recent", [])
-        ow = ob_tot.get("w", 0) or 0
-        ol = ob_tot.get("l", 0) or 0
-        cex_html += (
-            f"<div style='margin-top:6px;font-size:.8em'>"
-            f"<span style='color:#8b949e;text-transform:uppercase;letter-spacing:.8px;"
-            f"font-size:.85em'>orderbook_bot</span>"
-            f" — {ob_tot.get('t', 0)}T · WR {_wr(ow, ol)}"
-            f"</div>"
-        )
-        if ob_recent:
-            cex_html += (
-                f"<details><summary>Recent ob trades ▾</summary>"
-                f"{_render_trade_table(ob_recent, 'ob')}"
-                f"</details>"
-            )
     accum = data.get("accum")
     if accum:
         accum_port = (accum.get("portfolio") or [{}])[0]
@@ -1050,19 +999,12 @@ def _render_html(
         f"</div>"
     )
 
-    # BTC 24h: try Binance API first, fall back to orderbook_bot heartbeat payload
+    # BTC 24h from the Binance API.
     btc_24h   = _fetch_btc_24h()
     btc_price = float(btc_24h.get("lastPrice") or 0)
     btc_chg   = float(btc_24h.get("priceChangePercent") or 0)
     btc_high  = float(btc_24h.get("highPrice") or 0)
     btc_low   = float(btc_24h.get("lowPrice") or 0)
-    if not btc_price:
-        for r in heartbeats:
-            if r["bot_name"] == "orderbook_bot":
-                lp = r.get("payload", {}).get("last_price")
-                if lp:
-                    btc_price = float(lp)
-                break
     if btc_price:
         chg_cls  = "up" if btc_chg >= 0 else "dn"
         chg_sign = "+" if btc_chg >= 0 else ""
