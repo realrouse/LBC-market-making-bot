@@ -43,6 +43,13 @@ FEED_ADDR  = os.environ.get(
 )
 MARKET_REFRESH  = 30   # seconds between Gamma API polls
 PING_INTERVAL   = 10   # seconds between keepalive pings to subscribers
+# Which Polymarket markets this feed discovers + broadcasts. Default 5M (102892);
+# set TRADINEBOTTE_MARKET_TAG_ID=102467 for a 15M feed. Window auto-derives unless
+# overridden. One feed serves one timeframe — run a separate instance per tag.
+MARKET_TAG_ID   = int(os.environ.get("TRADINEBOTTE_MARKET_TAG_ID", api.GAMMA_TAG_5M))
+MARKET_WINDOW   = int(os.environ.get(
+    "TRADINEBOTTE_MARKET_WINDOW_MINS",
+    16 if MARKET_TAG_ID == api.GAMMA_TAG_15M else 6))
 _INSTALL_DIR    = os.environ.get("TRADINEBOTTE_DIR", os.getcwd())
 
 logger = setup_logger("feed", os.path.join(_INSTALL_DIR, "feed.log"))
@@ -125,7 +132,7 @@ async def _market_refresh(sock: zmq.asyncio.Socket,
         try:
             if VERBOSE:
                 logger.debug("[REFRESH] polling Gamma API...")
-            markets = await api.get_markets(session)
+            markets = await api.get_markets(session, tag_id=MARKET_TAG_ID, window_minutes=MARKET_WINDOW)
             if VERBOSE:
                 logger.debug("[REFRESH] %d markets returned", len(markets))
             new_ids: list[str] = []
@@ -186,8 +193,9 @@ async def _run_ws(sock: zmq.asyncio.Socket, session: aiohttp.ClientSession) -> N
     global _ws_connected, _last_book_ts, _msgs_total  # pylint: disable=global-statement
     if VERBOSE:
         logger.debug("[WS] calling get_markets...")
-    markets = await api.get_markets(session)
-    logger.info("BTC 5-min markets: %d", len(markets))
+    markets = await api.get_markets(session, tag_id=MARKET_TAG_ID, window_minutes=MARKET_WINDOW)
+    _tf = "15M" if MARKET_TAG_ID == api.GAMMA_TAG_15M else "5M"
+    logger.info("BTC %s markets (tag=%d, ±%dmin): %d", _tf, MARKET_TAG_ID, MARKET_WINDOW, len(markets))
     if not markets:
         logger.warning("No markets — waiting 30s")
         await asyncio.sleep(30)
