@@ -101,10 +101,16 @@ REMOTE_ARGS="--bot $BOT --cmd $CMD"
 # inventory stores install_dir with a literal "~"; a quoted "~" is NOT expanded by
 # the remote shell, so rewrite the leading ~/ to $HOME/ (expanded remotely).
 REMOTE_DIR="${INSTALL_DIR/#\~\//\$HOME/}"
-# Pick the bot's venv python (.venv vs venv), then run the client as the bot user.
-REMOTE_CMD="cd \"$REMOTE_DIR\" || exit 9
-PY=.venv/bin/python; [ -x \"\$PY\" ] || PY=venv/bin/python
-\"\$PY\" -m tradinetools.ctl_client $REMOTE_ARGS"
+# The venv + tradinetools live in the code dir, which for some bots (e.g. the c3
+# Binance grid) differs from install_dir (the data dir). Search install_dir then
+# ~/tradinebotte for a venv, run ctl_client from there. The control socket is
+# per-UID, so cwd does not matter — only that python+tradinetools are importable.
+REMOTE_CMD="for d in \"$REMOTE_DIR\" \"\$HOME/tradinebotte\"; do
+  for py in \"\$d/.venv/bin/python\" \"\$d/venv/bin/python\"; do
+    if [ -x \"\$py\" ]; then cd \"\$d\" && exec \"\$py\" -m tradinetools.ctl_client $REMOTE_ARGS; fi
+  done
+done
+echo '{\"ok\": false, \"msg\": \"no venv found for ctl_client\"}'; exit 9"
 
 echo -e "${YELLOW}▶ $CMD → $BOT (acct idx $ACC_IDX) @ $INSTALL_DIR${NC}"
 set +e
