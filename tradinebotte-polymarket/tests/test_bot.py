@@ -3345,5 +3345,55 @@ class TestCumulativePnl(unittest.TestCase):
         self.assertEqual(bot.cumulative_pnl(st), (-1.5, 2))
 
 
+class TestCapitalBasePersistence(unittest.TestCase):
+    """The capital base is persisted so equity resumes across restarts instead of
+    reverting to the config default."""
+
+    def test_base_roundtrip(self):
+        conn = make_db()
+        self.assertIsNone(bot.read_capital_base(conn))
+        bot.write_capital_base(conn, 1234.0)
+        self.assertEqual(bot.read_capital_base(conn), 1234.0)
+
+    def test_first_boot_seeds_base_from_config(self):
+        conn = make_db()
+        cfg = bot.BotConfig()
+        cfg.capital_start = 555.0
+        st = bot.BotState(conn, cfg)
+        bot.restore_state_from_db(st)
+        self.assertEqual(bot.read_capital_base(conn), 555.0)   # seeded
+        self.assertEqual(st.config.capital_start, 555.0)
+        self.assertEqual(st.capital, 555.0)                    # no trades → base + 0
+
+    def test_restore_uses_persisted_base_over_config(self):
+        """A restart: persisted base (e.g. a prior reset override) wins over config."""
+        conn = make_db()
+        bot.write_capital_base(conn, 1234.0)
+        cfg = bot.BotConfig()
+        cfg.capital_start = 555.0          # config says 555, persisted says 1234
+        st = bot.BotState(conn, cfg)
+        bot.restore_state_from_db(st)
+        self.assertEqual(st.config.capital_start, 1234.0)
+        self.assertEqual(st.capital, 1234.0)
+
+
+class TestEquity(unittest.TestCase):
+    """equity() = capital base + realized cumulative, uniform across strategies."""
+
+    def test_threshold_equity_is_base_plus_total_pnl(self):
+        st = make_state()
+        st.strategy = None
+        st.config.capital_start = 1000.0
+        st.total_pnl = 50.0
+        self.assertAlmostEqual(bot.equity(st), 1050.0)
+
+    def test_grid_equity_folds_in_grid_profit(self):
+        st = make_state()
+        st.config.capital_start = 2000.0
+        st.strategy = SimpleNamespace(
+            grid=SimpleNamespace(total_profit_usd=13.46, total_cycles=5))
+        self.assertAlmostEqual(bot.equity(st), 2013.46)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

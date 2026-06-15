@@ -409,7 +409,7 @@ async def main() -> None:
                     "daily_pnl":         round(state.daily_pnl, 2),
                     "pnl_total":         round(pnl_total, 2),
                     "trades_total":      trades_total,
-                    "capital":           round(state.capital, 2),
+                    "capital":           round(config.capital_start + pnl_total, 2),  # equity
                     "open_trades":       len(state.open_trades),
                     "last_feed_msg_ts":  _last_feed_msg_ts,
                 }

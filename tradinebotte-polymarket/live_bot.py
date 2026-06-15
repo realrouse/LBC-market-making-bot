@@ -748,6 +748,10 @@ CREATE TABLE IF NOT EXISTS grid_levels (
     # v3: entry price of the BUY a SELL is closing, so a completed BUY→SELL cycle
     # can book its PnL. Without it, GridStrategy never counted a cycle (PnL stuck $0).
     3: "ALTER TABLE grid_levels ADD COLUMN entry_price REAL;\n",
+    # v4: persist the effective capital base (capital_start) so equity resumes across
+    # restarts instead of reverting to the config default. Equity = base + cumulative.
+    4: "CREATE TABLE IF NOT EXISTS bot_meta (key TEXT PRIMARY KEY, value REAL NOT NULL, "
+       "updated_at REAL NOT NULL);\n",
 }
 
 
@@ -926,6 +930,37 @@ def cumulative_pnl(state: "BotState") -> tuple[float, int]:
     if sw is not None:
         return float(sw.total_pnl), int(sw.total_trades)
     return float(state.total_pnl), int(state.total_trades)
+
+
+def equity(state: "BotState") -> float:
+    """Current equity = persisted capital base + realized cumulative PnL.
+
+    Reported uniformly on the heartbeat. For the threshold strategy this equals the
+    live state.capital; for grid/swing it folds in their strategy-table cumulative
+    (which state.capital does not track), so the figure resumes across restarts.
+    """
+    return state.config.capital_start + cumulative_pnl(state)[0]
+
+
+def read_capital_base(conn: sqlite3.Connection) -> "float | None":
+    """Persisted effective capital base, or None if never written (fresh DB)."""
+    try:
+        row = conn.execute(
+            "SELECT value FROM bot_meta WHERE key='capital_base'").fetchone()
+    except sqlite3.OperationalError:
+        return None
+    return float(row[0]) if row else None
+
+
+def write_capital_base(conn: sqlite3.Connection, value: float) -> None:
+    """Persist the effective capital base so it survives restarts (until the next
+    reset overrides it)."""
+    conn.execute(
+        "INSERT INTO bot_meta(key, value, updated_at) VALUES('capital_base', ?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+        (float(value), time.time()),
+    )
+    conn.commit()
 
 
 # ─── WEBSOCKET MESSAGE HANDLING ───────────────────────────────────────────────
@@ -1604,7 +1639,16 @@ def restore_state_from_db(state: BotState) -> None:
     state.wins   = row[1] or 0
     state.losses = row[2] or 0
     state.total_pnl = row[3] or 0.0
-    state.capital = state.config.capital_start + state.total_pnl
+
+    # Resume the capital base across restarts: use the persisted base if present,
+    # otherwise seed it from config (first boot, or first boot after a reset that
+    # wiped the DB — config.capital_start then already holds the reset override).
+    _base = read_capital_base(state.conn)
+    if _base is None:
+        _base = state.config.capital_start
+        write_capital_base(state.conn, _base)
+    state.config.capital_start = _base
+    state.capital = _base + state.total_pnl
 
     # Initialize daily PnL cache from DB so the in-memory counter starts
     # accurate after a restart, not at zero.
@@ -1739,7 +1783,7 @@ async def main() -> None:
                     "daily_pnl":    round(state.daily_pnl, 2),
                     "pnl_total":    round(pnl_total, 2),
                     "trades_total": trades_total,
-                    "capital":      round(state.capital, 2),
+                    "capital":      round(config.capital_start + pnl_total, 2),  # equity
                     "open_trades":  len(state.open_trades),
                     "last_book_ts": state.last_book_ts,
                 }
