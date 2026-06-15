@@ -3395,5 +3395,34 @@ class TestEquity(unittest.TestCase):
         self.assertAlmostEqual(bot.equity(st), 2013.46)
 
 
+class TestFeedConsumer(unittest.TestCase):
+    """Data-plane: registering markets from shared-feed messages (feed-consumer mode)."""
+
+    def test_register_market_from_feed_builds_up_down_tokens(self):
+        st = make_state()
+        msg = {"t": "market", "market_id": "mkt1", "question": "BTC Up or Down",
+               "up_token_id": "up1", "dn_token_id": "dn1",
+               "start_ms": 0, "end_ms": int((time.time() + 3600) * 1000)}
+        bot._register_market_from_feed(st, msg)
+        self.assertIn("up1", st.tokens)
+        self.assertIn("dn1", st.tokens)
+        self.assertEqual(st.market_tokens["mkt1"], {"UP": "up1", "DOWN": "dn1"})
+
+    def test_register_market_skips_expired(self):
+        st = make_state()
+        msg = {"t": "market", "market_id": "old", "question": "x",
+               "up_token_id": "u", "dn_token_id": "d", "start_ms": 0, "end_ms": 1}
+        bot._register_market_from_feed(st, msg)
+        self.assertNotIn("u", st.tokens)
+
+    def test_register_market_ignores_incomplete(self):
+        st = make_state()
+        bot._register_market_from_feed(st, {"t": "market", "market_id": "m"})  # no tokens
+        self.assertEqual(len(st.tokens), 0)
+
+    def test_data_source_defaults_to_ws(self):
+        self.assertEqual(bot.BotConfig().data_source, "ws")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

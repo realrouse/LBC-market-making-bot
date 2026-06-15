@@ -51,7 +51,8 @@ from tradinetools import (
     heartbeat_loop, control_loop, Command,
     write_reset_marker, consume_reset_marker,
 )
-from tradinetools.zmq import PORT_FEED, PORT_INDICATORS, PORT_IND_REG, default_ipc_addr
+from tradinetools.zmq import PORT_FEED, PORT_INDICATORS, PORT_IND_REG, default_ipc_addr, make_sub
+from tradinetools.schemas import MarketMessage
 
 # ─── STRATEGY DEFAULTS (module-level — tests reference these directly) ────────
 # Hardcoded defaults — overridden by make_config() when a strategy JSON is
@@ -282,7 +283,11 @@ class BotConfig:
     # Weekly stop-loss
     weekly_stop_loss: float = WEEKLY_STOP_LOSS
 
-    # ZeroMQ feed address (account_bot / indicators only)
+    # Market-data source: "ws" = own Polymarket WS (standalone, default);
+    # "feed" = consume the shared feed at feed_addr (data plane). Orders are placed
+    # by this bot either way (order plane stays per-bot with its own credentials).
+    data_source: str = "ws"
+    # ZeroMQ feed address (used when data_source == "feed", and by account_bot)
     feed_addr: str = f"tcp://127.0.0.1:{PORT_FEED}"
     # When False, account_bot will not auto-start feed.py; it exits if the feed
     # is unreachable. Set to false when feed is managed by systemd.
@@ -492,6 +497,8 @@ def make_config(simulate: bool = False, no_log: bool = False,
         ),
     )
     feed_auto_start = bool(cfg.get("feed_auto_start", True))
+    data_source = str(cfg.get("data_source",
+                              os.environ.get("TRADINEBOTTE_DATA_SOURCE", "ws"))).lower()
 
     # Indicators service: config.json first, env vars as fallback, IPC as final default.
     indicators_addr = cfg.get(
@@ -568,6 +575,7 @@ def make_config(simulate: bool = False, no_log: bool = False,
         us_weekly_close=us_weekly_close,
         enable_snapshots=not no_snapshots,
         feed_addr=feed_addr,
+        data_source=data_source,
         feed_auto_start=feed_auto_start,
         indicators_addr=indicators_addr,
         indicators_reg_addr=indicators_reg_addr,
@@ -1680,6 +1688,58 @@ def restore_state_from_db(state: BotState) -> None:
         state.capital, row[0], state.win_rate, state.daily_pnl, state.weekly_pnl,
     )
 
+
+# ─── DATA PLANE: shared-feed consumer (alternative to the direct WS) ───────────
+# When data_source == "feed", the bot sources market data from the shared feed
+# instead of opening its own Polymarket WS. Order placement is unchanged — it still
+# happens inside handle_book_update via this bot's own credentials (order plane).
+# Mirrors account_bot's consumer loop; does NOT auto-start a feed.
+
+def _register_market_from_feed(state: BotState, msg: dict[str, Any]) -> None:
+    """Register a market's UP/DOWN tokens from a feed 'market' message."""
+    m = MarketMessage.from_dict(msg)
+    if not m.market_id or not m.up_token_id or not m.dn_token_id:
+        return
+    if m.end_ms and time.time() * 1000 > m.end_ms:
+        return
+    q = (m.question or "")[:80]
+    for tid, d in ((m.up_token_id, "UP"), (m.dn_token_id, "DOWN")):
+        if tid not in state.tokens:
+            state.tokens[tid] = TokenState(tid, m.market_id, d, q, m.start_ms, m.end_ms,
+                                           vol_window=state.config.vol_window)
+    state.market_tokens[m.market_id] = {"UP": m.up_token_id, "DOWN": m.dn_token_id}
+
+
+async def feed_consumer_loop(state: BotState, feed_addr: str) -> None:
+    """Consume market + book updates from the shared feed and dispatch to the same
+    strategy handlers as the direct WS path. SUB-and-warn only (no feed auto-start)."""
+    import zmq.asyncio  # noqa: PLC0415
+    ctx  = zmq.asyncio.Context()
+    sock = make_sub(ctx, feed_addr)
+    logger.info("Data source: shared feed %s (consumer mode — no direct WS)", feed_addr)
+    last_msg = time.time()
+    try:
+        while True:
+            try:
+                raw = await asyncio.wait_for(sock.recv_json(), timeout=30)
+            except asyncio.TimeoutError:
+                logger.warning("No feed message for %.0fs — is the feed running on %s?",
+                               time.time() - last_msg, feed_addr)
+                continue
+            last_msg = time.time()
+            t = raw.get("t")
+            if t == "market":
+                _register_market_from_feed(state, raw)
+            elif t == "book":
+                if raw.get("token_id", "") not in state.tokens:
+                    continue
+                await handle_book_update(state, {k: v for k, v in raw.items() if k != "t"})
+            # t == "ping": liveness only
+    finally:
+        sock.close(linger=0)
+        ctx.term()
+
+
 async def main() -> None:
     args   = _parse_args()
     config = make_config(
@@ -1819,8 +1879,15 @@ async def main() -> None:
                     is_live=_is_live,
                 )
             )
+            _use_feed = config.data_source == "feed" and config.connector == "polymarket"
+            if config.data_source == "feed" and not _use_feed:
+                logger.warning("data_source=feed ignored: only the polymarket connector "
+                               "is supported (connector=%s) — using direct WS", config.connector)
             try:
-                await ws_loop(state, session)
+                if _use_feed:
+                    await feed_consumer_loop(state, config.feed_addr)
+                else:
+                    await ws_loop(state, session)
             finally:
                 _hb_task.cancel()
                 _ctl_task.cancel()
