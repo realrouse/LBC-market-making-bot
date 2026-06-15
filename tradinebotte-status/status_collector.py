@@ -28,6 +28,7 @@ import zmq
 import zmq.asyncio
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "tradinetools"))
+from tradinetools import control_loop
 from tradinetools.zmq import default_status_addr, make_pull
 from tradinetools.db import open_db
 
@@ -130,11 +131,14 @@ async def run(status_addr: str, db_path: str) -> None:
     sock = make_pull(ctx, status_addr, name="STATUS_ADDR")
     logger.info("status_collector listening on %s — db=%s", status_addr, db_path)
     prune_task = asyncio.create_task(_prune_loop(db, stop), name="prune")
+    # Infra service: control surface for ping/status only (no destructive commands).
+    ctl_task = asyncio.create_task(control_loop("status_collector"), name="control")
     try:
         await _recv_loop(sock, db, stop)
     finally:
         prune_task.cancel()
-        await asyncio.gather(prune_task, return_exceptions=True)
+        ctl_task.cancel()
+        await asyncio.gather(prune_task, ctl_task, return_exceptions=True)
         sock.close(linger=0)
         ctx.term()
         db.close()

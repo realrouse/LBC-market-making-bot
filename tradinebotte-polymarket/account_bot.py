@@ -32,7 +32,10 @@ Message types consumed from feed.py:
 """
 import argparse, asyncio, fcntl, hashlib, logging, os, subprocess, sys, time
 import zmq, zmq.asyncio
-from tradinetools import heartbeat_loop
+from tradinetools import (
+    heartbeat_loop, control_loop, Command,
+    write_reset_marker, consume_reset_marker,
+)
 from tradinetools.logging import setup_logger
 from tradinetools.zmq import make_req, make_sub, default_ipc_addr
 from tradinetools.schemas import MarketMessage
@@ -376,6 +379,16 @@ async def main() -> None:
 
     _register_indicators_sync(config)
 
+    # Self-reported mode + sim-only reset (same model as live_bot). A live account
+    # bot (real Polymarket private_key) must never honour a reset marker.
+    _hb_mode = "live" if config.private_key else "sim"
+    _is_live = _hb_mode == "live"
+    if not _is_live:
+        _reset_cap = consume_reset_marker(config.install_dir, "account_bot", config.db_path)
+        if _reset_cap is not None:
+            config.capital_start = _reset_cap
+            logger.warning("RESET applied — fresh state, starting capital=$%.2f", _reset_cap)
+
     if VERBOSE:
         logger.debug("[INIT] init_db...")
     conn  = bot.init_db(config)
@@ -389,23 +402,47 @@ async def main() -> None:
         import aiohttp
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
             state.session = session
+            def _hb_payload() -> dict:
+                pnl_total, trades_total = bot.cumulative_pnl(state)
+                return {
+                    "bounds_ok":         state.daily_pnl >= -config.daily_stop_loss,
+                    "daily_pnl":         round(state.daily_pnl, 2),
+                    "pnl_total":         round(pnl_total, 2),
+                    "trades_total":      trades_total,
+                    "capital":           round(state.capital, 2),
+                    "open_trades":       len(state.open_trades),
+                    "last_feed_msg_ts":  _last_feed_msg_ts,
+                }
             _hb_task = asyncio.create_task(
-                heartbeat_loop(
+                heartbeat_loop("account_bot", config.install_dir, _hb_payload, mode=_hb_mode)
+            )
+
+            def _reset_handler(cmd_args: dict) -> dict:
+                """Sim-only: record a reset and hard-exit so systemd restarts cold,
+                wiping state and starting from `capital`. Guarded by control_loop."""
+                cap = float(cmd_args.get("capital", config.capital_start))
+                if cap <= 0:
+                    raise ValueError("capital must be > 0")
+                write_reset_marker(config.install_dir, "account_bot", cap)
+                logger.warning("RESET requested via control plane — capital=$%.2f, "
+                               "exiting for systemd restart", cap)
+                asyncio.get_running_loop().call_later(0.5, os._exit, 1)
+                return {"capital": cap, "wiped_on_restart": True, "restart_in_s": 30}
+
+            _ctl_task = asyncio.create_task(
+                control_loop(
                     "account_bot",
-                    config.install_dir,
-                    lambda: {
-                        "bounds_ok":         state.daily_pnl >= -config.daily_stop_loss,
-                        "daily_pnl":         round(state.daily_pnl, 2),
-                        "open_trades":       len(state.open_trades),
-                        "last_feed_msg_ts":  _last_feed_msg_ts,
-                    },
+                    {"reset": Command(_reset_handler, destructive=True,
+                                      help="wipe state + restart with given --capital (sim only)")},
+                    mode=_hb_mode, is_live=_is_live,
                 )
             )
             try:
                 await _run(state)
             finally:
                 _hb_task.cancel()
-                await asyncio.gather(_hb_task, return_exceptions=True)
+                _ctl_task.cancel()
+                await asyncio.gather(_hb_task, _ctl_task, return_exceptions=True)
     finally:
         conn.close()
 

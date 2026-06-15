@@ -76,7 +76,7 @@ from typing import Any, NamedTuple
 
 import aiohttp, websockets, zmq, zmq.asyncio
 
-from tradinetools import heartbeat_loop
+from tradinetools import heartbeat_loop, control_loop
 from tradinetools.zmq import make_pub, make_sub, make_rep, default_ipc_addr
 from tradinetools.math import (atr_last, bollinger_last, vwap_last,
                                 vol_zscore_last, rolling_max_last)
@@ -1954,6 +1954,8 @@ async def run(feed_addr: str, ind_addr: str, reg_addr: str,
         heartbeat_loop("indicators", _INSTALL_DIR, lambda: {"last_pub_ts": _last_pub_ts}),
         name="heartbeat",
     ))
+    # Infra service: control surface for ping/status only (no destructive commands).
+    tasks.append(asyncio.create_task(control_loop("indicators"), name="control"))
 
     try:
         await asyncio.gather(*tasks)

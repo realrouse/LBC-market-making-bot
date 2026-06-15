@@ -30,7 +30,7 @@ import aiohttp, websockets, zmq, zmq.asyncio
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import api_polymarket as api
-from tradinetools import heartbeat_loop
+from tradinetools import heartbeat_loop, control_loop
 from tradinetools.zmq import make_pub, default_ipc_addr
 from tradinetools.logging import setup_logger
 from tradinetools.schemas import MarketMessage, PingMessage
@@ -288,6 +288,8 @@ async def main() -> None:
                                 "last_book_ts": _last_book_ts,
                                 "msgs_total": _msgs_total})
     )
+    # Infra service: control surface for ping/status only (no destructive commands).
+    _ctl_task = asyncio.create_task(control_loop("feed"))
     try:
         backoff = 1
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
@@ -304,7 +306,8 @@ async def main() -> None:
                     backoff = min(backoff * 2, 60)
     finally:
         _hb_task.cancel()
-        await asyncio.gather(_hb_task, return_exceptions=True)
+        _ctl_task.cancel()
+        await asyncio.gather(_hb_task, _ctl_task, return_exceptions=True)
 
 
 if __name__ == "__main__":
