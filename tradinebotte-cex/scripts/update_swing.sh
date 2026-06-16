@@ -165,7 +165,9 @@ if [[ "$VERIFY_ONLY" == "false" ]]; then
         mkdir -p $INSTALL_DIR
         cat > $INSTALL_DIR/config.json <<'EOJSON'
 {
-    \"strategy\": \"$STRATEGY_PATH\"
+    \"strategy\": \"$STRATEGY_PATH\",
+    \"data_source\": \"cex_feed\",
+    \"feed_addr\": \"tcp://127.0.0.1:5563\"
 }
 EOJSON
         echo 'config.json written'
