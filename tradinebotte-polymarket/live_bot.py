@@ -1740,6 +1740,42 @@ async def feed_consumer_loop(state: BotState, feed_addr: str) -> None:
         ctx.term()
 
 
+async def cex_feed_consumer_loop(state: BotState, feed_addr: str, symbol: str) -> None:
+    """Consume CEX book updates for `symbol` from the shared cex_feed and drive the
+    grid/swing strategy directly (no handle_book_update — CEX bots don't need its
+    polymarket token bookkeeping, and a token_id mismatch there fails silently).
+    Order placement stays per-bot. SUB-and-warn only (no feed auto-start)."""
+    import zmq.asyncio  # noqa: PLC0415
+    from types import SimpleNamespace  # noqa: PLC0415
+    ctx  = zmq.asyncio.Context()
+    sock = make_sub(ctx, feed_addr)
+    logger.info("Data source: shared CEX feed %s symbol=%s (consumer mode — no direct WS)",
+                feed_addr, symbol)
+    last_msg = time.time()
+    try:
+        while True:
+            try:
+                raw = await asyncio.wait_for(sock.recv_json(), timeout=30)
+            except asyncio.TimeoutError:
+                logger.warning("No cex_feed message for %.0fs — is cex_feed running on %s?",
+                               time.time() - last_msg, feed_addr)
+                continue
+            last_msg = time.time()
+            if raw.get("t") != "book" or raw.get("symbol") != symbol:
+                continue
+            ts = SimpleNamespace(
+                best_bid=float(raw["best_bid"]), best_ask=float(raw["best_ask"]),
+                spread=float(raw.get("spread", 0.0)), bid_vol=float(raw.get("bid_vol", 0.0)),
+                ask_vol=float(raw.get("ask_vol", 0.0)), obi=float(raw.get("obi", 0.0)),
+                last_update_ts=time.time())
+            state.last_book_ts = time.time()
+            if state.strategy is not None:
+                await state.strategy.on_book_update(state, ts)
+    finally:
+        sock.close(linger=0)
+        ctx.term()
+
+
 async def main() -> None:
     args   = _parse_args()
     config = make_config(
@@ -1879,13 +1915,19 @@ async def main() -> None:
                     is_live=_is_live,
                 )
             )
-            _use_feed = config.data_source == "feed" and config.connector == "polymarket"
-            if config.data_source == "feed" and not _use_feed:
-                logger.warning("data_source=feed ignored: only the polymarket connector "
-                               "is supported (connector=%s) — using direct WS", config.connector)
+            _cex_connectors = ("binance", "mexc", "mexc_futures", "bitstamp")
+            _use_feed    = config.data_source == "feed"     and config.connector == "polymarket"
+            _use_cexfeed = config.data_source == "cex_feed" and config.connector in _cex_connectors
+            if config.data_source in ("feed", "cex_feed") and not (_use_feed or _use_cexfeed):
+                logger.warning("data_source=%s ignored for connector=%s — using direct WS",
+                               config.data_source, config.connector)
             try:
                 if _use_feed:
                     await feed_consumer_loop(state, config.feed_addr)
+                elif _use_cexfeed:
+                    _sym = (config.grid_symbol if config.strategy_type == "grid"
+                            else config.strategy_cfg.get("symbol", config.grid_symbol))
+                    await cex_feed_consumer_loop(state, config.feed_addr, _sym)
                 else:
                     await ws_loop(state, session)
             finally:
