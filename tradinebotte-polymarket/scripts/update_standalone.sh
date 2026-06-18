@@ -183,6 +183,29 @@ if [[ "$VERIFY_ONLY" == "false" ]]; then
     fi
 fi
 
+# ─── Step 1b: data-plane routing — set only when the caller requests it ─────────
+# update_claudeN.sh wrappers export TRADINEBOTTE_DATA_SOURCE=feed so the live_bot
+# consumes the shared feed (config.json is excluded from rsync, so merge remotely).
+# The fresh-install integration-test path leaves it unset → this step is skipped.
+if [[ "$VERIFY_ONLY" == "false" && -n "${TRADINEBOTTE_DATA_SOURCE:-}" ]]; then
+    section "STEP 1b — DATA SOURCE"
+    _DS="${TRADINEBOTTE_DATA_SOURCE}"
+    _FA="${TRADINEBOTTE_FEED_ADDR:-tcp://127.0.0.1:5557}"
+    if _ssh "python3 - <<PYEOF
+import json, os
+p = os.path.expanduser('$INSTALL_DIR/config.json')
+c = json.load(open(p)) if os.path.exists(p) else {}
+c['data_source'] = '$_DS'
+c['feed_addr'] = '$_FA'
+json.dump(c, open(p, 'w'), indent=2)
+print('config.json data_source=%s feed_addr=%s' % (c['data_source'], c['feed_addr']))
+PYEOF"; then
+        ok "data_source=$_DS feed_addr=$_FA"
+    else
+        warn "could not set data_source (non-fatal)"
+    fi
+fi
+
 T_BEFORE=$(date +%s)   # epoch snapshot for post-deploy heartbeat check
 
 # ─── Step 2: restart ───────────────────────────────────────────────────────────
