@@ -290,8 +290,11 @@ async def main() -> None:
         logger.debug("[ZMQ] PUB socket bound on %s", FEED_ADDR)
     await asyncio.sleep(0.5)
 
+    # Heartbeat name is per-instance so several feeds on one account (e.g. a 15M
+    # and a 5M feed) don't collide on the (account, bot_name) heartbeat key.
+    _hb_name = os.environ.get("TRADINEBOTTE_FEED_NAME", "feed")
     _hb_task = asyncio.create_task(
-        heartbeat_loop("feed", os.path.dirname(os.path.abspath(__file__)),
+        heartbeat_loop(_hb_name, os.path.dirname(os.path.abspath(__file__)),
                        lambda: {"ws_connected": _ws_connected,
                                 "last_book_ts": _last_book_ts,
                                 "msgs_total": _msgs_total})

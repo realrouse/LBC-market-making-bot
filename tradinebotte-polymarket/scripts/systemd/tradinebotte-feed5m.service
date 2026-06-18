@@ -15,6 +15,7 @@ WorkingDirectory=%h/tradinebotte
 Environment=TRADINEBOTTE_DIR=%h/feed5m
 Environment=TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5557
 Environment=TRADINEBOTTE_MARKET_TAG_ID=102892
+Environment=TRADINEBOTTE_FEED_NAME=feed5m
 ExecStart=%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/feed.py
 Restart=on-failure
 RestartSec=10

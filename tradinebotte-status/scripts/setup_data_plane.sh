@@ -42,6 +42,7 @@ R_DIR='~/tradinebotte'
 R_UNIT='~/.config/systemd/user'
 
 # 1. Push code + unit templates + tradinetools source
+_rsync "$REPO/tradinebotte-polymarket/feed.py" "$R_DIR/feed.py"
 _rsync "$REPO/tradinebotte-cex/cex_feed.py" "$R_DIR/cex_feed.py"
 _rsync "$REPO/tradinebotte-polymarket/scripts/systemd/tradinebotte-feed5m.service" "$R_UNIT/tradinebotte-feed5m.service"
 _rsync "$REPO/tradinebotte-cex/scripts/systemd/tradinebotte-cexfeed.service" "$R_UNIT/tradinebotte-cexfeed.service"

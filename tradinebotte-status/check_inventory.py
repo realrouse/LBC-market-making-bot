@@ -43,7 +43,9 @@ DEPLOY_ALL = os.path.join(_REPO, "tradinebotte-cex", "scripts", "deploy_all.sh")
 # Scripts excluded from the inventory<->deploy_all set-compare (both directions):
 #   deploy_status_service.sh — in inventory, deployed independently (not via deploy_all)
 #   heartbeat_status.sh      — invoked by deploy_all as a status snapshot, not a bot deploy
-_PIPELINE_EXCEPTIONS = {"deploy_status_service.sh", "heartbeat_status.sh"}
+#   setup_data_plane.sh      — installs the shared feeds (feed5m/cex_feed) independently
+_PIPELINE_EXCEPTIONS = {"deploy_status_service.sh", "heartbeat_status.sh",
+                        "setup_data_plane.sh"}
 
 _REQUIRED = ("account_idx", "bot_name", "kind")
 _KINDS = {"bot", "service"}
