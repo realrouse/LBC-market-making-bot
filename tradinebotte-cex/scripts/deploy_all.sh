@@ -88,6 +88,9 @@ if [[ "$RESTART_INFRA" == "true" ]]; then
     add_row "  └─ account-1 — indicators  (restarted)" "$_c1"
     add_row "  └─ account-1 — feed        (restarted)" "$_c1"
     add_row "  └─ account-1 — account_bot (restarted)" "$_c1"
+    # Shared data plane (feed5m + cex_feed + tradinetools refresh) — only with infra
+    # restart, since it (re)starts the feeds and briefly reconnects all consumers.
+    run_step "account-1 — data plane (feed5m + cex_feed)" "$STATUS/setup_data_plane.sh"
 else
     run_step "account-1 — rsync (indicators + feed + account_bot)" \
         "$PM/update_claude1.sh" --skip-restart
