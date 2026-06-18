@@ -6,6 +6,38 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.85] — 2026-06-18
+
+### Ajouté
+- **Séparation plan de données / plan d'ordres** — les données de marché externes (websockets, REST) sont désormais récupérées une seule fois par des services partagés puis diffusées via ZeroMQ, tandis que chaque bot continue de passer ses ordres indépendamment avec ses propres identifiants. Cela supprime la duplication des connexions amont par bot :
+  - **`tradinebotte-polymarket/feed.py` — tag/horizon de marché configurable** : le feed lit `TRADINEBOTTE_MARKET_TAG_ID` et une fenêtre de marché depuis l'environnement au lieu de les coder en dur, de sorte qu'un processus feed sert un horizon et qu'un second feed peut en servir un autre ; le nom de heartbeat est aussi configurable via `TRADINEBOTTE_FEED_NAME` pour que plusieurs feeds se signalent distinctement
+  - **`tradinebotte-polymarket/feed.py` — second feed 5 minutes** en parallèle du feed 15 minutes existant, avec son propre modèle d'unité systemd et son adresse ZeroMQ
+  - **`tradinebotte-cex/cex_feed.py` — service de données de marché CEX partagé** : un nouveau service qui s'abonne une seule fois aux carnets d'ordres Binance et MEXC et rediffuse des mises à jour normalisées (meilleur bid/ask, spread, volumes, déséquilibre du carnet) via ZeroMQ ; une tâche indépendante par place de marché, de sorte qu'une reconnexion d'un feed ne perturbe pas les autres
+  - **`tradinebotte-polymarket/live_bot.py` — modes consommateur de feed partagé** : le `data_source` d'un bot peut valoir `ws` (websocket direct, défaut), `feed` (feed Polymarket partagé) ou `cex_feed` (feed Binance/MEXC partagé) ; les bots consommateurs n'ouvrent aucun websocket amont propre
+  - **`setup_data_plane.sh` — installateur idempotent** qui provisionne les services de feed partagés et rafraîchit la bibliothèque partagée `tradinetools` sur l'hôte du plan de données ; intégré à `deploy_all.sh --restart-infra`
+- **Plan de contrôle ZeroMQ pour les bots et services** — un opérateur peut désormais envoyer des commandes aux bots en cours d'exécution via une socket de contrôle par compte :
+  - **Cœur du plan de contrôle dans `tradinetools`** : un assistant `control_loop` avec une garde fail-closed qui refuse toute commande modifiant l'état sauf si le bot est explicitement en mode simulation, plus des assistants de marqueur de reset / effacement au démarrage
+  - **Commande `reset`** : efface l'état d'un bot de simulation et le redémarre depuis un capital de départ paramétrable (les bots réels sont toujours refusés)
+  - **CLI opérateur `botctl` + client de requête `ctl_client`** : `botctl.sh <compte> <bot> <ping|status|reset>` via SSH en loopback
+  - **Persistance du capital de base** : le capital de départ d'un bot est stocké en base afin que l'équité reprenne correctement après un redémarrage au lieu d'être réinitialisée
+- **Base d'état partagée unifiée** — heartbeats, inventaire et journal de déploiement vivent désormais dans une seule base SQLite partagée ; la page de statut gagne une section attendu-vs-réel et les bots déclarent eux-mêmes s'ils tournent en simulation ou en réel afin de vérifier le mode déclaré dans l'inventaire
+- **Durcissement du garde-fou de release** — le script de pré-release exécute désormais un contrôle de dérive inventaire/pipeline de déploiement et une garde qui échoue si du code lit encore l'ancien emplacement par compte `heartbeat.db` au lieu de la base partagée
+
+### Modifié
+- **`tradinebotte-cex/scripts/deploy_all.sh`** — `--restart-infra` (re)démarre désormais aussi le plan de données partagé (feed 5 minutes + feed CEX + rafraîchissement de `tradinetools`) dans la même fenêtre qui reconnecte déjà les consommateurs ; les wrappers de déploiement Polymarket réaffirment `data_source=feed` à chaque déploiement pour qu'un redéploiement ne fasse jamais silencieusement revenir un bot à son propre websocket
+- **`account_bot`** — déclaré en simulation (`is_live=false`) dans l'inventaire
+- **Scalper de carnet désactivé** — le bot de scalping de carnet du compte 4 était structurellement non rentable (dominé par les frais) ; il est désormais arrêté et désactivé dans le pipeline de déploiement et dans l'inventaire ; son script est conservé pour référence en attendant un recalibrage
+- **Page de statut** — le bot de carnet désactivé a été retiré du générateur
+
+### Corrigé
+- **`tradinebotte-cex` — comptabilité du PnL de grille** : les bots de grille comptabilisent désormais le PnL réalisé par cycle achat/vente complété et exportent le PnL cumulé, corrigeant un PnL rapporté quasi nul
+- **`tradinebotte-cex/cex_feed.py` / grille MEXC** — déduplication de l'abonnement à la profondeur MEXC (un abonnement multi-token était envoyé sous forme de tableau JSON et rejeté) et recalibrage de la plage de grille
+- **Le test d'intégration pouvait viser la production** — le test d'intégration ZeroMQ multi-bots utilisait par défaut les indices feed/compte `0`/`(0 1)`, qui correspondaient à des comptes de production ; il vise désormais par défaut le compte de test dédié (`TEST_STANDALONE_USER_IDX`) et échoue en fail-closed si un indice résolu n'est pas ce compte (contournement via `TEST_ALLOW_NONTEST_ACCOUNTS=true` pour un essai multi-comptes hors production délibéré)
+- **`scripts/check_no_legacy_refs.sh`** — exclusion de l'outil de nettoyage de l'ancienne base du scan des chemins de lecture obsolètes (il ne fait que stat/supprimer l'ancien fichier, sans jamais l'ouvrir comme base)
+- **`scripts/update_standalone.sh`** — préservation du `TEST_STANDALONE_USER_IDX` de l'appelant lors du `source` du fichier de configuration, corrigeant les déploiements standalone redirigés par erreur vers le compte de test
+
+---
+
 ## [0.84] — 2026-06-13
 
 ### Corrigé
