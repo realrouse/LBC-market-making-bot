@@ -7,6 +7,8 @@
 #   - status_collector.py's documented write fallback: os.path.join(args.dir, "heartbeat.db")
 #     and the bare "heartbeat.db" filename in its docstrings (used only when --db is unset).
 #   - the rsync `--exclude='heartbeat.db'` in deploy_status_service.sh.
+#   - cleanup_old_heartbeat_db.sh: names the OLD path only to stat/lsof/rm it (the
+#     deletion tool itself) — it never opens it as a DB to read/query.
 # Flagged: any path pointing at the OLD per-account location, e.g. ~/tradinebotte/heartbeat.db
 #   or ${INSTALL_DIR}/heartbeat.db used as a DB to open/query.
 #
@@ -22,7 +24,8 @@ PATTERNS='tradinebotte/heartbeat\.db|\$\{?INSTALL_DIR\}?/heartbeat\.db'
 
 HITS=$(grep -rnE "$PATTERNS" \
          --include='*.py' --include='*.sh' --include='*.service' \
-         --exclude='check_no_legacy_refs.sh' . 2>/dev/null \
+         --exclude='check_no_legacy_refs.sh' \
+         --exclude='cleanup_old_heartbeat_db.sh' . 2>/dev/null \
        | grep -v '__pycache__' | grep -vE '/tests/|test_')
 
 if [[ -n "$HITS" ]]; then
