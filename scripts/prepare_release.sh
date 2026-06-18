@@ -75,7 +75,7 @@ printf 'Date   : %s\n' "$(date +%Y-%m-%d)"
 # ══════════════════════════════════════════════════════════════════════
 # 1 — Unit tests (BLOCKING)
 # ══════════════════════════════════════════════════════════════════════
-_step "1/7  Unit tests  [BLOCKING]"
+_step "1/8  Unit tests  [BLOCKING]"
 
 _tests_ok=true
 
@@ -106,7 +106,7 @@ fi
 # ══════════════════════════════════════════════════════════════════════
 # 2 — Pylint (BLOCKING if score < 9.90)
 # ══════════════════════════════════════════════════════════════════════
-_step "2/7  Pylint  [BLOCKING if score < 9.90]"
+_step "2/8  Pylint  [BLOCKING if score < 9.90]"
 
 mapfile -t _py_files < <(git ls-files '*.py' 2>/dev/null)
 
@@ -135,7 +135,7 @@ fi
 # ══════════════════════════════════════════════════════════════════════
 # 3 — Shellcheck (BLOCKING)
 # ══════════════════════════════════════════════════════════════════════
-_step "3/7  Shellcheck  [BLOCKING]"
+_step "3/8  Shellcheck  [BLOCKING]"
 
 mapfile -t _sh_files < <(git ls-files '*.sh' 2>/dev/null)
 
@@ -156,7 +156,7 @@ fi
 # ══════════════════════════════════════════════════════════════════════
 # 4 — Bilingual doc pairs (BLOCKING)
 # ══════════════════════════════════════════════════════════════════════
-_step "4/7  Bilingual doc pairs  [BLOCKING]"
+_step "4/8  Bilingual doc pairs  [BLOCKING]"
 
 _docs_ok=true
 for _base in README CHANGELOG INSTALL QUICKSTART UPDATE; do
@@ -176,9 +176,26 @@ if [[ "$_docs_ok" == "true" ]]; then
 fi
 
 # ══════════════════════════════════════════════════════════════════════
-# 5 — CHANGELOG freshness (NON-BLOCKING)
+# 5 — Inventory & legacy-ref consistency (BLOCKING)
 # ══════════════════════════════════════════════════════════════════════
-_step "5/7  CHANGELOG freshness  [warning only]"
+_step "5/8  Inventory & legacy refs  [BLOCKING]"
+
+if bash scripts/check_no_legacy_refs.sh >/dev/null 2>&1; then
+    _pass "No legacy heartbeat.db read-path references"
+else
+    _fail "Legacy heartbeat.db read-path(s) — run: bash scripts/check_no_legacy_refs.sh"
+fi
+
+if "$PYTHON" tradinebotte-status/check_inventory.py >/dev/null 2>&1; then
+    _pass "inventory.toml valid (offline structural + deploy_all drift)"
+else
+    _fail "inventory.toml invalid — run: python3 tradinebotte-status/check_inventory.py"
+fi
+
+# ══════════════════════════════════════════════════════════════════════
+# 6 — CHANGELOG freshness (NON-BLOCKING)
+# ══════════════════════════════════════════════════════════════════════
+_step "6/8  CHANGELOG freshness  [warning only]"
 
 _today=$(date +%Y-%m-%d)
 _cl_date=$(grep -oP '\d{4}-\d{2}-\d{2}' CHANGELOG.md 2>/dev/null | head -1 || true)
@@ -191,9 +208,9 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════════════
-# 6 — Data quality full scan (NON-BLOCKING)
+# 7 — Data quality full scan (NON-BLOCKING)
 # ══════════════════════════════════════════════════════════════════════
-_step "6/7  Data quality full scan  [warning only]"
+_step "7/8  Data quality full scan  [warning only]"
 
 if compgen -G "${PROJECT_DIR}/data/*.db" > /dev/null 2>&1; then
     if "$PYTHON" analysis/check_data_quality.py --warn-only 2>&1; then
@@ -206,9 +223,9 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════════════
-# 7 — Integration tests (NON-BLOCKING)
+# 8 — Integration tests (NON-BLOCKING)
 # ══════════════════════════════════════════════════════════════════════
-_step "7/7  Integration tests  [warning only]"
+_step "8/8  Integration tests  [warning only]"
 
 _conf="${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
 if [[ "$SKIP_INTEGRATION" == "true" ]]; then

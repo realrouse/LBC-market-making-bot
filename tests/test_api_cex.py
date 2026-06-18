@@ -1088,5 +1088,27 @@ class TestMexcFuturesRegistry(unittest.TestCase):
         self.assertIs(mod, mexc_futures)
 
 
+class TestMexcFuturesSubscribe(unittest.TestCase):
+    """make_subscribe_msg must emit ONE object — MEXC rejects JSON arrays.
+
+    A grid registers UP (bare symbol) + DOWN (":SHORT") for one market; both map
+    to the same underlying symbol. Sending an array got {"rs.error":"invalid
+    message"} and left the grid with no depth feed (last_book_ts stuck at 0).
+    """
+
+    def test_single_symbol_is_object(self):
+        msg = json.loads(mexc_futures.make_subscribe_msg(["BTC_USDT"]))
+        self.assertIsInstance(msg, dict)
+        self.assertEqual(msg["method"], "sub.depth.full")
+        self.assertEqual(msg["param"]["symbol"], "BTC_USDT")
+
+    def test_up_and_down_tokens_dedupe_to_single_object(self):
+        # exactly what register_market produces for a grid market
+        msg = json.loads(
+            mexc_futures.make_subscribe_msg(["BTC_USDT", "BTC_USDT:SHORT"]))
+        self.assertIsInstance(msg, dict, "must not be a JSON array (MEXC rejects it)")
+        self.assertEqual(msg["param"]["symbol"], "BTC_USDT")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -719,6 +719,7 @@ async def _run(p: dict, db: sqlite3.Connection, install_dir: str = "") -> None:
                     "total_pnl":       round(sum(s.total_pnl for s in states), 2),
                     "last_price":      max((s.last_price for s in states if s.last_price > 0), default=0.0),
                 },
+                mode="sim",  # paper trading only — no real exchange connector
             )
         ),
     ]

@@ -15,7 +15,7 @@ Usage:
     python3 heartbeat_query.py [options]
 
 Options:
-    --db PATH        heartbeat.db location  (default ~/tradinebotte/heartbeat.db)
+    --db PATH        shared state DB  (default /data1/tradinebotte-shared/database/tradinebotte.db)
     --stale-after N  Seconds before ALIVE → STALE  (default 7200  = 2 h)
     --dead-after  N  Seconds before STALE  → DEAD   (default 14400 = 4 h)
     --require NAME   Bot name that must have ≥ 1 ALIVE row; repeatable.
@@ -158,10 +158,10 @@ def main() -> None:
     parser.add_argument(
         "--db",
         default=os.environ.get(
-            "TRADINEBOTTE_STATUS_DIR",
-            os.path.expanduser("~/tradinebotte"),
-        ) + "/heartbeat.db",
-        help="Path to heartbeat.db (default %(default)s)",
+            "TRADINEBOTTE_DB",
+            "/data1/tradinebotte-shared/database/tradinebotte.db",
+        ),
+        help="Path to the shared state DB (default %(default)s)",
     )
     parser.add_argument(
         "--stale-after",

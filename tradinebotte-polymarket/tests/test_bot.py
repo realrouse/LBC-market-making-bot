@@ -10,6 +10,7 @@ Run with:
 
 import logging, os, sys, time, sqlite3, unittest
 from datetime import datetime, timezone, timedelta
+from types import SimpleNamespace
 from unittest.mock import patch
 
 # Redirect all bot I/O to ~/tmp so tests never touch /opt or write credentials.
@@ -1956,7 +1957,7 @@ class TestGridFills(unittest.TestCase):
         s   = self._make_strategy()
         lvl = s.level_at_price(99000.0)
         # Simulate the level after a full BUY→SELL cycle
-        lvl.buy_price     = 99000.0
+        lvl.entry_price   = 99000.0   # entry recorded by the preceding BUY fill
         lvl.sell_order_id = "sim_sell1"
         lvl.sell_price    = 100000.0
         lvl.status        = "sell_placed"
@@ -1975,7 +1976,7 @@ class TestGridFills(unittest.TestCase):
     def test_sell_filled_profit_positive(self):
         s   = self._make_strategy()
         lvl = s.level_at_price(99000.0)
-        lvl.buy_price     = 99000.0
+        lvl.entry_price   = 99000.0   # entry recorded by the preceding BUY fill
         lvl.sell_order_id = "sim_sell1"
         lvl.sell_price    = 100000.0
         lvl.status        = "sell_placed"
@@ -2060,7 +2061,7 @@ class TestGridSimFillDetection(unittest.TestCase):
     def test_sim_sell_fill_detected(self):
         s   = self._make_strategy()
         lvl = s.level_at_price(99000.0)
-        lvl.buy_price     = 99000.0
+        lvl.entry_price   = 99000.0   # entry recorded by the preceding BUY fill
         lvl.sell_order_id = "sim_sell1"
         lvl.sell_price    = 100000.0
         lvl.status        = "sell_placed"
@@ -3319,6 +3320,108 @@ class TestMarketRefreshLoop(unittest.IsolatedAsyncioTestCase):
 
         # Loop survived the error — no tokens added, but no crash
         self.assertEqual(len(self.state.tokens), 0)
+
+
+class TestCumulativePnl(unittest.TestCase):
+    """cumulative_pnl() sources the right persisted totals per strategy type."""
+
+    def test_threshold_uses_state_totals(self):
+        st = make_state()
+        st.strategy   = None          # built-in threshold strategy
+        st.total_pnl  = 12.5
+        st.total_trades = 7
+        self.assertEqual(bot.cumulative_pnl(st), (12.5, 7))
+
+    def test_grid_uses_grid_state(self):
+        st = make_state()
+        st.strategy = SimpleNamespace(
+            grid=SimpleNamespace(total_profit_usd=3.25, total_cycles=4))
+        self.assertEqual(bot.cumulative_pnl(st), (3.25, 4))
+
+    def test_swing_uses_swing_state(self):
+        st = make_state()
+        st.strategy = SimpleNamespace(
+            sw=SimpleNamespace(total_pnl=-1.5, total_trades=2))
+        self.assertEqual(bot.cumulative_pnl(st), (-1.5, 2))
+
+
+class TestCapitalBasePersistence(unittest.TestCase):
+    """The capital base is persisted so equity resumes across restarts instead of
+    reverting to the config default."""
+
+    def test_base_roundtrip(self):
+        conn = make_db()
+        self.assertIsNone(bot.read_capital_base(conn))
+        bot.write_capital_base(conn, 1234.0)
+        self.assertEqual(bot.read_capital_base(conn), 1234.0)
+
+    def test_first_boot_seeds_base_from_config(self):
+        conn = make_db()
+        cfg = bot.BotConfig()
+        cfg.capital_start = 555.0
+        st = bot.BotState(conn, cfg)
+        bot.restore_state_from_db(st)
+        self.assertEqual(bot.read_capital_base(conn), 555.0)   # seeded
+        self.assertEqual(st.config.capital_start, 555.0)
+        self.assertEqual(st.capital, 555.0)                    # no trades → base + 0
+
+    def test_restore_uses_persisted_base_over_config(self):
+        """A restart: persisted base (e.g. a prior reset override) wins over config."""
+        conn = make_db()
+        bot.write_capital_base(conn, 1234.0)
+        cfg = bot.BotConfig()
+        cfg.capital_start = 555.0          # config says 555, persisted says 1234
+        st = bot.BotState(conn, cfg)
+        bot.restore_state_from_db(st)
+        self.assertEqual(st.config.capital_start, 1234.0)
+        self.assertEqual(st.capital, 1234.0)
+
+
+class TestEquity(unittest.TestCase):
+    """equity() = capital base + realized cumulative, uniform across strategies."""
+
+    def test_threshold_equity_is_base_plus_total_pnl(self):
+        st = make_state()
+        st.strategy = None
+        st.config.capital_start = 1000.0
+        st.total_pnl = 50.0
+        self.assertAlmostEqual(bot.equity(st), 1050.0)
+
+    def test_grid_equity_folds_in_grid_profit(self):
+        st = make_state()
+        st.config.capital_start = 2000.0
+        st.strategy = SimpleNamespace(
+            grid=SimpleNamespace(total_profit_usd=13.46, total_cycles=5))
+        self.assertAlmostEqual(bot.equity(st), 2013.46)
+
+
+class TestFeedConsumer(unittest.TestCase):
+    """Data-plane: registering markets from shared-feed messages (feed-consumer mode)."""
+
+    def test_register_market_from_feed_builds_up_down_tokens(self):
+        st = make_state()
+        msg = {"t": "market", "market_id": "mkt1", "question": "BTC Up or Down",
+               "up_token_id": "up1", "dn_token_id": "dn1",
+               "start_ms": 0, "end_ms": int((time.time() + 3600) * 1000)}
+        bot._register_market_from_feed(st, msg)
+        self.assertIn("up1", st.tokens)
+        self.assertIn("dn1", st.tokens)
+        self.assertEqual(st.market_tokens["mkt1"], {"UP": "up1", "DOWN": "dn1"})
+
+    def test_register_market_skips_expired(self):
+        st = make_state()
+        msg = {"t": "market", "market_id": "old", "question": "x",
+               "up_token_id": "u", "dn_token_id": "d", "start_ms": 0, "end_ms": 1}
+        bot._register_market_from_feed(st, msg)
+        self.assertNotIn("u", st.tokens)
+
+    def test_register_market_ignores_incomplete(self):
+        st = make_state()
+        bot._register_market_from_feed(st, {"t": "market", "market_id": "m"})  # no tokens
+        self.assertEqual(len(st.tokens), 0)
+
+    def test_data_source_defaults_to_ws(self):
+        self.assertEqual(bot.BotConfig().data_source, "ws")
 
 
 if __name__ == "__main__":

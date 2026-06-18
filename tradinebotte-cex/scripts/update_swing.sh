@@ -24,6 +24,7 @@ set -uo pipefail
 
 LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 GIT_HASH=$(git -C "$LOCAL_REPO" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+source "$LOCAL_REPO/tradinebotte-status/scripts/record_deploy.sh"
 SKIP_RESTART=false
 VERIFY_ONLY=false
 
@@ -164,7 +165,9 @@ if [[ "$VERIFY_ONLY" == "false" ]]; then
         mkdir -p $INSTALL_DIR
         cat > $INSTALL_DIR/config.json <<'EOJSON'
 {
-    \"strategy\": \"$STRATEGY_PATH\"
+    \"strategy\": \"$STRATEGY_PATH\",
+    \"data_source\": \"cex_feed\",
+    \"feed_addr\": \"tcp://127.0.0.1:5563\"
 }
 EOJSON
         echo 'config.json written'
@@ -286,6 +289,7 @@ ERROR_COUNT=$(echo "$VERIFY_OUT" | grep -cE '\[ERROR\]|\[CRITICAL\]' || true)
 
 # ─── Report ────────────────────────────────────────────────────────────────────
 section "RESULT"
+tbnt_record_deploy "$SW_USER" swing_bot "$([[ $FAILURES -eq 0 ]] && echo OK || echo FAILED)"
 if [[ $FAILURES -eq 0 ]]; then
     echo -e "${BOLD}${GREEN}  SUCCESS — $SW_USER updated and running${NC}"
     exit 0

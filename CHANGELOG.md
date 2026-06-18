@@ -6,6 +6,38 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.85] — 2026-06-18
+
+### Added
+- **Data-plane / order-plane separation** — external market data (websockets, REST) is now fetched once by shared services and fanned out over ZeroMQ, while each bot keeps placing orders independently with its own credentials. This removes the per-bot duplication of upstream connections:
+  - **`tradinebotte-polymarket/feed.py` — configurable market tag/timeframe**: the feed reads `TRADINEBOTTE_MARKET_TAG_ID` and a market window from the environment instead of hard-coding them, so one feed process serves one timeframe and a second feed can serve another; the heartbeat name is also configurable via `TRADINEBOTTE_FEED_NAME` so multiple feeds report distinctly
+  - **`tradinebotte-polymarket/feed.py` — second 5-minute feed** alongside the existing 15-minute feed, with its own systemd unit template and ZeroMQ address
+  - **`tradinebotte-cex/cex_feed.py` — shared CEX market-data service**: a new service that subscribes once to Binance and MEXC order books and republishes normalized book updates (best bid/ask, spread, volumes, order-book imbalance) over ZeroMQ; one independent task per exchange so a single feed reconnect does not disturb the others
+  - **`tradinebotte-polymarket/live_bot.py` — shared-feed consumer modes**: a bot's `data_source` can be `ws` (direct websocket, default), `feed` (shared Polymarket feed), or `cex_feed` (shared Binance/MEXC feed); consumer bots open no upstream websocket of their own
+  - **`setup_data_plane.sh` — idempotent installer** that provisions the shared feed services and refreshes the shared `tradinetools` library on the data-plane host; wired into `deploy_all.sh --restart-infra`
+- **ZeroMQ control plane for bots and services** — an operator can now send commands to running bots over a per-account control socket:
+  - **`tradinetools` control-plane core**: a `control_loop` helper with a fail-closed guard that refuses any state-changing command unless the bot is explicitly in simulation mode, plus reset-marker / boot-time wipe helpers
+  - **`reset` command**: wipes a simulation bot's state and restarts it from a parametrable starting capital (live bots are always refused)
+  - **`botctl` operator CLI + `ctl_client` request client**: `botctl.sh <account> <bot> <ping|status|reset>` over loopback SSH
+  - **Capital-base persistence**: a bot's starting-capital base is stored in the database so equity resumes correctly across restarts instead of resetting
+- **Unified shared state database** — heartbeats, inventory, and deploy journal now live in one shared SQLite database; the status page gains an expected-vs-actual section and bots self-report whether they run in simulation or live mode so the inventory's declared mode can be verified
+- **Release gate hardening** — the pre-release script now runs an inventory/deploy-pipeline drift check and a guard that fails if any code still reads the pre-migration per-account `heartbeat.db` location instead of the shared database
+
+### Changed
+- **`tradinebotte-cex/scripts/deploy_all.sh`** — `--restart-infra` now also (re)starts the shared data plane (5-minute feed + CEX feed + `tradinetools` refresh) in the same window that already reconnects consumers; Polymarket deploy wrappers re-assert `data_source=feed` on every deploy so a redeploy never silently reverts a bot to its own websocket
+- **`account_bot`** — declared as simulation (`is_live=false`) in the inventory
+- **Order-book scalper disabled** — the account-4 order-book scalping bot was structurally unprofitable (fee-dominated) and is now stopped and disabled in both the deploy pipeline and the inventory; its script is kept for reference pending recalibration
+- **Status page** — the disabled order-book bot was removed from the generator
+
+### Fixed
+- **`tradinebotte-cex` — grid PnL accounting**: grid bots now book realized PnL per completed buy/sell cycle and export cumulative PnL, fixing near-zero reported PnL
+- **`tradinebotte-cex/cex_feed.py` / MEXC grid** — deduplicated the MEXC depth subscribe (a multi-token subscribe was sent as a JSON array and rejected) and recalibrated the grid range
+- **Integration test could target production** — the multi-bot ZeroMQ integration test defaulted its feed/account indices to `0`/`(0 1)`, which mapped to production accounts; it now defaults to the dedicated test account (`TEST_STANDALONE_USER_IDX`) and fails closed if any resolved index is not that account (override with `TEST_ALLOW_NONTEST_ACCOUNTS=true` for a deliberate non-production multi-account run)
+- **`scripts/check_no_legacy_refs.sh`** — excluded the old-database cleanup tool from the legacy-read-path scan (it only stats/removes the old file, never opens it as a database)
+- **`scripts/update_standalone.sh`** — preserve the caller's `TEST_STANDALONE_USER_IDX` across the `source` of the config file, fixing standalone deploys that were misrouted to the test account
+
+---
+
 ## [0.84] — 2026-06-13
 
 ### Fixed

@@ -29,6 +29,7 @@ set -uo pipefail
 
 LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 GIT_HASH=$(git -C "$LOCAL_REPO" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+source "$LOCAL_REPO/tradinebotte-status/scripts/record_deploy.sh"
 SKIP_RESTART=false
 SKIP_VERIFY=false
 VERIFY_ONLY=false
@@ -64,6 +65,9 @@ if [[ ! -f "$CONF" ]]; then
     echo "  cp scripts/test_multibot.conf.example ~/.tradinebotte-test.conf"
     exit 1
 fi
+# Callers (update_claude2.sh etc.) set TEST_STANDALONE_USER_IDX=N in the env
+# before calling this script. Preserve that override before source() overwrites it.
+_SA_IDX_CALLER="${TEST_STANDALONE_USER_IDX:-}"
 # shellcheck source=/dev/null
 source "$CONF"
 
@@ -73,7 +77,7 @@ ALL_USERS=("${TEST_USERS[@]:?TEST_USERS missing in $CONF}")
 ALL_PASSWORDS=("${TEST_PASSWORDS[@]:?TEST_PASSWORDS missing in $CONF}")
 INSTALL_DIR="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
 
-SA_IDX="${TEST_STANDALONE_USER_IDX:-2}"
+SA_IDX="${_SA_IDX_CALLER:-${TEST_STANDALONE_USER_IDX:-2}}"
 if [[ "$SA_IDX" -ge "${#ALL_USERS[@]}" ]]; then
     echo "ERROR: TEST_STANDALONE_USER_IDX=$SA_IDX is out of range"
     exit 1
@@ -176,6 +180,29 @@ if [[ "$VERIFY_ONLY" == "false" ]]; then
     else
         err "rsync failed"
         exit 1
+    fi
+fi
+
+# ─── Step 1b: data-plane routing — set only when the caller requests it ─────────
+# update_claudeN.sh wrappers export TRADINEBOTTE_DATA_SOURCE=feed so the live_bot
+# consumes the shared feed (config.json is excluded from rsync, so merge remotely).
+# The fresh-install integration-test path leaves it unset → this step is skipped.
+if [[ "$VERIFY_ONLY" == "false" && -n "${TRADINEBOTTE_DATA_SOURCE:-}" ]]; then
+    section "STEP 1b — DATA SOURCE"
+    _DS="${TRADINEBOTTE_DATA_SOURCE}"
+    _FA="${TRADINEBOTTE_FEED_ADDR:-tcp://127.0.0.1:5557}"
+    if _ssh "python3 - <<PYEOF
+import json, os
+p = os.path.expanduser('$INSTALL_DIR/config.json')
+c = json.load(open(p)) if os.path.exists(p) else {}
+c['data_source'] = '$_DS'
+c['feed_addr'] = '$_FA'
+json.dump(c, open(p, 'w'), indent=2)
+print('config.json data_source=%s feed_addr=%s' % (c['data_source'], c['feed_addr']))
+PYEOF"; then
+        ok "data_source=$_DS feed_addr=$_FA"
+    else
+        warn "could not set data_source (non-fatal)"
     fi
 fi
 
@@ -315,7 +342,7 @@ ERROR_COUNT=$(echo "$VERIFY_OUT" | grep -cE '\[ERROR\]|\[CRITICAL\]' || true)
 fi  # SKIP_VERIFY
 
 # ─── Step 4: heartbeat check ───────────────────────────────────────────────────
-# Poll heartbeat.db on the collector account for a fresh row from SA_USER.
+# Poll the shared state DB on the collector account for a fresh row from SA_USER.
 # Skipped when --skip-verify or --skip-restart is set (no restart happened).
 if [[ "$SKIP_VERIFY" == "false" && "$SKIP_RESTART" == "false" ]]; then
     section "STEP 4 — HEARTBEAT CHECK"
@@ -323,7 +350,7 @@ if [[ "$SKIP_VERIFY" == "false" && "$SKIP_RESTART" == "false" ]]; then
     _HB_PY=$(cat <<PYEOF
 import sqlite3,time,os,sys
 t=$T_BEFORE
-p=os.path.expanduser("~/tradinebotte/heartbeat.db")
+p=os.environ.get("TRADINEBOTTE_DB","/data1/tradinebotte-shared/database/tradinebotte.db")
 if not os.path.exists(p):
     print("HB_NODB"); sys.exit(1)
 db=sqlite3.connect(p)
@@ -347,6 +374,7 @@ fi  # STEP 4
 
 # ─── Report ────────────────────────────────────────────────────────────────────
 section "RESULT"
+tbnt_record_deploy "$SA_USER" live_bot "$([[ $FAILURES -eq 0 ]] && echo OK || echo FAILED)"
 if [[ $FAILURES -eq 0 ]]; then
     echo -e "${BOLD}${GREEN}  SUCCESS — $SA_USER updated and running${NC}"
     exit 0

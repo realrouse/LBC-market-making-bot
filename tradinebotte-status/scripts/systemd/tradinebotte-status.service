@@ -6,11 +6,24 @@ After=network.target
 Type=simple
 WorkingDirectory=%h/tradinebotte
 Environment=TRADINEBOTTE_STATUS_ADDR=tcp://127.0.0.1:5562
-ExecStart=%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/status_collector.py --dir %h/tradinebotte
+# Shared state DB on the always-on server (heartbeats + inventory + deploys),
+# in /data1/tradinebotte-shared/database/ (dir 2770 root-of-trust group `claudes`).
+# --db (via this env) overrides the legacy --dir/heartbeat.db path.
+Environment=TRADINEBOTTE_DB=/data1/tradinebotte-shared/database/tradinebotte.db
+# Group-writable sidecars (0660) so other claudes members can read/append.
+UMask=0002
+# Run via `sg claudes` so the collector holds the `claudes` group and can write the
+# shared dir.  Required because the systemd --user manager was started (via linger)
+# before `claudes` existed and cannot add the group itself (SupplementaryGroups= fails
+# with "Operation not permitted" for an unprivileged user manager).  `sg` is setuid-root,
+# validates the collector user's membership in /etc/group, adds the group without a manager
+# restart.  Harmless once a reboot lets the manager pick up the group natively.
+ExecStart=/usr/bin/sg claudes -c "%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/status_collector.py --dir %h/tradinebotte"
 Restart=on-failure
 RestartSec=15
 StandardOutput=null
-StandardError=null
+# Keep stderr in the journal: StandardError=null previously hid a startup crash loop.
+StandardError=journal
 
 [Install]
 WantedBy=default.target

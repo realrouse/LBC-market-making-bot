@@ -13,6 +13,7 @@ PORT_FEED       = 5557   # feed.py PUB (Polymarket order book)
 PORT_INDICATORS = 5559   # indicators.py PUB
 PORT_IND_REG    = 5561   # indicators.py REP (registration)
 PORT_STATUS     = 5562   # status_collector.py PULL (bot heartbeats)
+PORT_CEX_FEED   = 5563   # cex_feed.py PUB (Binance + MEXC order book, shared)
 
 
 def ipc_socket_dir() -> str:
@@ -96,6 +97,20 @@ def make_sub(ctx: zmq.asyncio.Context, addr: str) -> zmq.asyncio.Socket:
 
 def make_rep(ctx: zmq.Context, addr: str, name: str = "REP") -> zmq.Socket:
     """Bind a synchronous REP socket to addr and return it."""
+    warn_if_external_bind(addr, name)
+    _prepare_ipc_bind(addr)
+    sock = ctx.socket(zmq.REP)
+    sock.bind(addr)
+    _chmod_ipc(addr)
+    return sock
+
+
+def make_rep_async(ctx: "zmq.asyncio.Context", addr: str, name: str = "REP") -> "zmq.asyncio.Socket":
+    """Bind an async REP socket to addr (IPC chmod 0600) and return it.
+
+    Async counterpart of make_rep(), for the control-plane loop that lives in the
+    bot's asyncio event loop alongside heartbeat_loop.
+    """
     warn_if_external_bind(addr, name)
     _prepare_ipc_bind(addr)
     sock = ctx.socket(zmq.REP)

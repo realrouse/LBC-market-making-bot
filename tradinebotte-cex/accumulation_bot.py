@@ -46,6 +46,7 @@ from pathlib import Path
 import aiohttp
 
 from earn_manager import EarnManager
+from tradinetools import control_loop, Command, write_reset_marker, consume_reset_marker
 from tradinetools.logging import setup_root_logger
 
 logger = logging.getLogger("accumulation_bot")
@@ -806,6 +807,19 @@ async def _run(p: dict, db: sqlite3.Connection, install_dir: str = "") -> None:
                     p.get("scale_in_obi_strong_thresh", 0.80))
 
         from tradinetools import heartbeat_loop
+
+        def _reset_handler(cmd_args: dict) -> dict:
+            """Sim-only: record a reset and hard-exit so systemd restarts cold,
+            wiping state and starting from `capital`. Guarded by control_loop."""
+            cap = float(cmd_args.get("capital", p["capital_usdt"]))
+            if cap <= 0:
+                raise ValueError("capital must be > 0")
+            write_reset_marker(install_dir, "accumulation_bot", cap)
+            logger.warning("RESET requested via control plane — capital=$%.2f, "
+                           "exiting for systemd restart", cap)
+            asyncio.get_running_loop().call_later(0.5, os._exit, 1)
+            return {"capital": cap, "wiped_on_restart": True, "restart_in_s": 30}
+
         tasks = [
             asyncio.create_task(_zmq_loop(state, db)),
             asyncio.create_task(_stats_loop(state)),
@@ -819,7 +833,20 @@ async def _run(p: dict, db: sqlite3.Connection, install_dir: str = "") -> None:
                         "free_usdt":      round(state.free_usdt, 2),
                         "avg_entry":      round(state.avg_entry, 2),
                         "total_realized": round(state.total_realized, 2),
+                        # Unified cumulative-PnL field (alias of total_realized) so the
+                        # status page reads one key across all bots. Persisted +
+                        # restored at boot → survives restarts.
+                        "pnl_total":      round(state.total_realized, 2),
                     },
+                    mode="sim",  # paper trading only — no real exchange connector
+                )
+            ),
+            asyncio.create_task(
+                control_loop(
+                    "accumulation_bot",
+                    {"reset": Command(_reset_handler, destructive=True,
+                                      help="wipe state + restart with given --capital (sim only)")},
+                    mode="sim", is_live=False,
                 )
             ),
         ]
@@ -854,6 +881,14 @@ def main() -> None:
         with open(strat, encoding="utf-8") as f:
             p.update({k: v for k, v in json.load(f).items()
                       if not k.startswith("_")})
+
+    # Apply a pending operator reset BEFORE opening the DB (atomic cold-start wipe).
+    # Accumulation is always simulation, so no live guard is needed here.
+    _reset_cap = consume_reset_marker(
+        str(install_dir), "accumulation_bot", str(install_dir / "live_accum.db"))
+    if _reset_cap is not None:
+        p["capital_usdt"] = _reset_cap
+        logger.warning("RESET applied — fresh state, starting capital=$%.2f", _reset_cap)
 
     db = init_db(install_dir / "live_accum.db")
     try:

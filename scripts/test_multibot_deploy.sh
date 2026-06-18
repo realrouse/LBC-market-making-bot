@@ -90,12 +90,14 @@ ALL_PASSWORDS=("${TEST_PASSWORDS[@]:?TEST_PASSWORDS missing in $CONF}")
 REMOTE_INSTALL_DIR="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
 REMOTE_BOT_DIR="${TEST_REMOTE_BOT_DIR:-~/account-sim}"
 
-# Role indices
-FEED_IDX="${TEST_FEED_USER_IDX:-0}"
+# Role indices — default to the dedicated test account so a minimal conf that only
+# sets TEST_STANDALONE_USER_IDX never targets production.
+_DEFAULT_IDX="${TEST_STANDALONE_USER_IDX:-0}"
+FEED_IDX="${TEST_FEED_USER_IDX:-$_DEFAULT_IDX}"
 if [[ -n "${TEST_ACCOUNT_USER_IDXS+_}" ]]; then
     ACCOUNT_IDXS=("${TEST_ACCOUNT_USER_IDXS[@]}")
 else
-    ACCOUNT_IDXS=(0 1)
+    ACCOUNT_IDXS=("$_DEFAULT_IDX")
 fi
 FEED_ADDR="${TEST_FEED_ADDR:-tcp://127.0.0.1:5557}"
 FEED_AUTO_RESTART="${TEST_FEED_AUTO_RESTART:-false}"
@@ -107,6 +109,29 @@ for _i in "$FEED_IDX" "${ACCOUNT_IDXS[@]}"; do
     [[ -z "${_SEEN_DEPLOY[$_i]+_}" ]] && { DEPLOY_IDXS+=("$_i"); _SEEN_DEPLOY[$_i]=1; }
 done
 unset _SEEN_DEPLOY _i
+
+# Fail-closed guard: this test deploys + tears down account_bot processes, so it MUST
+# only run on the dedicated test account (TEST_STANDALONE_USER_IDX). Refuse if any
+# resolved index points elsewhere (e.g. a default of 0 → production). Mirrors the
+# control-plane sim-only guard. Override only for a deliberate non-prod multi-account
+# setup via TEST_ALLOW_NONTEST_ACCOUNTS=true.
+if [[ "${TEST_ALLOW_NONTEST_ACCOUNTS:-false}" != "true" ]]; then
+    if [[ -z "${TEST_STANDALONE_USER_IDX:-}" ]]; then
+        echo "REFUSED: TEST_STANDALONE_USER_IDX unset — cannot confirm a dedicated test account." >&2
+        echo "  Set it (and TEST_FEED_USER_IDX/TEST_ACCOUNT_USER_IDXS) to the test account index in $CONF." >&2
+        exit 1
+    fi
+    for _i in "${DEPLOY_IDXS[@]}"; do
+        if [[ "$_i" != "$TEST_STANDALONE_USER_IDX" ]]; then
+            echo "REFUSED: integration test would target account index $_i, not the dedicated" >&2
+            echo "  test account (index $TEST_STANDALONE_USER_IDX). This test must never touch production." >&2
+            echo "  Fix TEST_FEED_USER_IDX / TEST_ACCOUNT_USER_IDXS in $CONF," >&2
+            echo "  or set TEST_ALLOW_NONTEST_ACCOUNTS=true for a deliberate non-prod multi-account run." >&2
+            exit 1
+        fi
+    done
+    unset _i
+fi
 
 # Helpers: run / run_bg / deploy_code all accept indices into ALL_USERS
 run() {

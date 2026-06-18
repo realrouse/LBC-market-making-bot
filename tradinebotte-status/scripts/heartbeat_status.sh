@@ -2,7 +2,7 @@
 # heartbeat_status.sh — Report the latest heartbeat for every (account, bot_name) pair.
 #
 # Connects to the status collector account via SSH and runs heartbeat_query.py
-# against ~/tradinebotte/heartbeat.db on the remote.
+# against the shared state DB (/data1/tradinebotte-shared/database/tradinebotte.db).
 #
 # NOTE: Only bots that have sent at least one heartbeat appear in the table.
 #       A bot never deployed with Phase-4 code produces no rows and is invisible.
@@ -61,6 +61,7 @@ PORT="${TEST_PORT:-22}"
 ALL_USERS=("${TEST_USERS[@]:?TEST_USERS missing in $CONF}")
 ALL_PASSWORDS=("${TEST_PASSWORDS[@]:?TEST_PASSWORDS missing in $CONF}")
 INSTALL_DIR="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
+SHARED_DB="${TRADINEBOTTE_DB:-/data1/tradinebotte-shared/database/tradinebotte.db}"
 
 if [[ "$COLLECTOR_IDX" -ge "${#ALL_USERS[@]}" ]]; then
     echo "ERROR: --collector-idx=$COLLECTOR_IDX is out of range (${#ALL_USERS[@]} users in conf)"
@@ -85,7 +86,7 @@ fi
 # ─── Build remote arguments ────────────────────────────────────────────────────
 
 REMOTE_ARGS=(
-    "--db"          "${INSTALL_DIR}/heartbeat.db"
+    "--db"          "${SHARED_DB}"
     "--stale-after" "$STALE_AFTER"
     "--dead-after"  "$DEAD_AFTER"
 )

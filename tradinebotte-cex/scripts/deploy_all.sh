@@ -5,7 +5,7 @@
 #   account-1  indicators + feed + account_bot  (Polymarket multibot infra)
 #   account-2  live_bot (Polymarket threshold)
 #   account-3  live_bot (Polymarket grid) + accumulation_bot + grid_bot (Binance CEX sim)
-#   account-4  live_bot (Polymarket) + orderbook_bot + accumulation_bot deepdip
+#   account-4  live_bot (Polymarket) + accumulation_bot deepdip  (orderbook_bot disabled)
 #   account-5  swing live_bot (CEX)
 #   account-6  grid live_bot (MEXC Futures BTC_USDT — simulation)
 #
@@ -88,6 +88,9 @@ if [[ "$RESTART_INFRA" == "true" ]]; then
     add_row "  └─ account-1 — indicators  (restarted)" "$_c1"
     add_row "  └─ account-1 — feed        (restarted)" "$_c1"
     add_row "  └─ account-1 — account_bot (restarted)" "$_c1"
+    # Shared data plane (feed5m + cex_feed + tradinetools refresh) — only with infra
+    # restart, since it (re)starts the feeds and briefly reconnects all consumers.
+    run_step "account-1 — data plane (feed5m + cex_feed)" "$STATUS/setup_data_plane.sh"
 else
     run_step "account-1 — rsync (indicators + feed + account_bot)" \
         "$PM/update_claude1.sh" --skip-restart
@@ -102,7 +105,10 @@ run_step "account-3 — live_bot (Polymarket)"            "$PM/update_claude3.sh
 run_step "account-3 — accumulation_bot"                 "$CEX/deploy_accumulation_claude3.sh"
 run_step "account-3 — grid_bot (Binance CEX sim)"       "$CEX/deploy_grid_claude3.sh"
 run_step "account-4 — live_bot (Polymarket)"            "$PM/update_claude4.sh"
-run_step "account-4 — orderbook_bot"                    "$CEX/deploy_scalping_claude4.sh"
+# account-4 — orderbook_bot DISABLED 2026-06-14: structurally unprofitable
+# (−$643 over 9051 trades, 5.4% win rate, fee-dominated). Service stopped + disabled
+# on the host. The acct-4 scalping deploy script is kept in scripts/ for reference;
+# re-enable here and in inventory.toml only after the strategy is recalibrated.
 run_step "account-4 — accumulation_bot (deepdip)"       "$CEX/deploy_accumulation_claude4.sh"
 run_step "account-5 — swing live_bot"                   "$CEX/update_swing.sh"
 run_step "account-6 — grid live_bot (MEXC Futures sim)" "$CEX/deploy_grid_mexc.sh"

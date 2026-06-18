@@ -67,6 +67,7 @@ SC_PASS="${ALL_PASSWORDS[$SC_IDX]}"
 
 LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 GIT_HASH=$(git -C "$LOCAL_REPO" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+source "$LOCAL_REPO/tradinebotte-status/scripts/record_deploy.sh"
 
 _ssh() {
     SSHPASS="$SC_PASS" /usr/bin/sshpass -e \
@@ -216,6 +217,7 @@ if echo "$VERIFY_OUT" | grep -qE "BUY|connected|Accumulation"; then ok "startup 
 else warn "startup message not yet in log"; fi
 
 section "RESULT"
+tbnt_record_deploy "$SC_USER" accumulation_bot "$([[ $FAILURES -eq 0 ]] && echo OK || echo FAILED)"
 if [[ $FAILURES -eq 0 ]]; then
     echo -e "${BOLD}${GREEN}  SUCCESS — accumulation_bot running on $SC_USER${NC}"
     echo -e "  Log : $INSTALL_DIR/accumulation_bot.log"

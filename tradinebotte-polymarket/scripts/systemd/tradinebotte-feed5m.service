@@ -1,0 +1,24 @@
+[Unit]
+# Shared 5M Polymarket feed (data plane). Runs on the infra account (acct-1, index 0 in TEST_USERS)
+# alongside the 15M tradinebotte-feed.service. One feed = one timeframe.
+# Consumed cross-account over TCP loopback by the 5M live_bots (data_source=feed).
+Description=tradinebotte — shared 5M Polymarket feed (TCP loopback :5557)
+After=network.target
+Wants=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+WorkingDirectory=%h/tradinebotte
+# Separate log dir so it does not clobber the 15M feed's ~/tradinebotte/feed.log.
+Environment=TRADINEBOTTE_DIR=%h/feed5m
+Environment=TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5557
+Environment=TRADINEBOTTE_MARKET_TAG_ID=102892
+Environment=TRADINEBOTTE_FEED_NAME=feed5m
+ExecStart=%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/feed.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

@@ -23,6 +23,7 @@ set -uo pipefail
 
 LOCAL_REPO_C1="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 GIT_HASH=$(git -C "$LOCAL_REPO_C1" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+source "$LOCAL_REPO_C1/tradinebotte-status/scripts/record_deploy.sh"
 
 RESTART_INDICATORS=false
 RESTART_FEED=false
@@ -117,7 +118,7 @@ fi
 # ─── Run the standard update (rsync + optional live_bot restart) ──────────────
 # Note: update_standalone's VERIFY step reports a false negative on this account
 # (no standalone live_bot on this account — services are managed separately below).
-TEST_STANDALONE_USER_IDX=0 bash "$(dirname "$0")/update_standalone.sh" --skip-verify "${FORWARD_ARGS[@]}"
+TBNT_SKIP_JOURNAL=1 TEST_STANDALONE_USER_IDX=0 bash "$(dirname "$0")/update_standalone.sh" --skip-verify "${FORWARD_ARGS[@]}"
 UPDATE_EXIT=$?
 
 # Abort on rsync failure only; the verify false-negative is expected and ignored.
@@ -302,6 +303,17 @@ if [[ "$RESTART_ACCOUNT" == "true" ]]; then
 
     _restart_service "tradinebotte-account-${_c1_user}.service" "ACCOUNT BOT" "ACCOUNT BOT|Connected to feed|ERROR"
 fi
+
+# ─── Deploy journal: record the three account-1 infra units (both exit paths) ──
+_C1_CONF="${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
+# shellcheck disable=SC1090
+source "$_C1_CONF"
+_c1_acct="${TEST_USERS[0]}"
+_c1_mode=$([[ "$RESTART_INDICATORS" == "true" || "$RESTART_FEED" == "true" || "$RESTART_ACCOUNT" == "true" ]] && echo restart || echo rsync)
+_c1_result=$([[ "${UPDATE_EXIT:-0}" -eq 0 ]] && echo OK || echo FAILED)
+for _b in indicators feed account_bot; do
+    tbnt_record_deploy "$_c1_acct" "$_b" "$_c1_result" "$_c1_mode"
+done
 
 # ─── Final verify: always run after any service restart ───────────────────────
 if [[ "$RESTART_INDICATORS" == "true" || "$RESTART_FEED" == "true" || "$RESTART_ACCOUNT" == "true" ]]; then

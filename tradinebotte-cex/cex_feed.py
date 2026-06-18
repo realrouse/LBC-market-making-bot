@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""cex_feed.py — shared CEX market-data feed (Binance + MEXC → ZeroMQ).
+
+Opens ONE public WebSocket per (connector, symbol) and republishes every normalized
+book update over a ZeroMQ PUB socket. grid/swing bots consume this feed (data plane)
+instead of each opening their own exchange WS; order placement stays per-bot with
+its own credentials (order plane).
+
+One symbol per exchange keeps make_subscribe_msg in object form (MEXC rejects arrays).
+Each exchange runs as an independent task — one dropping does not blind the other.
+
+Published message:
+  {"t": "book", "exchange": "binance", "symbol": "BTCUSDT",
+   "best_bid": ..., "best_ask": ..., "spread": ..., "bid_vol": ..., "ask_vol": ...,
+   "obi": ...}
+
+Usage:
+  python3 tradinebotte-cex/cex_feed.py
+  TRADINEBOTTE_CEX_FEEDS='binance:BTCUSDT,mexc_futures:BTC_USDT' python3 cex_feed.py
+"""
+
+import argparse
+import asyncio
+import json
+import os
+import sys
+import time
+
+import websockets
+import zmq
+import zmq.asyncio
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from tradinetools import heartbeat_loop, control_loop  # noqa: E402
+from tradinetools.zmq import make_pub, PORT_CEX_FEED     # noqa: E402
+from tradinetools.logging import setup_logger            # noqa: E402
+
+_INSTALL_DIR = os.environ.get("TRADINEBOTTE_DIR", os.getcwd())
+FEED_ADDR = os.environ.get("TRADINEBOTTE_CEX_FEED_ADDR", f"tcp://127.0.0.1:{PORT_CEX_FEED}")
+# "binance:BTCUSDT,mexc_futures:BTC_USDT" — one symbol per exchange.
+_FEEDS_ENV = os.environ.get("TRADINEBOTTE_CEX_FEEDS", "binance:BTCUSDT,mexc_futures:BTC_USDT")
+FEEDS = [tuple(s.split(":", 1)) for s in _FEEDS_ENV.split(",") if ":" in s]
+
+logger = setup_logger("cex_feed", os.path.join(_INSTALL_DIR, "cex_feed.log"))
+
+# Per-exchange last-publish timestamps for the heartbeat.
+_last_pub: dict[str, float] = {}
+
+
+async def _exchange_task(pub: zmq.asyncio.Socket, connector: str, symbol: str) -> None:
+    """Maintain one public WS to `connector` for `symbol`, republishing book updates.
+    Reconnects with exponential backoff; never raises out (one leg stays isolated)."""
+    from connectors import load as _load  # noqa: PLC0415
+    api = _load(connector)
+    backoff = 1
+    while True:
+        try:
+            async with websockets.connect(api.WS_URL, ping_interval=20, ping_timeout=10) as ws:
+                await ws.send(api.make_subscribe_msg([symbol]))
+                logger.info("cex_feed: %s %s connected (%s)", connector, symbol, api.WS_URL)
+                backoff = 1
+                while True:
+                    raw = await ws.recv()
+                    try:
+                        msgs = json.loads(raw)
+                    except Exception:  # pylint: disable=broad-exception-caught
+                        continue
+                    if isinstance(msgs, dict):
+                        msgs = [msgs]
+                    for m in msgs:
+                        p = api.parse_book_update(m)
+                        if not p:
+                            continue
+                        out = {"t": "book", "exchange": connector, "symbol": symbol,
+                               "best_bid": p["best_bid"], "best_ask": p["best_ask"],
+                               "spread": p.get("spread", 0.0), "bid_vol": p.get("bid_vol", 0.0),
+                               "ask_vol": p.get("ask_vol", 0.0), "obi": p.get("obi", 0.0)}
+                        try:
+                            pub.send_json(out, zmq.NOBLOCK)
+                            _last_pub[connector] = time.time()
+                        except zmq.ZMQError:
+                            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.warning("cex_feed %s %s WS error — reconnect in %ds: %s",
+                           connector, symbol, backoff, e)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60)
+
+
+async def main() -> None:
+    ctx = zmq.asyncio.Context()
+    pub = make_pub(ctx, FEED_ADDR, "CEX_FEED")
+    logger.info("cex_feed PUB on %s — feeds: %s", FEED_ADDR, FEEDS)
+    tasks = [asyncio.create_task(_exchange_task(pub, c, s)) for c, s in FEEDS]
+    tasks.append(asyncio.create_task(
+        heartbeat_loop("cex_feed", _INSTALL_DIR,
+                       lambda: {"exchanges": list(_last_pub.keys()),
+                                "last_pub_ts": max(_last_pub.values(), default=0.0)})))
+    tasks.append(asyncio.create_task(control_loop("cex_feed")))
+    try:
+        await asyncio.gather(*tasks)
+    finally:
+        pub.close(linger=0)
+        ctx.term()
+
+
+if __name__ == "__main__":
+    argparse.ArgumentParser(description="tradinebotte CEX market-data feed").parse_args()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Stopped.")

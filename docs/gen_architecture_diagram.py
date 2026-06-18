@@ -187,7 +187,7 @@ eng = {"sc": (SC_X, SC_Y), "fd": (FD_X, FD_Y), "ind": (IND_X, IND_Y)}
 rbox(ax, SC_X, SC_Y, 3.4, 1.80, C_ENGINE, alpha=0.42, r=0.25, zorder=6, lw=2.0)
 txt(ax, SC_X, SC_Y+0.55,  "status_collector.py",         size=9.5, bold=True, color=C_ENGINE)
 txt(ax, SC_X, SC_Y+0.15,  "PULL bind :5562 (TCP)",        size=8.5, bold=True, color=C_TCP)
-txt(ax, SC_X, SC_Y-0.25,  "heartbeat.db — all accounts",  size=7.5, color=C_DIM)
+txt(ax, SC_X, SC_Y-0.25,  "shared state DB — all accounts",  size=7.5, color=C_DIM)
 txt(ax, SC_X, SC_Y-0.62,  "tradinebotte-status.service",  size=7.0, color=C_DIM, italic=True)
 
 # feed.py

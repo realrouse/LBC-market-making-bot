@@ -47,8 +47,12 @@ if os.path.isdir(_cex_dir) and _cex_dir not in sys.path:
 import api_polymarket as api
 import bot_utils
 from bot_utils import print_dashboard, write_web_status
-from tradinetools import heartbeat_loop
-from tradinetools.zmq import PORT_FEED, PORT_INDICATORS, PORT_IND_REG, default_ipc_addr
+from tradinetools import (
+    heartbeat_loop, control_loop, Command,
+    write_reset_marker, consume_reset_marker,
+)
+from tradinetools.zmq import PORT_FEED, PORT_INDICATORS, PORT_IND_REG, default_ipc_addr, make_sub
+from tradinetools.schemas import MarketMessage
 
 # ─── STRATEGY DEFAULTS (module-level — tests reference these directly) ────────
 # Hardcoded defaults — overridden by make_config() when a strategy JSON is
@@ -279,7 +283,11 @@ class BotConfig:
     # Weekly stop-loss
     weekly_stop_loss: float = WEEKLY_STOP_LOSS
 
-    # ZeroMQ feed address (account_bot / indicators only)
+    # Market-data source: "ws" = own Polymarket WS (standalone, default);
+    # "feed" = consume the shared feed at feed_addr (data plane). Orders are placed
+    # by this bot either way (order plane stays per-bot with its own credentials).
+    data_source: str = "ws"
+    # ZeroMQ feed address (used when data_source == "feed", and by account_bot)
     feed_addr: str = f"tcp://127.0.0.1:{PORT_FEED}"
     # When False, account_bot will not auto-start feed.py; it exits if the feed
     # is unreachable. Set to false when feed is managed by systemd.
@@ -489,6 +497,8 @@ def make_config(simulate: bool = False, no_log: bool = False,
         ),
     )
     feed_auto_start = bool(cfg.get("feed_auto_start", True))
+    data_source = str(cfg.get("data_source",
+                              os.environ.get("TRADINEBOTTE_DATA_SOURCE", "ws"))).lower()
 
     # Indicators service: config.json first, env vars as fallback, IPC as final default.
     indicators_addr = cfg.get(
@@ -565,6 +575,7 @@ def make_config(simulate: bool = False, no_log: bool = False,
         us_weekly_close=us_weekly_close,
         enable_snapshots=not no_snapshots,
         feed_addr=feed_addr,
+        data_source=data_source,
         feed_auto_start=feed_auto_start,
         indicators_addr=indicators_addr,
         indicators_reg_addr=indicators_reg_addr,
@@ -742,6 +753,13 @@ CREATE TABLE IF NOT EXISTS grid_levels (
     PRIMARY KEY (symbol, level_price)
 );
 """,
+    # v3: entry price of the BUY a SELL is closing, so a completed BUY→SELL cycle
+    # can book its PnL. Without it, GridStrategy never counted a cycle (PnL stuck $0).
+    3: "ALTER TABLE grid_levels ADD COLUMN entry_price REAL;\n",
+    # v4: persist the effective capital base (capital_start) so equity resumes across
+    # restarts instead of reverting to the config default. Equity = base + cumulative.
+    4: "CREATE TABLE IF NOT EXISTS bot_meta (key TEXT PRIMARY KEY, value REAL NOT NULL, "
+       "updated_at REAL NOT NULL);\n",
 }
 
 
@@ -902,6 +920,55 @@ class BotState:
         """Win rate as a percentage, 0.0 if no resolved trades."""
         t = self.wins + self.losses
         return (self.wins / t * 100) if t else 0.0
+
+
+def cumulative_pnl(state: "BotState") -> tuple[float, int]:
+    """Realized cumulative PnL and completed-trade count for the active strategy.
+
+    Sourced from the persisted, restart-restored state (grid_state for grid,
+    swing_state for swing, the threshold trades table otherwise), so the cumulative
+    survives restarts — only the operator reset command zeroes it. Exported on the
+    heartbeat so the status page shows the real cumulative, not just the daily PnL.
+    """
+    strat = getattr(state, "strategy", None)
+    grid = getattr(strat, "grid", None)
+    if grid is not None:
+        return float(grid.total_profit_usd), int(grid.total_cycles)
+    sw = getattr(strat, "sw", None)
+    if sw is not None:
+        return float(sw.total_pnl), int(sw.total_trades)
+    return float(state.total_pnl), int(state.total_trades)
+
+
+def equity(state: "BotState") -> float:
+    """Current equity = persisted capital base + realized cumulative PnL.
+
+    Reported uniformly on the heartbeat. For the threshold strategy this equals the
+    live state.capital; for grid/swing it folds in their strategy-table cumulative
+    (which state.capital does not track), so the figure resumes across restarts.
+    """
+    return state.config.capital_start + cumulative_pnl(state)[0]
+
+
+def read_capital_base(conn: sqlite3.Connection) -> "float | None":
+    """Persisted effective capital base, or None if never written (fresh DB)."""
+    try:
+        row = conn.execute(
+            "SELECT value FROM bot_meta WHERE key='capital_base'").fetchone()
+    except sqlite3.OperationalError:
+        return None
+    return float(row[0]) if row else None
+
+
+def write_capital_base(conn: sqlite3.Connection, value: float) -> None:
+    """Persist the effective capital base so it survives restarts (until the next
+    reset overrides it)."""
+    conn.execute(
+        "INSERT INTO bot_meta(key, value, updated_at) VALUES('capital_base', ?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+        (float(value), time.time()),
+    )
+    conn.commit()
 
 
 # ─── WEBSOCKET MESSAGE HANDLING ───────────────────────────────────────────────
@@ -1580,7 +1647,16 @@ def restore_state_from_db(state: BotState) -> None:
     state.wins   = row[1] or 0
     state.losses = row[2] or 0
     state.total_pnl = row[3] or 0.0
-    state.capital = state.config.capital_start + state.total_pnl
+
+    # Resume the capital base across restarts: use the persisted base if present,
+    # otherwise seed it from config (first boot, or first boot after a reset that
+    # wiped the DB — config.capital_start then already holds the reset override).
+    _base = read_capital_base(state.conn)
+    if _base is None:
+        _base = state.config.capital_start
+        write_capital_base(state.conn, _base)
+    state.config.capital_start = _base
+    state.capital = _base + state.total_pnl
 
     # Initialize daily PnL cache from DB so the in-memory counter starts
     # accurate after a restart, not at zero.
@@ -1611,6 +1687,94 @@ def restore_state_from_db(state: BotState) -> None:
         "State : capital=$%.2f | %d trades | WR=%.1f%% | daily_pnl=$%+.2f | weekly_pnl=$%+.2f",
         state.capital, row[0], state.win_rate, state.daily_pnl, state.weekly_pnl,
     )
+
+
+# ─── DATA PLANE: shared-feed consumer (alternative to the direct WS) ───────────
+# When data_source == "feed", the bot sources market data from the shared feed
+# instead of opening its own Polymarket WS. Order placement is unchanged — it still
+# happens inside handle_book_update via this bot's own credentials (order plane).
+# Mirrors account_bot's consumer loop; does NOT auto-start a feed.
+
+def _register_market_from_feed(state: BotState, msg: dict[str, Any]) -> None:
+    """Register a market's UP/DOWN tokens from a feed 'market' message."""
+    m = MarketMessage.from_dict(msg)
+    if not m.market_id or not m.up_token_id or not m.dn_token_id:
+        return
+    if m.end_ms and time.time() * 1000 > m.end_ms:
+        return
+    q = (m.question or "")[:80]
+    for tid, d in ((m.up_token_id, "UP"), (m.dn_token_id, "DOWN")):
+        if tid not in state.tokens:
+            state.tokens[tid] = TokenState(tid, m.market_id, d, q, m.start_ms, m.end_ms,
+                                           vol_window=state.config.vol_window)
+    state.market_tokens[m.market_id] = {"UP": m.up_token_id, "DOWN": m.dn_token_id}
+
+
+async def feed_consumer_loop(state: BotState, feed_addr: str) -> None:
+    """Consume market + book updates from the shared feed and dispatch to the same
+    strategy handlers as the direct WS path. SUB-and-warn only (no feed auto-start)."""
+    import zmq.asyncio  # noqa: PLC0415
+    ctx  = zmq.asyncio.Context()
+    sock = make_sub(ctx, feed_addr)
+    logger.info("Data source: shared feed %s (consumer mode — no direct WS)", feed_addr)
+    last_msg = time.time()
+    try:
+        while True:
+            try:
+                raw = await asyncio.wait_for(sock.recv_json(), timeout=30)
+            except asyncio.TimeoutError:
+                logger.warning("No feed message for %.0fs — is the feed running on %s?",
+                               time.time() - last_msg, feed_addr)
+                continue
+            last_msg = time.time()
+            t = raw.get("t")
+            if t == "market":
+                _register_market_from_feed(state, raw)
+            elif t == "book":
+                if raw.get("token_id", "") not in state.tokens:
+                    continue
+                await handle_book_update(state, {k: v for k, v in raw.items() if k != "t"})
+            # t == "ping": liveness only
+    finally:
+        sock.close(linger=0)
+        ctx.term()
+
+
+async def cex_feed_consumer_loop(state: BotState, feed_addr: str, symbol: str) -> None:
+    """Consume CEX book updates for `symbol` from the shared cex_feed and drive the
+    grid/swing strategy directly (no handle_book_update — CEX bots don't need its
+    polymarket token bookkeeping, and a token_id mismatch there fails silently).
+    Order placement stays per-bot. SUB-and-warn only (no feed auto-start)."""
+    import zmq.asyncio  # noqa: PLC0415
+    from types import SimpleNamespace  # noqa: PLC0415
+    ctx  = zmq.asyncio.Context()
+    sock = make_sub(ctx, feed_addr)
+    logger.info("Data source: shared CEX feed %s symbol=%s (consumer mode — no direct WS)",
+                feed_addr, symbol)
+    last_msg = time.time()
+    try:
+        while True:
+            try:
+                raw = await asyncio.wait_for(sock.recv_json(), timeout=30)
+            except asyncio.TimeoutError:
+                logger.warning("No cex_feed message for %.0fs — is cex_feed running on %s?",
+                               time.time() - last_msg, feed_addr)
+                continue
+            last_msg = time.time()
+            if raw.get("t") != "book" or raw.get("symbol") != symbol:
+                continue
+            ts = SimpleNamespace(
+                best_bid=float(raw["best_bid"]), best_ask=float(raw["best_ask"]),
+                spread=float(raw.get("spread", 0.0)), bid_vol=float(raw.get("bid_vol", 0.0)),
+                ask_vol=float(raw.get("ask_vol", 0.0)), obi=float(raw.get("obi", 0.0)),
+                last_update_ts=time.time())
+            state.last_book_ts = time.time()
+            if state.strategy is not None:
+                await state.strategy.on_book_update(state, ts)
+    finally:
+        sock.close(linger=0)
+        ctx.term()
+
 
 async def main() -> None:
     args   = _parse_args()
@@ -1677,6 +1841,22 @@ async def main() -> None:
     if not config.private_key:
         logger.info("  POLY_PRIVATE_KEY not set — orders SIMULATED")
     logger.info("=" * 65)
+
+    # Self-reported mode (decided from config, never runtime order ids): threshold
+    # places real orders only with a private_key; CEX grid/swing are always sim.
+    _hb_mode = "live" if (config.strategy_type == "threshold" and config.private_key) else "sim"
+    _is_live = _hb_mode == "live"
+    _hb_bot_name = {"grid": "grid_bot", "swing": "swing_bot"}.get(
+        config.strategy_type, "live_bot")
+
+    # Apply a pending operator reset BEFORE opening the DB so the wipe is atomic at
+    # cold start. Sim-only: a live bot must never honour a reset marker.
+    if not _is_live:
+        _reset_cap = consume_reset_marker(config.install_dir, _hb_bot_name, config.db_path)
+        if _reset_cap is not None:
+            config.capital_start = _reset_cap
+            logger.warning("RESET applied — fresh state, starting capital=$%.2f", _reset_cap)
+
     conn = init_db(config)
     try:
         state = BotState(conn, config)
@@ -1692,27 +1872,68 @@ async def main() -> None:
                 state.strategy = _load_strat(config.strategy_type, config)
                 logger.info("  Algorithm   : %s", config.strategy_type)
                 await state.strategy.restore_from_db(state)
-            _hb_bot_name = {"grid": "grid_bot", "swing": "swing_bot"}.get(
-                config.strategy_type, "live_bot"
-            )
+            def _hb_payload() -> dict[str, Any]:
+                pnl_total, trades_total = cumulative_pnl(state)
+                return {
+                    "bounds_ok":    state.daily_pnl >= -config.daily_stop_loss,
+                    "daily_pnl":    round(state.daily_pnl, 2),
+                    "pnl_total":    round(pnl_total, 2),
+                    "trades_total": trades_total,
+                    "capital":      round(config.capital_start + pnl_total, 2),  # equity
+                    "open_trades":  len(state.open_trades),
+                    "last_book_ts": state.last_book_ts,
+                }
+
             _hb_task = asyncio.create_task(
                 heartbeat_loop(
                     _hb_bot_name,
                     config.install_dir,
-                    lambda: {
-                        "bounds_ok":    state.daily_pnl >= -config.daily_stop_loss,
-                        "daily_pnl":    round(state.daily_pnl, 2),
-                        "capital":      round(state.capital, 2),
-                        "open_trades":  len(state.open_trades),
-                        "last_book_ts": state.last_book_ts,
-                    },
+                    _hb_payload,
+                    mode=_hb_mode,
                 )
             )
+
+            def _reset_handler(cmd_args: dict[str, Any]) -> dict[str, Any]:
+                """Sim-only: record a reset and hard-exit so systemd restarts cold,
+                wiping state and starting from `capital`. Guarded by control_loop."""
+                cap = float(cmd_args.get("capital", config.capital_start))
+                if cap <= 0:
+                    raise ValueError("capital must be > 0")
+                write_reset_marker(config.install_dir, _hb_bot_name, cap)
+                logger.warning("RESET requested via control plane — capital=$%.2f, "
+                               "exiting for systemd restart", cap)
+                # exit AFTER the reply is sent; non-zero trips Restart=on-failure.
+                asyncio.get_running_loop().call_later(0.5, os._exit, 1)
+                return {"capital": cap, "wiped_on_restart": True, "restart_in_s": 30}
+
+            _ctl_task = asyncio.create_task(
+                control_loop(
+                    _hb_bot_name,
+                    {"reset": Command(_reset_handler, destructive=True,
+                                      help="wipe state + restart with given --capital (sim only)")},
+                    mode=_hb_mode,
+                    is_live=_is_live,
+                )
+            )
+            _cex_connectors = ("binance", "mexc", "mexc_futures", "bitstamp")
+            _use_feed    = config.data_source == "feed"     and config.connector == "polymarket"
+            _use_cexfeed = config.data_source == "cex_feed" and config.connector in _cex_connectors
+            if config.data_source in ("feed", "cex_feed") and not (_use_feed or _use_cexfeed):
+                logger.warning("data_source=%s ignored for connector=%s — using direct WS",
+                               config.data_source, config.connector)
             try:
-                await ws_loop(state, session)
+                if _use_feed:
+                    await feed_consumer_loop(state, config.feed_addr)
+                elif _use_cexfeed:
+                    _sym = (config.grid_symbol if config.strategy_type == "grid"
+                            else config.strategy_cfg.get("symbol", config.grid_symbol))
+                    await cex_feed_consumer_loop(state, config.feed_addr, _sym)
+                else:
+                    await ws_loop(state, session)
             finally:
                 _hb_task.cancel()
-                await asyncio.gather(_hb_task, return_exceptions=True)
+                _ctl_task.cancel()
+                await asyncio.gather(_hb_task, _ctl_task, return_exceptions=True)
     finally:
         conn.close()
 
