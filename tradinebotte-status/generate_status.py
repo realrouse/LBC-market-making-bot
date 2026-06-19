@@ -277,15 +277,21 @@ h2{color:#8b949e;font-size:.85em;text-transform:uppercase;letter-spacing:1.5px;
   visibility:hidden;opacity:0;pointer-events:none;
   position:absolute;left:0;top:calc(100% + 5px);z-index:300;
   background:#1c2029;border:1px solid #30363d;border-radius:7px;
-  padding:12px 16px;min-width:260px;max-width:480px;
-  font-size:.93em;color:#c9d1d9;line-height:1.9;white-space:normal;
+  padding:13px 17px;min-width:280px;max-width:500px;
+  font-size:1.1em;color:#c9d1d9;line-height:1.85;white-space:normal;
   box-shadow:0 8px 28px rgba(0,0,0,.65);
   transition:opacity .13s ease,visibility .13s ease}
 .tt:hover .tip{visibility:visible;opacity:1}
 .tt .tip.tip-up{top:auto;bottom:calc(100% + 5px)}
-.tip-label{color:#8b949e;font-size:.88em;margin-bottom:5px;display:block}
+.tip-label{color:#8b949e;font-size:1em;margin-bottom:5px;display:block}
 .tip-row{color:#c9d1d9;margin:2px 0}
-.tip-dim{color:#484f58;margin-top:6px;font-size:.86em}
+.tip-dim{color:#8b949e;margin-top:6px;font-size:.95em}
+/* Small screens: enlarge hover tooltips so the detail is readable on phones */
+@media (max-width:640px){
+  .tt .tip{font-size:1.3em;line-height:1.8;min-width:200px;max-width:92vw;padding:15px 18px}
+  .tip-label{font-size:1.05em}
+  .tip-dim{font-size:1em}
+}
 
 /* ── Summary bar ──────────────────────────────────────── */
 .summary-bar{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}
@@ -714,16 +720,20 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
         pnl_str    = (f"{'+' if today_pnl >= 0 else '-'}${abs(today_pnl):.2f}"
                       if isinstance(today_pnl, (int, float)) else "—")
         # Win-rate sub-line + tip from live.db (Polymarket only; payload has no W/L split).
+        # Win rate is over RESOLVED trades only, so the count shown next to it is the
+        # resolved count (w+l) — not trades_total, which also includes open positions.
         cap_sub = mode_badge
         wr_tip = ""
         if has_poly and live:
             totals = (live.get("totals") or [{}])[0]
             w = totals.get("w", 0) or 0
             l = totals.get("l", 0) or 0
-            t = trades_tot if trades_tot is not None else (totals.get("t", 0) or 0)
-            cap_sub = f"{_wr(w, l)} · {t}T"
-            wr_tip = (f"<div class='tip-row'>Win rate {_wr(w, l)}</div>"
-                      f"<div class='tip-row'>Total trades {t}</div>")
+            resolved = w + l
+            total_all = trades_tot if trades_tot is not None else (totals.get("t", 0) or 0)
+            cap_sub = f"{_wr(w, l)} · {resolved}T"
+            open_extra = f" · {open_n} open" if open_n else ""
+            wr_tip = (f"<div class='tip-row'>Win rate {_wr(w, l)} ({w}W / {l}L)</div>"
+                      f"<div class='tip-row'>Resolved {resolved} · Total {total_all}{open_extra}</div>")
         # Age-gate: when the source heartbeat is STALE/DEAD, dim the values and show a
         # badge so last-known payload numbers aren't read as current.
         is_stale   = bool(flag) and flag != "ALIVE"
