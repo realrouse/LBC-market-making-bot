@@ -46,9 +46,6 @@ _REMOTE_COLLECT = r"""
 import sqlite3, json, os, time, subprocess, sys
 
 now = int(time.time())
-today_start_ms = (now - (now % 86400)) * 1000
-week_start_ms  = (now - 7 * 86400) * 1000
-month_start_ms = (now - 30 * 86400) * 1000
 data = {"version": "?", "services": [], "live": None, "accum": None,
         "heartbeats": None}
 
@@ -94,7 +91,9 @@ def _qdb(path, queries):
     return result
 
 
-# live.db: Polymarket bot — uses entry_ts_ms (ms), outcome, pnl_net, capital_after
+# live.db: Polymarket bot. PnL/capital now come from the heartbeat payload (the single
+# source of truth shared with the pills + fleet headline); live.db is queried only for
+# the win-rate counts and the recent/open trade tables that payloads don't carry.
 data["live"] = _qdb("~/tradinebotte/live.db", {
     "totals": (
         "SELECT count(*) t,"
@@ -102,26 +101,6 @@ data["live"] = _qdb("~/tradinebotte/live.db", {
         " sum(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) l,"
         " sum(CASE WHEN resolved=0    THEN 1 ELSE 0 END) o"
         " FROM trades"
-    ),
-    "capital": (
-        "SELECT capital_after capital FROM trades WHERE resolved=1"
-        " ORDER BY id DESC LIMIT 1"
-    ),
-    "today": (
-        f"SELECT sum(pnl_net) p, count(*) t FROM trades"
-        f" WHERE outcome IN ('WIN','LOSS') AND entry_ts_ms >= {today_start_ms}"
-    ),
-    "week": (
-        f"SELECT sum(pnl_net) p, count(*) t FROM trades"
-        f" WHERE outcome IN ('WIN','LOSS') AND entry_ts_ms >= {week_start_ms}"
-    ),
-    "month": (
-        f"SELECT sum(pnl_net) p, count(*) t FROM trades"
-        f" WHERE outcome IN ('WIN','LOSS') AND entry_ts_ms >= {month_start_ms}"
-    ),
-    "lifetime": (
-        "SELECT sum(pnl_net) p, count(*) t FROM trades"
-        " WHERE outcome IN ('WIN','LOSS')"
     ),
     "recent": (
         "SELECT id, entry_ts_ms/1000 entry_ts, direction,"
@@ -710,57 +689,76 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
     trade_html = ""
     open_html  = ""
 
-    if live and has_poly:
-        totals    = (live.get("totals") or [{}])[0]
-        cap_row   = (live.get("capital") or [{}])[0]
-        today_row = (live.get("today") or [{}])[0]
-        week_row  = (live.get("week") or [{}])[0]
-        month_row = (live.get("month") or [{}])[0]
-        life_row  = (live.get("lifetime") or [{}])[0]
-        w         = totals.get("w", 0) or 0
-        l         = totals.get("l", 0) or 0
-        t         = totals.get("t", 0) or 0
-        cap       = cap_row.get("capital")
-        today_pnl = today_row.get("p")
-        today_t   = today_row.get("t", 0) or 0
-        week_pnl  = week_row.get("p")
-        week_t    = week_row.get("t", 0) or 0
-        month_pnl = month_row.get("p")
-        month_t   = month_row.get("t", 0) or 0
-        life_pnl  = life_row.get("p")
-        life_t    = life_row.get("t", 0) or 0
-        cap_str   = f"${cap:.2f}" if cap is not None else "—"
-        pnl_sign  = "+" if (today_pnl or 0) >= 0 else "-"
-        pnl_cls   = "pnl-pos" if (today_pnl or 0) >= 0 else "pnl-neg"
-        pnl_str   = (f"{pnl_sign}${abs(today_pnl):.2f}" if today_pnl is not None else "—")
+    # Big metrics (Capital, Today PnL) come from the primary bot's heartbeat payload —
+    # the single source of truth shared with the pills and the fleet headline. live.db
+    # is used only for the Polymarket win-rate and the trade tables further below.
+    primary = None
+    for _name in ("live_bot", "account_bot", "grid_bot", "swing_bot"):
+        primary = next((r for r in (hb_rows or []) if r["bot_name"] == _name), None)
+        if primary:
+            break
+    if primary:
+        p          = primary.get("payload", {}) or {}
+        acct_s     = (primary.get("_label") or "").split()[0]
+        flag       = primary.get("flag", "")
+        cap        = p.get("capital")
+        today_pnl  = p.get("daily_pnl")
+        life_pnl   = p.get("pnl_total")
+        trades_tot = p.get("trades_total")
+        open_n     = p.get("open_trades")
+        mode_badge = _mode_badge(acct_s, primary["bot_name"])
+        cap_str    = f"${cap:,.2f}" if isinstance(cap, (int, float)) else "—"
+        pnl_cls    = "pnl-pos" if (today_pnl or 0) >= 0 else "pnl-neg"
+        pnl_str    = (f"{'+' if today_pnl >= 0 else '-'}${abs(today_pnl):.2f}"
+                      if isinstance(today_pnl, (int, float)) else "—")
+        # Win-rate sub-line + tip from live.db (Polymarket only; payload has no W/L split).
+        cap_sub = mode_badge
+        wr_tip = ""
+        if has_poly and live:
+            totals = (live.get("totals") or [{}])[0]
+            w = totals.get("w", 0) or 0
+            l = totals.get("l", 0) or 0
+            t = trades_tot if trades_tot is not None else (totals.get("t", 0) or 0)
+            cap_sub = f"{_wr(w, l)} · {t}T"
+            wr_tip = (f"<div class='tip-row'>Win rate {_wr(w, l)}</div>"
+                      f"<div class='tip-row'>Total trades {t}</div>")
+        # Flag stale source data so last-known payload values aren't read as current.
+        stale_note = (
+            f"<div class='tip-row'><span class='{flag.lower()}'>heartbeat {escape(flag)}</span></div>"
+            if flag and flag != "ALIVE" else ""
+        )
+        open_tip = (f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;"
+                    f"display:inline-block'>Open</span> {open_n}</div>"
+                    if open_n is not None else "")
         stats_html = (
             f"<div class='big-metrics'>"
             f"<div class='metric-big tt'>"
             f"<div class='lbl'>Capital</div>"
             f"<div class='val'>{cap_str}</div>"
-            f"<div class='metric-sub'>{_wr(w, l)} · {t}T</div>"
+            f"<div class='metric-sub'>{cap_sub}</div>"
             f"<div class='tip tip-up'>"
-            f"<span class='tip-label'>All-time</span>"
-            f"<div class='tip-row'>Win rate {_wr(w, l)}</div>"
-            f"<div class='tip-row'>Total trades {t}</div>"
+            f"<span class='tip-label'>{escape(primary['bot_name'])} · from heartbeat</span>"
+            f"{wr_tip}"
+            f"<div class='tip-row'>Lifetime {_fmt_pnl(life_pnl)}</div>"
+            f"{stale_note}"
             f"</div></div>"
             f"<div class='metric-big tt'>"
             f"<div class='lbl'>Today PnL</div>"
             f"<div class='val {pnl_cls}'>{pnl_str}</div>"
-            f"<div class='metric-sub'>{today_t}T today</div>"
+            f"<div class='metric-sub'>{mode_badge}</div>"
             f"<div class='tip tip-up'>"
-            f"<span class='tip-label'>PnL breakdown</span>"
+            f"<span class='tip-label'>PnL (from heartbeat)</span>"
             f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>Today</span>"
-            f" {_fmt_pnl(today_pnl)} · {today_t}T</div>"
-            f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>7 days</span>"
-            f" {_fmt_pnl(week_pnl)} · {week_t}T</div>"
-            f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>30 days</span>"
-            f" {_fmt_pnl(month_pnl)} · {month_t}T</div>"
+            f" {_fmt_pnl(today_pnl)}</div>"
             f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>Lifetime</span>"
-            f" {_fmt_pnl(life_pnl)} · {life_t}T</div>"
+            f" {_fmt_pnl(life_pnl)}</div>"
+            f"{open_tip}{stale_note}"
             f"</div></div>"
             f"</div>"
         )
+
+    # Polymarket trade tables (open + recent) from live.db — payloads don't carry them.
+    if live and has_poly:
         open_trades = live.get("open", [])
         if open_trades:
             def _ep(r):
@@ -778,41 +776,6 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
                 f"<details><summary>Last {len(recent)} trades ▾</summary>"
                 f"{_render_trade_table(recent, 'live')}"
                 f"</details>"
-            )
-
-    elif not has_poly:
-        # CEX-only account: big metrics from heartbeat payload
-        primary = next(
-            (r for r in (hb_rows or []) if r["bot_name"] in ("grid_bot", "swing_bot")),
-            None,
-        )
-        if primary:
-            p          = primary.get("payload", {})
-            cap        = p.get("capital")
-            pnl_d      = p.get("daily_pnl")
-            trades_o   = p.get("open_trades")
-            acct_s     = (primary.get("_label") or "").split()[0]
-            is_sim     = (acct_s, primary["bot_name"]) not in _LIVE_BOTS
-            mode_badge = _mode_badge(acct_s, primary["bot_name"])
-            cap_str    = f"${cap:.0f}" if cap is not None else "—"
-            pnl_sign   = "+" if (pnl_d or 0) >= 0 else "-"
-            pnl_cls    = "pnl-pos" if (pnl_d or 0) >= 0 else "pnl-neg"
-            pnl_str    = f"{pnl_sign}${abs(pnl_d):.2f}" if pnl_d is not None else "—"
-            stats_html = (
-                f"<div class='big-metrics'>"
-                f"<div class='metric-big tt'>"
-                f"<div class='lbl'>Capital</div>"
-                f"<div class='val'>{cap_str}</div>"
-                f"<div class='metric-sub'>{mode_badge}</div>"
-                f"<div class='tip tip-up'>"
-                f"<div class='tip-row'>Open orders: {trades_o if trades_o is not None else '—'}</div>"
-                f"</div></div>"
-                f"<div class='metric-big'>"
-                f"<div class='lbl'>Today PnL</div>"
-                f"<div class='val {pnl_cls}'>{pnl_str}</div>"
-                f"<div class='metric-sub'>open: {trades_o if trades_o is not None else '—'}</div>"
-                f"</div>"
-                f"</div>"
             )
 
     cex_html = ""
@@ -957,17 +920,17 @@ def _render_html(
     svc_cls    = "alive" if svc_issues == 0 else "dead"
     unr_cls    = "alive" if unreachable == 0 else "dead"
 
-    # Aggregate PnL across all Polymarket accounts for each time window
-    def _sum_pnl(key: str) -> float:
-        return sum(
-            float((acc.get("live") or {}).get(key, [{}])[0].get("p") or 0)
-            for acc in accounts if acc.get("live")
-        )
-
-    today_pnl_total = _sum_pnl("today")
-    week_pnl_total  = _sum_pnl("week")
-    month_pnl_total = _sum_pnl("month")
-    life_pnl_total  = _sum_pnl("lifetime")
+    # Fleet PnL — single source of truth: the heartbeat payload every bot emits
+    # (Polymarket AND CEX), so the totals cover the whole fleet, not just live.db
+    # accounts. Only Today + Lifetime are available fleet-wide (payloads carry
+    # daily_pnl + pnl_total; they don't carry 7d/30d windows).
+    today_pnl_total = life_pnl_total = 0.0
+    for _hb in heartbeats:
+        _pl = _hb.get("payload") or {}
+        if isinstance(_pl.get("daily_pnl"), (int, float)):
+            today_pnl_total += _pl["daily_pnl"]
+        if isinstance(_pl.get("pnl_total"), (int, float)):
+            life_pnl_total += _pl["pnl_total"]
     pnl_sign    = "+" if today_pnl_total >= 0 else ""
     pnl_val_cls = "pnl-pos" if today_pnl_total >= 0 else "pnl-neg"
 
@@ -979,13 +942,9 @@ def _render_html(
         f"<div class='lbl'>Today PnL</div>"
         f"<div class='val {pnl_val_cls}'>{pnl_sign}${today_pnl_total:.2f}</div>"
         f"<div class='tip'>"
-        f"<span class='tip-label'>PnL breakdown (all accounts)</span>"
+        f"<span class='tip-label'>PnL — all bots (from heartbeats)</span>"
         f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>Today</span>"
         f" {_fmt_pnl(today_pnl_total)}</div>"
-        f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>7 days</span>"
-        f" {_fmt_pnl(week_pnl_total)}</div>"
-        f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>30 days</span>"
-        f" {_fmt_pnl(month_pnl_total)}</div>"
         f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>Lifetime</span>"
         f" {_fmt_pnl(life_pnl_total)}</div>"
         f"</div>"
