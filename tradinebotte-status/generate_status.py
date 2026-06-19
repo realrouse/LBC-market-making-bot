@@ -324,6 +324,8 @@ h2{color:#8b949e;font-size:.85em;text-transform:uppercase;letter-spacing:1.5px;
 .metric-big .lbl{font-size:.63em;color:#8b949e;text-transform:uppercase;letter-spacing:.9px}
 .metric-big .val{font-size:1.8em;font-weight:700;margin-top:2px;
                   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Dim metric values whose source heartbeat is stale/dead (last-known, not current) */
+.metric-big .val.stale-val{opacity:.45}
 .metric-sub{font-size:.72em;color:#8b949e;margin-top:2px}
 
 /* ── Compact bot rows in account cards ────────────────── */
@@ -722,35 +724,41 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
             cap_sub = f"{_wr(w, l)} · {t}T"
             wr_tip = (f"<div class='tip-row'>Win rate {_wr(w, l)}</div>"
                       f"<div class='tip-row'>Total trades {t}</div>")
-        # Flag stale source data so last-known payload values aren't read as current.
+        # Age-gate: when the source heartbeat is STALE/DEAD, dim the values and show a
+        # badge so last-known payload numbers aren't read as current.
+        is_stale   = bool(flag) and flag != "ALIVE"
+        vcls       = " stale-val" if is_stale else ""
+        flag_badge = (f" <span class='badge {flag.lower()}'>{escape(flag)}</span>"
+                      if is_stale else "")
         stale_note = (
-            f"<div class='tip-row'><span class='{flag.lower()}'>heartbeat {escape(flag)}</span></div>"
-            if flag and flag != "ALIVE" else ""
+            f"<div class='tip-row'><span class='{flag.lower()}'>"
+            f"heartbeat {escape(flag)} — last-known values</span></div>"
+            if is_stale else ""
         )
-        open_tip = (f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;"
+        open_tip = (f"<div class='tip-row'><span style='color:#8b949e;min-width:64px;"
                     f"display:inline-block'>Open</span> {open_n}</div>"
                     if open_n is not None else "")
         stats_html = (
             f"<div class='big-metrics'>"
             f"<div class='metric-big tt'>"
             f"<div class='lbl'>Capital</div>"
-            f"<div class='val'>{cap_str}</div>"
-            f"<div class='metric-sub'>{cap_sub}</div>"
+            f"<div class='val{vcls}'>{cap_str}</div>"
+            f"<div class='metric-sub'>{cap_sub}{flag_badge}</div>"
             f"<div class='tip tip-up'>"
             f"<span class='tip-label'>{escape(primary['bot_name'])} · from heartbeat</span>"
             f"{wr_tip}"
-            f"<div class='tip-row'>Lifetime {_fmt_pnl(life_pnl)}</div>"
+            f"<div class='tip-row'>Since reset {_fmt_pnl(life_pnl)}</div>"
             f"{stale_note}"
             f"</div></div>"
             f"<div class='metric-big tt'>"
             f"<div class='lbl'>Today PnL</div>"
-            f"<div class='val {pnl_cls}'>{pnl_str}</div>"
-            f"<div class='metric-sub'>{mode_badge}</div>"
+            f"<div class='val {pnl_cls}{vcls}'>{pnl_str}</div>"
+            f"<div class='metric-sub'>{mode_badge}{flag_badge}</div>"
             f"<div class='tip tip-up'>"
             f"<span class='tip-label'>PnL (from heartbeat)</span>"
-            f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>Today</span>"
+            f"<div class='tip-row'><span style='color:#8b949e;min-width:64px;display:inline-block'>Today (UTC)</span>"
             f" {_fmt_pnl(today_pnl)}</div>"
-            f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>Lifetime</span>"
+            f"<div class='tip-row'><span style='color:#8b949e;min-width:64px;display:inline-block'>Since reset</span>"
             f" {_fmt_pnl(life_pnl)}</div>"
             f"{open_tip}{stale_note}"
             f"</div></div>"
@@ -943,9 +951,9 @@ def _render_html(
         f"<div class='val {pnl_val_cls}'>{pnl_sign}${today_pnl_total:.2f}</div>"
         f"<div class='tip'>"
         f"<span class='tip-label'>PnL — all bots (from heartbeats)</span>"
-        f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>Today</span>"
+        f"<div class='tip-row'><span style='color:#8b949e;min-width:74px;display:inline-block'>Today (UTC)</span>"
         f" {_fmt_pnl(today_pnl_total)}</div>"
-        f"<div class='tip-row'><span style='color:#8b949e;min-width:60px;display:inline-block'>Lifetime</span>"
+        f"<div class='tip-row'><span style='color:#8b949e;min-width:74px;display:inline-block'>Since reset</span>"
         f" {_fmt_pnl(life_pnl_total)}</div>"
         f"</div>"
         f"</div>"
