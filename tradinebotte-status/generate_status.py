@@ -43,9 +43,8 @@ def _fetch_btc_24h(symbol: str = "BTCUSDT") -> dict:
 # ─── Remote data-collection snippet (runs via SSH on each account) ────────────
 
 _REMOTE_COLLECT = r"""
-import sqlite3, json, os, time, subprocess, sys
+import sqlite3, json, os, subprocess
 
-now = int(time.time())
 data = {"version": "?", "services": [], "live": None, "accum": None,
         "heartbeats": None}
 
@@ -566,16 +565,6 @@ def _render_heartbeat_pills(hb_rows: list) -> str:
             f"</div>"
         )
     return f"<div class='hb-pills'>{pills}</div>"
-
-
-def _render_services(services: list) -> str:
-    if not services:
-        return ""
-    items = "".join(
-        f"<span class='svc {'ok' if s['active'] else 'bad'}'>{escape(s['unit'])}</span>"
-        for s in services
-    )
-    return f"<div class='svc-list'>{items}</div>"
 
 
 def _render_trade_table(rows: list, db_type: str = "live") -> str:

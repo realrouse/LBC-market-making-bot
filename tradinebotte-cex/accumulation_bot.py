@@ -668,7 +668,6 @@ async def _handle_indicator(state: AccumState, db: sqlite3.Connection,
 
 async def _zmq_loop(state: AccumState, db: sqlite3.Connection) -> None:
     try:
-        import os as _os
         import zmq.asyncio as azmq
         from tradinetools.zmq import make_sub, default_ipc_addr
     except ImportError:
