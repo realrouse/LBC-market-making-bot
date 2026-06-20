@@ -3,10 +3,16 @@
 #
 # Run this before every merge to main.  Aborts on blocking failures.
 #
+# Versioning (x.y.z):
+#   - Only a GitHub Release bumps the minor (x.y): e.g. 0.87 -> 0.88.
+#   - Work merged to main WITHOUT a GitHub Release bumps the patch (z):
+#     0.87 -> 0.87.1 -> 0.87.2 …  The CHANGELOG header + --tag take the
+#     full x.y.z string (e.g. --tag v0.87.1); this script is format-agnostic.
+#
 # Usage:
 #   bash scripts/prepare_release.sh
 #   bash scripts/prepare_release.sh --skip-integration
-#   bash scripts/prepare_release.sh --tag v0.82
+#   bash scripts/prepare_release.sh --tag v0.87.1
 
 set -uo pipefail
 
