@@ -6,6 +6,13 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.87] — 2026-06-20
+
+### Fixed
+- **Standalone install integration test repaired — it had been silently broken since the monorepo split and never actually exercised the bot.** Three issues: (1) it invoked `scripts/start_bot.sh`, but after the split that script lives under `tradinebotte-polymarket/scripts/` while `install.sh` deploys a flat layout — it now starts via the `run.sh` wrapper that `install.sh` creates and documents; (2) it rsynced the whole repo *into* the install directory, so the `tradinetools/` source tree shadowed the installed package as a namespace package (`cannot import name 'heartbeat_loop'`) — it now installs from a separate source directory into a clean install directory, mirroring a real clone-here/install-there user; (3) it waited a fixed 8 s for the WebSocket — it now polls for up to 60 s, since a cold fresh install needs ~10–20 s to fetch markets and connect. Teardown also wipes the install and source directories so the dedicated clean-install test account holds no persistent state. The release gate's integration step (standalone + multi-bot) now passes cleanly end to end.
+
+---
+
 ## [0.86] — 2026-06-20
 
 ### Fixed
