@@ -6,6 +6,13 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.87] — 2026-06-20
+
+### Corrigé
+- **Réparation du test d'intégration d'installation autonome — il était silencieusement cassé depuis la séparation en monorepo et n'exerçait jamais réellement le bot.** Trois problèmes : (1) il invoquait `scripts/start_bot.sh`, mais depuis la séparation ce script se trouve sous `tradinebotte-polymarket/scripts/` alors qu'`install.sh` déploie une arborescence à plat — il démarre désormais via le wrapper `run.sh` qu'`install.sh` crée et documente ; (2) il faisait un rsync de tout le dépôt *dans* le répertoire d'installation, de sorte que l'arborescence source `tradinetools/` masquait le paquet installé comme paquet d'espace de noms (`cannot import name 'heartbeat_loop'`) — il installe désormais depuis un répertoire source séparé vers un répertoire d'installation propre, à l'image d'un vrai utilisateur (cloner ici / installer ailleurs) ; (3) il attendait 8 s fixes la connexion WebSocket — il sonde désormais jusqu'à 60 s, car une installation propre à froid a besoin d'environ 10 à 20 s pour récupérer les marchés et se connecter. Le teardown efface aussi les répertoires d'installation et source afin que le compte de test dédié aux installations propres ne conserve aucun état persistant. L'étape d'intégration du garde-fou de release (autonome + multi-bots) passe désormais proprement de bout en bout.
+
+---
+
 ## [0.86] — 2026-06-20
 
 ### Corrigé
