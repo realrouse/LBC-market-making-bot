@@ -100,6 +100,12 @@ def make_subscribe_msg(symbols):
     })
 
 
+def make_ping_msg():
+    """App-level keepalive for the public WS. MEXC spot closes the socket with
+    code 1005 after ~30 s of silence (the websockets protocol PING is not honoured),
+    so cex_feed sends this periodically to keep the depth stream alive."""
+    return json.dumps({"method": "PING"})
+
 
 # ─── ORDER BOOK ───────────────────────────────────────────────────────────────
 
