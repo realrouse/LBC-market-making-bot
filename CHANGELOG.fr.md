@@ -6,7 +6,7 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
-## [Non publié]
+## [0.86] — 2026-06-20
 
 ### Corrigé
 - **Page de statut — le PnL de la flotte était un agrégat faux ; désormais une source unique de vérité.** La page recalculait le PnL Polymarket depuis le `live.db` de chaque bot mais lisait le PnL CEX depuis le payload du heartbeat — deux pipelines pour la même métrique. L'en-tête « Today / Lifetime » de la flotte, pourtant étiqueté « all accounts », excluait donc silencieusement tous les bots CEX (sous-estimant le PnL cumulé de la flotte d'environ 64 %), et le « today » d'un bot pouvait différer entre sa carte de compte et sa pastille de heartbeat. La carte, la pastille et l'en-tête de flotte lisent désormais tous le payload du heartbeat que chaque bot (Polymarket *et* CEX) émet déjà, de sorte que les totaux couvrent toute la flotte et ne peuvent plus diverger. Le `live.db` n'est plus interrogé que pour le taux de réussite Polymarket et les tables des trades récents/ouverts.

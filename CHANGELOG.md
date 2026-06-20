@@ -6,7 +6,7 @@ All notable changes to this project are documented here.
 
 ---
 
-## [Unreleased]
+## [0.86] — 2026-06-20
 
 ### Fixed
 - **Status page — fleet PnL was a wrong aggregate; now a single source of truth.** The page re-derived Polymarket PnL from each bot's `live.db` but read CEX PnL from the heartbeat payload — two pipelines for the same metric. The fleet "Today / Lifetime" headline, though labelled "all accounts", therefore silently excluded every CEX bot (understating fleet lifetime PnL by ~64%), and a bot's "today" could differ between its account card and its heartbeat pill. Card, pill, and fleet headline now all read the heartbeat payload every bot (Polymarket *and* CEX) already emits, so the totals cover the whole fleet and cannot disagree. `live.db` is now queried only for the Polymarket win-rate and the recent/open trade tables.
