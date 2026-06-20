@@ -609,7 +609,11 @@ class SwingStrategy:
                 logger.error("SwingStrategy [%s] SL MARKET SELL failed — position marked closed",
                              self.sw.symbol)
 
-        pnl = (price - entry) * qty   # approximate at triggered price; fees omitted
+        # Account both legs' fees (BUY entry + SL market SELL), like the TP path —
+        # otherwise SL-closed trades overstate PnL by the round-trip fee.
+        fee_b = self._api.compute_fee(entry, qty)
+        fee_s = self._api.compute_fee(price, qty)
+        pnl = (price - entry) * qty - fee_b - fee_s   # at triggered price
         self.sw.total_pnl    += pnl
         self.sw.total_trades += 1
         pos.status = "closed"
