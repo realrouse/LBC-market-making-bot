@@ -1,23 +1,27 @@
 #!/usr/bin/env bash
-# test_multibot_deploy.sh — Multibot integration test (account_bot + systemd feed)
+# test_multibot_deploy.sh — Multibot integration test (account_bot + shared feed)
 #
 # Architecture under test:
-#   Feed owner  (TEST_FEED_USER_IDX)      — systemd tradinebotte-feed service
+#   Feed owner  (TEST_FEED_USER_IDX)      — feed.py as an ephemeral nohup process
 #   Account bots (TEST_ACCOUNT_USER_IDXS) — account_bot.py, feed_auto_start=false
+#
+# The feed is run as a plain nohup process (not a systemd service) and everything is
+# deleted at teardown, so the test account holds NO persistent state — it is only for
+# short-lived clean-install tests.
 #
 # Phases:
 #   1. Pre-flight  — sshpass, SSH connectivity, host-key scan
-#   2. Cleanup     — kill stale account_bot/indicators, wipe REMOTE_BOT_DIR
+#   2. Cleanup     — kill stale account_bot/indicators/feed, wipe REMOTE_BOT_DIR
 #   3. Feed check  — capture feed.py hash before any deploy
-#   4. Deploy      — rsync code + venv + pip to all users
-#   5. Feed update — if feed.py changed, restart service or print instructions
+#   4. Deploy      — rsync code + venv + pip + tradinetools to all users
+#   5. Start feed  — launch feed.py (nohup) and wait until it publishes
 #   6. Configure   — write config.json (feed_addr, feed_auto_start=false)
 #   7. Indicators  — start optional indicators services
 #   8. Launch      — start account_bot instances simultaneously
-#   9. Verify init — systemd feed running + N account bots connected
+#   9. Verify init — feed running + N account bots connected
 #  10. Sustained   — heartbeat every 30s for DURATION seconds
 #  11. Analysis    — collect and analyse logs
-#  12. Teardown    — kill account_bot processes ONLY (feed service untouched)
+#  12. Teardown    — stop bots + feed, wipe the test account clean
 #  13. Report      — SUCCESS / FAILURE with error count
 #
 # Usage:
@@ -30,8 +34,8 @@
 #   editor ~/.tradinebotte-test.conf
 #
 # Local prerequisites  : sshpass (apt-get install sshpass)
-# Server prerequisites : python3-venv, python3-pip, python3.X-venv,
-#                        systemd tradinebotte-feed service installed and enabled
+# Server prerequisites : python3-venv, python3-pip, python3.X-venv
+#                        (the feed is started by the test — nothing to pre-install)
 
 set -euo pipefail
 
@@ -148,6 +152,13 @@ run_bg() {
         -p "$PORT" "${ALL_USERS[$idx]}@$SERVER" "$@" 2>&1 &
 }
 
+# Feed liveness — the test runs the feed as an ephemeral nohup process (no systemd /
+# linger, so the test account holds no persistent state). uid-scoped so it never
+# matches a production feed.py running under another account on this shared host.
+feed_active() {  # echoes "active" or "inactive"
+    run "$FEED_IDX" "ps -u \$(id -u) -o args= | grep -q '[f]eed.py' && echo active || echo inactive"
+}
+
 deploy_code() {
     # Flat rsync: tradinebotte-polymarket/ + tradinebotte-cex/ → $REMOTE_INSTALL_DIR/
     # indicators.py lives in tradinebotte-indicators/ and is also synced flat.
@@ -203,6 +214,12 @@ deploy_code() {
         rsync -az \
         -e "ssh $ssh_opts" \
         "$LOCAL_REPO/requirements.txt" "$user@$SERVER:$REMOTE_INSTALL_DIR/" 2>&1 || return 1
+
+    # tradinetools source — not on PyPI, installed into the venv in Phase 4.
+    SSHPASS="${ALL_PASSWORDS[$idx]}" /usr/bin/sshpass -e \
+        rsync -az --exclude='__pycache__' --exclude='*.pyc' \
+        -e "ssh $ssh_opts" \
+        "$LOCAL_REPO/tradinetools/" "$user@$SERVER:$REMOTE_INSTALL_DIR/tradinetools/" 2>&1 || return 1
 }
 
 # ─── Phase 1: Pre-flight ────────────────────────────────────────────────────────
@@ -240,19 +257,9 @@ for idx in "${DEPLOY_IDXS[@]}"; do
     fi
 done
 
-# Verify the systemd feed service is installed and enabled on the feed user
-FEED_SVC_STATUS=$(run "$FEED_IDX" \
-    "systemctl is-active tradinebotte-feed 2>/dev/null || echo inactive")
-FEED_SVC_ENABLED=$(run "$FEED_IDX" \
-    "systemctl is-enabled tradinebotte-feed 2>/dev/null || echo disabled")
-info "Feed service on ${ALL_USERS[$FEED_IDX]}: status=$FEED_SVC_STATUS enabled=$FEED_SVC_ENABLED"
-
-if [[ "$FEED_SVC_STATUS" != "active" ]]; then
-    warn "Feed service is NOT active on ${ALL_USERS[$FEED_IDX]}"
-    warn "  Start it first: sudo systemctl start tradinebotte-feed"
-    warn "  (install with: bash scripts/install_feed_service.sh)"
-    warn "Continuing — account_bot will fail to connect if feed is not running"
-fi
+# The feed is started by this test in Phase 5 as a nohup process — no pre-provisioned
+# service required (the test account is ephemeral). Just note where it will bind.
+info "Feed will be started in Phase 5 (nohup, on $FEED_ADDR)"
 
 # ─── Phase 2: Cleanup stale processes and runtime dirs ────────────────────────
 section "PHASE 2 — CLEANUP"
@@ -296,26 +303,24 @@ done
 
 # Confirm no residual account_bot processes
 STALE=$(run "${ACCOUNT_IDXS[0]}" \
-    "ps aux | grep '[a]ccount_bot.py' | wc -l" || echo 0)
+    "ps -u \$(id -u) -o args= | grep '[a]ccount_bot.py' | wc -l" || echo 0)
 [[ "$STALE" -eq 0 ]] && ok "No residual account_bot processes" \
     || warn "$STALE residual account_bot process(es) — continuing"
 
 # ─── Phase 3: Capture current feed.py hash BEFORE any deploy ───────────────────
 section "PHASE 3 — FEED VERSION CHECK"
 
+# Informational only — Phase 5 always (re)installs the feed with the deployed code.
 LOCAL_FEED_HASH=$(sha256sum "$LOCAL_REPO/tradinebotte-polymarket/feed.py" | cut -d' ' -f1)
 REMOTE_FEED_HASH=$(run "$FEED_IDX" \
     "sha256sum $REMOTE_INSTALL_DIR/feed.py 2>/dev/null | cut -d' ' -f1" || echo "")
-FEED_UPDATE_NEEDED=false
 
 if [[ -z "$REMOTE_FEED_HASH" ]]; then
     info "feed.py not yet deployed on ${ALL_USERS[$FEED_IDX]} — first deploy"
-    FEED_UPDATE_NEEDED=true
 elif [[ "$REMOTE_FEED_HASH" == "$LOCAL_FEED_HASH" ]]; then
-    ok "feed.py unchanged (hash: ${LOCAL_FEED_HASH:0:12}…) — no service restart needed"
+    ok "feed.py unchanged (hash: ${LOCAL_FEED_HASH:0:12}…)"
 else
     warn "feed.py changed (remote: ${REMOTE_FEED_HASH:0:12}… → local: ${LOCAL_FEED_HASH:0:12}…)"
-    FEED_UPDATE_NEEDED=true
 fi
 
 # ─── Phase 4: Deploy ───────────────────────────────────────────────────────────
@@ -337,46 +342,62 @@ else
             $REMOTE_INSTALL_DIR/venv/bin/pip install --quiet --upgrade pip
             $REMOTE_INSTALL_DIR/venv/bin/pip install --quiet -r $REMOTE_INSTALL_DIR/requirements.txt
         " && ok "$user: dependencies installed" || { err "$user: pip install failed"; exit 1; }
+
+        # tradinetools isn't on PyPI / in requirements.txt — install it into the venv
+        # so account_bot's 'from tradinetools import heartbeat_loop' resolves to a real
+        # package instead of the source namespace dir on cwd. Plain copy (not pip) to
+        # avoid stale dist-info breaking restarts (see feedback_integration_test_tradinetools).
+        info "install tradinetools into venv ($user)..."
+        run "$idx" "
+            VENV=$REMOTE_INSTALL_DIR/venv
+            PYVER=\$(\$VENV/bin/python3 -c 'import sys;print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')
+            SITE=\$VENV/lib/python\$PYVER/site-packages
+            rm -rf \"\$SITE/tradinetools\"
+            cp -r $REMOTE_INSTALL_DIR/tradinetools/tradinetools \"\$SITE/tradinetools\"
+            \$VENV/bin/python3 -c 'from tradinetools import heartbeat_loop'
+        " && ok "$user: tradinetools installed" || { err "$user: tradinetools install failed"; exit 1; }
     done
 fi
 
-# ─── Phase 4: Feed service update ─────────────────────────────────────────────
-section "PHASE 5 — FEED SERVICE UPDATE"
+# ─── Phase 5: Start the feed (ephemeral nohup process) ────────────────────────
+section "PHASE 5 — START FEED"
 
-if [[ "$FEED_UPDATE_NEEDED" == "false" ]] || [[ "$SKIP_DEPLOY" == "true" ]]; then
-    ok "No feed service restart required"
+# Run the feed from the same venv the test just built (which now has tradinetools),
+# as a nohup background process — no systemd / linger, so nothing persists on the
+# test account. It binds the dedicated test port and publishes book updates that the
+# account bots consume.
+# Kill any stale feed first (uid-scoped), then launch fresh.
+run "$FEED_IDX" "pkill -9 -u \$(id -u) -f '[f]eed.py' 2>/dev/null; sleep 1; exit 0" || true
+run_bg "$FEED_IDX" "
+    cd $REMOTE_INSTALL_DIR
+    TRADINEBOTTE_FEED_ADDR=$FEED_ADDR TRADINEBOTTE_DIR=$REMOTE_INSTALL_DIR \\
+    nohup $REMOTE_INSTALL_DIR/venv/bin/python3 -u feed.py \\
+        > $REMOTE_INSTALL_DIR/feed.log 2>&1 < /dev/null &
+    FEED_PID=\$!
+    disown \$FEED_PID
+    echo \$FEED_PID > $REMOTE_INSTALL_DIR/feed.pid
+    echo \"FEED_PID=\$FEED_PID\"
+"
+wait
+ok "feed.py launched on ${ALL_USERS[$FEED_IDX]} ($FEED_ADDR)"
+
+# Wait for the feed to actually start publishing — a cold feed needs to fetch markets
+# and connect its upstream WebSocket (~10–20s) before book updates flow. Gate the
+# account_bot launch on this so the test isn't flaky on cold start.
+info "Waiting for feed to connect + publish (up to 60s)..."
+FEED_READY=false
+for _i in $(seq 1 20); do
+    if run "$FEED_IDX" "grep -q 'WebSocket connected' $REMOTE_INSTALL_DIR/feed.log 2>/dev/null && echo y" | grep -q y; then
+        FEED_READY=true
+        break
+    fi
+    sleep 3
+done
+if [[ "$FEED_READY" == "true" ]]; then
+    ok "Feed connected and broadcasting on $FEED_ADDR"
 else
-    info "feed.py was updated — feed service restart needed"
-    RESTART_OK=false
-    if [[ "$FEED_AUTO_RESTART" == "true" ]]; then
-        info "Attempting automatic restart via tradinebotte-ctl..."
-        if run "$FEED_IDX" "sudo tradinebotte-ctl restart tradinebotte-feed 2>&1"; then
-            sleep 5
-            NEW_STATUS=$(run "$FEED_IDX" \
-                "systemctl is-active tradinebotte-feed 2>/dev/null || echo inactive")
-            if [[ "$NEW_STATUS" == "active" ]]; then
-                ok "Feed service restarted successfully (now: $NEW_STATUS)"
-                RESTART_OK=true
-            else
-                warn "Restart command ran but service status: $NEW_STATUS"
-            fi
-        else
-            warn "sudo tradinebotte-ctl failed — check /etc/sudoers.d/tradinebotte"
-        fi
-    fi
-    if [[ "$RESTART_OK" == "false" ]]; then
-        warn "Manual restart required on ${ALL_USERS[$FEED_IDX]}:"
-        warn "  sudo tradinebotte-ctl restart tradinebotte-feed"
-        warn "  systemctl status tradinebotte-feed"
-        warn "Run these commands now, then re-run this script with --skip-deploy"
-    fi
+    err "Feed did not start publishing within 60s — see $REMOTE_INSTALL_DIR/feed.log"
 fi
-
-# Verify feed is actually reachable after any update step
-FEED_SVC_STATUS=$(run "$FEED_IDX" \
-    "systemctl is-active tradinebotte-feed 2>/dev/null || echo inactive")
-[[ "$FEED_SVC_STATUS" == "active" ]] && ok "Feed service active" \
-    || err "Feed service not active (status: $FEED_SVC_STATUS)"
 
 # ─── Phase 5: Configure account bots ──────────────────────────────────────────
 section "PHASE 6 — CONFIGURE ACCOUNT BOTS"
@@ -463,21 +484,21 @@ sleep 30
 # ─── Phase 8: Initial verification ────────────────────────────────────────────
 section "PHASE 9 — INITIAL VERIFICATION"
 
-# Feed service must be running (managed by systemd — not ps aux)
-FEED_SVC_NOW=$(run "$FEED_IDX" \
-    "systemctl is-active tradinebotte-feed 2>/dev/null || echo inactive")
-[[ "$FEED_SVC_NOW" == "active" ]] && ok "Feed service: active (systemd)" \
-    || err "Feed service: $FEED_SVC_NOW (expected: active)"
+# Feed process must be running (ephemeral nohup process, uid-scoped check)
+FEED_SVC_NOW=$(feed_active)
+[[ "$FEED_SVC_NOW" == "active" ]] && ok "Feed process: active" \
+    || err "Feed process: $FEED_SVC_NOW (expected: active)"
 
-# Count account_bot processes (visible to all users via ps aux)
-BOT_COUNT=$(run "${ACCOUNT_IDXS[0]}" "ps aux | grep '[a]ccount_bot.py' | wc -l" || echo 0)
+# Count account_bot processes — scoped to the test user's uid, since on this shared
+# host `ps aux` would also count production account_bot.py running under other accounts.
+BOT_COUNT=$(run "${ACCOUNT_IDXS[0]}" "ps -u \$(id -u) -o args= | grep '[a]ccount_bot.py' | wc -l" || echo 0)
 info "account_bot processes: $BOT_COUNT (expected: $N_BOTS)"
 [[ "$BOT_COUNT" -eq "$N_BOTS" ]] && ok "$N_BOTS account bots active" \
     || err "Expected $N_BOTS bots, found $BOT_COUNT"
 
 # Verify shared indicators service (runs under feed owner, not per account)
 if [[ -n "${IND_CFG_REL:-}" ]]; then
-    IND_COUNT=$(run "$FEED_IDX" "ps aux | grep '[i]ndicators.py' | wc -l" || echo 0)
+    IND_COUNT=$(run "$FEED_IDX" "ps -u \$(id -u) -o args= | grep '[i]ndicators.py' | wc -l" || echo 0)
     [[ "$IND_COUNT" -ge 1 ]] \
         && ok "${ALL_USERS[$FEED_IDX]}: shared indicators.py active" \
         || err "${ALL_USERS[$FEED_IDX]}: indicators.py not running (config=$IND_CFG_REL)"
@@ -514,10 +535,9 @@ while [[ $ELAPSED -lt $DURATION ]]; do
     sleep $SLEEP_FOR
     ELAPSED=$((ELAPSED + SLEEP_FOR))
 
-    FEED_C=$(run "$FEED_IDX" \
-        "systemctl is-active tradinebotte-feed 2>/dev/null || echo inactive")
+    FEED_C=$(feed_active)
     BOT_C=$(run "${ACCOUNT_IDXS[0]}" \
-        "ps aux | grep '[a]ccount_bot.py' | wc -l" 2>/dev/null || echo "?")
+        "ps -u \$(id -u) -o args= | grep '[a]ccount_bot.py' | wc -l" 2>/dev/null || echo "?")
     info "  [${ELAPSED}s] feed=${FEED_C} bots=${BOT_C}"
 
     [[ "$FEED_C" == "active" ]] || warn "  ! Feed service not active: $FEED_C"
@@ -557,27 +577,28 @@ if [[ -n "${IND_CFG_REL:-}" ]]; then
         || err "${ALL_USERS[$FEED_IDX]}: indicators — $IND_ERR ERROR/CRITICAL line(s)"
 fi
 
-# Feed service journal (last 30 lines)
+# Feed log (last 15 lines) — the nohup feed logs to feed.log, not journald.
 echo ""
-echo -e "${BOLD}--- Feed service journal (last 30 lines via journalctl) ---${NC}"
-FEED_JOURNAL=$(run "$FEED_IDX" \
-    "journalctl -u tradinebotte-feed --no-pager -n 30 2>/dev/null || echo '(not available)'")
-echo "$FEED_JOURNAL"
-echo "$FEED_JOURNAL" | grep -qE "WebSocket connected|Subscribing|BTC 5-min markets" && \
-    ok "Feed: WebSocket confirmed in journal" || warn "Feed: WebSocket not confirmed in journal"
+echo -e "${BOLD}--- Feed log (last 15 lines: $REMOTE_INSTALL_DIR/feed.log) ---${NC}"
+FEED_LOG=$(run "$FEED_IDX" \
+    "tail -n 15 $REMOTE_INSTALL_DIR/feed.log 2>/dev/null || echo '(not available)'")
+echo "$FEED_LOG"
+echo "$FEED_LOG" | grep -qE "WebSocket connected|Subscribing|BTC .* markets" && \
+    ok "Feed: WebSocket confirmed in log" || warn "Feed: WebSocket not confirmed in log"
 
-FEED_FINAL=$(run "$FEED_IDX" \
-    "systemctl is-active tradinebotte-feed 2>/dev/null || echo inactive")
+FEED_FINAL=$(feed_active)
 BOT_FINAL=$(run "${ACCOUNT_IDXS[0]}" \
-    "ps aux | grep '[a]ccount_bot.py' | wc -l" || echo 0)
-[[ "$FEED_FINAL" == "active" ]] && ok "Feed service still active after ${DURATION}s" \
-    || err "Feed service stopped (status: $FEED_FINAL)"
+    "ps -u \$(id -u) -o args= | grep '[a]ccount_bot.py' | wc -l" || echo 0)
+[[ "$FEED_FINAL" == "active" ]] && ok "Feed still active after ${DURATION}s" \
+    || err "Feed stopped (status: $FEED_FINAL)"
 [[ "$BOT_FINAL" -eq "$N_BOTS" ]] && ok "$N_BOTS bots still active after ${DURATION}s" \
     || err "$BOT_FINAL/$N_BOTS bots still active"
 
-# ─── Phase 11: Teardown ────────────────────────────────────────────────────────
+# ─── Phase 12: Teardown ────────────────────────────────────────────────────────
 section "PHASE 12 — TEARDOWN"
-info "Stopping account_bot processes (feed service left running)"
+# The test account is only for short-lived clean-install tests — it must hold no
+# persistent state. Stop the bots AND the feed, then wipe everything this test left.
+info "Stopping bots + feed and wiping the test account (no persistent state)"
 
 # Stop shared indicators.py under the feed owner
 if [[ -n "${IND_CFG_REL:-}" ]]; then
@@ -612,15 +633,51 @@ for idx in "${ACCOUNT_IDXS[@]}"; do
 done
 sleep 3
 REMAINING_BOTS=$(run "${ACCOUNT_IDXS[0]}" \
-    "ps aux | grep '[a]ccount_bot.py' | grep -v grep | wc -l" || echo 0)
+    "ps -u \$(id -u) -o args= | grep '[a]ccount_bot.py' | grep -v grep | wc -l" || echo 0)
 [[ "$REMAINING_BOTS" -eq 0 ]] && ok "All account_bot processes stopped" \
     || warn "$REMAINING_BOTS account_bot process(es) still running"
 
-# Confirm the feed service was not affected
-FEED_AFTER=$(run "$FEED_IDX" \
-    "systemctl is-active tradinebotte-feed 2>/dev/null || echo inactive")
-[[ "$FEED_AFTER" == "active" ]] && ok "Feed service still running after teardown (as expected)" \
-    || warn "Feed service status after teardown: $FEED_AFTER"
+# Kill the nohup feed; also defensively remove any legacy systemd feed unit + linger
+# left by older runs, so the test account never accumulates persistent state.
+run "$FEED_IDX" "
+    export XDG_RUNTIME_DIR=/run/user/\$(id -u)
+    pkill -9 -u \$(id -u) -f '[f]eed.py' 2>/dev/null || true
+    systemctl --user stop tradinebotte-feed.service 2>/dev/null || true
+    systemctl --user disable tradinebotte-feed.service 2>/dev/null || true
+    rm -f \$HOME/.config/systemd/user/tradinebotte-feed.service
+    systemctl --user daemon-reload 2>/dev/null || true
+    systemctl --user reset-failed 2>/dev/null || true
+    loginctl disable-linger \$(whoami) 2>/dev/null || true
+    exit 0
+" && info "${ALL_USERS[$FEED_IDX]}: feed stopped (+ legacy unit/linger cleared)" || true
+
+# Delete the install + test directories on every account the test deployed to.
+for idx in "${DEPLOY_IDXS[@]}"; do
+    run "$idx" "rm -rf $REMOTE_INSTALL_DIR $REMOTE_BOT_DIR \$HOME/feed.log 2>/dev/null; exit 0" \
+        && info "${ALL_USERS[$idx]}: install + test dirs deleted" || true
+done
+
+# Best-effort: purge this account's heartbeats from the shared state DB so it does
+# not linger as DEAD on the status page (runs on the deployer host; needs sg claudes).
+_SHARED_DB="${TRADINEBOTTE_DB:-/data1/tradinebotte-shared/database/tradinebotte.db}"
+if command -v sqlite3 >/dev/null 2>&1 && [[ -f "$_SHARED_DB" ]]; then
+    for idx in "$FEED_IDX" "${ACCOUNT_IDXS[@]}"; do
+        sg claudes -c "sqlite3 '$_SHARED_DB' \"DELETE FROM heartbeats WHERE account='${ALL_USERS[$idx]}';\"" 2>/dev/null || true
+    done
+    info "shared-DB heartbeats purged for the test account"
+fi
+
+# Verify the account is clean.
+CLEAN_LEFT=$(run "$FEED_IDX" "
+    export XDG_RUNTIME_DIR=/run/user/\$(id -u)
+    n=0
+    ls -d $REMOTE_INSTALL_DIR $REMOTE_BOT_DIR >/dev/null 2>&1 && n=\$((n+1))
+    [ -f \$HOME/.config/systemd/user/tradinebotte-feed.service ] && n=\$((n+1))
+    ps -u \$(id -u) -o args= | grep -qE '[f]eed.py|[a]ccount_bot.py' && n=\$((n+1))
+    echo \$n
+" || echo "?")
+[[ "$CLEAN_LEFT" == "0" ]] && ok "Test account wiped clean (no dirs, unit, or processes)" \
+    || warn "Test account not fully clean (residual classes: $CLEAN_LEFT)"
 
 # ─── Phase 12: Final report ─────────────────────────────────────────────────────
 section "FINAL REPORT"

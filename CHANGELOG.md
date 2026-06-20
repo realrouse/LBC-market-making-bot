@@ -6,6 +6,21 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.86] — 2026-06-20
+
+### Fixed
+- **Status page — fleet PnL was a wrong aggregate; now a single source of truth.** The page re-derived Polymarket PnL from each bot's `live.db` but read CEX PnL from the heartbeat payload — two pipelines for the same metric. The fleet "Today / Lifetime" headline, though labelled "all accounts", therefore silently excluded every CEX bot (understating fleet lifetime PnL by ~64%), and a bot's "today" could differ between its account card and its heartbeat pill. Card, pill, and fleet headline now all read the heartbeat payload every bot (Polymarket *and* CEX) already emits, so the totals cover the whole fleet and cannot disagree. `live.db` is now queried only for the Polymarket win-rate and the recent/open trade tables.
+- **Status page — stale metrics are flagged instead of shown as current.** When a bot's heartbeat is STALE/DEAD, its Capital / Today PnL values are dimmed and badged so last-known numbers are not mistaken for live ones.
+- **Status page — win-rate / trade-count consistency.** The count shown next to the win rate is now the resolved-trade count the rate is computed over (not the total, which also includes open positions); the tooltip spells out the W/L split and the open count.
+- **Multi-bot integration test is self-contained and leaves the test account clean.** The feed it needs runs as an ephemeral background process from the test's own virtualenv (no systemd service, no user lingering); teardown stops every process, deletes the install/test directories, and purges the account's heartbeats — so the dedicated clean-install test account never accumulates persistent state.
+- **Dead-code cleanup (code audit).** Removed an unused HTML helper and unused imports/locals in the status generator, redundant re-imports of `os` in the accumulation and order-book bots, and an unused local in the DCA strategy engine.
+
+### Changed
+- **Status page — accurate PnL time labels.** "Today" → "Today (UTC)" (daily PnL aggregates from UTC midnight) and "Lifetime" → "Since reset" (the total is PnL since the bot's capital base, which is wiped on a simulation reset).
+- **Status page — larger, more readable hover tooltips**, with a small-screen media query so the detail panels are legible on a phone.
+
+---
+
 ## [0.85] — 2026-06-18
 
 ### Added

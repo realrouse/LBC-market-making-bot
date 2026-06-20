@@ -244,8 +244,6 @@ class DCAStrategy:
 
     async def _poll_fills(self, state: Any, ts: Any) -> None:
         """Detect fills for all open positions."""
-        d = self.dca
-
         is_sim = all(
             (p.buy_order_id or "").startswith("sim_") and
             (p.sell_order_id is None or (p.sell_order_id or "").startswith("sim_"))

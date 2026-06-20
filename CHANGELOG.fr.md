@@ -6,6 +6,21 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.86] — 2026-06-20
+
+### Corrigé
+- **Page de statut — le PnL de la flotte était un agrégat faux ; désormais une source unique de vérité.** La page recalculait le PnL Polymarket depuis le `live.db` de chaque bot mais lisait le PnL CEX depuis le payload du heartbeat — deux pipelines pour la même métrique. L'en-tête « Today / Lifetime » de la flotte, pourtant étiqueté « all accounts », excluait donc silencieusement tous les bots CEX (sous-estimant le PnL cumulé de la flotte d'environ 64 %), et le « today » d'un bot pouvait différer entre sa carte de compte et sa pastille de heartbeat. La carte, la pastille et l'en-tête de flotte lisent désormais tous le payload du heartbeat que chaque bot (Polymarket *et* CEX) émet déjà, de sorte que les totaux couvrent toute la flotte et ne peuvent plus diverger. Le `live.db` n'est plus interrogé que pour le taux de réussite Polymarket et les tables des trades récents/ouverts.
+- **Page de statut — les métriques périmées sont signalées au lieu d'être affichées comme actuelles.** Quand le heartbeat d'un bot est STALE/DEAD, ses valeurs Capital / Today PnL sont atténuées et badgées pour que les dernières valeurs connues ne soient pas prises pour des valeurs en direct.
+- **Page de statut — cohérence taux de réussite / nombre de trades.** Le nombre affiché à côté du taux de réussite est désormais le nombre de trades résolus sur lequel le taux est calculé (et non le total, qui inclut aussi les positions ouvertes) ; l'infobulle détaille la répartition gains/pertes et le nombre de positions ouvertes.
+- **Le test d'intégration multi-bots est autonome et laisse le compte de test propre.** Le feed dont il a besoin tourne comme un processus d'arrière-plan éphémère depuis le virtualenv propre au test (pas de service systemd, pas de lingering utilisateur) ; le teardown arrête tous les processus, supprime les répertoires d'installation/test et purge les heartbeats du compte — ainsi le compte de test dédié aux installations propres n'accumule jamais d'état persistant.
+- **Nettoyage de code mort (audit de code).** Suppression d'un helper HTML inutilisé et d'imports/variables locales inutilisés dans le générateur de statut, de ré-imports redondants de `os` dans les bots d'accumulation et de carnet d'ordres, et d'une variable locale inutilisée dans le moteur de stratégie DCA.
+
+### Modifié
+- **Page de statut — libellés temporels de PnL exacts.** « Today » → « Today (UTC) » (le PnL quotidien est agrégé à partir de minuit UTC) et « Lifetime » → « Since reset » (le total est le PnL depuis la base de capital du bot, remise à zéro lors d'un reset de simulation).
+- **Page de statut — infobulles au survol plus grandes et lisibles**, avec une media query petit écran pour que les panneaux de détail soient lisibles sur un téléphone.
+
+---
+
 ## [0.85] — 2026-06-18
 
 ### Ajouté
