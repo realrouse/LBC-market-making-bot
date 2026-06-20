@@ -64,6 +64,11 @@ PORT="${TEST_PORT:-22}"
 ALL_USERS=("${TEST_USERS[@]:?TEST_USERS missing in $CONF}")
 ALL_PASSWORDS=("${TEST_PASSWORDS[@]:?TEST_PASSWORDS missing in $CONF}")
 INSTALL_DIR="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
+# The repo is rsynced to a SEPARATE source dir and installed into a clean INSTALL_DIR
+# (mirrors a real user: clone here, install there). Installing in-place would leave
+# the tradinetools/ source dir in the install root, shadowing the pip-installed
+# package as a PEP-420 namespace ("cannot import name 'heartbeat_loop'").
+SRC_DIR="${INSTALL_DIR}-src"
 
 SA_IDX="${TEST_STANDALONE_USER_IDX:-2}"
 if [[ "$SA_IDX" -ge "${#ALL_USERS[@]}" ]]; then
@@ -86,7 +91,7 @@ deploy_code() {
         --exclude='.venv' --exclude='venv/' \
         --exclude='config.json' --exclude='live.db' --exclude='*.log' \
         -e "ssh -p $PORT -o StrictHostKeyChecking=yes" \
-        "$LOCAL_REPO/" "$SA_USER@$SERVER:$INSTALL_DIR/" 2>&1
+        "$LOCAL_REPO/" "$SA_USER@$SERVER:$SRC_DIR/" 2>&1
 }
 
 # ─── Pre-flight ─────────────────────────────────────────────────────────────────
@@ -124,7 +129,7 @@ run "
     fi
     sleep 2
     pkill -9 -u \$(id -u) -f '[l]ive_bot.py' 2>/dev/null || true
-    rm -rf $INSTALL_DIR
+    rm -rf $INSTALL_DIR $SRC_DIR
     rm -rf \"\${HOME}/tmp/tradinebotte-standalone-test\"
     exit 0
 " && ok "$SA_USER: cleaned up" || warn "$SA_USER: partial cleanup"
@@ -134,7 +139,7 @@ if [[ "$SKIP_DEPLOY" == "false" ]]; then
     section "PHASE 2 — DEPLOY"
     info "rsync → $SA_USER..."
     deploy_code && ok "$SA_USER: rsync OK" || { err "$SA_USER: rsync failed"; }
-    run "cd $INSTALL_DIR && bash scripts/install.sh" \
+    run "cd $SRC_DIR && TRADINEBOTTE_DIR=$INSTALL_DIR bash scripts/install.sh --lang EN $INSTALL_DIR" \
         && ok "$SA_USER: install.sh OK" || { err "$SA_USER: install.sh failed"; }
     # Write a simulation config.json directly — setup.py uses getpass(/dev/tty)
     # which is incompatible with non-interactive SSH sessions.
@@ -155,8 +160,11 @@ fi
 
 # ─── Phase 3: Start ────────────────────────────────────────────────────────────
 section "PHASE 3 — START $SA_USER"
-info "start_bot.sh for $SA_USER..."
-START_OUT=$(run "cd $INSTALL_DIR && TRADINEBOTTE_DIR=$INSTALL_DIR bash scripts/start_bot.sh")
+info "starting bot for $SA_USER via run.sh..."
+# Use the entry point install.sh creates + documents (run.sh → the real start_bot.sh).
+# install.sh deploys a FLAT layout (live_bot.py at the install root), so the source
+# tree's scripts/start_bot.sh path does not exist here — run.sh resolves it correctly.
+START_OUT=$(run "cd $INSTALL_DIR && TRADINEBOTTE_DIR=$INSTALL_DIR bash run.sh")
 if echo "$START_OUT" | grep -qE "Bot running|Bot en cours"; then
     ok "$SA_USER: bot started"
 else
@@ -166,13 +174,23 @@ fi
 
 # ─── Phase 4: Verify ───────────────────────────────────────────────────────────
 section "PHASE 4 — VERIFICATION"
-sleep 8
 LOG="$INSTALL_DIR/live.log"
 
-if run "grep -q 'WebSocket connected' $LOG 2>/dev/null"; then
+# A cold fresh-install bot must fetch markets then connect its WebSocket (~10-20s),
+# so poll the log instead of a fixed sleep — avoids a startup-timing flake.
+info "Waiting for WebSocket connection (up to 60s)..."
+WS_OK=false
+for _i in $(seq 1 20); do
+    if run "grep -q 'WebSocket connected' $LOG 2>/dev/null"; then
+        WS_OK=true
+        break
+    fi
+    sleep 3
+done
+if [[ "$WS_OK" == "true" ]]; then
     ok "$SA_USER: WebSocket connected"
 else
-    err "$SA_USER: WebSocket not connected in $LOG"
+    err "$SA_USER: WebSocket not connected in $LOG after 60s"
 fi
 if run "grep -q 'an instance is already running' $LOG 2>/dev/null"; then
     err "$SA_USER: log contains 'an instance is already running'"
@@ -194,9 +212,12 @@ run "
     else
         pkill -u \$(id -u) -f '[l]ive_bot.py' 2>/dev/null || true
     fi
+    sleep 1
+    # Leave the dedicated test account clean — no persistent install/source state.
+    rm -rf $INSTALL_DIR $SRC_DIR
     exit 0
 "
-ok "$SA_USER: bot stopped"
+ok "$SA_USER: bot stopped + test dirs removed"
 
 # ─── Final report ──────────────────────────────────────────────────────────────
 ELAPSED=$(( $(date +%s) - START_TS ))
