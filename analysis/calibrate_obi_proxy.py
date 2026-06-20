@@ -212,7 +212,8 @@ def q3_regime_persistence(rows: List[tuple], threshold: float) -> None:
             print(f"   {label}: no streaks found")
             return
         d_s = [d / 1000 for d in durations_ms]
-        p10, p50, p90 = percentiles(d_s, [10, 50, 90])
+        # percentiles() returns one value per requested percentile (3 here).
+        p10, p50, p90 = percentiles(d_s, [10, 50, 90])  # pylint: disable=unbalanced-tuple-unpacking
         print(f"   {label} streaks: n={len(d_s)}  "
               f"p10={p10:.0f}s  median={p50:.0f}s  p90={p90:.0f}s  "
               f"mean={sum(d_s)/len(d_s):.0f}s")
@@ -243,7 +244,8 @@ def q4_distribution(rows: List[tuple], threshold: float) -> None:
     mn   = min(obis)
     mx   = max(obis)
     mean = sum(obis) / len(obis)
-    p5, p25, p50, p75, p95 = percentiles(obis, [5, 25, 50, 75, 95])
+    # percentiles() returns one value per requested percentile (5 here).
+    p5, p25, p50, p75, p95 = percentiles(obis, [5, 25, 50, 75, 95])  # pylint: disable=unbalanced-tuple-unpacking
 
     print(f"   n={len(obis):,}  min={mn:+.4f}  max={mx:+.4f}")
     print(f"   mean={mean:+.4f}  p5={p5:+.4f}  p25={p25:+.4f}  "
