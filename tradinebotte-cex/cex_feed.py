@@ -37,8 +37,11 @@ from tradinetools.logging import setup_logger            # noqa: E402
 
 _INSTALL_DIR = os.environ.get("TRADINEBOTTE_DIR", os.getcwd())
 FEED_ADDR = os.environ.get("TRADINEBOTTE_CEX_FEED_ADDR", f"tcp://127.0.0.1:{PORT_CEX_FEED}")
-# "binance:BTCUSDT,mexc_futures:BTC_USDT" — one symbol per exchange.
-_FEEDS_ENV = os.environ.get("TRADINEBOTTE_CEX_FEEDS", "binance:BTCUSDT,mexc_futures:BTC_USDT")
+# "binance:BTCUSDT,mexc:BTCUSDT,mexc_futures:BTC_USDT" — one symbol per (exchange).
+# Every external CEX data source is fetched once here and fanned out; bots never open
+# their own exchange WS (data plane). mexc = MEXC spot, mexc_futures = MEXC perp.
+_FEEDS_ENV = os.environ.get(
+    "TRADINEBOTTE_CEX_FEEDS", "binance:BTCUSDT,mexc:BTCUSDT,mexc_futures:BTC_USDT")
 FEEDS = [tuple(s.split(":", 1)) for s in _FEEDS_ENV.split(",") if ":" in s]
 
 logger = setup_logger("cex_feed", os.path.join(_INSTALL_DIR, "cex_feed.log"))
