@@ -12,7 +12,7 @@ User=__USER__
 Environment=TRADINEBOTTE_DIR=__TRADINEBOTTE_DIR__
 EnvironmentFile=-__TRADINEBOTTE_DIR__/credentials
 WorkingDirectory=__TRADINEBOTTE_DIR__
-ExecStart=__TRADINEBOTTE_DIR__/venv/bin/python3 __TRADINEBOTTE_DIR__/live_bot.py
+ExecStart=__TRADINEBOTTE_DIR__/.venv/bin/python3 __TRADINEBOTTE_DIR__/live_bot.py
 Restart=on-failure
 RestartSec=30
 
