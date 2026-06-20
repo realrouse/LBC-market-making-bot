@@ -122,7 +122,7 @@ def q1_delta_mid_vs_obi(rows: List[tuple]) -> None:
     agree = sum(1 for o, d in zip(obi_lag, deltas) if (o > 0) == (d > 0) and d != 0)
     total = sum(1 for d in deltas if d != 0)
     print(f"   Sign agreement rate          = {agree/total*100:.1f}%  ({agree}/{total})")
-    print(f"   (50% = random, >55% = useful)")
+    print("   (50% = random, >55% = useful)")
 
 
 # ---------------------------------------------------------------------------
@@ -167,8 +167,8 @@ def q2_hourly_proxy(rows: List[tuple]) -> None:
           f"({'✓ significant' if abs(corr) > 0.15 else '✗ weak'})")
     print(f"   Interpretation: kline proxy validity = "
           f"{'HIGH (>0.30)' if abs(corr) > 0.30 else 'MEDIUM (0.15-0.30)' if abs(corr) > 0.15 else 'LOW (<0.15)'}")
-    print(f"   Note: this is a necessary but not sufficient condition for proxy validity.")
-    print(f"         Real proxy also uses taker volume (column 9), not just price direction.")
+    print("   Note: this is a necessary but not sufficient condition for proxy validity.")
+    print("         Real proxy also uses taker volume (column 9), not just price direction.")
 
     # Directional accuracy
     agree = sum(1 for o, r in zip(hour_obis, hour_returns) if (o > 0) == (r > 0))
@@ -233,7 +233,7 @@ def q3_regime_persistence(rows: List[tuple], threshold: float) -> None:
 # ---------------------------------------------------------------------------
 
 def q4_distribution(rows: List[tuple], threshold: float) -> None:
-    print(f"\n── Q4: Real L2 OBI distribution ──────────────────────────────────────")
+    print("\n── Q4: Real L2 OBI distribution ──────────────────────────────────────")
     print("   Is the ±{:.2f} threshold well-calibrated?".format(threshold))
 
     obis = [r[3] for r in rows if r[3] is not None]
@@ -268,19 +268,19 @@ def q4_distribution(rows: List[tuple], threshold: float) -> None:
 # ---------------------------------------------------------------------------
 
 def summarize_recommendations(threshold: float) -> None:
-    print(f"\n── Summary ────────────────────────────────────────────────────────────")
+    print("\n── Summary ────────────────────────────────────────────────────────────")
     print(f"   Accumulation bot entry: obi_entry_thresh = ±{threshold:.2f}")
-    print(f"   Key question: Is kline taker-flow proxy a valid substitute for L2 OBI?")
-    print(f"")
-    print(f"   Structural difference:")
-    print(f"     L2 OBI  = (bid_depth - ask_depth) / (bid_depth + ask_depth)  [depth]")
-    print(f"     Kline   = (taker_buy - taker_sell) / total_vol               [flow]")
-    print(f"   These measure different market phenomena. Correlation > 0.30 would")
-    print(f"   suggest they align directionally (both reflect supply/demand imbalance).")
-    print(f"   Correlation < 0.15 means the proxy is NOT tracking real OBI dynamics.")
-    print(f"")
-    print(f"   Data limitation: only 3 days of L2 OBI data available (May 23-26).")
-    print(f"   Collect 4+ weeks before drawing firm conclusions about proxy validity.")
+    print("   Key question: Is kline taker-flow proxy a valid substitute for L2 OBI?")
+    print("")
+    print("   Structural difference:")
+    print("     L2 OBI  = (bid_depth - ask_depth) / (bid_depth + ask_depth)  [depth]")
+    print("     Kline   = (taker_buy - taker_sell) / total_vol               [flow]")
+    print("   These measure different market phenomena. Correlation > 0.30 would")
+    print("   suggest they align directionally (both reflect supply/demand imbalance).")
+    print("   Correlation < 0.15 means the proxy is NOT tracking real OBI dynamics.")
+    print("")
+    print("   Data limitation: only 3 days of L2 OBI data available (May 23-26).")
+    print("   Collect 4+ weeks before drawing firm conclusions about proxy validity.")
 
 
 # ---------------------------------------------------------------------------
