@@ -37,13 +37,17 @@ from tradinetools.logging import setup_logger            # noqa: E402
 
 _INSTALL_DIR = os.environ.get("TRADINEBOTTE_DIR", os.getcwd())
 FEED_ADDR = os.environ.get("TRADINEBOTTE_CEX_FEED_ADDR", f"tcp://127.0.0.1:{PORT_CEX_FEED}")
-# "binance:BTCUSDT,mexc:BTCUSDT,mexc_futures:BTC_USDT" — one symbol per (exchange).
-# Every external CEX data source is fetched once here and fanned out; bots never open
-# their own WS. Consumers filter by (exchange, symbol), so multiple exchanges may
-# publish the same symbol (binance + mexc spot BTCUSDT) without cross-contamination.
-# mexc = MEXC spot, mexc_futures = MEXC perp.
+# "binance:BTCUSDT,mexc_futures:BTC_USDT" — one symbol per (exchange). Every external
+# CEX data source is fetched once here and fanned out; bots never open their own WS.
+# Consumers filter by (exchange, symbol), so multiple exchanges may publish the same
+# symbol without cross-contamination.
+# NOTE: MEXC SPOT (mexc:BTCUSDT) is intentionally absent — wbs.mexc.com rejects every
+# public spot subscription from this server with "Blocked!" (IP/geo block; MEXC
+# futures on contract.mexc.com is unaffected). The mexc spot connector + keepalive
+# remain supported, so add "mexc:BTCUSDT" via TRADINEBOTTE_CEX_FEEDS if run from an
+# unblocked host. Use mexc_futures for MEXC market data from this server.
 _FEEDS_ENV = os.environ.get(
-    "TRADINEBOTTE_CEX_FEEDS", "binance:BTCUSDT,mexc:BTCUSDT,mexc_futures:BTC_USDT")
+    "TRADINEBOTTE_CEX_FEEDS", "binance:BTCUSDT,mexc_futures:BTC_USDT")
 FEEDS = [tuple(s.split(":", 1)) for s in _FEEDS_ENV.split(",") if ":" in s]
 
 logger = setup_logger("cex_feed", os.path.join(_INSTALL_DIR, "cex_feed.log"))
