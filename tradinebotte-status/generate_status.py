@@ -186,8 +186,10 @@ def _collect_account(user: str, password: str, server: str, port: int) -> dict:
 
 # ─── Heartbeat classification ────────────────────────────────────────────────
 
-_STALE_AFTER = int(os.environ.get("HEARTBEAT_STALE_S", 7200))
-_DEAD_AFTER  = int(os.environ.get("HEARTBEAT_DEAD_S",  14400))
+# Heartbeats are sent every 120 s (tradinetools.heartbeat_loop default), so a bot
+# missing ~2 heartbeats is STALE and ~5 is DEAD — a real death shows in minutes.
+_STALE_AFTER = int(os.environ.get("HEARTBEAT_STALE_S", 240))
+_DEAD_AFTER  = int(os.environ.get("HEARTBEAT_DEAD_S",  600))
 
 
 def _classify_heartbeats(raw_rows: list, user_to_label: dict) -> list:
