@@ -33,8 +33,10 @@ ok()   { echo -e "${GREEN}✓ $*${NC}"; }
 warn() { echo -e "${YELLOW}! $*${NC}"; }
 
 DESTRUCTIVE_CMDS=" reset "          # space-delimited set
-# Heartbeats are hourly in steady state; 2h matches the status page "alive" window.
-FRESH_MAX_S="${BOTCTL_FRESH_MAX_S:-7200}"
+# Heartbeats are every 120s; require a recent one (≤300s, ~2 beats) before a
+# destructive reset so the sim-mode confirmation is genuinely current — a stale
+# heartbeat can't prove the bot wasn't restarted into live mode since.
+FRESH_MAX_S="${BOTCTL_FRESH_MAX_S:-300}"
 
 # ── Args ────────────────────────────────────────────────────────────────────────
 [[ $# -ge 3 ]] || { err "usage: botctl.sh <account_idx> <bot_name> <cmd> [--capital N] [--yes]"; exit 2; }
