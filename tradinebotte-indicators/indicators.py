@@ -77,7 +77,7 @@ from typing import Any, NamedTuple
 import aiohttp, websockets, zmq, zmq.asyncio
 
 from tradinetools import heartbeat_loop, control_loop
-from tradinetools.zmq import make_pub, make_sub, make_rep, default_ipc_addr
+from tradinetools.zmq import make_pub, make_sub, make_rep, default_ipc_addr, PORT_CEX_FEED
 from tradinetools.math import (atr_last, bollinger_last, vwap_last,
                                 vol_zscore_last, rolling_max_last)
 from tradinetools.logging import setup_logger
@@ -334,14 +334,14 @@ _VALID_INDICATOR_TYPES      = frozenset({"rsi", "sma", "ema", "volatility"}) | _
 _VALID_SOURCES              = frozenset({
     "feed", "binance_ws", "binance_funding", "deribit_iv", "fear_greed",
     "binance_oi", "binance_ls_ratio", "binance_liquidations",
-    "binance_scalping",
+    "binance_scalping", "cex_scalping",
     "binance_vwap_context", "binance_volume_profile", "binance_macro_obi",
     "binance_full_depth",
 })
 _SOURCES_WITHOUT_INDICATORS = frozenset({
     "binance_funding", "deribit_iv", "fear_greed",
     "binance_oi", "binance_ls_ratio", "binance_liquidations",
-    "binance_scalping",
+    "binance_scalping", "cex_scalping",
     "binance_vwap_context", "binance_volume_profile", "binance_macro_obi",
     "binance_full_depth",
 })
@@ -679,6 +679,79 @@ async def _zmq_feed_task(feed_addr: str, pub: zmq.asyncio.Socket,
                 "stream_id": stream_id,
                 "ts":        int(time.time() * 1000),
                 **ind,
+            })
+    finally:
+        sub.close()
+
+
+async def _cex_scalping_task(spec: StreamSpec, pub: zmq.asyncio.Socket) -> None:
+    """Scalping microstructure indicators sourced from the shared cex_feed.
+
+    Unlike binance_scalping (which opens its own exchange WS), this consumes the
+    already-shared cex_feed PUB — honouring 'every data source is fetched once and
+    shared'. cex_feed already computes obi / bid_vol / ask_vol / spread per book
+    update, so this is a thin transform: mid, EMA-smoothed OBI, spread_bps. Emits a
+    stream shaped like binance_scalping (mid / obi / obi_ema / obi_decel / spread_bps)
+    so consumers (e.g. accumulation_bot) are source-agnostic.
+
+    Source params (JSON "params"):
+      cex_feed_addr   str   (tcp://127.0.0.1:5563) — shared cex_feed PUB address
+      exchange        str   (required) — cex_feed exchange tag (e.g. "mexc_futures")
+      symbol          str   (required) — cex_feed symbol      (e.g. "BTC_USDT")
+      obi_ema_alpha   float (0.05)     — OBI EMA smoothing factor
+      publish_every_n int   (5)        — throttle: publish every N book updates
+    """
+    p               = spec.params
+    feed_addr       = str(p.get("cex_feed_addr", f"tcp://127.0.0.1:{PORT_CEX_FEED}"))
+    exchange        = str(p.get("exchange", ""))
+    symbol          = str(p.get("symbol", ""))
+    obi_ema_alpha   = float(p.get("obi_ema_alpha", 0.05))
+    publish_every_n = max(1, int(p.get("publish_every_n", 5)))
+    if not exchange or not symbol:
+        logger.error("[%s] cex_scalping requires params.exchange and params.symbol", spec.id)
+        return
+
+    ctx = zmq.asyncio.Context.instance()
+    sub = make_sub(ctx, feed_addr)
+    logger.info("[%s] cex_scalping SUB → %s (exchange=%s symbol=%s)",
+                spec.id, feed_addr, exchange, symbol)
+    obi_ema: float | None = None
+    prev_obi_ema: float | None = None
+    count = 0
+    try:
+        while True:
+            try:
+                msg = await asyncio.wait_for(sub.recv_json(), timeout=_WS_RECV_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                logger.warning("[%s] cex_scalping stale — no cex_feed msg in %ds",
+                               spec.id, _WS_RECV_TIMEOUT_S)
+                continue
+            if (msg.get("t") != "book" or msg.get("exchange") != exchange
+                    or msg.get("symbol") != symbol):
+                continue
+            bid = msg.get("best_bid"); ask = msg.get("best_ask")
+            if not bid or not ask:
+                continue
+            mid = (float(bid) + float(ask)) / 2.0
+            if mid <= 0:
+                continue
+            obi = float(msg.get("obi", 0.0))
+            obi_ema = obi if obi_ema is None else obi_ema_alpha * obi + (1 - obi_ema_alpha) * obi_ema
+            obi_decel = 0.0 if prev_obi_ema is None else obi_ema - prev_obi_ema
+            prev_obi_ema = obi_ema
+            spread_bps = float(msg.get("spread", float(ask) - float(bid))) / mid * 10_000.0
+            count += 1
+            if count % publish_every_n != 0:
+                continue
+            _publish(pub, {
+                "t":          "indicators",
+                "stream_id":  spec.id,
+                "ts":         int(time.time() * 1000),
+                "mid":        mid,
+                "obi":        obi,
+                "obi_ema":    obi_ema,
+                "obi_decel":  obi_decel,
+                "spread_bps": spread_bps,
             })
     finally:
         sub.close()
@@ -1789,6 +1862,8 @@ async def _start_stream(
         coro = _binance_liquidations_task(spec, pub)
     elif spec.source == "binance_scalping":
         coro = _binance_scalping_task(spec, pub)
+    elif spec.source == "cex_scalping":
+        coro = _cex_scalping_task(spec, pub)
     elif spec.source == "binance_full_depth":
         coro = _binance_full_depth_task(spec, pub)
     elif spec.source == "binance_vwap_context":
