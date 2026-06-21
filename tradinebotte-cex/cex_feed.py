@@ -37,13 +37,13 @@ from tradinetools.logging import setup_logger            # noqa: E402
 
 _INSTALL_DIR = os.environ.get("TRADINEBOTTE_DIR", os.getcwd())
 FEED_ADDR = os.environ.get("TRADINEBOTTE_CEX_FEED_ADDR", f"tcp://127.0.0.1:{PORT_CEX_FEED}")
-# "binance:BTCUSDT,mexc_futures:BTC_USDT" — one symbol per (exchange). Every external
-# CEX data source is fetched once here and fanned out; bots never open their own WS.
-# MEXC spot (mexc:BTCUSDT) is intentionally NOT enabled yet: the consumer filters by
-# symbol only, so a 2nd BTCUSDT source would contaminate the binance consumers — it is
-# gated behind the consumer exchange-filter (shipped with the MEXC accumulation bot).
+# "binance:BTCUSDT,mexc:BTCUSDT,mexc_futures:BTC_USDT" — one symbol per (exchange).
+# Every external CEX data source is fetched once here and fanned out; bots never open
+# their own WS. Consumers filter by (exchange, symbol), so multiple exchanges may
+# publish the same symbol (binance + mexc spot BTCUSDT) without cross-contamination.
+# mexc = MEXC spot, mexc_futures = MEXC perp.
 _FEEDS_ENV = os.environ.get(
-    "TRADINEBOTTE_CEX_FEEDS", "binance:BTCUSDT,mexc_futures:BTC_USDT")
+    "TRADINEBOTTE_CEX_FEEDS", "binance:BTCUSDT,mexc:BTCUSDT,mexc_futures:BTC_USDT")
 FEEDS = [tuple(s.split(":", 1)) for s in _FEEDS_ENV.split(",") if ":" in s]
 
 logger = setup_logger("cex_feed", os.path.join(_INSTALL_DIR, "cex_feed.log"))
