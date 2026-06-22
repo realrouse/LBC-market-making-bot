@@ -87,4 +87,4 @@ disable=
 # connectors/ and strategy_engines/ live alongside live_bot.py in the flat
 # deploy directory (tradinebotte-cex/); they are absent from the source tree
 # during lint runs.
-ignored-modules = websockets,zmq,py_clob_client,connectors,strategy_engines
+ignored-modules = websockets,zmq,py_clob_client,connectors,strategy_engines,mexc_spot_depth_pb2

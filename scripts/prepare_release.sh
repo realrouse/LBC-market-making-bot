@@ -3,10 +3,16 @@
 #
 # Run this before every merge to main.  Aborts on blocking failures.
 #
+# Versioning (x.y.z):
+#   - Only a GitHub Release bumps the minor (x.y): e.g. 0.87 -> 0.88.
+#   - Work merged to main WITHOUT a GitHub Release bumps the patch (z):
+#     0.87 -> 0.87.1 -> 0.87.2 …  The CHANGELOG header + --tag take the
+#     full x.y.z string (e.g. --tag v0.87.1); this script is format-agnostic.
+#
 # Usage:
 #   bash scripts/prepare_release.sh
 #   bash scripts/prepare_release.sh --skip-integration
-#   bash scripts/prepare_release.sh --tag v0.82
+#   bash scripts/prepare_release.sh --tag v0.87.1
 
 set -uo pipefail
 
@@ -108,7 +114,9 @@ fi
 # ══════════════════════════════════════════════════════════════════════
 _step "2/8  Pylint  [BLOCKING if score < 9.90]"
 
-mapfile -t _py_files < <(git ls-files '*.py' 2>/dev/null)
+# Exclude generated protobuf modules (*_pb2.py) — they are machine-generated and not
+# style-graded; pylint scores them ~5/10 which would drag the repo gate.
+mapfile -t _py_files < <(git ls-files '*.py' 2>/dev/null | grep -vE '_pb2\.py$')
 
 if ! "$PYTHON" -m pylint --version &> /dev/null; then
     _warn "pylint not installed — skipped (pip install pylint)"

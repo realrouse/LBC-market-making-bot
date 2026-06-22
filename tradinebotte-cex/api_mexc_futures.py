@@ -167,6 +167,12 @@ def make_subscribe_msg(symbols):
     ])
 
 
+def make_ping_msg():
+    """App-level keepalive for the public WS. MEXC Futures expects {"method":"ping"}
+    and otherwise drops the socket (code 1005); cex_feed sends this periodically."""
+    return json.dumps({"method": "ping"})
+
+
 # ── ORDER BOOK ────────────────────────────────────────────────────────────────
 
 def parse_book_update(msg):

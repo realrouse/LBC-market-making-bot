@@ -8,7 +8,7 @@ StartLimitBurst=5
 [Service]
 Type=simple
 WorkingDirectory=%h/tradinebotte
-ExecStart=%h/tradinebotte/venv/bin/python3 %h/tradinebotte/accumulation_bot.py --strategy %h/tradinebotte/strategies/accumulation/btc_accumulation.json --dir %h/tradinebotte
+ExecStart=%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/accumulation_bot.py --strategy %h/tradinebotte/strategies/accumulation/btc_accumulation.json --dir %h/tradinebotte
 Restart=on-failure
 RestartSec=30
 StandardOutput=null

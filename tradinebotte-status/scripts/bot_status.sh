@@ -19,13 +19,13 @@
 #
 # Optional env vars:
 #   TEST_MULTIBOT_CONF   Credentials file  (default ~/.tradinebotte-test.conf)
-#   HEARTBEAT_STALE_S    Alive→Stale threshold in seconds  (default 7200)
-#   HEARTBEAT_DEAD_S     Stale→Dead  threshold in seconds  (default 14400)
+#   HEARTBEAT_STALE_S    Alive→Stale threshold in seconds  (default 240)
+#   HEARTBEAT_DEAD_S     Stale→Dead  threshold in seconds  (default 600)
 
 set -uo pipefail
 
-STALE_AFTER="${HEARTBEAT_STALE_S:-7200}"
-DEAD_AFTER="${HEARTBEAT_DEAD_S:-14400}"
+STALE_AFTER="${HEARTBEAT_STALE_S:-240}"
+DEAD_AFTER="${HEARTBEAT_DEAD_S:-600}"
 COLOR=true
 
 while [[ $# -gt 0 ]]; do

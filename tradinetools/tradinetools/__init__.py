@@ -88,7 +88,7 @@ async def heartbeat_loop(
     get_extra: Callable[[], dict[str, Any]],
     *,
     mode: str | None = None,
-    interval: int = 3600,
+    interval: int = 120,
     warmup_interval: int = 60,
     warmup_count: int = 3,
 ) -> None:

@@ -1,0 +1,94 @@
+{
+    "_comment": "BTC accumulation (MEXC spot sim) — same v2.0 strategy as btc_accumulation, but price/OBI come from the shared MEXC SPOT scalping stream (btc_scalping_mexc, sourced from cex_feed mexc spot BTCUSDT via the protobuf WS on wbs-api.mexc.com). Macro gates (F&G, liquidations, L/S, RSI, macro-OBI) stay on the shared Binance-derived streams (no MEXC equivalent). MEXC spot fee schedule; Binance Simple Earn disabled. Simulation only.",
+    "_version": "2.0-mexc",
+
+    "symbol":               "BTCUSDT",
+
+    "capital_usdt":         1000.0,
+    "initial_stake_usdt":   500.0,
+    "scale_in_usdt":        100.0,
+    "scale_in_dip_factor":  0.5,
+    "scale_in_max_mult":    3.0,
+    "max_invested_pct":     0.65,
+    "max_avg_entry_mult":   1.20,
+
+    "obi_levels":           10,
+    "obi_ema_alpha":        0.05,
+    "obi_entry_thresh":     0.50,
+    "obi_confirm_n":        20,
+    "min_scale_interval_s": 3600,
+
+    "profit_bands_pct":     [5.0, 10.0, 20.0, 30.0, 50.0],
+    "sell_fraction":        0.10,
+    "min_holdings_pct":     0.50,
+    "rebuy_discount_min_pct": 3.0,
+    "rebuy_discount_max_pct": 10.0,
+    "rebuy_spread_mult":    3.0,
+
+    "fee_spot":             0.002,
+    "maker_fee_spot":       0.0,
+    "use_limit_orders":     true,
+
+    "snapshot_every_n":     20,
+
+    "spread_ema_alpha":     0.1,
+    "buy_dust_tolerance_usdt": 0.01,
+
+    "indicators_addr":      "tcp://127.0.0.1:5559",
+    "indicators_reg_addr":  "tcp://127.0.0.1:5561",
+    "register_interval_s":  120,
+    "indicators_streams": [
+        {
+            "id":         "btc_scalping_mexc",
+            "stream_id":  "btc_scalping_mexc",
+            "asset":      "BTCUSDT",
+            "source":     "cex_scalping",
+            "timeframe":  "tick",
+            "indicators": [],
+            "params": {
+                "exchange":        "mexc",
+                "symbol":          "BTCUSDT",
+                "cex_feed_addr":   "tcp://127.0.0.1:5563",
+                "obi_ema_alpha":   0.05,
+                "publish_every_n": 5
+            }
+        }
+    ],
+    "scalping_stream_id":   "btc_scalping_mexc",
+    "vwap_gate":            true,
+    "vwap_gate_initial":    false,
+
+    "macro_obi_gate":         true,
+    "macro_obi_block_thresh": -0.30,
+    "macro_obi_stream_id":    "btc_macro_obi",
+
+    "scale_in_cooldown_min_s":    900,
+    "scale_in_obi_strong_thresh": 0.80,
+
+    "rebuy_max_age_days": 60,
+    "rebuy_trail_pct":    0.005,
+
+    "earn_enabled":         false,
+    "earn_min_liquid_usdt": 20.0,
+
+    "fear_greed_gate":         true,
+    "fear_greed_stream_id":    "fear_greed",
+    "fear_greed_block_thresh": 80,
+    "fear_greed_boost_thresh": 25,
+    "fear_greed_boost_mult":   1.5,
+
+    "liq_gate":            true,
+    "liq_stream_id":       "btc_liquidations",
+    "liq_short_block_usd": 10000000,
+    "liq_long_spike_usd":   5000000,
+    "liq_long_boost_mult":  1.3,
+
+    "ls_ratio_gate":       true,
+    "ls_ratio_stream_id":  "btc_ls_ratio",
+    "ls_ratio_block_high": 3.0,
+
+    "rsi4h_gate":           true,
+    "rsi4h_stream_id":      "btc_4h",
+    "rsi4h_block_high":     70.0,
+    "rsi4h_relax_vwap_low": 35.0
+}

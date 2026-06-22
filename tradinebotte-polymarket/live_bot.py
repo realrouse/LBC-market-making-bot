@@ -1740,17 +1740,23 @@ async def feed_consumer_loop(state: BotState, feed_addr: str) -> None:
         ctx.term()
 
 
-async def cex_feed_consumer_loop(state: BotState, feed_addr: str, symbol: str) -> None:
+async def cex_feed_consumer_loop(state: BotState, feed_addr: str, symbol: str,
+                                 exchange: str | None = None) -> None:
     """Consume CEX book updates for `symbol` from the shared cex_feed and drive the
     grid/swing strategy directly (no handle_book_update — CEX bots don't need its
     polymarket token bookkeeping, and a token_id mismatch there fails silently).
-    Order placement stays per-bot. SUB-and-warn only (no feed auto-start)."""
+    Order placement stays per-bot. SUB-and-warn only (no feed auto-start).
+
+    Filters on (exchange, symbol): the shared cex_feed multiplexes several exchanges,
+    and more than one can publish the SAME symbol (e.g. binance:BTCUSDT and
+    mexc:BTCUSDT). `exchange` (the bot's connector) selects the right source; without
+    it a 2nd BTCUSDT source would contaminate this bot's book stream."""
     import zmq.asyncio  # noqa: PLC0415
     from types import SimpleNamespace  # noqa: PLC0415
     ctx  = zmq.asyncio.Context()
     sock = make_sub(ctx, feed_addr)
-    logger.info("Data source: shared CEX feed %s symbol=%s (consumer mode — no direct WS)",
-                feed_addr, symbol)
+    logger.info("Data source: shared CEX feed %s exchange=%s symbol=%s (consumer mode — no direct WS)",
+                feed_addr, exchange or "any", symbol)
     last_msg = time.time()
     try:
         while True:
@@ -1762,6 +1768,8 @@ async def cex_feed_consumer_loop(state: BotState, feed_addr: str, symbol: str) -
                 continue
             last_msg = time.time()
             if raw.get("t") != "book" or raw.get("symbol") != symbol:
+                continue
+            if exchange is not None and raw.get("exchange") != exchange:
                 continue
             ts = SimpleNamespace(
                 best_bid=float(raw["best_bid"]), best_ask=float(raw["best_ask"]),
@@ -1927,7 +1935,7 @@ async def main() -> None:
                 elif _use_cexfeed:
                     _sym = (config.grid_symbol if config.strategy_type == "grid"
                             else config.strategy_cfg.get("symbol", config.grid_symbol))
-                    await cex_feed_consumer_loop(state, config.feed_addr, _sym)
+                    await cex_feed_consumer_loop(state, config.feed_addr, _sym, config.connector)
                 else:
                     await ws_loop(state, session)
             finally:

@@ -1,0 +1,27 @@
+// Minimal subset of MEXC's official spot WS protobuf schema, sufficient to decode the
+// `spot@public.limit.depth.v3.api.pb@<SYMBOL>@5` channel (top-N depth snapshots) on
+// wss://wbs-api.mexc.com/ws. Field numbers match MEXC's official protos exactly
+// (mexcdevelop/websocket-proto): PushDataV3ApiWrapper.publicLimitDepths = 303,
+// PublicLimitDepthsV3Api {asks=1,bids=2}, PublicLimitDepthV3ApiItem {price=1,quantity=2}.
+// Unknown wrapper fields (other body types, sendTime, etc.) are ignored by protobuf,
+// so this minimal wrapper decodes real frames without the full 15-proto import closure.
+syntax = "proto3";
+
+message PublicLimitDepthV3ApiItem {
+  string price    = 1;
+  string quantity = 2;
+}
+
+message PublicLimitDepthsV3Api {
+  repeated PublicLimitDepthV3ApiItem asks = 1;
+  repeated PublicLimitDepthV3ApiItem bids = 2;
+  string eventType            = 3;
+  string version              = 4;
+  int64  lastOrderCreateTime  = 5;
+}
+
+message PushDataV3ApiWrapper {
+  string channel = 1;
+  string symbol  = 3;
+  PublicLimitDepthsV3Api publicLimitDepths = 303;
+}

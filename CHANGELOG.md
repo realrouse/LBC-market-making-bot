@@ -6,6 +6,32 @@ All notable changes to this project are documented here.
 
 ---
 
+## [0.88] — 2026-06-22
+
+### Added
+- **MEXC spot in the shared CEX feed (genuine, low-latency)** — `cex_feed` now streams MEXC spot order books. MEXC migrated its spot public WebSocket to **protobuf** on `wbs-api.mexc.com`; the `api_mexc` connector was updated for the new endpoint + protobuf depth channel (`spot@public.limit.depth.v3.api.pb`), with a vendored minimal protobuf schema (`tradinebotte-cex/mexc_proto/`, generated `mexc_spot_depth_pb2.py`) and the `protobuf` runtime added to requirements. `cex_feed` gained binary-frame handling (`WS_BINARY` connectors) alongside the unchanged JSON path.
+- **MEXC scalping indicator from the shared feed** — a new `cex_scalping` source in the indicators service consumes the shared `cex_feed` (rather than opening its own exchange WS) and republishes a scalping stream (`mid`/`obi`/`obi_ema`/`spread_bps`), e.g. `btc_scalping_mexc` from MEXC spot.
+- **On-demand indicator-stream registration** — bots now declare the streams they consume in config (`indicators_streams`) and register them with the indicators service's REP socket, re-registering periodically so a stream self-heals if the indicators service restarts — no reliance on a hand-maintained static config. Implemented for `accumulation_bot`.
+- **MEXC accumulation simulation bot (account-2)** — a paper-trading accumulation instance driven by genuine MEXC spot price/OBI (`btc_scalping_mexc`); macro gates stay on the shared Binance-derived streams. MEXC spot fees, Earn disabled. New strategy config, deploy wrapper, systemd unit (installed by the deploy), and inventory row.
+- **MEXC public-WS keepalive** — app-level ping for MEXC spot + futures public sockets (they otherwise drop an idle connection ~every 30 s), eliminating reconnect churn.
+
+### Changed
+- **Monitoring cadence** — heartbeat interval reduced from 3600 s to **120 s**; status thresholds tightened to **STALE 240 s / DEAD 600 s**, so a genuinely dead bot is visible within minutes instead of hours.
+- **`cex_feed` consumers filter by (exchange, symbol)** — multiple exchanges may publish the same symbol (e.g. binance + mexc spot BTC/USDT) without cross-contaminating a consumer's book stream.
+- **Versioning scheme formalized (x.y.z)** — only a GitHub Release bumps the minor (x.y); a plain merge to main bumps the patch (z).
+- **Deploy reproducibility** — `setup_data_plane.sh` now deploys the MEXC-spot capability (connector closure + protobuf runtime) to the data-plane host; `deploy_accumulation.sh` installs the systemd unit (templated per strategy) if missing; `deploy_all.sh` includes the account-2 MEXC accumulation step.
+- **`botctl` reset freshness guard** tightened to 300 s (matches the 120 s heartbeat) so the sim-mode confirmation before a destructive reset is genuinely current.
+
+### Fixed
+- **Swing stop-loss PnL omitted fees** — `_close_sl` booked PnL without the round-trip trading fee (the take-profit path already deducted it); SL-closed swing trades overstated PnL. Now both legs' fees are deducted. (The swing/DCA backtest already accounted for SL fees — no change there.)
+- **Simulation PnL inflated on every restart** — the grid and swing restart reconcile treated all saved orders as "filled offline" in simulation (where `get_open_orders` returns empty), re-booking the whole book each restart. The reconcile is now skipped for simulated orders (live fills are detected on price ticks).
+- **Latent `_os` NameError** in `accumulation_bot._zmq_loop` (an over-eager dead-code removal left an undefined alias; dormant because the deployed config short-circuited the line) — corrected to the module-level `os`.
+
+### Internal
+- venv naming standardized on `.venv` everywhere (creation sites, systemd unit templates, all accounts); generated `*_pb2.py` excluded from the pylint gate.
+
+---
+
 ## [0.87] — 2026-06-20
 
 ### Fixed

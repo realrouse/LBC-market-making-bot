@@ -20,16 +20,16 @@
 #
 # Optional env vars:
 #   TEST_MULTIBOT_CONF   Credentials file path  (default ~/.tradinebotte-test.conf)
-#   HEARTBEAT_STALE_S    Alive→Stale threshold  (default 7200  = 2 h)
-#   HEARTBEAT_DEAD_S     Stale→Dead threshold   (default 14400 = 4 h)
+#   HEARTBEAT_STALE_S    Alive→Stale threshold  (default 240  = 4 min, ~2 missed beats)
+#   HEARTBEAT_DEAD_S     Stale→Dead threshold   (default 600  = 10 min, ~5 missed beats)
 #
 # Local prerequisites: sshpass  (apt-get install sshpass)
 
 set -uo pipefail
 
 COLLECTOR_IDX=0
-STALE_AFTER="${HEARTBEAT_STALE_S:-7200}"
-DEAD_AFTER="${HEARTBEAT_DEAD_S:-14400}"
+STALE_AFTER="${HEARTBEAT_STALE_S:-240}"
+DEAD_AFTER="${HEARTBEAT_DEAD_S:-600}"
 REQUIRE_NAMES=()
 
 while [[ $# -gt 0 ]]; do

@@ -83,6 +83,13 @@ DEFAULTS: dict = {
     "buy_dust_tolerance_usdt": 0.01,
     # Indicators service (ZMQ) — None means auto-detect (IPC or set TRADINEBOTTE_INDICATORS_ADDR)
     "indicators_addr":       None,
+    # On-demand stream registration: declare the streams this bot consumes (full specs)
+    # and they are registered + re-registered (idempotent) with the indicators REP
+    # socket, so no hand-maintained static config is required. Empty → register nothing
+    # (rely on streams already running). reg_addr None → tcp://127.0.0.1:5561.
+    "indicators_reg_addr":   None,
+    "indicators_streams":    [],
+    "register_interval_s":   120,
     "scalping_stream_id":    "btc_scalping_spot",
     # VWAP gate
     "vwap_gate":             True,
@@ -676,7 +683,7 @@ async def _zmq_loop(state: AccumState, db: sqlite3.Connection) -> None:
 
     p    = state.p
     addr = (p.get("indicators_addr")
-            or _os.environ.get("TRADINEBOTTE_INDICATORS_ADDR")
+            or os.environ.get("TRADINEBOTTE_INDICATORS_ADDR")
             or default_ipc_addr("tradinebotte-indicators"))
     scalping_id = p.get("scalping_stream_id",  "btc_scalping_spot")
     macro_id = (p.get("macro_obi_stream_id", "btc_macro_obi")
@@ -748,6 +755,56 @@ async def _stats_loop(state: AccumState) -> None:
             state.obi_ema, state.macro_obi, state.macro_obi_dir,
             state.fear_greed_val, state.ls_ratio, state.rsi_4h,
             state.liq_long_usd, state.liq_short_usd, state.vwap_dip_zone)
+
+async def _register_loop(p: dict) -> None:
+    """Register this bot's indicator streams on demand, re-registering periodically.
+
+    The bot declares the streams it consumes in config `indicators_streams` (full
+    specs) and registers them with the shared indicators service's REP socket. The
+    service starts each stream once (idempotent), so re-registering every interval is a
+    no-op while healthy and self-heals if the indicators service was restarted — no
+    reliance on a hand-maintained static config. Skips entirely if none are declared.
+    A fresh REQ socket per request avoids the REQ state-machine lockup after a timeout.
+    """
+    streams = p.get("indicators_streams") or []
+    if not streams:
+        return
+    import zmq            # noqa: PLC0415  pylint: disable=import-outside-toplevel
+    import zmq.asyncio    # noqa: PLC0415  pylint: disable=import-outside-toplevel
+    reg_addr = (p.get("indicators_reg_addr")
+                or os.environ.get("TRADINEBOTTE_INDICATORS_REG_ADDR")
+                or "tcp://127.0.0.1:5561")
+    interval = max(30, int(p.get("register_interval_s", 120)))
+    ctx = zmq.asyncio.Context.instance()
+    logger.info("Registering %d indicator stream(s) on demand → %s (every %ds)",
+                len(streams), reg_addr, interval)
+    first = True
+    while True:
+        for spec in streams:
+            label = spec.get("stream_id") or spec.get("source", "?")
+            req = ctx.socket(zmq.REQ)
+            req.setsockopt(zmq.LINGER, 0)
+            req.setsockopt(zmq.RCVTIMEO, 5_000)
+            req.setsockopt(zmq.SNDTIMEO, 5_000)
+            try:
+                req.connect(reg_addr)
+                await req.send_json({**spec, "cmd": "subscribe"})
+                resp = await req.recv_json()
+                if resp.get("status") == "ok":
+                    if first:
+                        logger.info("[IND] registered %s → stream_id=%s",
+                                    label, resp.get("stream_id"))
+                else:
+                    logger.warning("[IND] registration rejected for %s: %s",
+                                   label, resp.get("message", "?"))
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("[IND] registration error for %s @ %s: %s",
+                               label, reg_addr, exc)
+            finally:
+                req.close(linger=0)
+        first = False
+        await asyncio.sleep(interval)
+
 
 # ---------------------------------------------------------------------------
 # Main
@@ -822,6 +879,7 @@ async def _run(p: dict, db: sqlite3.Connection, install_dir: str = "") -> None:
         tasks = [
             asyncio.create_task(_zmq_loop(state, db)),
             asyncio.create_task(_stats_loop(state)),
+            asyncio.create_task(_register_loop(p)),
             asyncio.create_task(
                 heartbeat_loop(
                     "accumulation_bot",

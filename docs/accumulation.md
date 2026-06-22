@@ -4,6 +4,13 @@
 > Strategy: `strategies/accumulation/btc_accumulation.json` (config v2.0)  
 > Conviction: long-only BTC spot, bull-run horizon (weeks to months)
 
+> **MEXC variant:** `strategies/accumulation/btc_accumulation_mexc.json` runs the same
+> strategy on genuine **MEXC spot** price/OBI. It sets `scalping_stream_id` to
+> `btc_scalping_mexc` and declares that stream in `indicators_streams` so it is
+> registered on demand (sourced from the shared `cex_feed` MEXC-spot protobuf WS via the
+> `cex_scalping` indicators source). Macro gates stay on the shared Binance-derived
+> streams (no MEXC equivalent); MEXC spot fees; Binance Earn disabled.
+
 ---
 
 ## 1. Philosophy

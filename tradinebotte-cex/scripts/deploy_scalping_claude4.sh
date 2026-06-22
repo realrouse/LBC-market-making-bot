@@ -162,9 +162,9 @@ if [[ "$SKIP_RESTART" == "false" ]]; then
 
     REMOTE_CMD="cd $INSTALL_DIR; mkdir -p strategies"$'\n'
     REMOTE_CMD+="echo '${GIT_HASH}' > $INSTALL_DIR/version.stamp
-if [ ! -x venv/bin/python3 ] && [ ! -x .venv/bin/python3 ]; then
+if [ ! -x .venv/bin/python3 ] && [ ! -x venv/bin/python3 ]; then
     echo 'Creating venv...'
-    python3 -m venv venv
+    python3 -m venv .venv
     echo 'Venv ready'
 fi
 echo 'updating dependencies...'

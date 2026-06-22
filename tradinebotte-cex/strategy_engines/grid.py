@@ -334,6 +334,24 @@ class GridStrategy:
             return True
 
         # Reconcile: detect fills that occurred while the bot was offline.
+        # In SIMULATION there is no real exchange, so get_open_orders() returns []
+        # and would falsely mark EVERY placed level as "filled offline" on each
+        # restart — re-booking the whole grid and inflating PnL. Sim fills are
+        # detected live on price ticks (_poll_fills), so skip the offline reconcile
+        # for simulated orders (same sim_ marker the live path uses).
+        is_sim = any(
+            (l.buy_order_id  or "").startswith("sim_") or
+            (l.sell_order_id or "").startswith("sim_")
+            for l in self.grid.levels
+        )
+        if is_sim:
+            logger.info(
+                "GridStrategy [%s] — simulation: skip offline reconcile | "
+                "cycles=%d | total PnL=$%+.2f",
+                self.grid.symbol, self.grid.total_cycles, self.grid.total_profit_usd,
+            )
+            return True
+
         logger.info(
             "GridStrategy [%s] — reconciling with exchange...",
             self.grid.symbol,

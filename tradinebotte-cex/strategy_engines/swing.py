@@ -439,6 +439,16 @@ class SwingStrategy:
             return True
 
         # Reconcile: orders that filled while the bot was offline.
+        # In SIMULATION there is no real exchange — get_open_orders() returns [] and
+        # would falsely book every placed order as "filled offline" on each restart,
+        # inflating PnL. Sim fills are detected live on price ticks (_check_fills),
+        # so skip the offline reconcile for simulated orders.
+        if any((p.buy_order_id or "").startswith("sim_") or
+               (p.sell_order_id or "").startswith("sim_")
+               for p in self.sw.positions):
+            logger.info("SwingStrategy [%s] — simulation: skip offline reconcile",
+                        self.sw.symbol)
+            return True
         logger.info("SwingStrategy [%s] — reconciling with exchange...", self.sw.symbol)
         try:
             open_orders = await self._api.get_open_orders(state.session, self.sw.symbol)
@@ -609,7 +619,11 @@ class SwingStrategy:
                 logger.error("SwingStrategy [%s] SL MARKET SELL failed — position marked closed",
                              self.sw.symbol)
 
-        pnl = (price - entry) * qty   # approximate at triggered price; fees omitted
+        # Account both legs' fees (BUY entry + SL market SELL), like the TP path —
+        # otherwise SL-closed trades overstate PnL by the round-trip fee.
+        fee_b = self._api.compute_fee(entry, qty)
+        fee_s = self._api.compute_fee(price, qty)
+        pnl = (price - entry) * qty - fee_b - fee_s   # at triggered price
         self.sw.total_pnl    += pnl
         self.sw.total_trades += 1
         pos.status = "closed"

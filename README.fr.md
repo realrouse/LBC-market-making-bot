@@ -23,7 +23,7 @@ Voir [docs/design.fr.md](docs/design.fr.md) pour la référence complète de l'a
 
 ### Bot d'accumulation v1.5
 
-[`tradinebotte-cex/accumulation_bot.py`] — Achat sur creux OBI avec ratchet de profit progressif. Surveille le déséquilibre du carnet d'ordres en temps réel via ZMQ ; entre sur BTC/USDT à des seuils de creux configurables avec scale-in adaptatif et trailing stop de rebuy. Quatre gates de signal optionnelles : Fear & Greed (`fear_greed_gate`), Liquidations (`liq_gate`), Ratio Long/Short (`ls_ratio_gate`), RSI 4h (`rsi4h_gate`). Buffer Earn via `earn_buffer_usd` ; gate VWAP sur l'achat initial uniquement. Configuré via `tradinebotte-cex/strategies/accumulation/btc_accumulation.json`. Voir [docs/accumulation.md](docs/accumulation.md) pour le document de conception complet de la stratégie.
+[`tradinebotte-cex/accumulation_bot.py`] — Achat sur creux OBI avec ratchet de profit progressif. Surveille le déséquilibre du carnet d'ordres en temps réel via ZMQ ; entre sur BTC/USDT à des seuils de creux configurables avec scale-in adaptatif et trailing stop de rebuy. Quatre gates de signal optionnelles : Fear & Greed (`fear_greed_gate`), Liquidations (`liq_gate`), Ratio Long/Short (`ls_ratio_gate`), RSI 4h (`rsi4h_gate`). Buffer Earn via `earn_buffer_usd` ; gate VWAP sur l'achat initial uniquement. Configuré via `tradinebotte-cex/strategies/accumulation/btc_accumulation.json`. Une variante MEXC spot (`btc_accumulation_mexc.json`) exécute la même stratégie sur le prix/OBI MEXC spot réel (enregistré à la demande depuis le flux partagé sous `btc_scalping_mexc`), avec les frais MEXC et Earn désactivé. Voir [docs/accumulation.md](docs/accumulation.md) pour le document de conception complet de la stratégie.
 
 ### Bot de scalping OBI v2.12
 
@@ -49,7 +49,7 @@ Stratégie cycle long terme : trois configs de production dans `tradinebotte-cex
 | Adaptateur | Exchange | Authentification |
 |---|---|---|
 | `api_binance.py` | Binance spot | HMAC-SHA256 |
-| `api_mexc.py` | MEXC spot | HMAC-SHA256 (API v3 compatible Binance) |
+| `api_mexc.py` | MEXC spot | HMAC-SHA256 (API v3 compatible Binance) ; WS de profondeur public en protobuf (`wbs-api.mexc.com`) |
 | `api_mexc_futures.py` | MEXC Futures perpétuel | HMAC-SHA256 (en-têtes ApiKey + Request-Time) |
 | `api_bitstamp.py` | Bitstamp spot | OAuth2 |
 
@@ -64,8 +64,17 @@ Helpers partagés dans `api_common.py` : parsing du carnet d'ordres, signature H
 - **Entrée** : streams WebSocket depth20 + aggTrade de Binance (100 ms)
 - **Indicateurs** : RSI(14/21), SMA, EMA(50/200), ATR(14), OBI, TFI, `spread_bps`, `realized_vol_bps`, VWAP
 - **Sortie** : messages `{"t":"indicators"}` enrichis sur un ZMQ PUB (IPC par défaut, ou TCP port 5559)
-- **Flux** : configuration unifiée en 9 flux dans `tradinebotte-indicators/strategies/indicators_all.json` ; flux `btc_4h` pour les consommateurs swing ; liquidations via `wss://fstream.binance.com/ws/{symbol}@forceOrder` (public) ; flux full-depth perp optionnel (`btc_full_depth_perp`)
+- **Flux** : configuration unifiée dans `tradinebotte-indicators/strategies/indicators_all.json` ; flux `btc_4h` pour les consommateurs swing ; liquidations via `wss://fstream.binance.com/ws/{symbol}@forceOrder` (public) ; flux full-depth perp optionnel (`btc_full_depth_perp`)
 - **Watchdog** : timeout de 120 secondes sur `ws.recv()` (`asyncio.wait_for`) sur toutes les boucles WS
+
+### Flux CEX partagé (plan de données)
+
+`tradinebotte-cex/cex_feed.py` récupère chaque carnet d'ordres CEX externe **une seule fois** et le diffuse via ZMQ (TCP 5563), de sorte que les bots n'ouvrent jamais leur propre WebSocket d'exchange ; le passage d'ordres reste par bot avec les identifiants de chaque compte. Une tâche indépendante par exchange — actuellement **Binance spot**, **MEXC spot** et **MEXC futures** pour BTC. Les consommateurs filtrent par `(exchange, symbole)`, donc plusieurs places peuvent publier le même symbole sans contamination croisée.
+
+- **MEXC spot** utilise le WebSocket public protobuf de MEXC (`wbs-api.mexc.com`, canal `spot@public.limit.depth.v3.api.pb`) ; les trames de profondeur binaires sont décodées via un schéma minimal vendorisé (`tradinebotte-cex/mexc_proto/`). Les sockets publiques MEXC sont maintenues actives par un ping applicatif.
+- Le service indicators peut sourcer un flux de scalping depuis ce flux partagé (source `cex_scalping` → p. ex. `btc_scalping_mexc`) au lieu d'ouvrir son propre WS d'exchange.
+
+**Enregistrement des flux à la demande** : les bots déclarent les flux d'indicateurs dont ils ont besoin dans leur config (`indicators_streams`) et les enregistrent auprès de la socket REP indicators (TCP 5561), en se ré-enregistrant périodiquement : un flux s'auto-répare si le service indicators redémarre — aucune config statique maintenue à la main.
 
 Base de données SQLite partagée du carnet d'ordres optionnelle (`orderbook_current` + `orderbook_snapshots`), configurable par flux via `db_path`, `bucket_size_usd`, `db_write_every_n`, `history_retention_h`.
 
@@ -75,8 +84,8 @@ Voir [docs/indicators.fr.md](docs/indicators.fr.md) pour le guide de référence
 
 `tradinebotte-status/status_collector.py` — collecteur de heartbeats autonome (port ZMQ 5562) :
 
-- Reçoit les heartbeats de chaque bot, écrit en SQLite, purge les lignes de plus d'un an
-- `generate_status.py` interroge tous les comptes de déploiement via SSH et génère une page HTML de santé unique affichant l'état des bots, les versions des services et les détails de payload (PnL, positions, connectivité WebSocket)
+- Reçoit les heartbeats de chaque bot (envoyés toutes les **120 s**), écrit en SQLite, purge les lignes de plus d'un an. Un bot est marqué **STALE après 240 s** et **DEAD après 600 s** (`HEARTBEAT_STALE_S` / `HEARTBEAT_DEAD_S`), donc une panne réelle apparaît en quelques minutes
+- `generate_status.py` interroge tous les comptes de déploiement via SSH et génère une page HTML de santé unique affichant l'état des bots, les versions des services et les détails de payload (PnL, positions, connectivité WebSocket) ; toutes les valeurs de PnL proviennent du payload du heartbeat (source unique de vérité pour les bots Polymarket et CEX)
 - Chemin de sortie par défaut : `~/public_html/tradinebottestatus.html`, modifiable via `--out` ou `$TRADINEBOTTE_STATUS_OUT`
 - Voir [docs/logging.md](docs/logging.md) pour le vocabulaire canonique des tags de log utilisé par les alertes et les parseurs
 

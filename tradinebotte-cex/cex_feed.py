@@ -37,14 +37,33 @@ from tradinetools.logging import setup_logger            # noqa: E402
 
 _INSTALL_DIR = os.environ.get("TRADINEBOTTE_DIR", os.getcwd())
 FEED_ADDR = os.environ.get("TRADINEBOTTE_CEX_FEED_ADDR", f"tcp://127.0.0.1:{PORT_CEX_FEED}")
-# "binance:BTCUSDT,mexc_futures:BTC_USDT" — one symbol per exchange.
-_FEEDS_ENV = os.environ.get("TRADINEBOTTE_CEX_FEEDS", "binance:BTCUSDT,mexc_futures:BTC_USDT")
+# "binance:BTCUSDT,mexc:BTCUSDT,mexc_futures:BTC_USDT" — one symbol per (exchange).
+# Every external CEX data source is fetched once here and fanned out; bots never open
+# their own WS. Consumers filter by (exchange, symbol), so multiple exchanges may
+# publish the same symbol (binance + mexc spot BTCUSDT) without cross-contamination.
+# mexc = MEXC spot (protobuf WS, binary frames — see api_mexc.WS_BINARY),
+# mexc_futures = MEXC perp (JSON WS).
+_FEEDS_ENV = os.environ.get(
+    "TRADINEBOTTE_CEX_FEEDS", "binance:BTCUSDT,mexc:BTCUSDT,mexc_futures:BTC_USDT")
 FEEDS = [tuple(s.split(":", 1)) for s in _FEEDS_ENV.split(",") if ":" in s]
 
 logger = setup_logger("cex_feed", os.path.join(_INSTALL_DIR, "cex_feed.log"))
 
 # Per-exchange last-publish timestamps for the heartbeat.
 _last_pub: dict[str, float] = {}
+
+
+async def _ws_keepalive(ws, ping_factory, interval: float = 15.0) -> None:
+    """Send the connector's app-level ping every `interval`s. Some exchanges (MEXC
+    spot + futures) close an idle public WS with code 1005 despite protocol-level
+    pings, which starves the depth stream. `except Exception` (not BaseException)
+    lets the recv loop drive reconnect on a closed socket while honouring cancel."""
+    try:
+        while True:
+            await asyncio.sleep(interval)
+            await ws.send(ping_factory())
+    except Exception:  # noqa: BLE001  pylint: disable=broad-exception-caught
+        pass
 
 
 async def _exchange_task(pub: zmq.asyncio.Socket, connector: str, symbol: str) -> None:
@@ -59,27 +78,41 @@ async def _exchange_task(pub: zmq.asyncio.Socket, connector: str, symbol: str) -
                 await ws.send(api.make_subscribe_msg([symbol]))
                 logger.info("cex_feed: %s %s connected (%s)", connector, symbol, api.WS_URL)
                 backoff = 1
-                while True:
-                    raw = await ws.recv()
-                    try:
-                        msgs = json.loads(raw)
-                    except Exception:  # pylint: disable=broad-exception-caught
-                        continue
-                    if isinstance(msgs, dict):
-                        msgs = [msgs]
-                    for m in msgs:
-                        p = api.parse_book_update(m)
-                        if not p:
-                            continue
-                        out = {"t": "book", "exchange": connector, "symbol": symbol,
-                               "best_bid": p["best_bid"], "best_ask": p["best_ask"],
-                               "spread": p.get("spread", 0.0), "bid_vol": p.get("bid_vol", 0.0),
-                               "ask_vol": p.get("ask_vol", 0.0), "obi": p.get("obi", 0.0)}
-                        try:
-                            pub.send_json(out, zmq.NOBLOCK)
-                            _last_pub[connector] = time.time()
-                        except zmq.ZMQError:
-                            pass
+                # App-level keepalive for connectors that require it (MEXC).
+                _ping = getattr(api, "make_ping_msg", None)
+                ka = asyncio.create_task(_ws_keepalive(ws, _ping)) if _ping else None
+                # Binary connectors (e.g. MEXC spot protobuf) hand the raw frame to
+                # parse_book_update; the JSON path below is unchanged for the others.
+                binary = getattr(api, "WS_BINARY", False)
+                try:
+                    while True:
+                        raw = await ws.recv()
+                        if binary:
+                            # Text frames (subscribe ack) → parse_book_update returns None.
+                            msgs = [raw]
+                        else:
+                            try:
+                                msgs = json.loads(raw)
+                            except Exception:  # pylint: disable=broad-exception-caught
+                                continue
+                            if isinstance(msgs, dict):
+                                msgs = [msgs]
+                        for m in msgs:
+                            p = api.parse_book_update(m)
+                            if not p:
+                                continue
+                            out = {"t": "book", "exchange": connector, "symbol": symbol,
+                                   "best_bid": p["best_bid"], "best_ask": p["best_ask"],
+                                   "spread": p.get("spread", 0.0), "bid_vol": p.get("bid_vol", 0.0),
+                                   "ask_vol": p.get("ask_vol", 0.0), "obi": p.get("obi", 0.0)}
+                            try:
+                                pub.send_json(out, zmq.NOBLOCK)
+                                _last_pub[connector] = time.time()
+                            except zmq.ZMQError:
+                                pass
+                finally:
+                    if ka is not None:
+                        ka.cancel()
         except asyncio.CancelledError:
             raise
         except Exception as e:  # pylint: disable=broad-exception-caught

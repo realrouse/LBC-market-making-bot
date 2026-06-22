@@ -334,13 +334,13 @@ else
         deploy_code "$idx" && ok "$user: rsync OK" || { err "$user: rsync failed"; exit 1; }
 
         info "Creating venv for $user..."
-        run "$idx" "python3 -m venv $REMOTE_INSTALL_DIR/venv 2>&1" \
+        run "$idx" "python3 -m venv $REMOTE_INSTALL_DIR/.venv 2>&1" \
             && ok "$user: venv created" || { err "$user: venv creation failed"; exit 1; }
 
         info "pip install $user..."
         run "$idx" "
-            $REMOTE_INSTALL_DIR/venv/bin/pip install --quiet --upgrade pip
-            $REMOTE_INSTALL_DIR/venv/bin/pip install --quiet -r $REMOTE_INSTALL_DIR/requirements.txt
+            $REMOTE_INSTALL_DIR/.venv/bin/pip install --quiet --upgrade pip
+            $REMOTE_INSTALL_DIR/.venv/bin/pip install --quiet -r $REMOTE_INSTALL_DIR/requirements.txt
         " && ok "$user: dependencies installed" || { err "$user: pip install failed"; exit 1; }
 
         # tradinetools isn't on PyPI / in requirements.txt — install it into the venv
@@ -349,7 +349,7 @@ else
         # avoid stale dist-info breaking restarts (see feedback_integration_test_tradinetools).
         info "install tradinetools into venv ($user)..."
         run "$idx" "
-            VENV=$REMOTE_INSTALL_DIR/venv
+            VENV=$REMOTE_INSTALL_DIR/.venv
             PYVER=\$(\$VENV/bin/python3 -c 'import sys;print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')
             SITE=\$VENV/lib/python\$PYVER/site-packages
             rm -rf \"\$SITE/tradinetools\"
@@ -371,7 +371,7 @@ run "$FEED_IDX" "pkill -9 -u \$(id -u) -f '[f]eed.py' 2>/dev/null; sleep 1; exit
 run_bg "$FEED_IDX" "
     cd $REMOTE_INSTALL_DIR
     TRADINEBOTTE_FEED_ADDR=$FEED_ADDR TRADINEBOTTE_DIR=$REMOTE_INSTALL_DIR \\
-    nohup $REMOTE_INSTALL_DIR/venv/bin/python3 -u feed.py \\
+    nohup $REMOTE_INSTALL_DIR/.venv/bin/python3 -u feed.py \\
         > $REMOTE_INSTALL_DIR/feed.log 2>&1 < /dev/null &
     FEED_PID=\$!
     disown \$FEED_PID
@@ -440,7 +440,7 @@ if [[ -n "$IND_CFG_REL" ]]; then
     info "Launching shared indicators.py under ${ALL_USERS[$FEED_IDX]} — config=$IND_CFG_REL"
     run_bg "$FEED_IDX" "
         cd $REMOTE_INSTALL_DIR
-        nohup $REMOTE_INSTALL_DIR/venv/bin/python3 -u indicators.py \
+        nohup $REMOTE_INSTALL_DIR/.venv/bin/python3 -u indicators.py \
             --config $REMOTE_INSTALL_DIR/$IND_CFG_REL \
             > $REMOTE_INSTALL_DIR/indicators.log 2>&1 < /dev/null &
         IND_PID=\$!
@@ -464,7 +464,7 @@ info "Sending $N_BOTS launch commands in parallel..."
 LAUNCH_CMD="
     cd $REMOTE_INSTALL_DIR
     TRADINEBOTTE_DIR=$REMOTE_BOT_DIR \\
-    nohup $REMOTE_INSTALL_DIR/venv/bin/python3 -u account_bot.py --verbose \\
+    nohup $REMOTE_INSTALL_DIR/.venv/bin/python3 -u account_bot.py --verbose \\
         > $REMOTE_BOT_DIR/account.log 2>&1 < /dev/null &
     BOT_PID=\$!
     disown \$BOT_PID
