@@ -145,6 +145,38 @@ mkdir -p \"\$SITE\" && rm -rf \"\$SITE/tradinetools\"
 cp -r $INSTALL_DIR/tradinetools/tradinetools \"\$SITE/tradinetools\" && echo 'tradinetools ok'
 
 export XDG_RUNTIME_DIR=/run/user/\$(id -u)
+# Install the systemd --user unit if missing (idempotent: accounts that already have it
+# are untouched). ExecStart is templated with this deploy's BOT_STRATEGY, so each
+# account runs its own strategy (e.g. btc_accumulation_mexc.json on account-2).
+ACC_UNIT=\$HOME/.config/systemd/user/tradinebotte-accumulation.service
+if [ ! -f \"\$ACC_UNIT\" ]; then
+    echo 'installing tradinebotte-accumulation.service'
+    mkdir -p \$HOME/.config/systemd/user
+    cat > \"\$ACC_UNIT\" <<UNITEOF
+[Unit]
+Description=tradinebotte — BTC accumulation bot
+After=network.target
+Wants=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/tradinebotte
+ExecStart=%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/${BOT_SCRIPT} --strategy %h/tradinebotte/${BOT_STRATEGY} --dir %h/tradinebotte
+Restart=on-failure
+RestartSec=30
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=default.target
+UNITEOF
+    loginctl enable-linger \$(whoami) >/dev/null 2>&1 || true
+    systemctl --user daemon-reload
+    systemctl --user enable tradinebotte-accumulation.service >/dev/null 2>&1
+    echo 'unit installed + enabled + linger'
+fi
 if systemctl --user is-active tradinebotte-accumulation.service >/dev/null 2>&1 \
    || systemctl --user is-enabled tradinebotte-accumulation.service >/dev/null 2>&1; then
     echo 'detected user service: tradinebotte-accumulation.service'

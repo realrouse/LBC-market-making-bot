@@ -15,7 +15,15 @@ import api_mexc  # noqa: E402
 
 _FIXTURE = os.path.join(os.path.dirname(__file__), "_mexc_spot_depth_frame.hex")
 
+try:
+    import google.protobuf  # noqa: F401
+    import mexc_spot_depth_pb2  # noqa: F401
+    _HAVE_PB = True
+except ImportError:
+    _HAVE_PB = False
 
+
+@unittest.skipUnless(_HAVE_PB, "protobuf + mexc_spot_depth_pb2 not installed")
 class TestMexcSpotProtobufDecode(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

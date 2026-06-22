@@ -44,10 +44,17 @@ R_UNIT='~/.config/systemd/user'
 # 1. Push code + unit templates + tradinetools source
 _rsync "$REPO/tradinebotte-polymarket/feed.py" "$R_DIR/feed.py"
 _rsync "$REPO/tradinebotte-cex/cex_feed.py" "$R_DIR/cex_feed.py"
+# cex_feed connector closure: it loads binance / mexc / mexc_futures. mexc spot is a
+# protobuf WS, so api_mexc needs mexc_spot_depth_pb2 (+ the protobuf runtime, installed
+# in the remote block below).
+for _f in api_common.py api_binance.py api_mexc.py api_mexc_futures.py mexc_spot_depth_pb2.py; do
+    _rsync "$REPO/tradinebotte-cex/$_f" "$R_DIR/$_f"
+done
+_rsync "$REPO/tradinebotte-cex/connectors/" "$R_DIR/connectors/"
 _rsync "$REPO/tradinebotte-polymarket/scripts/systemd/tradinebotte-feed5m.service" "$R_UNIT/tradinebotte-feed5m.service"
 _rsync "$REPO/tradinebotte-cex/scripts/systemd/tradinebotte-cexfeed.service" "$R_UNIT/tradinebotte-cexfeed.service"
 _rsync "$REPO/tradinetools/" "$R_DIR/tradinetools/"
-ok "pushed cex_feed.py, unit templates, tradinetools"
+ok "pushed feed.py, cex_feed.py + connectors (+ mexc spot pb), unit templates, tradinetools"
 
 # 2. Remote: refresh tradinetools site-packages, env/config, (re)start services
 _ssh '
@@ -59,6 +66,15 @@ SITE=$VENV/lib/python$PYVER/site-packages
 rm -rf "$SITE/tradinetools" && cp -r "$HOME/tradinebotte/tradinetools/tradinetools" "$SITE/tradinetools"
 $VENV/bin/python3 -c "from tradinetools.zmq import PORT_CEX_FEED" || { echo "tradinetools still stale"; exit 1; }
 echo "  tradinetools refreshed (PORT_CEX_FEED importable)"
+
+# protobuf runtime for MEXC spot decode (cex_feed). The venv may lack pip → ensurepip.
+if ! $VENV/bin/python3 -c "import google.protobuf" 2>/dev/null; then
+  $VENV/bin/python3 -m pip --version >/dev/null 2>&1 || $VENV/bin/python3 -m ensurepip --upgrade >/dev/null 2>&1 || true
+  $VENV/bin/python3 -m pip install --quiet "protobuf>=5,<6" 2>&1 | tail -1 || true
+fi
+( cd "$HOME/tradinebotte" && $VENV/bin/python3 -c "import google.protobuf, mexc_spot_depth_pb2" ) 2>/dev/null \
+  && echo "  protobuf + mexc_spot_depth_pb2 OK (mexc spot decode ready)" \
+  || echo "  WARN: protobuf/_pb2 not importable — mexc spot will not decode"
 
 UNIT=$HOME/.config/systemd/user/tradinebotte-feed.service
 if [ -f "$UNIT" ] && ! grep -q TRADINEBOTTE_MARKET_TAG_ID "$UNIT"; then
