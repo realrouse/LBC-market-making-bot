@@ -37,17 +37,14 @@ from tradinetools.logging import setup_logger            # noqa: E402
 
 _INSTALL_DIR = os.environ.get("TRADINEBOTTE_DIR", os.getcwd())
 FEED_ADDR = os.environ.get("TRADINEBOTTE_CEX_FEED_ADDR", f"tcp://127.0.0.1:{PORT_CEX_FEED}")
-# "binance:BTCUSDT,mexc_futures:BTC_USDT" — one symbol per (exchange). Every external
-# CEX data source is fetched once here and fanned out; bots never open their own WS.
-# Consumers filter by (exchange, symbol), so multiple exchanges may publish the same
-# symbol without cross-contamination.
-# NOTE: MEXC SPOT (mexc:BTCUSDT) is intentionally absent — wbs.mexc.com rejects every
-# public spot subscription from this server with "Blocked!" (IP/geo block; MEXC
-# futures on contract.mexc.com is unaffected). The mexc spot connector + keepalive
-# remain supported, so add "mexc:BTCUSDT" via TRADINEBOTTE_CEX_FEEDS if run from an
-# unblocked host. Use mexc_futures for MEXC market data from this server.
+# "binance:BTCUSDT,mexc:BTCUSDT,mexc_futures:BTC_USDT" — one symbol per (exchange).
+# Every external CEX data source is fetched once here and fanned out; bots never open
+# their own WS. Consumers filter by (exchange, symbol), so multiple exchanges may
+# publish the same symbol (binance + mexc spot BTCUSDT) without cross-contamination.
+# mexc = MEXC spot (protobuf WS, binary frames — see api_mexc.WS_BINARY),
+# mexc_futures = MEXC perp (JSON WS).
 _FEEDS_ENV = os.environ.get(
-    "TRADINEBOTTE_CEX_FEEDS", "binance:BTCUSDT,mexc_futures:BTC_USDT")
+    "TRADINEBOTTE_CEX_FEEDS", "binance:BTCUSDT,mexc:BTCUSDT,mexc_futures:BTC_USDT")
 FEEDS = [tuple(s.split(":", 1)) for s in _FEEDS_ENV.split(",") if ":" in s]
 
 logger = setup_logger("cex_feed", os.path.join(_INSTALL_DIR, "cex_feed.log"))
@@ -84,15 +81,22 @@ async def _exchange_task(pub: zmq.asyncio.Socket, connector: str, symbol: str) -
                 # App-level keepalive for connectors that require it (MEXC).
                 _ping = getattr(api, "make_ping_msg", None)
                 ka = asyncio.create_task(_ws_keepalive(ws, _ping)) if _ping else None
+                # Binary connectors (e.g. MEXC spot protobuf) hand the raw frame to
+                # parse_book_update; the JSON path below is unchanged for the others.
+                binary = getattr(api, "WS_BINARY", False)
                 try:
                     while True:
                         raw = await ws.recv()
-                        try:
-                            msgs = json.loads(raw)
-                        except Exception:  # pylint: disable=broad-exception-caught
-                            continue
-                        if isinstance(msgs, dict):
-                            msgs = [msgs]
+                        if binary:
+                            # Text frames (subscribe ack) → parse_book_update returns None.
+                            msgs = [raw]
+                        else:
+                            try:
+                                msgs = json.loads(raw)
+                            except Exception:  # pylint: disable=broad-exception-caught
+                                continue
+                            if isinstance(msgs, dict):
+                                msgs = [msgs]
                         for m in msgs:
                             p = api.parse_book_update(m)
                             if not p:

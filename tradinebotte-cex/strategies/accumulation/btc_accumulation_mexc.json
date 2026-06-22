@@ -1,5 +1,5 @@
 {
-    "_comment": "BTC accumulation (MEXC sim) — same v2.0 strategy as btc_accumulation, but price/OBI come from the shared MEXC-derived scalping stream (btc_scalping_mexc, sourced from cex_feed mexc_futures: MEXC SPOT WS is geo-blocked from this server, so MEXC perp is used as the MEXC price/OBI source; BTC perp ~= spot). Macro gates (F&G, liquidations, L/S, RSI, macro-OBI) stay on the shared Binance-derived streams (no MEXC equivalent). MEXC fee schedule; Binance Simple Earn disabled. Simulation only.",
+    "_comment": "BTC accumulation (MEXC spot sim) — same v2.0 strategy as btc_accumulation, but price/OBI come from the shared MEXC SPOT scalping stream (btc_scalping_mexc, sourced from cex_feed mexc spot BTCUSDT via the protobuf WS on wbs-api.mexc.com). Macro gates (F&G, liquidations, L/S, RSI, macro-OBI) stay on the shared Binance-derived streams (no MEXC equivalent). MEXC spot fee schedule; Binance Simple Earn disabled. Simulation only.",
     "_version": "2.0-mexc",
 
     "symbol":               "BTCUSDT",
@@ -41,13 +41,13 @@
         {
             "id":         "btc_scalping_mexc",
             "stream_id":  "btc_scalping_mexc",
-            "asset":      "BTC_USDT",
+            "asset":      "BTCUSDT",
             "source":     "cex_scalping",
             "timeframe":  "tick",
             "indicators": [],
             "params": {
-                "exchange":        "mexc_futures",
-                "symbol":          "BTC_USDT",
+                "exchange":        "mexc",
+                "symbol":          "BTCUSDT",
                 "cex_feed_addr":   "tcp://127.0.0.1:5563",
                 "obi_ema_alpha":   0.05,
                 "publish_every_n": 5

@@ -4,3 +4,4 @@ web3
 py-clob-client
 pyzmq
 bcrypt
+protobuf>=5,<6

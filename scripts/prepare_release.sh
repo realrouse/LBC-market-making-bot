@@ -114,7 +114,9 @@ fi
 # ══════════════════════════════════════════════════════════════════════
 _step "2/8  Pylint  [BLOCKING if score < 9.90]"
 
-mapfile -t _py_files < <(git ls-files '*.py' 2>/dev/null)
+# Exclude generated protobuf modules (*_pb2.py) — they are machine-generated and not
+# style-graded; pylint scores them ~5/10 which would drag the repo gate.
+mapfile -t _py_files < <(git ls-files '*.py' 2>/dev/null | grep -vE '_pb2\.py$')
 
 if ! "$PYTHON" -m pylint --version &> /dev/null; then
     _warn "pylint not installed — skipped (pip install pylint)"

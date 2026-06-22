@@ -34,7 +34,12 @@ logger = logging.getLogger(__name__)
 
 # ─── ENDPOINTS ────────────────────────────────────────────────────────────────
 BASE_URL      = "https://api.mexc.com"
-WS_URL        = "wss://wbs.mexc.com/ws"
+# MEXC migrated spot public WS to protobuf on wbs-api.mexc.com; the old wbs.mexc.com/ws
+# + JSON depth channels are retired (every subscribe is rejected "Not Subscribed /
+# Blocked!"). Public depth now streams as binary protobuf frames — WS_BINARY tells
+# cex_feed not to json.loads the frame but to hand the raw bytes to parse_book_update.
+WS_URL        = "wss://wbs-api.mexc.com/ws"
+WS_BINARY     = True
 WS_BATCH_SIZE = 10  # streams per WebSocket connection
 
 DEFAULT_SYMBOL = "BTCUSDT"
@@ -86,12 +91,13 @@ def get_down_token_id(market):
 
 def make_subscribe_msg(symbols):
     """
-    Return a JSON subscribe message for MEXC limit depth streams.
-    Format: spot@public.limit.depth.v3.api@<SYMBOL>@5
-    Strips any ":SELL" suffix encoded in the symbol string.
+    Return a JSON subscribe message for MEXC spot limit-depth streams (protobuf).
+    Format: spot@public.limit.depth.v3.api.pb@<SYMBOL>@5  (top-5 snapshot per frame)
+    The subscribe request itself is JSON; the depth DATA streams back as binary
+    protobuf (see parse_book_update). Strips any ":SELL" suffix in the symbol string.
     """
     params = [
-        f"spot@public.limit.depth.v3.api@{s.split(':')[0]}@5"
+        f"spot@public.limit.depth.v3.api.pb@{s.split(':')[0]}@5"
         for s in symbols
     ]
     return json.dumps({
@@ -111,44 +117,54 @@ def make_ping_msg():
 
 def parse_book_update(msg):
     """
-    Parse a MEXC WebSocket depth message into a normalized price snapshot.
+    Parse a MEXC spot depth frame into a normalized price snapshot.
 
-    MEXC depth stream format:
-    {
-      "c": "spot@public.limit.depth.v3.api@BTCUSDT@5",
-      "d": {
-        "asks": [["price", "qty"], ...],
-        "bids": [["price", "qty"], ...]
-      },
-      "s": "BTCUSDT",
-      "t": 1610123456789
-    }
+    The spot WS (wbs-api.mexc.com) streams the limit-depth channel as BINARY protobuf
+    (PushDataV3ApiWrapper → publicLimitDepths: top-5 asks/bids per frame). The subscribe
+    ACK and any control frames arrive as text/JSON and carry no depth → return None.
 
-    OBI (Order Book Imbalance) = (bid_vol - ask_vol) / (bid_vol + ask_vol)
-    computed over top-5 levels on each side, same as api_polymarket.
+    Accepts bytes (the protobuf frame). For robustness also tolerates a pre-decoded
+    dict in the legacy {"d": {"asks":..,"bids":..}, "s": symbol} shape (tests).
 
-    Returns {token_id, best_bid, best_ask, spread, bid_vol, ask_vol, obi}
-    or None if the message is irrelevant or malformed.
+    OBI = (bid_vol - ask_vol) / (bid_vol + ask_vol) over the top levels, via book_snapshot.
+    Returns {token_id, best_bid, best_ask, spread, bid_vol, ask_vol, obi} or None.
     """
-    if not isinstance(msg, dict):
-        return None
+    if isinstance(msg, (bytes, bytearray)):
+        return _parse_pb_depth(msg)
+    if isinstance(msg, dict):
+        data   = msg.get("d")
+        symbol = msg.get("s", DEFAULT_SYMBOL)
+        if not data:
+            return None
+        bids = sorted(parse_levels(data.get("bids") or []), reverse=True)
+        asks = sorted(parse_levels(data.get("asks") or []))
+        if not bids and not asks:
+            return None
+        return book_snapshot(bids, asks, symbol)
+    return None   # text ack / unknown frame
 
-    # MEXC wraps depth data under the "d" key; symbol is in "s"
-    data   = msg.get("d")
-    symbol = msg.get("s", DEFAULT_SYMBOL)
-    if not data:
-        return None
 
-    bids_raw = data.get("bids") or []
-    asks_raw = data.get("asks") or []
-    if not bids_raw and not asks_raw:
+def _parse_pb_depth(raw):
+    """Decode a binary MEXC spot protobuf depth frame → normalized snapshot, or None."""
+    try:
+        import mexc_spot_depth_pb2 as _pb  # noqa: PLC0415  pylint: disable=import-outside-toplevel
+    except ImportError:
+        logger.error("mexc_spot_depth_pb2 not importable — is protobuf installed + _pb2 deployed?")
         return None
-
-    bids = sorted(parse_levels(bids_raw), reverse=True)
-    asks = sorted(parse_levels(asks_raw))
+    try:
+        wrapper = _pb.PushDataV3ApiWrapper()
+        wrapper.ParseFromString(bytes(raw))
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.debug("MEXC pb decode failed: %s", exc)
+        return None
+    depth = wrapper.publicLimitDepths
+    if not depth.bids and not depth.asks:
+        return None
+    symbol = wrapper.symbol or DEFAULT_SYMBOL
+    bids = sorted(parse_levels([[lv.price, lv.quantity] for lv in depth.bids]), reverse=True)
+    asks = sorted(parse_levels([[lv.price, lv.quantity] for lv in depth.asks]))
     if not bids and not asks:
         return None
-
     return book_snapshot(bids, asks, symbol)
 
 
