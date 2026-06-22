@@ -6,7 +6,7 @@ All notable changes to this project are documented here.
 
 ---
 
-## [Unreleased]
+## [0.88] — 2026-06-22
 
 ### Added
 - **MEXC spot in the shared CEX feed (genuine, low-latency)** — `cex_feed` now streams MEXC spot order books. MEXC migrated its spot public WebSocket to **protobuf** on `wbs-api.mexc.com`; the `api_mexc` connector was updated for the new endpoint + protobuf depth channel (`spot@public.limit.depth.v3.api.pb`), with a vendored minimal protobuf schema (`tradinebotte-cex/mexc_proto/`, generated `mexc_spot_depth_pb2.py`) and the `protobuf` runtime added to requirements. `cex_feed` gained binary-frame handling (`WS_BINARY` connectors) alongside the unchanged JSON path.
