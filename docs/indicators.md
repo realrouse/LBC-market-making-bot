@@ -81,6 +81,7 @@ Each stream is declared in a JSON config file:
 | `feed` | computed | ZeroMQ feed.py (local) | event-driven |
 | `binance_ws` | computed | Binance kline WebSocket | event-driven (closed candle) |
 | `binance_scalping` | WebSocket | Binance depth20@100ms + aggTrade | event-driven (every N depth events) |
+| `cex_scalping` | ZeroMQ | shared `cex_feed` (local, any exchange) | event-driven (every N book updates) |
 | `binance_full_depth` | WebSocket | Binance depth@100ms + REST snapshot | event-driven (every N depth events) |
 | `binance_funding` | poll | `fapi.binance.com` REST | 900 s (15 min) |
 | `deribit_iv` | poll | `www.deribit.com` REST | 300 s (5 min) |
@@ -91,6 +92,10 @@ Each stream is declared in a JSON config file:
 | `binance_vwap_context` | poll | `api.binance.com` REST | 3600 s (1 h) |
 | `binance_volume_profile` | poll | `api.binance.com` REST | 3600 s (1 h) |
 | `binance_macro_obi` | poll | `api.binance.com` REST | 60 s (1 min) |
+
+**`cex_scalping`** consumes the shared `cex_feed` data-plane service (which fetches each CEX order book once and fans it out over ZeroMQ) instead of opening its own exchange WebSocket, and republishes a scalping stream (`mid` / `obi` / `obi_ema` / `spread_bps`) shaped like `binance_scalping`. Params: `exchange` + `symbol` (the cex_feed tags, e.g. `mexc` / `BTCUSDT`), `cex_feed_addr`, `obi_ema_alpha`, `publish_every_n`. Used e.g. for `btc_scalping_mexc` (MEXC spot, decoded from MEXC's protobuf WS by cex_feed).
+
+**On-demand registration:** beyond the static config, a bot can declare the streams it needs (`indicators_streams`) and register them with the REP socket (`zmq_reg_addr`), re-registering periodically so a stream self-heals if the indicators service restarts — no static-config edit required.
 
 ---
 

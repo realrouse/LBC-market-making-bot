@@ -82,6 +82,7 @@ et `binance_ws`.
 | `feed` | calculé | ZeroMQ feed.py (local) | événementiel |
 | `binance_ws` | calculé | Binance kline WebSocket | événementiel (bougie fermée) |
 | `binance_scalping` | WebSocket | Binance depth20@100ms + aggTrade | événementiel (tous les N events) |
+| `cex_scalping` | ZeroMQ | `cex_feed` partagé (local, tout exchange) | événementiel (tous les N updates de carnet) |
 | `binance_full_depth` | WebSocket | Binance depth@100ms + snapshot REST | événementiel (tous les N events) |
 | `binance_funding` | poll | REST `fapi.binance.com` | 900 s (15 min) |
 | `deribit_iv` | poll | REST `www.deribit.com` | 300 s (5 min) |
@@ -92,6 +93,10 @@ et `binance_ws`.
 | `binance_vwap_context` | poll | REST `api.binance.com` | 3600 s (1 h) |
 | `binance_volume_profile` | poll | REST `api.binance.com` | 3600 s (1 h) |
 | `binance_macro_obi` | poll | REST `api.binance.com` | 60 s (1 min) |
+
+**`cex_scalping`** consomme le service de plan de données partagé `cex_feed` (qui récupère chaque carnet d'ordres CEX une seule fois et le diffuse via ZeroMQ) au lieu d'ouvrir son propre WebSocket d'exchange, et rediffuse un flux de scalping (`mid` / `obi` / `obi_ema` / `spread_bps`) au même format que `binance_scalping`. Paramètres : `exchange` + `symbol` (les tags cex_feed, p. ex. `mexc` / `BTCUSDT`), `cex_feed_addr`, `obi_ema_alpha`, `publish_every_n`. Utilisé p. ex. pour `btc_scalping_mexc` (MEXC spot, décodé depuis le WS protobuf de MEXC par cex_feed).
+
+**Enregistrement à la demande :** au-delà de la config statique, un bot peut déclarer les flux dont il a besoin (`indicators_streams`) et les enregistrer auprès de la socket REP (`zmq_reg_addr`), en se ré-enregistrant périodiquement : un flux s'auto-répare si le service indicators redémarre — sans édition de config statique.
 
 ---
 
