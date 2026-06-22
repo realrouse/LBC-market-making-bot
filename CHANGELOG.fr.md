@@ -6,6 +6,32 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [Non publié]
+
+### Ajouté
+- **MEXC spot dans le flux CEX partagé (réel, basse latence)** — `cex_feed` diffuse désormais les carnets d'ordres MEXC spot. MEXC a migré son WebSocket public spot vers **protobuf** sur `wbs-api.mexc.com` ; le connecteur `api_mexc` a été mis à jour (nouveau endpoint + canal de profondeur protobuf `spot@public.limit.depth.v3.api.pb`), avec un schéma protobuf minimal vendorisé (`tradinebotte-cex/mexc_proto/`, `mexc_spot_depth_pb2.py` généré) et le runtime `protobuf` ajouté aux dépendances. `cex_feed` gère les trames binaires (connecteurs `WS_BINARY`) en parallèle du chemin JSON inchangé.
+- **Indicateur de scalping MEXC depuis le flux partagé** — une nouvelle source `cex_scalping` du service indicators consomme le `cex_feed` partagé (au lieu d'ouvrir son propre WS) et rediffuse un flux de scalping (`mid`/`obi`/`obi_ema`/`spread_bps`), p. ex. `btc_scalping_mexc` depuis le spot MEXC.
+- **Enregistrement des flux d'indicateurs à la demande** — les bots déclarent les flux qu'ils consomment dans leur config (`indicators_streams`) et les enregistrent auprès de la socket REP du service indicators, en se ré-enregistrant périodiquement : un flux s'auto-répare si le service indicators redémarre — plus de dépendance à une config statique maintenue à la main. Implémenté pour `accumulation_bot`.
+- **Bot d'accumulation MEXC en simulation (compte 2)** — instance paper-trading pilotée par le prix/OBI MEXC spot réel (`btc_scalping_mexc`) ; les gates macro restent sur les flux partagés dérivés de Binance. Frais spot MEXC, Earn désactivé. Nouvelle config de stratégie, wrapper de déploiement, unité systemd (installée par le déploiement) et ligne d'inventaire.
+- **Keepalive WS public MEXC** — ping applicatif pour les sockets publiques MEXC spot + futures (qui coupent sinon une connexion inactive ~toutes les 30 s), éliminant les reconnexions en boucle.
+
+### Modifié
+- **Cadence de monitoring** — intervalle de heartbeat réduit de 3600 s à **120 s** ; seuils de statut resserrés à **STALE 240 s / DEAD 600 s**, de sorte qu'un bot réellement mort est visible en minutes plutôt qu'en heures.
+- **Les consommateurs de `cex_feed` filtrent par (exchange, symbole)** — plusieurs places peuvent publier le même symbole (p. ex. binance + mexc spot BTC/USDT) sans contaminer le flux de carnet d'un consommateur.
+- **Schéma de versionnage formalisé (x.y.z)** — seule une GitHub Release incrémente le mineur (x.y) ; un simple merge sur main incrémente le patch (z).
+- **Reproductibilité du déploiement** — `setup_data_plane.sh` déploie désormais la capacité MEXC spot (clôture des connecteurs + runtime protobuf) sur l'hôte du plan de données ; `deploy_accumulation.sh` installe l'unité systemd (gabarit par stratégie) si absente ; `deploy_all.sh` inclut l'étape d'accumulation MEXC du compte 2.
+- **Garde de fraîcheur du reset `botctl`** resserrée à 300 s (correspond au heartbeat de 120 s), pour que la confirmation du mode sim avant un reset destructif soit réellement actuelle.
+
+### Corrigé
+- **Le PnL de stop-loss swing omettait les frais** — `_close_sl` comptabilisait le PnL sans les frais aller-retour (le chemin take-profit les déduisait déjà) ; les trades swing clôturés en SL surévaluaient le PnL. Les frais des deux jambes sont désormais déduits. (Le backtest swing/DCA tenait déjà compte des frais de SL — aucun changement.)
+- **PnL de simulation gonflé à chaque redémarrage** — la réconciliation au redémarrage des bots grid et swing traitait tous les ordres sauvegardés comme « remplis hors-ligne » en simulation (où `get_open_orders` renvoie vide), re-comptabilisant tout le carnet à chaque redémarrage. La réconciliation est désormais ignorée pour les ordres simulés (les remplissages sim sont détectés sur les ticks de prix).
+- **NameError `_os` latent** dans `accumulation_bot._zmq_loop` (une suppression de code mort trop zélée avait laissé un alias non défini ; dormant car la config déployée court-circuitait la ligne) — corrigé en `os` au niveau module.
+
+### Interne
+- Nommage des venv standardisé sur `.venv` partout (sites de création, gabarits d'unités systemd, tous les comptes) ; `*_pb2.py` générés exclus du gate pylint.
+
+---
+
 ## [0.87] — 2026-06-20
 
 ### Corrigé

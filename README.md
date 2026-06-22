@@ -23,7 +23,7 @@ See [docs/design.md](docs/design.md) for the full process architecture and ZMQ m
 
 ### Accumulation bot v1.5
 
-[`tradinebotte-cex/accumulation_bot.py`] — OBI dip-buy with profit-ladder ratchet. Monitors real-time order book imbalance via ZMQ; enters BTC/USDT on configurable dip thresholds with adaptive scale-in and rebuy trailing stop. Four optional signal gates: Fear & Greed (`fear_greed_gate`), Liquidations (`liq_gate`), Long/Short Ratio (`ls_ratio_gate`), RSI 4h (`rsi4h_gate`). Earn buffer via `earn_buffer_usd`; VWAP gate on initial buy only. Configured via `tradinebotte-cex/strategies/accumulation/btc_accumulation.json`. See [docs/accumulation.md](docs/accumulation.md) for the full strategy design document.
+[`tradinebotte-cex/accumulation_bot.py`] — OBI dip-buy with profit-ladder ratchet. Monitors real-time order book imbalance via ZMQ; enters BTC/USDT on configurable dip thresholds with adaptive scale-in and rebuy trailing stop. Four optional signal gates: Fear & Greed (`fear_greed_gate`), Liquidations (`liq_gate`), Long/Short Ratio (`ls_ratio_gate`), RSI 4h (`rsi4h_gate`). Earn buffer via `earn_buffer_usd`; VWAP gate on initial buy only. Configured via `tradinebotte-cex/strategies/accumulation/btc_accumulation.json`. A MEXC-spot variant (`btc_accumulation_mexc.json`) runs the same strategy on genuine MEXC spot price/OBI (registered on demand from the shared feed as `btc_scalping_mexc`), with MEXC fees and Earn disabled. See [docs/accumulation.md](docs/accumulation.md) for the full strategy design document.
 
 ### OBI Scalping bot v2.12
 
@@ -49,7 +49,7 @@ Long-term cycle strategy: three production configs in `tradinebotte-cex/strategi
 | Adapter | Exchange | Auth |
 |---|---|---|
 | `api_binance.py` | Binance spot | HMAC-SHA256 |
-| `api_mexc.py` | MEXC spot | HMAC-SHA256 (Binance-compat v3) |
+| `api_mexc.py` | MEXC spot | HMAC-SHA256 (Binance-compat v3); public depth WS is protobuf (`wbs-api.mexc.com`) |
 | `api_mexc_futures.py` | MEXC Futures perpetual | HMAC-SHA256 (ApiKey + Request-Time headers) |
 | `api_bitstamp.py` | Bitstamp spot | OAuth2 |
 
@@ -64,8 +64,17 @@ Shared helpers in `api_common.py`: order book parsing, HMAC signing, dry-run mod
 - **Input**: Binance depth20 + aggTrade WebSocket streams (100 ms update rate)
 - **Indicators**: RSI(14/21), SMA, EMA(50/200), ATR(14), OBI, TFI, `spread_bps`, `realized_vol_bps`, VWAP
 - **Output**: ZMQ PUB enriched `{"t":"indicators"}` messages (IPC by default, or TCP port 5559)
-- **Streams**: 9-stream unified config in `tradinebotte-indicators/strategies/indicators_all.json`; `btc_4h` stream for swing consumers; liquidations via public `wss://fstream.binance.com/ws/{symbol}@forceOrder`; optional full-depth perp stream (`btc_full_depth_perp`)
+- **Streams**: unified config in `tradinebotte-indicators/strategies/indicators_all.json`; `btc_4h` stream for swing consumers; liquidations via public `wss://fstream.binance.com/ws/{symbol}@forceOrder`; optional full-depth perp stream (`btc_full_depth_perp`)
 - **Watchdog**: 120-second recv timeout (`asyncio.wait_for`) on all WS loops to prevent indefinite hangs
+
+### Shared CEX feed (data plane)
+
+`tradinebotte-cex/cex_feed.py` fetches each external CEX order book **once** and fans it out over ZMQ (TCP 5563) so bots never open their own exchange WebSocket; order placement stays per-bot with each account's own credentials. One independent task per exchange — currently **Binance spot**, **MEXC spot**, and **MEXC futures** for BTC. Consumers filter by `(exchange, symbol)`, so several exchanges can publish the same symbol without cross-contamination.
+
+- **MEXC spot** uses MEXC's protobuf public WebSocket (`wbs-api.mexc.com`, channel `spot@public.limit.depth.v3.api.pb`); the binary depth frames are decoded via a vendored minimal schema (`tradinebotte-cex/mexc_proto/`). MEXC public sockets are kept alive with an app-level ping.
+- The indicators service can source a scalping stream from this shared feed (`cex_scalping` source → e.g. `btc_scalping_mexc`) instead of opening its own exchange WS.
+
+**On-demand stream registration**: bots declare the indicator streams they need in config (`indicators_streams`) and register them with the indicators REP socket (TCP 5561), re-registering periodically so a stream self-heals if the indicators service restarts — no hand-maintained static config required.
 
 Optional shared SQLite orderbook database (`orderbook_current` + `orderbook_snapshots`), configurable per stream via `db_path`, `bucket_size_usd`, `db_write_every_n`, `history_retention_h`.
 
@@ -75,8 +84,8 @@ See [docs/indicators.md](docs/indicators.md) for the full reference guide.
 
 `tradinebotte-status/status_collector.py` — standalone heartbeat collector (ZMQ port 5562):
 
-- Receives per-bot heartbeats, writes to SQLite, prunes rows older than one year
-- `generate_status.py` polls all deployment accounts via SSH and writes a single HTML health page showing bot health, service versions, and payload details (PnL, position counts, WebSocket connectivity)
+- Receives per-bot heartbeats (sent every **120 s**), writes to SQLite, prunes rows older than one year. A bot is flagged **STALE after 240 s** and **DEAD after 600 s** (`HEARTBEAT_STALE_S` / `HEARTBEAT_DEAD_S`), so a genuine outage surfaces within minutes
+- `generate_status.py` polls all deployment accounts via SSH and writes a single HTML health page showing bot health, service versions, and payload details (PnL, position counts, WebSocket connectivity); all PnL figures read from the heartbeat payload (one source of truth across Polymarket and CEX bots)
 - Default output: `~/public_html/tradinebottestatus.html`, overridable via `--out` or `$TRADINEBOTTE_STATUS_OUT`
 - See [docs/logging.md](docs/logging.md) for the canonical log tag vocabulary used by alerting and log parsers
 
