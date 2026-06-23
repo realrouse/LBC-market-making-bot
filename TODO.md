@@ -431,3 +431,51 @@ If Phase 3 shows a clear winner:
 - **Predictive polling** (option 2) — instead of polling every 30 s, compute the exact time the
   next market enters the ±6 min window (`next_boundary = ceil(now/300)*300 - 360`) and schedule a
   targeted poll. Eliminates the residual 30 s lag without extra API load.
+
+---
+
+## Backtest system audit 2026-06-23 — Findings
+
+Audit of the 8 `analysis/backtest_*.py` scripts. Lens: can the backtests be trusted to
+validate a strategy before it trades? Prioritized by trustworthiness.
+
+### Done
+
+- **[BT-1] DONE — Shared realized-PnL math; kill live↔backtest drift** (commit 5889029, dev)
+  Every backtest reimplemented its PnL/fee math independently of the live engines, and they had
+  silently diverged (the swing SL fee bug: live omitted a fee leg, backtest didn't). Extracted
+  `tradinetools/pnl.py::round_trip_pnl` (both fee legs always charged), routed all 7 live-engine
+  PnL sites + the swing/DCA/SwingHold backtests through it. Fixed a second real bug: those
+  backtests' `realized_pnl` deducted only the SELL fee (cost basis excluded the buy fee),
+  overstating PnL by one leg (range-DB DCA realized +78.22 → +75.52; portfolio unchanged). Grid
+  was already correct (`gross − total_fee`). Parity test (`test_pnl_parity.py`) locks
+  round_trip_pnl ≡ live assembly ≡ backtest model so future drift fails CI.
+
+### Open — by priority
+
+- **[BT-2] Signal-tape record/replay so the accumulation (and other gated) strategies are
+  backtestable.** The flagship accumulation strategy (OBI dip-buy + 6 macro gates: F&G,
+  liquidations, L/S ratio, RSI 4h, macro-OBI, VWAP) has NO backtest, because its inputs are the
+  live indicators *streams*, which are never recorded historically. Fix: record the indicator
+  stream messages to a "signal tape" (the orderbook/scalping backtests already replay live-recorded
+  OBI/TFI from `ob_snapshots` — same idea, extended to all streams), then replay the tape to drive
+  the accumulation strategy against its real inputs. Highest-value coverage gap.
+
+- **[BT-3] Enforced out-of-sample / regime reporting.** bull / bear / range datasets exist and the
+  tooling supports them (`backtest_grid.py --all`, `--trail bull/bear`) but it's opt-in — no
+  discipline that a strategy is reported across all three before deployment. Add a wrapper/convention
+  that runs each price strategy across all regime DBs and prints one comparison table (a "+5% on
+  range" headline is meaningless without the bear number).
+
+- **[BT-4] Overfitting discipline for the calibration studies.** `backtest_stake_secs.py` and
+  `backtest_volfilter.py` are grid searches over thresholds (calibrated in `volstop.txt`). Mined
+  params were NOT found in any live strategy config (appear confined to the studies / the disabled
+  order-book scalper), so this is currently methodology not live risk — but: keep mined params out
+  of live configs unless validated out-of-sample; report train-vs-holdout for any grid search.
+
+- **[BT-5] Shared backtest harness (lowest priority — cosmetic).** Data loading and metrics
+  (Sharpe/Calmar/MaxDD/CAGR) are re-defined per file with inconsistent formulas; fees are a single
+  `fee_rate` with no maker/taker or per-exchange split (relevant now MEXC spot is maker-0%/taker-0.2%).
+  Add a small shared `backtest_common` (OHLCV loader + one metrics module + a fee schedule), adopt
+  incrementally. Also: `docs/HOWTO_tests_and_backtests.md` is heavily Polymarket-centric — the CEX
+  backtests are thinly documented there.
