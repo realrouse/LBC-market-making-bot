@@ -65,6 +65,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from tradinetools.pnl import round_trip_pnl
+
 logger = logging.getLogger(__name__)
 
 STRATEGY_TYPE = "swing"
@@ -562,9 +564,7 @@ class SwingStrategy:
         """TP SELL filled → account PnL, re-arm the support level."""
         entry = pos.buy_price or pos.level_price
         qty   = self.sw.order_size_usdt / entry
-        fee_b = self._api.compute_fee(entry,      qty)
-        fee_s = self._api.compute_fee(fill_price, qty)
-        pnl   = (fill_price - entry) * qty - fee_b - fee_s
+        pnl   = round_trip_pnl(entry, fill_price, qty, self._api.FEE_RATE)
 
         self.sw.total_pnl    += pnl
         self.sw.total_trades += 1
@@ -619,11 +619,9 @@ class SwingStrategy:
                 logger.error("SwingStrategy [%s] SL MARKET SELL failed — position marked closed",
                              self.sw.symbol)
 
-        # Account both legs' fees (BUY entry + SL market SELL), like the TP path —
-        # otherwise SL-closed trades overstate PnL by the round-trip fee.
-        fee_b = self._api.compute_fee(entry, qty)
-        fee_s = self._api.compute_fee(price, qty)
-        pnl = (price - entry) * qty - fee_b - fee_s   # at triggered price
+        # Round-trip PnL net of BOTH legs' fees (BUY entry + SL market SELL) — via the
+        # shared helper so the SL path can never again drop a fee leg (see tradinetools.pnl).
+        pnl = round_trip_pnl(entry, price, qty, self._api.FEE_RATE)   # at triggered price
         self.sw.total_pnl    += pnl
         self.sw.total_trades += 1
         pos.status = "closed"

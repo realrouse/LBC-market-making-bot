@@ -35,6 +35,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from tradinetools.pnl import round_trip_pnl
+
 logger = logging.getLogger(__name__)
 
 STRATEGY_TYPE = "dca"
@@ -322,9 +324,7 @@ class DCAStrategy:
 
     async def _on_tp_filled(self, state: Any, pos: DCAPosition,
                             exit_price: float) -> None:
-        fee_buy  = self._api.compute_fee(pos.entry_price, pos.qty)
-        fee_sell = self._api.compute_fee(exit_price, pos.qty)
-        pnl      = (exit_price - pos.entry_price) * pos.qty - fee_buy - fee_sell
+        pnl      = round_trip_pnl(pos.entry_price, exit_price, pos.qty, self._api.FEE_RATE)
 
         pos.status      = "closed"
         pos.exit_price  = exit_price
@@ -342,9 +342,7 @@ class DCAStrategy:
         )
 
     async def _on_sl_hit(self, state: Any, pos: DCAPosition, price: float) -> None:
-        fee_buy  = self._api.compute_fee(pos.entry_price, pos.qty)
-        fee_sell = self._api.compute_fee(price, pos.qty)
-        pnl      = (price - pos.entry_price) * pos.qty - fee_buy - fee_sell
+        pnl      = round_trip_pnl(pos.entry_price, price, pos.qty, self._api.FEE_RATE)
 
         pos.status      = "closed"
         pos.exit_price  = price

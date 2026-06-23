@@ -40,6 +40,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from tradinetools.pnl import round_trip_pnl  # shared realized-PnL math (parity with live)
+
 FEE_RATE     = 0.001   # 0.1% per side — Binance spot taker
 DATA_DIR     = Path(__file__).resolve().parent.parent / "data"
 STRATEGY_DIR = Path(__file__).resolve().parent.parent / "tradinebotte-cex" / "strategies"
@@ -231,8 +233,7 @@ def run_dca(rows: list, p: DCAParams, db_label: str = "",
                     usdt -= total_cost
                     btc  += qty
                     fees_paid += fee
-                    open_pos.append({"qty": qty, "entry": c, "tp": tp,
-                                     "sl": sl, "cost": p.amount_usdt})
+                    open_pos.append({"qty": qty, "entry": c, "tp": tp, "sl": sl})
 
         # Check exits: SL takes precedence over TP
         still_open = []
@@ -240,14 +241,14 @@ def run_dca(rows: list, p: DCAParams, db_label: str = "",
             if pos["sl"] is not None and l <= pos["sl"]:
                 proceeds      = pos["qty"] * pos["sl"] * (1 - p.fee_rate)
                 fees_paid    += pos["qty"] * pos["sl"] * p.fee_rate
-                realized_pnl += proceeds - pos["cost"]
+                realized_pnl += round_trip_pnl(pos["entry"], pos["sl"], pos["qty"], p.fee_rate)
                 usdt         += proceeds
                 btc          -= pos["qty"]
                 n_losses     += 1
             elif h >= pos["tp"]:
                 proceeds      = pos["qty"] * pos["tp"] * (1 - p.fee_rate)
                 fees_paid    += pos["qty"] * pos["tp"] * p.fee_rate
-                realized_pnl += proceeds - pos["cost"]
+                realized_pnl += round_trip_pnl(pos["entry"], pos["tp"], pos["qty"], p.fee_rate)
                 usdt         += proceeds
                 btc          -= pos["qty"]
                 n_wins       += 1
@@ -335,8 +336,7 @@ def run_swing(rows: list, p: SwingParams, db_label: str = "") -> BacktestResult:
             usdt -= total_cost
             btc  += qty
             fees_paid += fee
-            slot[i]    = {"qty": qty, "entry": sp, "tp": tp,
-                          "sl": sl, "cost": p.order_size_usdt}
+            slot[i]    = {"qty": qty, "entry": sp, "tp": tp, "sl": sl}
             n_open += 1
 
         # ── Check exits for open positions
@@ -347,7 +347,7 @@ def run_swing(rows: list, p: SwingParams, db_label: str = "") -> BacktestResult:
             if l <= pos["sl"]:
                 proceeds      = pos["qty"] * pos["sl"] * (1 - p.fee_rate)
                 fees_paid    += pos["qty"] * pos["sl"] * p.fee_rate
-                realized_pnl += proceeds - pos["cost"]
+                realized_pnl += round_trip_pnl(pos["entry"], pos["sl"], pos["qty"], p.fee_rate)
                 usdt         += proceeds
                 btc          -= pos["qty"]
                 n_losses     += 1
@@ -356,7 +356,7 @@ def run_swing(rows: list, p: SwingParams, db_label: str = "") -> BacktestResult:
             elif h >= pos["tp"]:
                 proceeds      = pos["qty"] * pos["tp"] * (1 - p.fee_rate)
                 fees_paid    += pos["qty"] * pos["tp"] * p.fee_rate
-                realized_pnl += proceeds - pos["cost"]
+                realized_pnl += round_trip_pnl(pos["entry"], pos["tp"], pos["qty"], p.fee_rate)
                 usdt         += proceeds
                 btc          -= pos["qty"]
                 n_wins       += 1
@@ -445,7 +445,10 @@ def run_swinghold(rows: list, p: SwingHoldParams, db_label: str = "") -> Backtes
                 "initial_qty":   qty,
                 "entry":         sp,
                 "sl":            sl,
-                "cost_per_unit": sp,  # cost per BTC unit
+                # Cost basis per BTC unit INCLUDING the entry fee, so the partial-sell
+                # `proceeds - cost` lines below net BOTH legs' fees (parity with the live
+                # engines' round_trip_pnl, which deducts entry+exit fees).
+                "cost_per_unit": sp * (1 + p.fee_rate),
                 "resistances":   above,
                 "res_idx":       0,
                 "partial_pnl":   0.0,

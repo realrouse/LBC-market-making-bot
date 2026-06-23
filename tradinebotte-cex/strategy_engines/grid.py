@@ -53,6 +53,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from tradinetools.pnl import round_trip_pnl
+
 logger = logging.getLogger(__name__)
 
 STRATEGY_TYPE = "grid"
@@ -700,9 +702,7 @@ class GridStrategy:
         profit = 0.0
         if buy_p is not None and new_buy > 0:
             qty      = self.grid.order_size_usdt / buy_p
-            fee_buy  = self._api.compute_fee(buy_p, qty)
-            fee_sell = self._api.compute_fee(sell_p, qty)
-            profit   = (sell_p - buy_p) * qty - fee_buy - fee_sell
+            profit   = round_trip_pnl(buy_p, sell_p, qty, self._api.FEE_RATE)
             self.grid.total_profit_usd += profit
             self.grid.total_cycles     += 1
 
