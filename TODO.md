@@ -2,6 +2,12 @@
 
 > Code, comments, logs, and docstrings are English-only. Documentation files (README, CHANGELOG, INSTALL, QUICKSTART, UPDATE) are bilingual (EN + FR).
 
+> **Path note (2026-06-23):** the codebase was restructured — `bot/*` modules now live under
+> `tradinebotte-polymarket/` (`feed.py`, `live_bot.py`, `account_bot.py`, `api_polymarket.py`,
+> `bot_utils.py`), `tradinebotte-indicators/` (`indicators.py`), and `tradinebotte-cex/`
+> (`api_binance.py`, `api_mexc.py`, `cex_feed.py`, …). File references in the older DONE sections
+> below still point at the old `bot/…` paths and have not been refreshed (cosmetic only).
+
 ---
 
 ## Audit 2026-05-17 — Findings to fix
@@ -138,27 +144,41 @@
 
 ### HIGH — Open
 
-- **[H-2]** ZeroMQ sockets have no authentication on multi-tenant host
-  `feed.py` and `indicators.py` bind PUB/REP sockets on `127.0.0.1` without CURVE or ZAP auth.
-  On a multi-tenant VPS any local process can subscribe to the raw market data stream and send
-  commands to the REP socket. Fix: enable CURVE auth or add a ZAP handler before exposing data
-  to multiple user accounts.
+- **[H-2] LARGELY MITIGATED → coupled to the external-broadcast roadmap item (re-checked 2026-06-23)**
+  ZeroMQ sockets have no CURVE/ZAP authentication. **But** the default bind is now IPC sockets with
+  `chmod 0600` (`tradinetools/zmq.py::_chmod_ipc`), so other users on the multi-tenant host cannot
+  read the stream or reach the REP socket — the original "any local process can subscribe" concern
+  no longer holds for the IPC default. TCP `127.0.0.1` is used only when `TRADINEBOTTE_PORT_BASE`
+  is set. CURVE/ZAP is therefore only required if/when external broadcast is pursued; see the
+  "External network broadcast for the indicator server" item under Roadmap v0.3. No standalone action.
 
-- **[H-3]** SSH passwords appear in `/proc` and remote heredoc
-  Deploy scripts pass SSH credentials via environment variables or heredocs that briefly appear in
-  `/proc/<pid>/cmdline`. Fix: use SSH key-based auth for all deploy operations; eliminate password
-  arguments from command lines.
+- **[H-3] STALE / WONTFIX (re-checked 2026-06-23)** — SSH passwords appear in `/proc` and remote heredoc
+  Finding as written is inaccurate: deploy scripts use `sshpass -e`, which passes the password via the
+  `SSHPASS` env var, so it lands in `/proc/<pid>/environ` (same-user/root readable only), **not**
+  `/proc/<pid>/cmdline`. The heredoc `PASS=` leak was already removed by L-2 (below). The proposed fix
+  (migrate to SSH key-based auth) conflicts with the documented stance that the credentials in
+  `~/.tradinebotte-test.conf` are intentional (chmod 600 only). No action — kept here for traceability.
 
 ### LOW — Open
 
-- **[L-1]** Private key stored as plain `str` in `BotConfig` (unzeroable)
-  Python strings are immutable and cannot be securely zeroed. The private key in `BotConfig.private_key`
-  remains in memory until garbage-collected. Fix: use a `bytearray` or a `SecretStr` wrapper that
-  can be explicitly zeroed after use, and clear on bot shutdown.
+- **[L-1] DONE (partial — log-masking; 2026-06-23)** Private key stored as plain `str` in `BotConfig`
+  Scope chosen: **log-masking only** (the realistic leak vector on a single-user dedicated host is a
+  secret showing up in logs/tracebacks, not memory scraping by a non-root attacker). The four
+  credential fields (`private_key`, `api_key`, `api_secret`, `api_passphrase`) in `BotConfig`
+  (`live_bot.py:305`) are now declared `field(default="", repr=False)`, so the dataclass `__repr__`
+  no longer emits them — logging/printing a `BotConfig` can't leak secrets. Values remain plain `str`
+  (consumed as-is by `eth_account` / `ClobClient`). 427 polymarket tests pass.
+  **Not done (accepted residual):** secure memory zeroing via `bytearray`/`SecretStr.clear()` — of
+  limited value since `eth_account`/`ClobClient` and `os.environ` keep their own uncontrollable `str`
+  copies; out of scope on a single-user dedicated server.
 
-- **[+]** Add `|` guard to `install_service.sh`, `install_feed_service.sh`, `install_indicators_service.sh`
-  Pipe (`|`) in service unit names can break `systemctl enable`; add a guard that aborts with a
-  clear error if the computed service name contains `|`.
+- **[+] DONE (2026-06-23)** — `|` guard added to `install_status_service.sh`
+  Original finding named `install_service.sh` / `install_feed_service.sh` / `install_indicators_service.sh`,
+  but those do **not** use a `|`-delimited `sed`. The only script that does was
+  `tradinebotte-status/scripts/install_status_service.sh:86`
+  (`sed "s|tcp://127.0.0.1:5562|${STATUS_ADDR}|g"`). Added a guard before the sed block that aborts
+  with a clear error if `$STATUS_ADDR` contains `|` (mirrors `install_account_service.sh:93-99`).
+  `bash -n` clean; guard verified to reject `tcp://…|evil` and accept the default address.
 
 ### LOW — Done
 
@@ -253,10 +273,13 @@ Full results and parameter recommendations in `notes/backtest_20260608.txt`.
   Wire format gains `"v": 1` (backward-compatible — all consumers use `.get()`).
   Intentionally skipped: `BookMessage` (hot path — `get_type_hints()` overhead per tick);
   `IndicatorsMessage` (14+ polymorphic stream types, marginal gain).
-  Stale schemas — **cannot migrate without breaking the live protocol**: `RegisterRequest` /
-  `RegisterReply` define `{t, stream_id, bot_id}` but the live protocol uses
-  `{cmd, asset, timeframe, source, indicators}` / `{status, stream_id}`. These need to either
-  be corrected to match the live protocol or deleted. (dev branch, audit session 2026-06-12)
+  Stale schemas — **DELETED (2026-06-23)**: `RegisterRequest` / `RegisterReply` defined
+  `{t, stream_id, bot_id}` / `{t:"register_ack", ok, error}`, but the live protocol uses
+  `{cmd:"subscribe", asset, timeframe, …}` → `{status, stream_id}` (see
+  `tradinebotte-indicators/indicators.py:59-61`). No production code imported them — only the
+  classes and their own tests. Removed both dataclasses from `tradinetools/schemas.py` and their
+  tests from `test_schemas.py` (22 schema tests still pass). Modeling the real subscribe protocol
+  as a fresh schema is a separate "add schema" task, out of scope here.
 
 - **[A05-M6] `sys.path.insert` inside `post_order` — already mitigated by H-1 cache**
   The `if _site not in sys.path` guard in `_init_clob_client` prevents duplicate inserts.
@@ -333,9 +356,16 @@ These were scoped out of the log-system refactor session (priorities 1+2 + Engli
   - **`TRADINEBOTTE_PORT_BASE`** is already multi-stack compatible; this change slots in naturally.
 
 - **Telegram notifications** — alert on each trade, daily stop-loss trigger, WebSocket reconnect.
-- **HTTP health-check** — lightweight local server (e.g. port 9090) returning raw stats; monitorable
-  from a reverse proxy or an external cron.
-  > `aiohttp.web` on `127.0.0.1:8765`, `GET /health` → `{"status":"ok","capital":…,"wins":…,"losses":…,"open_trades":…,"uptime_s":…}`
+- ~~**HTTP health-check** — lightweight local server returning raw stats; monitorable from a reverse
+  proxy or an external cron.~~ ✓ Done (2026-06-23): `tradinetools.health_server()` — an opt-in
+  `aiohttp.web` `GET /health` endpoint mounted beside `heartbeat_loop` in all four trading
+  entrypoints (`live_bot.py`, `account_bot.py`, `accumulation_bot.py`, `orderbook_bot.py`). It
+  **reuses the same `get_extra` payload callback as the heartbeat**, so the pulled view can never
+  drift from the pushed one; response is the `build_heartbeat()` payload + `uptime_s`. Opt-in via
+  `TRADINEBOTTE_HEALTH_PORT` (no-op + unchanged default behavior when unset); binds `127.0.0.1`
+  only with a non-loopback warning. 3 unit tests (`test_health.py`): disabled-no-op, invalid-port,
+  serve-and-clean-shutdown. Documented (EN+FR) in `docs/design.md` / `docs/design.fr.md` §7
+  "HTTP health endpoint", the env-var summary table, and the CHANGELOG.
 
 ### Strategy / risk management
 
@@ -348,16 +378,23 @@ These were scoped out of the log-system refactor session (priorities 1+2 + Engli
   `BotConfig`; step path added to `compute_stake()` (priority: Kelly > step > bid×secs > flat);
   JSON: `"stake_step": {"enabled": true, "s0": 15, "s1": 12, "s2": 6, "s3": 6}`.
   Best Sharpe config from Curve B grid: Sharpe +8.40, DD $38.57, +$118 PnL vs flat $80.
-- **Weekly stop-loss** — complement to the daily stop-loss to limit multi-day drawdown streaks.
+- ~~**Weekly stop-loss** — complement to the daily stop-loss to limit multi-day drawdown streaks.~~
+  ✓ Done (verified 2026-06-23): `weekly_stop_loss` is a `BotConfig` field (`WEEKLY_STOP_LOSS` default),
+  read in `make_config()`, with a `weekly_stop` state counter enforced in `live_bot.py`
+  (Monday-aligned boundary, per A05-M5). This roadmap line contradicted A05-M5 and is now resolved.
 - **Threshold=0.98 investigation** — walk-forward consistently selects `thr=0.98` over `0.95` in
   training folds. Validate OOS when ≥8 weeks of live data are available (current: 3 weeks,
   walk-forward too noisy). Do not change without running `backtest.py --walk-forward 4`.
+  > Gate re-check (2026-06-23): the only DB in the repo (`data/paper3.db`) still covers ~3 weeks
+  > (2026-04-13 → 2026-05-04); `liveweek.db` lives server-side. Confirm its date span on the server
+  > before assuming the ≥8-week gate has flipped.
 - **Curve A (bid×secs) alternative** — `bid_α=1.0 secs_ref=45 secs_α=1.00 vol=weekday` gives
   Sharpe +7.85 vs Curve B's +8.40 but EV is lower ($0.0344 vs $0.0509). Revisit if step-function
   produces unexpected behaviour in live data (e.g. if secs bucketing introduces noise).
 - **Kelly live validation** — Curve C (Kelly/bucket) showed Sharpe +12.02 in-sample. Requires
   out-of-sample walk-forward on ≥8 weeks of data before enabling live (`kelly_fraction > 0`).
   Current 3-week dataset is insufficient for robust (p, b) estimation per bucket.
+  > Same ≥8-week data gate as the Threshold=0.98 item above — re-check `liveweek.db` span server-side.
 
 ### Technical indicators — indicators.py
 

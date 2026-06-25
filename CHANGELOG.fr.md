@@ -6,6 +6,25 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [Non publié]
+
+### Ajouté
+- **Planification versionnée de la page de statut** — la page HTML était régénérée par une crontab opérateur maintenue à la main, hors du dépôt. Elle est désormais pilotée par un timer systemd `--user` versionné (`tradinebotte-statuspage.timer` → `.service`, toutes les 2 minutes) installé par `install_statuspage_timer.sh`, donc la cadence est reproductible depuis le checkout. L'installeur localise seul le dépôt/venv, avertit si le linger est désactivé (le timer se mettrait en pause à la déconnexion) et signale toute ligne de crontab résiduelle à retirer.
+- **Endpoint HTTP de health-check** — un serveur HTTP `GET /health` optionnel (`tradinetools.health_server`) monté à côté du heartbeat dans chaque bot de trading (`live_bot`, `account_bot`, `accumulation_bot`, `orderbook_bot`). Il réutilise le payload du heartbeat du bot, de sorte qu'un cron externe, un reverse proxy ou un moniteur d'uptime peut récupérer la liveness et les stats (capital, PnL, trades ouverts, uptime) en HTTP sans parler ZMQ. Activé via `TRADINEBOTTE_HEALTH_PORT` (désactivé par défaut — comportement inchangé si non défini) ; bind `127.0.0.1` uniquement, avec un avertissement si pointé vers un hôte non-loopback.
+
+### Sécurité
+- **Les identifiants n'apparaissent plus dans un dump de config** — les champs `private_key`, `api_key`, `api_secret` et `api_passphrase` sont exclus du `repr` de `BotConfig` : journaliser ou afficher un objet de configuration ne peut plus faire fuiter de secrets dans les logs ou les tracebacks.
+
+### Corrigé
+- **La page de statut ne se vide plus silencieusement quand le collecteur est injoignable** — toutes les données heartbeat/inventory/deploy de la flotte viennent d'un seul compte (le collecteur) ; si son SSH/collecte échouait, la page affichait une vue flotte vide avec un « Bots alive » `0/0` faussement vert, lu comme « tout va bien » plutôt que « statut inconnu ». Elle affiche désormais une bannière rouge explicite (« Collector account unreachable — liveness inconnue, pas forcément hors-ligne »), passe l'en-tête au rouge, et rend « Bots alive — » au lieu d'un zéro vert. Une bannière ambre distincte liste les comptes (hors collecteur) dont la collecte a échoué, pour qu'une page partielle soit visiblement partielle.
+- **La page de statut expose désormais l'état agrégé des bots grid** — les bots grid tiennent un état agrégé (bornes, cycles, niveaux remplis, flag halted) dans `grid_state` / `grid_levels` plutôt qu'un journal par-trade : la page (qui interrogeait la table `trades` type-Polymarket) n'affichait rien pour eux, seul leur PnL heartbeat apparaissait. Le collecteur lit maintenant l'état grid depuis chaque `live.db` candidat — le chemin standard et tout dossier alternatif (p. ex. un grid avec `TRADINEBOTTE_DIR=~/tradinebotte-grid`) — et la carte compte affiche une ligne `grid` : `symbole · bornes $bas–$haut · N/M niveaux détenus · cycles · PnL`, avec un badge `HALTED` si le grid s'est arrêté.
+- **Durcissement de l'installation de service** — `install_status_service.sh` s'interrompt désormais avec une erreur claire si l'adresse de statut configurée contient un `|`, qui corromprait sinon la substitution `sed` écrivant le fichier d'unité.
+
+### Interne
+- Suppression de deux schémas de messages inutilisés et obsolètes (`RegisterRequest` / `RegisterReply`) décrivant un protocole d'enregistrement qui n'est plus utilisé par le service indicators ; le protocole réel est `{cmd:"subscribe", …}` → `{status, stream_id}`.
+
+---
+
 ## [0.88] — 2026-06-22
 
 ### Ajouté
