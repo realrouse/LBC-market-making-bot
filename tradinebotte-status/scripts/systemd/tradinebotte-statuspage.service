@@ -1,0 +1,18 @@
+[Unit]
+# One-shot HTML status-page generator, driven by tradinebotte-statuspage.timer.
+# Runs on the OPERATOR machine (not a bot account): it SSHes to every account,
+# collects state, and writes the status page. __REPO_DIR__ / __VENV__ are filled in
+# by install_statuspage_timer.sh from the local checkout (paths differ per operator).
+Description=tradinebotte — status page generator (one-shot, run by the .timer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=__REPO_DIR__
+Environment=PYTHONPATH=__REPO_DIR__:__REPO_DIR__/tradinetools
+# Default output is ~/public_html/tradinebottestatus.html; override with --out or
+# TRADINEBOTTE_STATUS_OUT. Needs ~/.tradinebotte-test.conf for the SSH credentials.
+ExecStart=__VENV__/bin/python3 __REPO_DIR__/tradinebotte-status/generate_status.py
+# Six sequential SSH round-trips — allow generous headroom before systemd kills it.
+TimeoutStartSec=120
