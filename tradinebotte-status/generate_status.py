@@ -510,6 +510,16 @@ def _render_payload_summary(bot_name: str, payload: dict, now: int) -> str:
         r = payload.get("total_realized")
         if r is not None:
             parts.append(f"pnl=${r:+.2f}")
+    elif bot_name == "orderbook_bot":
+        tp = payload.get("total_pnl")
+        if tp is not None:
+            parts.append(f"pnl=${tp:+.2f}")
+        op = payload.get("open_positions")
+        if op is not None:
+            parts.append(f"pos={op}")
+        lp = payload.get("last_price")
+        if lp:
+            parts.append(f"px=${lp:,.0f}")
     elif bot_name == "feed":
         ws = payload.get("ws_connected")
         if ws is not None:
@@ -545,6 +555,12 @@ def _key_metric(bot_name: str, payload: dict) -> str:
         btc = payload.get("holdings_btc")
         if btc is not None:
             return f"{btc:.4f} BTC"
+    elif bot_name == "orderbook_bot":
+        # No daily window in the payload; cumulative realized PnL is the headline.
+        pnl = payload.get("total_pnl")
+        if pnl is not None:
+            sign = "+" if pnl >= 0 else "-"
+            return f"{sign}${abs(pnl):.2f}"
     return ""
 
 

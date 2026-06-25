@@ -43,5 +43,24 @@ class TestRenderPayloadSummary(unittest.TestCase):
         self.assertNotIn("None", out)
 
 
+class TestOrderbookBotRendering(unittest.TestCase):
+    """orderbook_bot has its own payload shape (total_pnl / open_positions / last_price)."""
+
+    def test_payload_summary_shows_pnl_positions_price(self):
+        out = g._render_payload_summary(
+            "orderbook_bot",
+            {"total_pnl": -2.5, "open_positions": 3, "last_price": 64200.0, "bounds_ok": True},
+            _NOW)
+        self.assertIn("pnl=$-2.50", out)
+        self.assertIn("pos=3", out)
+        self.assertIn("px=$64,200", out)
+        self.assertNotIn("None", out)
+
+    def test_key_metric_uses_total_pnl_with_sign(self):
+        self.assertEqual(g._key_metric("orderbook_bot", {"total_pnl": 12.3}), "+$12.30")
+        self.assertEqual(g._key_metric("orderbook_bot", {"total_pnl": -4.0}), "-$4.00")
+        self.assertEqual(g._key_metric("orderbook_bot", {}), "")
+
+
 if __name__ == "__main__":
     unittest.main()
