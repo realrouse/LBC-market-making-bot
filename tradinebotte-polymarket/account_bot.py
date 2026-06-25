@@ -33,7 +33,7 @@ Message types consumed from feed.py:
 import argparse, asyncio, fcntl, hashlib, logging, os, subprocess, sys, time
 import zmq, zmq.asyncio
 from tradinetools import (
-    heartbeat_loop, control_loop, Command,
+    heartbeat_loop, control_loop, Command, health_server,
     write_reset_marker, consume_reset_marker,
 )
 from tradinetools.logging import setup_logger
@@ -416,6 +416,11 @@ async def main() -> None:
             _hb_task = asyncio.create_task(
                 heartbeat_loop("account_bot", config.install_dir, _hb_payload, mode=_hb_mode)
             )
+            # Opt-in HTTP /health (no-op unless TRADINEBOTTE_HEALTH_PORT is set);
+            # reuses _hb_payload so the pulled view matches the pushed heartbeat.
+            _health_task = asyncio.create_task(
+                health_server("account_bot", config.install_dir, _hb_payload, mode=_hb_mode)
+            )
 
             def _reset_handler(cmd_args: dict) -> dict:
                 """Sim-only: record a reset and hard-exit so systemd restarts cold,
@@ -442,7 +447,9 @@ async def main() -> None:
             finally:
                 _hb_task.cancel()
                 _ctl_task.cancel()
-                await asyncio.gather(_hb_task, _ctl_task, return_exceptions=True)
+                _health_task.cancel()
+                await asyncio.gather(_hb_task, _ctl_task, _health_task,
+                                     return_exceptions=True)
     finally:
         conn.close()
 

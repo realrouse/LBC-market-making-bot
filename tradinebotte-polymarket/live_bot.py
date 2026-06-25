@@ -48,7 +48,7 @@ import api_polymarket as api
 import bot_utils
 from bot_utils import print_dashboard, write_web_status
 from tradinetools import (
-    heartbeat_loop, control_loop, Command,
+    heartbeat_loop, control_loop, Command, health_server,
     write_reset_marker, consume_reset_marker,
 )
 from tradinetools.zmq import PORT_FEED, PORT_INDICATORS, PORT_IND_REG, default_ipc_addr, make_sub
@@ -301,11 +301,15 @@ class BotConfig:
     indicators_reg_addr: str  = f"tcp://127.0.0.1:{PORT_IND_REG}"
     indicators_streams:  list = field(default_factory=list)
 
-    # Credentials
-    private_key:    str = ""
-    api_key:        str = ""
-    api_secret:     str = ""
-    api_passphrase: str = ""
+    # Credentials.
+    # repr=False keeps secrets out of the dataclass __repr__ so they cannot leak
+    # into logs or tracebacks if a BotConfig instance is ever logged/printed.
+    # The values are still plain str (used as-is by eth_account / ClobClient);
+    # this is log-masking only, not secure memory zeroing — see TODO L-1.
+    private_key:    str = field(default="", repr=False)
+    api_key:        str = field(default="", repr=False)
+    api_secret:     str = field(default="", repr=False)
+    api_passphrase: str = field(default="", repr=False)
 
     # DB options
     db_mmap_mb: int = 0
@@ -1901,6 +1905,17 @@ async def main() -> None:
                 )
             )
 
+            # Opt-in HTTP /health (no-op unless TRADINEBOTTE_HEALTH_PORT is set);
+            # reuses _hb_payload so the pulled view matches the pushed heartbeat.
+            _health_task = asyncio.create_task(
+                health_server(
+                    _hb_bot_name,
+                    config.install_dir,
+                    _hb_payload,
+                    mode=_hb_mode,
+                )
+            )
+
             def _reset_handler(cmd_args: dict[str, Any]) -> dict[str, Any]:
                 """Sim-only: record a reset and hard-exit so systemd restarts cold,
                 wiping state and starting from `capital`. Guarded by control_loop."""
@@ -1941,7 +1956,9 @@ async def main() -> None:
             finally:
                 _hb_task.cancel()
                 _ctl_task.cancel()
-                await asyncio.gather(_hb_task, _ctl_task, return_exceptions=True)
+                _health_task.cancel()
+                await asyncio.gather(_hb_task, _ctl_task, _health_task,
+                                     return_exceptions=True)
     finally:
         conn.close()
 

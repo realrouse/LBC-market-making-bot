@@ -862,7 +862,20 @@ async def _run(p: dict, db: sqlite3.Connection, install_dir: str = "") -> None:
                     p.get("scale_in_cooldown_min_s", p.get("min_scale_interval_s", 3600)),
                     p.get("scale_in_obi_strong_thresh", 0.80))
 
-        from tradinetools import heartbeat_loop
+        from tradinetools import heartbeat_loop, health_server
+
+        def _hb_payload() -> dict:
+            return {
+                "bounds_ok":      state.free_usdt > 0,
+                "holdings_btc":   round(state.holdings_btc, 6),
+                "free_usdt":      round(state.free_usdt, 2),
+                "avg_entry":      round(state.avg_entry, 2),
+                "total_realized": round(state.total_realized, 2),
+                # Unified cumulative-PnL field (alias of total_realized) so the
+                # status page reads one key across all bots. Persisted +
+                # restored at boot → survives restarts.
+                "pnl_total":      round(state.total_realized, 2),
+            }
 
         def _reset_handler(cmd_args: dict) -> dict:
             """Sim-only: record a reset and hard-exit so systemd restarts cold,
@@ -884,18 +897,18 @@ async def _run(p: dict, db: sqlite3.Connection, install_dir: str = "") -> None:
                 heartbeat_loop(
                     "accumulation_bot",
                     install_dir or None,
-                    lambda: {
-                        "bounds_ok":      state.free_usdt > 0,
-                        "holdings_btc":   round(state.holdings_btc, 6),
-                        "free_usdt":      round(state.free_usdt, 2),
-                        "avg_entry":      round(state.avg_entry, 2),
-                        "total_realized": round(state.total_realized, 2),
-                        # Unified cumulative-PnL field (alias of total_realized) so the
-                        # status page reads one key across all bots. Persisted +
-                        # restored at boot → survives restarts.
-                        "pnl_total":      round(state.total_realized, 2),
-                    },
+                    _hb_payload,
                     mode="sim",  # paper trading only — no real exchange connector
+                )
+            ),
+            asyncio.create_task(
+                # Opt-in HTTP /health (no-op unless TRADINEBOTTE_HEALTH_PORT is set);
+                # reuses _hb_payload so the pulled view matches the pushed heartbeat.
+                health_server(
+                    "accumulation_bot",
+                    install_dir or None,
+                    _hb_payload,
+                    mode="sim",
                 )
             ),
             asyncio.create_task(
