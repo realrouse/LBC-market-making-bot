@@ -79,6 +79,12 @@ ok "tradinetools importable"
 
 mkdir -p "$HOME/.config/systemd/user"
 
+# Guard against '|' in any value used as a sed substitution — it is the delimiter.
+if [[ "$STATUS_ADDR" == *'|'* ]]; then
+    err "TRADINEBOTTE_STATUS_ADDR contains '|', which conflicts with the sed delimiter: $STATUS_ADDR"
+    exit 1
+fi
+
 # Substitute the venv path and status addr into the template.
 # The template uses %h for HOME (systemd expands it at runtime), so we only need
 # to override the address when the caller set a non-default TRADINEBOTTE_STATUS_ADDR.
