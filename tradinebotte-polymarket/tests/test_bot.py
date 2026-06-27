@@ -2217,10 +2217,12 @@ class TestBotConfigStrategyFields(unittest.TestCase):
         self.assertAlmostEqual(cfg.grid_lower, 0.0)
         self.assertAlmostEqual(cfg.grid_upper, 0.0)
 
-    def test_state_strategy_is_none_by_default(self):
+    def test_state_strategy_defaults_to_threshold(self):
+        # Plan D step 1: default is the built-in ThresholdStrategy (was None), so the
+        # book-update dispatch is unconditional. main() overrides for grid/swing.
         conn = make_db()
         state = bot.BotState(conn)
-        self.assertIsNone(state.strategy)
+        self.assertIsInstance(state.strategy, bot.ThresholdStrategy)
 
     def test_state_strategy_can_be_set(self):
         cfg = bot.BotConfig()
@@ -3444,6 +3446,43 @@ class TestPersistSnapshot(unittest.TestCase):
         bot._persist_snapshot(state, lambda: called.append(1))
         self.assertEqual(called, [])                  # guard short-circuits the write
         self.assertEqual(state.last_write_ts, 0)      # and never fakes freshness
+
+
+class TestThresholdStrategy(unittest.IsolatedAsyncioTestCase):
+    """Plan D step 1: the Polymarket threshold path is a Strategy peer (ThresholdStrategy),
+    not a special case inside handle_book_update. BotState defaults to it; it delegates to
+    check_signal/check_resolution so the dispatch is strategy-agnostic."""
+
+    def test_botstate_defaults_to_threshold_strategy(self):
+        state = make_state()
+        self.assertIsInstance(state.strategy, bot.ThresholdStrategy)
+        self.assertEqual(state.strategy.STRATEGY_TYPE, "threshold")
+
+    async def test_on_book_update_delegates_signal_then_resolution(self):
+        from unittest.mock import AsyncMock, MagicMock
+        state = make_state()
+        ts = make_token()
+        with patch.object(bot, "check_signal", new=AsyncMock()) as cs, \
+             patch.object(bot, "check_resolution", new=MagicMock()) as cr:
+            await bot.ThresholdStrategy().on_book_update(state, ts, _t_ws=123.0)
+        cs.assert_awaited_once_with(state, ts, _t_ws=123.0)   # signal first, _t_ws threaded
+        cr.assert_called_once_with(state, ts)                 # then resolution
+
+    async def test_dispatch_uses_threshold_by_default(self):
+        # handle_book_update on a known token must still run the threshold path via the
+        # default strategy (behaviour-preserving: dispatch now unconditional).
+        from unittest.mock import AsyncMock, MagicMock
+        state = make_state()
+        state.session = None
+        ts = make_token(token_id="tid")
+        state.tokens["tid"] = ts
+        parsed = {"token_id": "tid", "best_bid": 0.55, "best_ask": 0.56,
+                  "spread": 0.01, "bid_vol": 100.0, "ask_vol": 80.0, "obi": 0.1}
+        with patch.object(bot, "check_signal", new=AsyncMock()) as cs, \
+             patch.object(bot, "check_resolution", new=MagicMock()) as cr:
+            await bot.handle_book_update(state, parsed)
+        cs.assert_awaited_once()
+        cr.assert_called_once()
 
 
 class TestDataPathCoverage(unittest.TestCase):

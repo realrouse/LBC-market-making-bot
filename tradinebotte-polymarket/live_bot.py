@@ -916,9 +916,10 @@ class BotState:
         # Circuit-breaker: suspend new entries after 3 consecutive CLOB failures.
         self.api_fail_streak: int = 0
         self.api_cooldown_until: float = 0.0
-        # Active strategy instance (None = built-in threshold strategy).
-        # Set in main() after make_config() when strategy_type != "threshold".
-        self.strategy: Any = None
+        # Active strategy instance. Defaults to the built-in Polymarket ThresholdStrategy
+        # so the book-update dispatch is unconditional; main() overrides it with a
+        # GridStrategy/SwingStrategy when strategy_type != "threshold".
+        self.strategy: Any = ThresholdStrategy()
         # Rejection counters — reset and logged every 60 s.
         self.rejection_stats = RejectionStats()
         self._last_stats_log: float = time.time()
@@ -996,15 +997,10 @@ async def handle_book_update(state: BotState, parsed: dict[str, Any]) -> None:
     ts.obi       = parsed["obi"]
     ts.last_update_ts = time.time()
     state.last_book_ts = ts.last_update_ts
-    # Dispatch to the active strategy.
-    # state.strategy is None for the built-in threshold strategy (default),
-    # or a GridStrategy/SwingStrategy instance for "grid"/"swing".
-    if state.strategy is not None:
-        await state.strategy.on_book_update(state, ts, _t_ws=t_ws)
-    else:
-        # Default: Polymarket threshold strategy (check_signal / check_resolution).
-        await check_signal(state, ts, _t_ws=t_ws)
-        check_resolution(state, ts)
+    # Dispatch to the active strategy — always set (ThresholdStrategy by default in
+    # BotState; GridStrategy/SwingStrategy for "grid"/"swing"). The threshold path now
+    # lives inside ThresholdStrategy.on_book_update, so this dispatch is strategy-agnostic.
+    await state.strategy.on_book_update(state, ts, _t_ws=t_ws)
     now = time.time()
     if now - ts.last_snapshot_ts >= state.config.snapshot_interval:
         ts.bid_history.append(ts.best_bid)   # smoothing history — kept even when
@@ -1421,6 +1417,30 @@ def close_trade(state: BotState, ts: TokenState, trade_id: int, outcome: str) ->
         pn, roi, state.win_rate, state.capital, duration_s
     )
     write_web_status(state, state.config)
+
+
+class ThresholdStrategy:
+    """Polymarket binary-market threshold strategy: single-entry signal + resolution.
+
+    The default strategy (BotState sets it; used when strategy_type is "threshold" or
+    absent). Stateless — it delegates to the module-level check_signal / check_resolution,
+    which read everything from `state`/`state.config`. This makes the threshold a peer of
+    GridStrategy/SwingStrategy behind one dispatch, so handle_book_update no longer
+    special-cases it (Plan D step 1 — strategy-agnostic dispatch).
+
+    Satisfies strategy_engines.base.Strategy STRUCTURALLY (duck-typed) — deliberately NOT
+    importing/subclassing the Protocol: strategy_engines already imports live_bot, and a
+    top-level import here would harden that cycle into an import-time failure. Explicit
+    conformance waits for the step that moves the protocol to a neutral core package.
+    """
+
+    STRATEGY_TYPE = "threshold"
+
+    async def on_book_update(self, state: "BotState", ts: "TokenState",
+                             _t_ws: Optional[float] = None) -> None:
+        await check_signal(state, ts, _t_ws=_t_ws)
+        check_resolution(state, ts)
+
 
 def save_snapshot(state: BotState, ts: TokenState) -> None:
     """Insert a snapshot row without committing — caller batches commits via handle_book_update."""
