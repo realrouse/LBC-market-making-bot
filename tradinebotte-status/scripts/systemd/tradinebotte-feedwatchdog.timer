@@ -1,0 +1,12 @@
+[Unit]
+Description=tradinebotte — run the feed watchdog every minute
+
+[Timer]
+# First check ~45s after boot, then 60s after each run finishes (no self-overlap).
+OnActiveSec=45s
+OnUnitInactiveSec=60s
+AccuracySec=10s
+Unit=tradinebotte-feedwatchdog.service
+
+[Install]
+WantedBy=timers.target
