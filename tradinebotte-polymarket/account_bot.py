@@ -404,7 +404,7 @@ async def main() -> None:
             state.session = session
             def _hb_payload() -> dict:
                 pnl_total, trades_total = bot.cumulative_pnl(state)
-                return {
+                hb = {
                     "bounds_ok":         state.daily_pnl >= -config.daily_stop_loss,
                     "daily_pnl":         round(state.daily_pnl, 2),
                     "pnl_total":         round(pnl_total, 2),
@@ -413,6 +413,15 @@ async def main() -> None:
                     "open_trades":       len(state.open_trades),
                     "last_feed_msg_ts":  _last_feed_msg_ts,
                 }
+                # Data-recording freshness for the status page ⚠data flag (set by
+                # bot.handle_book_update on each snapshot write). See live_bot._hb_payload.
+                if config.enable_snapshots:
+                    hb["last_write_ts"] = state.last_write_ts
+                return hb
+            # Start the data-freshness clock at boot (see live_bot.main) so a
+            # never-recording restart ages to ⚠data instead of staying silently green.
+            if config.enable_snapshots:
+                state.last_write_ts = time.time()
             _hb_task = asyncio.create_task(
                 heartbeat_loop("account_bot", config.install_dir, _hb_payload, mode=_hb_mode)
             )

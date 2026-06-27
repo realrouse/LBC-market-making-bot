@@ -29,7 +29,7 @@ from collections import deque
 from dataclasses import dataclass, field
 import functools
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 import aiohttp, websockets
 
 # process start epoch — used for uptime display; harmless to capture at import
@@ -909,6 +909,10 @@ class BotState:
         # Batched snapshot commits — flushed every SNAPSHOT_COMMIT_SECS seconds.
         self.last_snapshot_commit_ts: float = 0.0
         self.last_book_ts: float = 0.0       # epoch time of last processed book update
+        self.last_write_ts: float = 0.0      # epoch time of last PERSISTED data row
+                                             # (snapshot). Distinct from last_book_ts
+                                             # (received): catches "heartbeating but
+                                             # recording stopped" via the status page.
         # Circuit-breaker: suspend new entries after 3 consecutive CLOB failures.
         self.api_fail_streak: int = 0
         self.api_cooldown_until: float = 0.0
@@ -1003,13 +1007,9 @@ async def handle_book_update(state: BotState, parsed: dict[str, Any]) -> None:
         check_resolution(state, ts)
     now = time.time()
     if now - ts.last_snapshot_ts >= state.config.snapshot_interval:
-        ts.bid_history.append(ts.best_bid)
-        ts.obi_history.append(ts.obi)
-        if state.config.enable_snapshots:
-            save_snapshot(state, ts)
-            if now - state.last_snapshot_commit_ts >= SNAPSHOT_COMMIT_SECS:
-                state.conn.commit()
-                state.last_snapshot_commit_ts = now
+        ts.bid_history.append(ts.best_bid)   # smoothing history — kept even when
+        ts.obi_history.append(ts.obi)        # snapshots are disabled (strategy input)
+        _persist_snapshot(state, lambda: save_snapshot(state, ts))
         ts.last_snapshot_ts = now
 
 
@@ -1433,6 +1433,50 @@ def save_snapshot(state: BotState, ts: TokenState) -> None:
          1 if ts.market_id in state.open_trades else 0)
     )
 
+
+def save_cex_snapshot(state: BotState, symbol: str, book: Any) -> None:
+    """Insert a CEX book snapshot (grid/swing consumer mode) without committing.
+
+    cex_feed_consumer_loop bypasses handle_book_update — and hence save_snapshot — so
+    CEX bots need their own writer. The snapshots table is polymarket-shaped, so reuse
+    it with the same placeholders the pre-data-plane direct-WS path wrote
+    (market_id=token_id=symbol, direction='UP', secs_remaining=9999.0, has_open_trade=0),
+    keeping the rows readable by backtest_grid / backtest_swing_dca and aligned with the
+    historical CEX snapshots collected before 2026-06-16."""
+    state.conn.execute(
+        "INSERT INTO snapshots (ts_ms, market_id, token_id, direction, "
+        "secs_remaining, best_bid, best_ask, spread, ask_vol, obi, has_open_trade) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (int(time.time() * 1000), symbol, symbol, "UP", 9999.0,
+         book.best_bid, book.best_ask, book.spread, book.ask_vol, book.obi, 0)
+    )
+
+
+def _persist_snapshot(state: BotState, row_writer: Callable[[], None]) -> None:
+    """The single shared snapshot-persistence step — invoked by EVERY data path.
+
+    Honours the enable-snapshots guard, writes one row (its shape delegated to
+    `row_writer`: save_snapshot for the polymarket/WS path, save_cex_snapshot for the
+    CEX consumer), advances the data-freshness clock (state.last_write_ts → status
+    ⚠data), and batch-commits every SNAPSHOT_COMMIT_SECS. Callers own only their cadence
+    gate (per-token for WS, per-loop for CEX).
+
+    Persistence used to be a side-effect buried inside handle_book_update; the
+    2026-06-16 CEX path bypassed that function and silently stopped recording. This
+    extraction does NOT by itself prevent that — a path that bypasses _persist_snapshot
+    too would record silently again. What it does: give every data path one named,
+    enable-guarded, tested step to call instead of a hidden side-effect. The actual
+    safety net for a silent recording-stop is the status ⚠data monitor (it flags a
+    stale last_write_ts regardless of which path dropped the write)."""
+    if not state.config.enable_snapshots:
+        return
+    row_writer()
+    now = time.time()
+    state.last_write_ts = now
+    if now - state.last_snapshot_commit_ts >= SNAPSHOT_COMMIT_SECS:
+        state.conn.commit()
+        state.last_snapshot_commit_ts = now
+
 # ─── MARKET DISCOVERY ─────────────────────────────────────────────────────────
 
 def purge_expired_markets(state: BotState) -> int:
@@ -1762,6 +1806,7 @@ async def cex_feed_consumer_loop(state: BotState, feed_addr: str, symbol: str,
     logger.info("Data source: shared CEX feed %s exchange=%s symbol=%s (consumer mode — no direct WS)",
                 feed_addr, exchange or "any", symbol)
     last_msg = time.time()
+    last_snap = 0.0
     try:
         while True:
             try:
@@ -1783,6 +1828,13 @@ async def cex_feed_consumer_loop(state: BotState, feed_addr: str, symbol: str,
             state.last_book_ts = time.time()
             if state.strategy is not None:
                 await state.strategy.on_book_update(state, ts)
+            # Record a snapshot via the shared persistence step — this loop bypasses
+            # handle_book_update, so it calls _persist_snapshot itself (the same named
+            # step the WS path uses); only the per-loop cadence gate lives here.
+            now = time.time()
+            if now - last_snap >= state.config.snapshot_interval:
+                _persist_snapshot(state, lambda: save_cex_snapshot(state, symbol, ts))
+                last_snap = now
     finally:
         sock.close(linger=0)
         ctx.term()
@@ -1886,7 +1938,7 @@ async def main() -> None:
                 await state.strategy.restore_from_db(state)
             def _hb_payload() -> dict[str, Any]:
                 pnl_total, trades_total = cumulative_pnl(state)
-                return {
+                hb: dict[str, Any] = {
                     "bounds_ok":    state.daily_pnl >= -config.daily_stop_loss,
                     "daily_pnl":    round(state.daily_pnl, 2),
                     "pnl_total":    round(pnl_total, 2),
@@ -1895,6 +1947,20 @@ async def main() -> None:
                     "open_trades":  len(state.open_trades),
                     "last_book_ts": state.last_book_ts,
                 }
+                # Data-recording freshness: lets the status page flag "bot heartbeats
+                # but its snapshots table stopped growing" (the 2026-06-16 CEX bug) —
+                # distinct from last_book_ts, which is data RECEIVED, not PERSISTED.
+                # Omitted when snapshots are disabled so --no-snapshots bots never alarm.
+                if config.enable_snapshots:
+                    hb["last_write_ts"] = state.last_write_ts
+                return hb
+
+            # Start the data-freshness clock at boot: a recorder that never writes then
+            # ages to ⚠data after _DATA_STALE_AFTER (catches "booted in a non-writing
+            # mode" — the post-restart shape of the 06-16 bug) with no false blip on
+            # every restart; a healthy recorder advances it on its first write.
+            if config.enable_snapshots:
+                state.last_write_ts = time.time()
 
             _hb_task = asyncio.create_task(
                 heartbeat_loop(

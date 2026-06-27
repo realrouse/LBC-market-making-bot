@@ -62,5 +62,44 @@ class TestOrderbookBotRendering(unittest.TestCase):
         self.assertEqual(g._key_metric("orderbook_bot", {}), "")
 
 
+class TestDataFreshness(unittest.TestCase):
+    """Regression guard for the 2026-06-16 silent-recording bug: a bot can heartbeat
+    fine while its data table stops growing. last_write_ts drives the ⚠data flag."""
+
+    def test_data_flag_stale_when_last_write_old(self):
+        stale = {"last_write_ts": _NOW - (g._DATA_STALE_AFTER + 100)}
+        self.assertEqual(g._data_flag(stale, _NOW), "STALE")
+
+    def test_data_flag_ok_when_last_write_recent(self):
+        fresh = {"last_write_ts": _NOW - 30}
+        self.assertEqual(g._data_flag(fresh, _NOW), "")
+
+    def test_data_flag_absent_field_never_alarms(self):
+        # infra services / --no-snapshots bots OMIT last_write_ts → no false alarm
+        self.assertEqual(g._data_flag({}, _NOW), "")
+
+    def test_data_flag_zero_means_booted_but_never_wrote_alarms(self):
+        # present-but-0.0 = bot claims to record but has written nothing (post-restart
+        # repro of the 06-16 bug). Must alarm — this is the case the monitor exists for.
+        self.assertEqual(g._data_flag({"last_write_ts": 0}, _NOW), "STALE")
+
+    def test_summary_marks_stale_data_for_recording_bots(self):
+        out = g._render_payload_summary(
+            "swing_bot",
+            {"pnl_total": 1.0, "last_book_ts": _NOW - 5,
+             "last_write_ts": _NOW - (g._DATA_STALE_AFTER + 100)},
+            _NOW)
+        self.assertIn("data=", out)
+        self.assertIn("⚠", out)          # stale marker present
+        self.assertIn("book=", out)      # book (received) still shown separately
+
+    def test_summary_fresh_data_has_no_warning(self):
+        out = g._render_payload_summary(
+            "grid_bot",
+            {"pnl_total": 1.0, "last_write_ts": _NOW - 30}, _NOW)
+        self.assertIn("data=", out)
+        self.assertNotIn("⚠", out)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -212,6 +212,26 @@ def _collect_account(user: str, password: str, server: str, port: int) -> dict:
 _STALE_AFTER = int(os.environ.get("HEARTBEAT_STALE_S", 240))
 _DEAD_AFTER  = int(os.environ.get("HEARTBEAT_DEAD_S",  600))
 
+# Data-recording freshness. A bot can heartbeat fine (ALIVE) while its time-series
+# table stops growing — the 2026-06-16 CEX snapshots bug hid for 10 days exactly this
+# way. Bots report last_write_ts (epoch of last PERSISTED data row); if it falls behind
+# this many seconds the page flags ⚠data, independently of the heartbeat flag. Generous
+# default (snapshots are written ~1/s, so 10 min behind is unambiguous, not flapping).
+_DATA_STALE_AFTER = int(os.environ.get("DATA_STALE_S", 600))
+
+
+def _data_flag(payload: dict, now: int) -> str:
+    """"STALE" if the bot's data table stopped growing, else "".
+
+    last_write_ts ABSENT → infra service / snapshots disabled → never alarms.
+    last_write_ts == 0.0 (present) → bot claims to record but has written NOTHING →
+    must alarm: that's the post-restart reproduction of the 2026-06-16 bug (the bot
+    boots in a mode that never writes). So test `is None`, not falsiness."""
+    wts = payload.get("last_write_ts")
+    if wts is None:
+        return ""
+    return "STALE" if now - int(wts) > _DATA_STALE_AFTER else ""
+
 
 def _classify_heartbeats(raw_rows: list, user_to_label: dict) -> list:
     now = int(time.time())
@@ -461,7 +481,11 @@ def _render_payload_summary(bot_name: str, payload: dict, now: int) -> str:
         age = now - int(ts)
         if age < 120:
             return f"{age}s ago"
-        return f"{age // 60}min ago"
+        if age < 7200:
+            return f"{age // 60}min ago"
+        if age < 172800:
+            return f"{age // 3600}h ago"
+        return f"{age // 86400}d ago"
 
     parts = []
     if bot_name in ("live_bot", "grid_bot", "swing_bot"):
@@ -535,6 +559,14 @@ def _render_payload_summary(bot_name: str, payload: dict, now: int) -> str:
         if ts:
             parts.append(f"pub={_ago(ts)}")
 
+    # Data-recording freshness — uniform across every family that persists a
+    # time-series table (snapshots / accum_snapshots / …). ⚠ when the table has
+    # stopped growing while the bot still heartbeats (the 2026-06-16 failure mode).
+    wts = payload.get("last_write_ts")
+    if wts is not None:
+        mark = " ⚠" if now - int(wts) > _DATA_STALE_AFTER else ""
+        parts.append(f"data={_ago(wts)}{mark}")
+
     return " · ".join(parts) if parts else "—"
 
 
@@ -582,6 +614,12 @@ def _render_heartbeat_pills(hb_rows: list) -> str:
         bounds_ok = r["bounds_ok"]
         bounds_warn = bounds_ok not in ("ok", "-", "")
         mode = _mode_badge(acct_short, bot)
+        data_warn = _data_flag(r.get("payload", {}), now)
+        data_badge = (
+            "<span class='badge stale' style='font-size:.63em' "
+            "title='data table not growing — bot heartbeats but stopped recording'>"
+            "⚠data</span>" if data_warn else ""
+        )
         km_cls = ""
         if km.startswith("+"):
             km_cls = " pnl-pos"
@@ -603,6 +641,7 @@ def _render_heartbeat_pills(hb_rows: list) -> str:
         pills += (
             f"<div class='bot-pill tt'>"
             f"<span class='badge {flag}' style='font-size:.63em'>{r['flag']}</span>"
+            f"{data_badge}"
             f"{mode}"
             f"<span class='pill-name'>{escape(bot)}</span>"
             f"<span class='pill-acct'>{escape(acct_short)}</span>"

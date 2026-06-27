@@ -208,6 +208,7 @@ class AccumState:
     pending_rebuys:     list  = field(default_factory=list)
     active_bands:       set   = field(default_factory=set)
     snap_counter:       int   = 0
+    last_write_ts:      float = 0.0   # epoch secs of last accum_snapshots row (status ⚠data)
     total_realized:     float = 0.0
     peak_holdings_btc:  float = 0.0
     # VWAP context
@@ -643,6 +644,7 @@ async def _handle_indicator(state: AccumState, db: sqlite3.Connection,
             (ts_ms, float(mid), state.holdings_btc, state.avg_entry or 0.0,
              invested, state.free_usdt, state.unrealized_pct(), state.obi_ema))
         db.commit()
+        state.last_write_ts = ts_ms / 1000.0
 
     price = float(mid)
 
@@ -875,6 +877,8 @@ async def _run(p: dict, db: sqlite3.Connection, install_dir: str = "") -> None:
                 # status page reads one key across all bots. Persisted +
                 # restored at boot → survives restarts.
                 "pnl_total":      round(state.total_realized, 2),
+                # Data-recording freshness for the status ⚠data flag (accum_snapshots).
+                "last_write_ts":  state.last_write_ts,
             }
 
         def _reset_handler(cmd_args: dict) -> dict:
@@ -889,6 +893,9 @@ async def _run(p: dict, db: sqlite3.Connection, install_dir: str = "") -> None:
             asyncio.get_running_loop().call_later(0.5, os._exit, 1)
             return {"capital": cap, "wiped_on_restart": True, "restart_in_s": 30}
 
+        # Start the data-freshness clock at boot (see live_bot.main) so a
+        # never-recording restart ages to ⚠data instead of staying silently green.
+        state.last_write_ts = time.time()
         tasks = [
             asyncio.create_task(_zmq_loop(state, db)),
             asyncio.create_task(_stats_loop(state)),

@@ -968,6 +968,8 @@ class TestHandleBookUpdate(unittest.IsolatedAsyncioTestCase):
         await bot.handle_book_update(self.state, parsed)
         self.assertAlmostEqual(ts.best_bid, 0.55)
         self.assertAlmostEqual(ts.ask_vol, 80.0)
+        # snapshot persisted → data-freshness clock advances (status page ⚠data signal)
+        self.assertGreater(self.state.last_write_ts, 0)
 
     async def test_unknown_token_ignored(self):
         parsed = {"token_id": "unknown", "best_bid": 0.97, "best_ask": 0.975,
@@ -3422,6 +3424,105 @@ class TestFeedConsumer(unittest.TestCase):
 
     def test_data_source_defaults_to_ws(self):
         self.assertEqual(bot.BotConfig().data_source, "ws")
+
+
+class TestPersistSnapshot(unittest.TestCase):
+    """The single shared persistence step both data paths converge on (Phase 2):
+    enable-guard + write delegation + data-freshness clock."""
+
+    def test_writes_and_advances_freshness_when_enabled(self):
+        state = make_state()
+        called = []
+        bot._persist_snapshot(state, lambda: called.append(1))
+        self.assertEqual(called, [1])                 # row_writer was invoked
+        self.assertGreater(state.last_write_ts, 0)    # freshness clock advanced
+
+    def test_noop_when_snapshots_disabled(self):
+        state = make_state()
+        state.config.enable_snapshots = False
+        called = []
+        bot._persist_snapshot(state, lambda: called.append(1))
+        self.assertEqual(called, [])                  # guard short-circuits the write
+        self.assertEqual(state.last_write_ts, 0)      # and never fakes freshness
+
+
+class TestCexFeedSnapshots(unittest.IsolatedAsyncioTestCase):
+    """Regression: cex_feed_consumer_loop must persist book snapshots (it bypasses
+    handle_book_update, which is the only other place snapshots are written). Before
+    this was fixed the CEX grid/swing bots wrote zero snapshots in consumer mode."""
+
+    def _book(self, symbol="BTCUSDT", exchange="binance", **kw):
+        d = dict(t="book", exchange=exchange, symbol=symbol,
+                 best_bid=60000.0, best_ask=60000.01, spread=0.01,
+                 bid_vol=1.0, ask_vol=2.0, obi=-0.3)
+        d.update(kw)
+        return d
+
+    def test_save_cex_snapshot_row_shape(self):
+        """CEX snapshot reuses the polymarket-shaped table with the historical placeholders."""
+        state = make_state()
+        book = SimpleNamespace(best_bid=60000.0, best_ask=60000.01, spread=0.01,
+                               ask_vol=2.0, obi=-0.3)
+        bot.save_cex_snapshot(state, "BTC_USDT", book)
+        state.conn.commit()
+        row = state.conn.execute(
+            "SELECT market_id, token_id, direction, secs_remaining, best_bid, "
+            "best_ask, spread, ask_vol, obi, has_open_trade FROM snapshots").fetchone()
+        self.assertEqual(
+            row, ("BTC_USDT", "BTC_USDT", "UP", 9999.0,
+                  60000.0, 60000.01, 0.01, 2.0, -0.3, 0))
+
+    async def _run_loop(self, state, msgs, symbol="BTCUSDT", exchange="binance"):
+        """Drive cex_feed_consumer_loop over a fake socket that yields `msgs` then stops."""
+        class _Stop(Exception):
+            pass
+        q = list(msgs)
+
+        async def recv_json():
+            if not q:
+                raise _Stop()
+            return q.pop(0)
+
+        sock = SimpleNamespace(recv_json=recv_json, close=lambda **kw: None)
+
+        async def on_book_update(st, ts, **kw):
+            pass
+        state.strategy = SimpleNamespace(on_book_update=on_book_update)
+
+        with patch.object(bot, "make_sub", return_value=sock), \
+             patch("zmq.asyncio.Context", return_value=SimpleNamespace(term=lambda: None)):
+            with self.assertRaises(_Stop):
+                await bot.cex_feed_consumer_loop(state, "tcp://x", symbol, exchange)
+        state.conn.commit()
+
+    def _count(self, state):
+        return state.conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
+
+    async def test_loop_writes_one_snapshot_per_book(self):
+        state = make_state()
+        state.config.snapshot_interval = 0          # no interval gating in this test
+        await self._run_loop(state, [self._book(), self._book()])
+        self.assertEqual(self._count(state), 2)
+        self.assertGreater(state.last_write_ts, 0)   # data-freshness clock advanced
+
+    async def test_loop_respects_enable_snapshots_false(self):
+        state = make_state()
+        state.config.enable_snapshots = False
+        state.config.snapshot_interval = 0
+        await self._run_loop(state, [self._book(), self._book()])
+        self.assertEqual(self._count(state), 0)
+        self.assertEqual(state.last_write_ts, 0)     # nothing persisted → no false freshness
+
+    async def test_loop_skips_filtered_messages(self):
+        state = make_state()
+        state.config.snapshot_interval = 0
+        await self._run_loop(
+            state,
+            [self._book(symbol="ETHUSDT"),     # wrong symbol → skipped
+             self._book(exchange="mexc"),      # wrong exchange → skipped
+             self._book()],                    # match → 1 snapshot
+            symbol="BTCUSDT", exchange="binance")
+        self.assertEqual(self._count(state), 1)
 
 
 if __name__ == "__main__":
