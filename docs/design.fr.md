@@ -343,6 +343,15 @@ async def heartbeat_loop(
 | `status` | string | Toujours `"running"` (futur : `"degraded"`, `"stopping"`) |
 | `bounds_ok` | bool\|null | Optionnel ; défini par les bots qui suivent les bornes de paramètres |
 
+Les bots fusionnent aussi des **champs extra spécifiques à leur famille** dans le payload
+(transportés tels quels dans le blob JSON `payload` stocké, pas en colonnes dédiées),
+p. ex. `pnl_total`, `daily_pnl`, `capital`, `open_trades`, `last_book_ts` (dernier book
+*reçu*). La status page les lit depuis le blob.
+
+| Champ extra | Type | Description |
+|---|---|---|
+| `last_write_ts` | float | Epoch (secondes) de la dernière ligne de données **persistée** par le bot (snapshot / accum_snapshot) — distinct de `last_book_ts` (reçu). La status page lève `⚠data` quand il prend du retard au-delà de `DATA_STALE_S` (défaut 600s) alors que le bot bat encore — détecte « vivant mais enregistrement arrêté ». Omis par les bots qui n'enregistrent pas (infra) ou tournent snapshots désactivés, pour qu'ils n'alarment jamais ; présent-mais-`0.0` = « démarré, jamais écrit » et alarme. |
+
 ### Schéma de heartbeat.db
 
 ```sql

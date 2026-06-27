@@ -16,6 +16,7 @@
 - [Règles de sécurité](#règles-de-sécurité)
 - [Ajouter un adaptateur d'exchange](#ajouter-un-adaptateur-dexchange)
 - [Ajouter un moteur de stratégie](#ajouter-un-moteur-de-stratégie)
+- [Modifier du code partagé : la règle de symétrie](#modifier-du-code-partagé--la-règle-de-symétrie)
 
 ---
 
@@ -308,3 +309,46 @@ git config core.hooksPath .git-hooks
 3. Ajouter des tests dans `tradinebotte-cex/tests/test_strategy_engines.py` couvrant la logique d'entrée, de sortie, le SL/TP et la restauration d'état au redémarrage.
 
 4. Si la stratégie consomme des données d'indicateurs, souscrire au ZMQ PUB de `indicators.py` — voir `docs/design.fr.md` pour le format des messages.
+
+## Modifier du code partagé : la règle de symétrie
+
+Aucune famille de stratégie n'est « principale ». Polymarket (threshold/grid), les
+grid/swing CEX et l'accumulation sont des **pairs**. Une conséquence n'est pas évidente :
+`live_bot.py` vit sous `tradinebotte-polymarket/` mais c'est l'entrypoint **universel** —
+il exécute aussi les stratégies grid/swing CEX (sélectionnées par `strategy_type` /
+`connector`). Plusieurs effets de bord sont couplés à ses fonctions partagées ; par
+exemple, la persistance des snapshots vivait *à l'intérieur* de `handle_book_update`.
+
+C'est exactement ainsi qu'est apparu le bug d'enregistrement silencieux du 2026-06-16 :
+une nouvelle boucle consommatrice CEX (`cex_feed_consumer_loop`) a contourné
+`handle_book_update` pour de bonnes raisons (elle n'a pas besoin du bookkeeping de tokens
+Polymarket) et a **silencieusement supprimé l'effet de bord de persistance des
+snapshots** qui s'y trouvait — et aucun test ne l'a attrapé, parce que cet effet de bord
+n'était exercé que sur le chemin Polymarket. Les bots continuaient à battre ; seule une
+table de fond a cessé de grossir, pendant ~10 jours.
+
+**La règle :** avant de merger une modification de code partagé entre familles, énumérer
+*chaque* effet de bord de la fonction modifiée ou contournée, et le vérifier **pour
+toutes les familles** — pas seulement celle sur laquelle on travaille. Quand on contourne
+une fonction partagée, revérifier ce qu'elle faisait *d'autre* et recréer ou tester les
+parties encore nécessaires.
+
+Checklist pour tout chemin consommateur de données nouveau ou modifié / fonction
+partagée du hot-path :
+
+- [ ] **Snapshots persistés ?** Faire passer l'écriture par l'étape partagée
+      (`_persist_snapshot` dans `live_bot.py`, `_record_accum_snapshot` dans
+      `accumulation_bot.py`) — ne pas inliner un `INSERT` nu.
+- [ ] **Horloge de fraîcheur avancée ?** Mettre à jour `last_write_ts` à chaque ligne
+      persistée. Le badge `⚠data` de la status page en dépend — un bot qui enregistre
+      mais ne la met jamais à jour (ou qui n'enregistre rien) doit apparaître stale, pas
+      silencieux.
+- [ ] **Trades / état de stratégie** écrits dans le ledger de cette famille (`trades`,
+      `grid_levels`, `swing_orders`, `accum_trades`, …) ?
+- [ ] **PnL cumulé** exporté sur le heartbeat (`pnl_total`) ?
+- [ ] **Un test pour chacun des points ci-dessus, pour CETTE famille.** Voir
+      `docs/test_coverage_matrix.md` pour la grille actuelle et les trous. Le garde
+      structurel `tradinebotte-polymarket/tests/test_bot.py::TestDataPathCoverage` fait
+      échouer toute boucle consommatrice `live_bot` qui pilote une stratégie sans
+      persister de snapshot — l'étendre (ou ajouter un équivalent) en ajoutant un
+      consommateur ailleurs.

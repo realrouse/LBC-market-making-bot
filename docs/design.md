@@ -337,6 +337,15 @@ async def heartbeat_loop(
 | `status` | string | Always `"running"` (future: `"degraded"`, `"stopping"`) |
 | `bounds_ok` | bool\|null | Optional; set by bots that track strategy parameter bounds |
 
+Bots also merge **family-specific extra fields** into the payload (carried verbatim in the
+stored `payload` JSON blob, not as dedicated columns), e.g. `pnl_total`, `daily_pnl`,
+`capital`, `open_trades`, `last_book_ts` (last book *received*). The status page reads
+these from the blob.
+
+| Extra field | Type | Description |
+|---|---|---|
+| `last_write_ts` | float | Epoch (seconds) of the last data row the bot **persisted** (snapshot / accum_snapshot) — distinct from `last_book_ts` (received). The status page flags `⚠data` when it falls behind `DATA_STALE_S` (default 600s) while the bot still heartbeats — catching "alive but recording stopped". Omitted by bots that don't record (infra) or run with snapshots disabled, so they never alarm; present-but-`0.0` means "started, never wrote" and alarms. |
+
 ### heartbeat.db schema
 
 ```sql
