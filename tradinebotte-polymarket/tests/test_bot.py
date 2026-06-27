@@ -3446,6 +3446,49 @@ class TestPersistSnapshot(unittest.TestCase):
         self.assertEqual(state.last_write_ts, 0)      # and never fakes freshness
 
 
+class TestDataPathCoverage(unittest.TestCase):
+    """Structural guard against the 2026-06-16 bug class. That bug shipped because a new
+    data-consumer loop (cex_feed_consumer_loop) drove a strategy but never persisted a
+    snapshot — and no test caught it. This inspects live_bot's source: every function
+    that drives a strategy from book updates (calls on_book_update) MUST also reach a
+    snapshot-persistence call. A future consumer that forgets persistence fails here, at
+    test time — the runtime ⚠data monitor is only the second line of defence."""
+
+    _PERSIST = {"_persist_snapshot", "save_snapshot", "save_cex_snapshot"}
+
+    def test_every_book_consumer_persists_a_snapshot(self):
+        import ast
+        import inspect
+        tree = ast.parse(inspect.getsource(bot))
+        offenders = []
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)):
+                continue
+            called = set()
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Call):
+                    fn = sub.func
+                    if isinstance(fn, ast.Attribute):
+                        called.add(fn.attr)
+                    elif isinstance(fn, ast.Name):
+                        called.add(fn.id)
+            if "on_book_update" in called and not (called & self._PERSIST):
+                offenders.append(node.name)
+        self.assertEqual(
+            offenders, [],
+            "live_bot function(s) drive a strategy (on_book_update) but never persist a "
+            f"snapshot — the 2026-06-16 silent-recording bug shape: {offenders}. "
+            "Route the write through _persist_snapshot.")
+
+    def test_guard_is_wired_to_the_real_consumers(self):
+        # Sanity: the guard actually has something to check (catches a future refactor
+        # that renames on_book_update and silently makes the guard vacuous).
+        import inspect
+        src = inspect.getsource(bot)
+        self.assertIn("on_book_update", src)
+        self.assertGreaterEqual(src.count("_persist_snapshot"), 3)  # def + 2 call sites
+
+
 class TestCexFeedSnapshots(unittest.IsolatedAsyncioTestCase):
     """Regression: cex_feed_consumer_loop must persist book snapshots (it bypasses
     handle_book_update, which is the only other place snapshots are written). Before

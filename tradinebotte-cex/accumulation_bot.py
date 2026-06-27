@@ -615,6 +615,24 @@ def _handle_4h(state: AccumState, msg: dict) -> None:
     logger.debug("4h RSI: %.1f", state.rsi_4h)
 
 
+def _record_accum_snapshot(state: AccumState, db: sqlite3.Connection,
+                           mid: float, ts_ms: int) -> None:
+    """Persist one accum_snapshots row and advance the data-freshness clock
+    (state.last_write_ts → status ⚠data). Named, tested step — same rationale as
+    live_bot._persist_snapshot: keep the freshness clock from being silently skipped by
+    a future caller, and make the write unit-testable without the trading logic."""
+    invested = state.holdings_btc * state.avg_entry if state.avg_entry > 0 else 0.0
+    db.execute("""
+        INSERT INTO accum_snapshots
+            (ts_ms, price, holdings_btc, avg_entry, invested_usdt,
+             free_usdt, unrealized_pct, obi_ema)
+        VALUES (?,?,?,?,?,?,?,?)""",
+        (ts_ms, float(mid), state.holdings_btc, state.avg_entry or 0.0,
+         invested, state.free_usdt, state.unrealized_pct(), state.obi_ema))
+    db.commit()
+    state.last_write_ts = ts_ms / 1000.0
+
+
 async def _handle_indicator(state: AccumState, db: sqlite3.Connection,
                              msg: dict, ts_ms: int) -> None:
     mid = msg.get("mid")
@@ -635,16 +653,7 @@ async def _handle_indicator(state: AccumState, db: sqlite3.Connection,
 
     state.snap_counter += 1
     if state.snap_counter % state.p["snapshot_every_n"] == 0:
-        invested = state.holdings_btc * state.avg_entry if state.avg_entry > 0 else 0.0
-        db.execute("""
-            INSERT INTO accum_snapshots
-                (ts_ms, price, holdings_btc, avg_entry, invested_usdt,
-                 free_usdt, unrealized_pct, obi_ema)
-            VALUES (?,?,?,?,?,?,?,?)""",
-            (ts_ms, float(mid), state.holdings_btc, state.avg_entry or 0.0,
-             invested, state.free_usdt, state.unrealized_pct(), state.obi_ema))
-        db.commit()
-        state.last_write_ts = ts_ms / 1000.0
+        _record_accum_snapshot(state, db, float(mid), ts_ms)
 
     price = float(mid)
 
