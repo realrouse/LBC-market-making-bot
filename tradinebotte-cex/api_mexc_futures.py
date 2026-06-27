@@ -221,7 +221,8 @@ def parse_book_update(msg):
 async def get_markets(session, symbol=DEFAULT_SYMBOL, **_):
     """
     Fetch current order book ticker for the given symbol from MEXC Futures REST.
-    Returns a list with one normalized market dict.
+    Returns a 1-element list with the normalized market dict on success, or None on an
+    API/network error (callers distinguish failure from data via `is None`).
     """
     _sym = symbol.split(":")[0]
     try:
@@ -232,7 +233,7 @@ async def get_markets(session, symbol=DEFAULT_SYMBOL, **_):
         ) as resp:
             if resp.status != 200:
                 logger.warning("MEXC Futures get_markets error %d [symbol=%s]", resp.status, _sym)
-                return []
+                return None   # error sentinel — not [] ("ran fine, no data")
             outer = await resp.json(content_type=None)
         raw = outer.get("data") or {}
         return [{
@@ -243,7 +244,7 @@ async def get_markets(session, symbol=DEFAULT_SYMBOL, **_):
         }]
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.warning("MEXC Futures get_markets error [symbol=%s]: %s", _sym, e)
-        return []
+        return None   # error sentinel — not [] ("ran fine, no data")
 
 
 # ── ORDER PLACEMENT ───────────────────────────────────────────────────────────

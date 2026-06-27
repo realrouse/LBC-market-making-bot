@@ -1572,6 +1572,11 @@ async def _market_refresh_loop(state: BotState, session: aiohttp.ClientSession, 
                 tag_id=state.config.market_tag_id,
                 window_minutes=state.config.market_window_mins,
             )
+            if nm is None:
+                # API/network error (not an empty window) — keep current tokens, retry
+                # next cycle. get_markets used to mask this as [], silently dropping markets.
+                logger.warning("Market refresh: get_markets API error — keeping current tokens")
+                continue
             ni = []
             for m in nm:
                 ni.extend(register_market(state, m))
@@ -1607,8 +1612,14 @@ async def _run_ws(state: BotState, session: aiohttp.ClientSession) -> None:
         tag_id=state.config.market_tag_id,
         window_minutes=state.config.market_window_mins,
     )
+    if markets is None:
+        # API/network error — distinct from an empty window. Retry soon (don't treat a
+        # failure as "no markets"; `is None` not falsiness, which would collide with []).
+        logger.warning("get_markets API error — retrying shortly")
+        await asyncio.sleep(5)
+        return
     if not markets:
-        logger.warning("No markets — waiting 30s")
+        logger.warning("No markets in window — waiting 30s")
         await asyncio.sleep(30)
         return
 

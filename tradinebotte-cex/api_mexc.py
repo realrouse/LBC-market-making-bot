@@ -173,7 +173,8 @@ def _parse_pb_depth(raw):
 async def get_markets(session, symbol=DEFAULT_SYMBOL, **_):
     """
     Fetch the current order book ticker for the given symbol from MEXC REST.
-    Returns a list with one normalized market dict.
+    Returns a 1-element list with the normalized market dict on success, or None on an
+    API/network error (callers distinguish failure from data via `is None`).
     """
     try:
         async with session.get(
@@ -183,7 +184,7 @@ async def get_markets(session, symbol=DEFAULT_SYMBOL, **_):
         ) as resp:
             if resp.status != 200:
                 logger.warning("MEXC get_markets error %d [symbol=%s]", resp.status, symbol)
-                return []
+                return None   # error sentinel — not [] ("ran fine, no data")
             # content_type=None: bypass aiohttp's MIME check — some APIs omit charset
             data = await resp.json(content_type=None)
         return [{
@@ -196,7 +197,7 @@ async def get_markets(session, symbol=DEFAULT_SYMBOL, **_):
         }]
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.warning("MEXC get_markets fetch error [symbol=%s]: %s", symbol, e)
-        return []
+        return None   # error sentinel — not [] ("ran fine, no data")
 
 
 # ─── ORDER PLACEMENT ──────────────────────────────────────────────────────────

@@ -1110,5 +1110,59 @@ class TestMexcFuturesSubscribe(unittest.TestCase):
         self.assertEqual(msg["param"]["symbol"], "BTC_USDT")
 
 
+# ── get_markets error sentinel (B1) ───────────────────────────────────────────
+
+class _Resp:
+    def __init__(self, status, payload): self.status = status; self._payload = payload
+    async def __aenter__(self): return self
+    async def __aexit__(self, *a): return False
+    async def json(self, **k): return self._payload
+
+
+class _Session:
+    """Minimal async stand-in for aiohttp.ClientSession.get()."""
+    def __init__(self, *, status=200, payload=None, exc=None):
+        self._status, self._payload, self._exc = status, payload, exc
+    def get(self, *a, **k):
+        if self._exc:
+            raise self._exc
+        return _Resp(self._status, self._payload)
+
+
+class TestGetMarketsErrorSentinel(unittest.IsolatedAsyncioTestCase):
+    """B1: get_markets returns None on API/network error — distinct from [] (a request
+    that ran fine but found no market). Masking errors as [] made the feed stall silently;
+    every connector now uses the sentinel so callers can tell failure from no-data."""
+
+    _MODS = {"binance": binance, "mexc": mexc, "mexc_futures": mexc_futures,
+             "bitstamp": bitstamp, "poly": poly}
+
+    def _call(self, mod, session):
+        # poly's market args are keyword-only; the CEX ones take symbol positionally
+        return mod.get_markets(session, tag_id=1) if mod is poly else mod.get_markets(session)
+
+    async def test_http_error_returns_none(self):
+        for name, mod in self._MODS.items():
+            with self.subTest(name):
+                self.assertIsNone(await self._call(mod, _Session(status=500)))
+
+    async def test_exception_returns_none(self):
+        for name, mod in self._MODS.items():
+            with self.subTest(name):
+                self.assertIsNone(await self._call(mod, _Session(exc=RuntimeError("boom"))))
+
+    async def test_poly_empty_window_is_empty_list_not_none(self):
+        # the load-bearing distinction: a successful-but-empty result must stay [], not None
+        r = await poly.get_markets(_Session(status=200, payload=[]), tag_id=1)
+        self.assertEqual(r, [])
+
+    async def test_cex_success_returns_nonempty_list(self):
+        r = await binance.get_markets(
+            _Session(status=200, payload={"bidPrice": "100", "askPrice": "101",
+                                          "bidQty": "1", "askQty": "1"}))
+        self.assertIsInstance(r, list)
+        self.assertEqual(len(r), 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

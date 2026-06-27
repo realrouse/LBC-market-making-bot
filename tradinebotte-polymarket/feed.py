@@ -65,6 +65,11 @@ token_meta: dict[str, str] = {}             # token_id  → market_id
 _ws_connected: bool = False
 _last_book_ts: float = 0.0
 _msgs_total: int = 0
+# Consecutive get_markets() API errors (None return). main() recreates the aiohttp
+# session after SESSION_RECREATE_AFTER of these — the likely-degraded resource behind a
+# silent "No markets" stall. (Persistent failure beyond that is the feed-watchdog's job.)
+_api_error_streak: int = 0
+SESSION_RECREATE_AFTER = 5
 
 
 def _parse_args() -> argparse.Namespace:
@@ -133,6 +138,11 @@ async def _market_refresh(sock: zmq.asyncio.Socket,
             if VERBOSE:
                 logger.debug("[REFRESH] polling Gamma API...")
             markets = await api.get_markets(session, tag_id=MARKET_TAG_ID, window_minutes=MARKET_WINDOW)
+            if markets is None:
+                # API/network error (not an empty window) — keep current subscriptions,
+                # try again next cycle. Do NOT purge: a transient error must not drop tokens.
+                logger.warning("[REFRESH] get_markets API error — keeping current tokens")
+                continue
             if VERBOSE:
                 logger.debug("[REFRESH] %d markets returned", len(markets))
             new_ids: list[str] = []
@@ -190,14 +200,22 @@ async def _run_ws(sock: zmq.asyncio.Socket, session: aiohttp.ClientSession) -> N
     every book-update message to subscribers via the PUB socket until the connection
     drops.  _market_refresh and _ping_loop run as concurrent background tasks.
     """
-    global _ws_connected, _last_book_ts, _msgs_total  # pylint: disable=global-statement
+    global _ws_connected, _last_book_ts, _msgs_total, _api_error_streak  # pylint: disable=global-statement
     if VERBOSE:
         logger.debug("[WS] calling get_markets...")
     markets = await api.get_markets(session, tag_id=MARKET_TAG_ID, window_minutes=MARKET_WINDOW)
+    if markets is None:
+        # API/network error — NOT an empty window. Count it: main() recreates the (likely
+        # degraded) session after a streak, the real fix for the silent "No markets" stall.
+        _api_error_streak += 1
+        logger.warning("get_markets API error (streak=%d) — feed degraded", _api_error_streak)
+        await asyncio.sleep(5)
+        return
+    _api_error_streak = 0   # a successful call (even an empty window) clears the streak
     _tf = "15M" if MARKET_TAG_ID == api.GAMMA_TAG_15M else "5M"
     logger.info("BTC %s markets (tag=%d, ±%dmin): %d", _tf, MARKET_TAG_ID, MARKET_WINDOW, len(markets))
     if not markets:
-        logger.warning("No markets — waiting 30s")
+        logger.warning("No markets in window — waiting 30s")
         await asyncio.sleep(30)
         return
 
@@ -282,6 +300,7 @@ async def _run_ws(sock: zmq.asyncio.Socket, session: aiohttp.ClientSession) -> N
 
 
 async def main() -> None:
+    global _api_error_streak  # pylint: disable=global-statement
     ctx  = zmq.asyncio.Context()
     sock = make_pub(ctx, FEED_ADDR, "FEED_ADDR")
     logger.info("Feed PUB bound on %s", FEED_ADDR)
@@ -302,19 +321,27 @@ async def main() -> None:
     # Infra service: control surface for ping/status only (no destructive commands).
     _ctl_task = asyncio.create_task(control_loop("feed"))
     try:
-        backoff = 1
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
-            while True:
-                try:
-                    await _run_ws(sock, session)
-                    backoff = 1
-                except Exception as e:
-                    logger.warning("WS error — reconnecting in %ds: %s", backoff, e)
-                    if VERBOSE:
-                        import traceback
-                        logger.debug("[WS] traceback: %s", traceback.format_exc())
-                    await asyncio.sleep(backoff)
-                    backoff = min(backoff * 2, 60)
+        while True:   # session lifecycle: recreate the aiohttp session after a persistent
+                      # get_markets error streak — the likely-degraded resource behind a
+                      # silent "No markets" stall. (Beyond that, the feed-watchdog restarts us.)
+            backoff = 1
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+                while True:
+                    try:
+                        await _run_ws(sock, session)
+                        backoff = 1
+                    except Exception as e:
+                        logger.warning("WS error — reconnecting in %ds: %s", backoff, e)
+                        if VERBOSE:
+                            import traceback
+                            logger.debug("[WS] traceback: %s", traceback.format_exc())
+                        await asyncio.sleep(backoff)
+                        backoff = min(backoff * 2, 60)
+                    if _api_error_streak >= SESSION_RECREATE_AFTER:
+                        logger.warning("get_markets failing (streak=%d) — recreating aiohttp session",
+                                       _api_error_streak)
+                        _api_error_streak = 0
+                        break   # exit inner loop → close + recreate the session
     finally:
         _hb_task.cancel()
         _ctl_task.cancel()
