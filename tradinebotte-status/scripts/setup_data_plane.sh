@@ -102,3 +102,5 @@ done
 '
 ok "data-plane setup complete"
 warn "verify consumers reconnected: bash tradinebotte-status/scripts/bot_status.sh"
+warn "a feed needs up to one market window to resume after restart; the feed-watchdog"
+warn "(tradinebotte-feedwatchdog.timer) auto-restarts it if it stays alive-but-silent."
