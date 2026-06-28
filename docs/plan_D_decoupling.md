@@ -157,8 +157,11 @@ are symmetric plugins behind **one Strategy interface** + **one connector interf
   shim pattern used for the Strategy protocol and the connector registry. `botcore` stays pure
   (these helpers take `conn` or a duck-typed `state`/`strategy`; no polymarket type imported — the
   `import botcore` loads-no-`api_*` invariant still holds). Caller/feasibility verified 2026-06-28:
-  - **3b-3a:** `botcore/persistence.py` ← `read_capital_base` / `write_capital_base` (`conn`-only,
-    zero coupling; callers: live_bot ×1 each + tests). Smallest first.
+  - **3b-3a DONE (committed → see git log):** `botcore/persistence.py` ← `read_capital_base` /
+    `write_capital_base` (`conn`-only); live_bot re-exports them (`from botcore.persistence import
+    …`) so `bot.<fn>` callers are unchanged. Verified re-export identity + core-purity invariant
+    (now imports `botcore.persistence`) + full gate green. No install.sh edit needed (whole-dir
+    botcore copy from 3b-1 ships it; flat test globs it).
   - **3b-3b:** move `_persist_snapshot` (+ the `SNAPSHOT_COMMIT_SECS` constant) into
     `botcore/persistence.py` — touches only `state.{conn,config.enable_snapshots,last_write_ts,
     last_snapshot_commit_ts}` (verified), so type the param duck/Protocol, not `BotState`. The

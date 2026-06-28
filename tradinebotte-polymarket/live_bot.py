@@ -52,6 +52,9 @@ if os.path.isdir(_core_dir) and _core_dir not in sys.path:
     sys.path.insert(0, os.path.normpath(_core_dir))
 from botcore.connectors import load as _load_connector_module
 from botcore import Strategy
+# Neutral persistence helpers — re-exported so existing live_bot.<fn> / bot.<fn>
+# callers keep working while the implementation lives in the core (Plan D step 3b).
+from botcore.persistence import read_capital_base, write_capital_base
 import bot_utils
 from bot_utils import print_dashboard, write_web_status
 from tradinetools import (
@@ -974,27 +977,6 @@ def equity(state: "BotState") -> float:
     (which state.capital does not track), so the figure resumes across restarts.
     """
     return state.config.capital_start + cumulative_pnl(state)[0]
-
-
-def read_capital_base(conn: sqlite3.Connection) -> "float | None":
-    """Persisted effective capital base, or None if never written (fresh DB)."""
-    try:
-        row = conn.execute(
-            "SELECT value FROM bot_meta WHERE key='capital_base'").fetchone()
-    except sqlite3.OperationalError:
-        return None
-    return float(row[0]) if row else None
-
-
-def write_capital_base(conn: sqlite3.Connection, value: float) -> None:
-    """Persist the effective capital base so it survives restarts (until the next
-    reset overrides it)."""
-    conn.execute(
-        "INSERT INTO bot_meta(key, value, updated_at) VALUES('capital_base', ?, ?) "
-        "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-        (float(value), time.time()),
-    )
-    conn.commit()
 
 
 # ─── WEBSOCKET MESSAGE HANDLING ───────────────────────────────────────────────
