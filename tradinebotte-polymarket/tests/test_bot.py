@@ -38,8 +38,12 @@ def make_db():
 
 
 def make_state(conn=None):
-    """BotState backed by an in-memory database (or a provided connection)."""
-    return bot.BotState(conn if conn is not None else make_db())
+    """BotState backed by an in-memory database (or a provided connection).
+
+    Injects the Polymarket threshold default the way the entrypoint does (Plan D
+    step 3b — BotState no longer self-defaults a strategy)."""
+    return bot.BotState(conn if conn is not None else make_db(),
+                        strategy=bot.ThresholdStrategy())
 
 
 def make_token(
@@ -2237,12 +2241,16 @@ class TestBotConfigStrategyFields(unittest.TestCase):
         self.assertAlmostEqual(cfg.grid_lower, 0.0)
         self.assertAlmostEqual(cfg.grid_upper, 0.0)
 
-    def test_state_strategy_defaults_to_threshold(self):
-        # Plan D step 1: default is the built-in ThresholdStrategy (was None), so the
-        # book-update dispatch is unconditional. main() overrides for grid/swing.
+    def test_state_strategy_is_injected_not_self_defaulted(self):
+        # Plan D step 3b: BotState names no concrete strategy. A bare BotState carries
+        # no strategy (None); the entrypoint injects ThresholdStrategy() at construction,
+        # which make_state() mirrors. main() overrides it for grid/swing.
         conn = make_db()
-        state = bot.BotState(conn)
-        self.assertIsInstance(state.strategy, bot.ThresholdStrategy)
+        self.assertIsNone(bot.BotState(conn).strategy)
+        self.assertIsInstance(
+            bot.BotState(conn, strategy=bot.ThresholdStrategy()).strategy,
+            bot.ThresholdStrategy)
+        self.assertIsInstance(make_state().strategy, bot.ThresholdStrategy)
 
     def test_state_strategy_can_be_set(self):
         cfg = bot.BotConfig()

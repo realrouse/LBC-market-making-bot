@@ -86,7 +86,8 @@ def make_state():
     conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.executescript(bot.SCHEMA)
     conn.commit()
-    return bot.BotState(conn)
+    # Inject the threshold default the way the entrypoint does (Plan D step 3b).
+    return bot.BotState(conn, strategy=bot.ThresholdStrategy())
 
 
 # ── 1. feed.register_market() ─────────────────────────────────────────────────

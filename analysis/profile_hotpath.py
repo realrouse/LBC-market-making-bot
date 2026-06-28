@@ -26,7 +26,9 @@ SEP     = "=" * 64
 
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
 conn  = bot.init_db(bot.BotConfig())
-state = bot.BotState(conn)
+# BotState no longer self-defaults a strategy (Plan D step 3b) — inject the threshold
+# default so handle_book_update can dispatch.
+state = bot.BotState(conn, strategy=bot.ThresholdStrategy())
 
 token_id  = "abc123token"
 market_id = "mkt001"

@@ -897,7 +897,8 @@ class BotState:
     A single instance lives for the entire process lifetime.
     """
     def __init__(self, conn: sqlite3.Connection,
-                 config: Optional["BotConfig"] = None) -> None:
+                 config: Optional["BotConfig"] = None,
+                 strategy: Any = None) -> None:
         self.conn = conn
         self.config: BotConfig = config if config is not None else BotConfig()
         self.capital = self.config.capital_start
@@ -930,10 +931,12 @@ class BotState:
         # Circuit-breaker: suspend new entries after 3 consecutive CLOB failures.
         self.api_fail_streak: int = 0
         self.api_cooldown_until: float = 0.0
-        # Active strategy instance. Defaults to the built-in Polymarket ThresholdStrategy
-        # so the book-update dispatch is unconditional; main() overrides it with a
-        # GridStrategy/SwingStrategy when strategy_type != "threshold".
-        self.strategy: Any = ThresholdStrategy()
+        # Active strategy instance — INJECTED by the entrypoint (Plan D step 3b), not
+        # named here: BotState carries no dependency on any concrete strategy/plugin. The
+        # Polymarket entrypoint (main / account_bot) passes ThresholdStrategy(); main()
+        # then overrides it with a GridStrategy/SwingStrategy when strategy_type !=
+        # "threshold". None until injected — the book-update dispatch requires it set.
+        self.strategy: Any = strategy
         # Rejection counters — reset and logged every 60 s.
         self.rejection_stats = RejectionStats()
         self._last_stats_log: float = time.time()
@@ -1968,7 +1971,7 @@ async def main() -> None:
 
     conn = init_db(config)
     try:
-        state = BotState(conn, config)
+        state = BotState(conn, config, strategy=ThresholdStrategy())
         restore_state_from_db(state)
 
         async with aiohttp.ClientSession(

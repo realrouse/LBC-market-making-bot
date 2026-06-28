@@ -91,26 +91,29 @@ are symmetric plugins behind **one Strategy interface** + **one connector interf
   strategy_engines/*) already ships botcore from 3a-1; accumulation/orderbook/scalping don't
   import it. NB this is a peripheral win — live_bot does NOT shrink, and its lazy
   `from strategy_engines import load` (~L1980) is still a real core→cex plugin dep for later.
+- **Step 3b-2a DONE (committed → see git log): strategy injection.** `BotState.__init__` no
+  longer instantiates `ThresholdStrategy()`; it takes a `strategy=None` param and stores it, so
+  BotState names no concrete strategy. The 2 polymarket entrypoints (live_bot main, account_bot)
+  inject `ThresholdStrategy()`; `make_state` (both test files) mirror it; main() still overrides
+  for grid/swing (guarded by `strategy_type != "threshold"`, verified). **Landmine resolved:**
+  `None`-means-threshold is NOT a live convention — handle_book_update (L1017) requires a real
+  instance; the L3354 test's `strategy=None` is only a `cumulative_pnl` getattr-fallthrough
+  shortcut (a real ThresholdStrategy yields the identical result). Churn was tiny (advisor was
+  right): of 22 direct `BotState(conn)` test sites only 2 touched `.strategy`; the rest pass
+  untouched with `strategy=None`. Used **explicit constructor injection**, NOT a ClassVar/global
+  factory (that would be a service-locator with an import-order landmine when BotState moves to
+  core). Gate: tests 411 / poly 441 / cex 126 / indicators 139 / status 75 / tools 168. Clean-install
+  NOT load-bearing here (no file/install.sh/import-shape change) → not run.
 - **Step 3b+ REMAINING (stop for review before each):** incrementally move the strategy-agnostic
   machinery into `botcore` — `BotState`, `handle_book_update`, `_persist_snapshot`, the consumer
   loops, heartbeat/control wiring — one sub-step = one commit, keeping `live_bot.py` the
-  ExecStart entrypoint that imports from core. **The hard blocker (verified this session):**
-  `BotState` is polymarket-coupled — it holds `tokens`/`TokenState`, `market_tokens`,
-  `traded_direction`, `signalled`, and instantiates `ThresholdStrategy()` in `__init__` (L936).
-  So `handle_book_update(state)`/`_persist_snapshot(state)` can't move to core until BotState is
-  neutralized. Likely first BotState sub-step: stop instantiating the plugin in `__init__` —
-  inject the default strategy at the construction boundary (2 non-test sites: live_bot main +
-  account_bot; plus `make_state` and tests asserting the default). Then neutralize fields / split
-  a neutral base. **Watch the step-2 hook:** the import-time `api = connectors.load(CONNECTOR)`
-  binding + tests patching `live_bot.api.*` must be restructured (inject connector into
-  `BotState`) so core imports no plugin. Then CEX engines explicitly conform too (symmetry).
-  - **⚠ LANDMINE to resolve BEFORE designing 3b-2:** there appear to be two competing
-    "default strategy" conventions — `BotState.__init__` sets `self.strategy = ThresholdStrategy()`
-    (L936), but a test sets `st.strategy = None` commented "built-in threshold strategy" (L3354)
-    while another asserts `isinstance(state.strategy, ThresholdStrategy)` (L2245). Grep how
-    `state.strategy is None` is handled in `handle_book_update`/`check_signal` and decide which
-    is authoritative — you can't have both `None`-means-threshold AND an injected default
-    instance. This tie-breaker decides the whole injection shape.
+  ExecStart entrypoint that imports from core. **Still-coupled (verified):** `BotState` still holds
+  polymarket fields (`tokens`/`TokenState`, `market_tokens`, `traded_direction`, `signalled`), so
+  it can't move to core yet. **Next sub-step (3b-2b): connector injection** — replace the module
+  global `api` (the import-time `api = connectors.load(CONNECTOR)` binding) with `state.connector`,
+  and restructure the tests patching `live_bot.api.*` accordingly, so the state-taking functions
+  reference an injected connector, not a plugin global. Then field-neutralize BotState / split a
+  neutral base, then move the machinery, then CEX engines explicitly conform too (symmetry).
   - **Coverage gap to close later (low risk):** the standalone clean-install only runs live_bot,
     which imports `botcore.connectors` directly — it does NOT exercise the `connectors/` shim's
     flat self-bootstrap (only cex_feed + the strategy engines hit that, on grid/swing accounts).

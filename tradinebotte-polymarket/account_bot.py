@@ -395,7 +395,7 @@ async def main() -> None:
         logger.debug("[INIT] init_db...")
     conn  = bot.init_db(config)
     try:
-        state = bot.BotState(conn, config)
+        state = bot.BotState(conn, config, strategy=bot.ThresholdStrategy())
         bot.restore_state_from_db(state)
         if VERBOSE:
             logger.debug("[INIT] capital=%.2f open_trades=%d",
