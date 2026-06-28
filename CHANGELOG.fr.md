@@ -22,6 +22,7 @@ Toutes les modifications notables de ce projet sont documentées ici.
 - **Durcissement de l'installation de service** — `install_status_service.sh` s'interrompt désormais avec une erreur claire si l'adresse de statut configurée contient un `|`, qui corromprait sinon la substitution `sed` écrivant le fichier d'unité.
 
 ### Interne
+- **Le point d'entrée universel des bots n'importe plus en dur un échange précis** — `live_bot.py` commençait par `import api_polymarket as api`, privilégiant un échange dans le point d'entrée partagé, et son chargeur de connecteur traitait `polymarket` comme un cas spécial sans effet. Il résout désormais son connecteur par défaut via le registre de connecteurs par nom (`connectors.load(CONNECTOR)`, défaut `"polymarket"`), exactement comme tout autre échange, de sorte qu'aucun connecteur n'est privilégié. Le comportement est inchangé (le défaut reste Polymarket et l'objet `api` résolu est identique), mais le point d'entrée ne dépend plus que du registre et d'un nom de connecteur, pas d'un module d'échange concret. Un test garde-fou échoue si un `import api_polymarket` privilégié est réintroduit.
 - Suppression de deux schémas de messages inutilisés et obsolètes (`RegisterRequest` / `RegisterReply`) décrivant un protocole d'enregistrement qui n'est plus utilisé par le service indicators ; le protocole réel est `{cmd:"subscribe", …}` → `{status, stream_id}`.
 
 ---

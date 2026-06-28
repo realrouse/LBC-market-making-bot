@@ -1682,6 +1682,26 @@ class TestConnectorFactory(unittest.TestCase):
         self.assertTrue(hasattr(mod, "post_order"))
         self.assertTrue(hasattr(mod, "compute_fee"))
 
+    def test_live_bot_loads_default_via_registry_not_hard_import(self):
+        """
+        Plan D step 2: live_bot must not privilege any exchange with a hard
+        `import api_polymarket`; its module-level `api` is resolved through the
+        connector registry from the CONNECTOR default. Guards the inversion.
+        """
+        with open(bot.__file__, encoding="utf-8") as _fh:
+            src = _fh.read()
+        code_lines = [
+            ln for ln in src.splitlines()
+            if not ln.lstrip().startswith("#")
+        ]
+        self.assertFalse(
+            any("import api_polymarket" in ln for ln in code_lines),
+            "live_bot has a privileged `import api_polymarket` — load via the registry instead",
+        )
+        # The default connector is still polymarket, loaded through the registry.
+        self.assertEqual(bot.CONNECTOR, "polymarket")
+        self.assertIs(bot.api, _connectors_mod.load("polymarket"))
+
     def test_binance(self):
         mod = _connectors_mod.load("binance")
         self.assertTrue(hasattr(mod, "parse_book_update"))

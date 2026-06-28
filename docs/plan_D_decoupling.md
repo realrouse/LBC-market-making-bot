@@ -22,20 +22,37 @@ are symmetric plugins behind **one Strategy interface** + **one connector interf
 
 ## Remaining steps
 
-### Step 2 — `api_polymarket` behind the connector interface (invert the hard dep)
-- Today `live_bot.py` does `import api_polymarket as api` and calls ~12 `api.*` functions:
-  `get_markets`, `parse_book_update`, `post_order`, `make_subscribe_msg`, `compute_fee`,
-  and Polymarket-specific market/token metadata (`get_market_id`, `get_up_token_id`,
-  `get_down_token_id`, `get_market_{question,start_ts_ms,end_ts_ms}`).
-- CEX connectors already load via `connectors.load(name)` (interface: `parse_book_update`,
-  `get_markets`, `post_order`). The Polymarket path is the odd one out (hard import).
-- **Task:** make `api_polymarket` a loadable connector (`load("polymarket")`); have
-  `live_bot` obtain its connector via the config's `connector` name instead of the hard
-  import. The Polymarket-specific metadata helpers either extend the connector protocol or
-  live on the ThresholdStrategy/connector as extras only the threshold path uses.
-- **Risk:** broad but mechanical (`api.` is used throughout). Behavior-preserving.
-- **Validate:** full suite + canary polymarket account (trades/PnL/snapshots identical) +
-  account_bot (2nd `handle_book_update` caller).
+### Step 2 — `api_polymarket` behind the connector interface (invert the hard dep) — **DONE (not yet deployed)**
+- **What was done:** `live_bot.py` no longer does `import api_polymarket as api`. The
+  module-level `api` is now bound via `connectors.load(CONNECTOR)` (default `"polymarket"`),
+  and `_load_connector(name)` loads *every* connector through the registry — the polymarket
+  no-op special-case is gone. All ~19 `api.*` calls already went through the rebindable `api`
+  global (most of the mechanical work landed with the CEX session), so this step was the
+  surgical removal of the one privileged hard import + de-special-casing the loader.
+- **Validated:** poly suite 439 (was 438 + 1 new guard) / cex 126 / top-level `tests/` 409 —
+  all green, behavior-preserving. New guard `TestConnectorFactory
+  .test_live_bot_loads_default_via_registry_not_hard_import` fails if a privileged
+  `import api_polymarket` reappears. Standalone import confirmed `live_bot.api == api_polymarket`.
+  `connectors/__init__.py` ships to polymarket accounts (install.sh L119-120,
+  update_standalone.sh L143-148), so importing the registry at module top is safe in every
+  deploy mode.
+- **NOT done (deferred, by design):** the Polymarket market-discovery path — `register_market`
+  (calls `get_market_id` / `get_up_token_id` / `get_down_token_id` /
+  `get_market_{question,start_ts_ms,end_ts_ms}`), `_market_refresh_loop`, `_run_ws`
+  (`WS_URL` / `WS_BATCH_SIZE` / `make_subscribe_msg`) — still assumes a Polymarket-shaped
+  connector. It is the `else` fall-through of the data-source dispatch (`ws_loop`, live_bot.py
+  ~L2052), behavior-preserving today only because polymarket is the default and CEX always
+  uses `cex_feed_consumer_loop`. **This is Step 4's job** (Step 4 literally lists
+  "register_market, market-refresh, token bookkeeping"). The only poly-metadata use on a
+  *shared* path is the `GAMMA_TAG_15M` log line in `main()`, and it is correctly gated by
+  `if config.connector == "polymarket"`.
+- **⚠ Still to deploy:** canary a Polymarket account (trades/PnL/snapshots identical) +
+  re-check `account_bot` (2nd `handle_book_update` caller) before calling this fully landed.
+- **Step-3 hook:** the import-time `api = connectors.load(CONNECTOR)` binding stays at module
+  scope *on purpose* — tests patch `live_bot.api.*`, so `live_bot.api` must exist at import.
+  When live_bot moves into the neutral core (Step 3), that import-time binding is the last
+  core→plugin coupling: it will need the test-patch pattern restructured (e.g. strategy/
+  connector injected into `BotState`, tests patching that) so core imports no plugin.
 
 ### Step 3 — neutral core package + move the `Strategy` protocol there
 - Today the `Strategy` protocol is in `tradinebotte-cex/strategy_engines/base.py`, and

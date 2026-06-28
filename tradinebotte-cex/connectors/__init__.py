@@ -12,8 +12,10 @@ Each connector module exposes the same interface:
     WS_BATCH_SIZE                   → int
 
 Usage from live_bot.py:
-    from connectors import load as load_connector
-    # replaces the module-level `api` global:
+    from connectors import load as _load_connector_module
+    # module-level default, resolved by name (no privileged import):
+    api = _load_connector_module(CONNECTOR)
+    # main() rebinds the same global for the configured connector:
     _load_connector(config.connector)
 """
 

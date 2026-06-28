@@ -35,16 +35,17 @@ import aiohttp, websockets
 # process start epoch — used for uptime display; harmless to capture at import
 _BOT_START: float = time.time()
 
-# sys.path insert finds api_polymarket.py in the same directory as this file,
-# whether running standalone from INSTALL_DIR or imported as tradinebotte-polymarket.live_bot
-# from the project root. To target a different exchange, replace the import below.
+# sys.path insert finds the connector modules (api_polymarket.py et al.) in the same
+# directory as this file, whether running standalone from INSTALL_DIR or imported as
+# tradinebotte-polymarket.live_bot from the project root.
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
-# connectors/ lives in tradinebotte-cex/ in the monorepo (flat deploy: same dir)
+# connectors/ lives in tradinebotte-cex/ in the monorepo (flat deploy: same dir,
+# install.sh/update_standalone.sh copy connectors/ into INSTALL_DIR).
 _cex_dir = os.path.join(_THIS_DIR, "..", "tradinebotte-cex")
 if os.path.isdir(_cex_dir) and _cex_dir not in sys.path:
     sys.path.insert(0, os.path.normpath(_cex_dir))
-import api_polymarket as api
+from connectors import load as _load_connector_module
 import bot_utils
 from bot_utils import print_dashboard, write_web_status
 from tradinetools import (
@@ -91,6 +92,13 @@ MARKET_REFRESH          = 30
 # ─── CONNECTOR / STRATEGY DEFAULTS ────────────────────────────────────────────
 CONNECTOR      = "polymarket"   # api_* module to use; see bot/connectors/
 STRATEGY_TYPE  = "threshold"    # "threshold" (built-in) or "grid" (bot/strategy_engines/grid.py)
+
+# Module-level `api` connector — resolved through the registry by name, not a
+# privileged `import api_polymarket`, so the entrypoint has no hard dependency on
+# any one exchange (Plan D step 2). make_config() may override CONNECTOR per
+# strategy; main() rebinds via _load_connector(config.connector) before any I/O.
+# Bound here (not in main) so live_bot.api exists at import for tests that patch it.
+api = _load_connector_module(CONNECTOR)
 
 # Grid strategy defaults (ignored when strategy_type == "threshold")
 GRID_SYMBOL          = "BTCUSDT"
@@ -632,14 +640,14 @@ def make_config(simulate: bool = False, no_log: bool = False,
 
 def _load_connector(name: str) -> None:
     """
-    Replace the module-level `api` global with the requested exchange connector.
-    No-op when name == "polymarket" (default import already in place).
+    Bind the module-level `api` global to the requested exchange connector.
+
+    Loaded through the registry by name for every connector — no exchange is
+    privileged (Plan D step 2). Re-binding the default is cheap: importlib
+    caches the module, so this returns the same object bound at import.
     """
     global api  # pylint: disable=global-statement
-    if name == "polymarket":
-        return
-    from connectors import load as _load
-    api = _load(name)
+    api = _load_connector_module(name)
     logger.info("Connector loaded: %s (%s)", name, api.__name__)
 
 

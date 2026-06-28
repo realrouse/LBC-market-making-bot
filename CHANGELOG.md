@@ -22,6 +22,7 @@ All notable changes to this project are documented here.
 - **Service-install hardening** — `install_status_service.sh` now aborts with a clear error if the configured status address contains a `|`, which would otherwise corrupt the `sed` substitution that writes the unit file.
 
 ### Internal
+- **The universal bot entrypoint no longer hard-imports a specific exchange** — `live_bot.py` used to begin with `import api_polymarket as api`, privileging one exchange in the shared entrypoint, and its connector loader special-cased `polymarket` as a no-op. It now resolves its default connector through the connector registry by name (`connectors.load(CONNECTOR)`, default `"polymarket"`), exactly like every other exchange, so no connector is privileged. Behavior is unchanged (the default is still Polymarket and the resolved `api` object is identical), but the entrypoint now depends only on the registry and a connector name, not on a concrete exchange module. A guard test fails if a privileged `import api_polymarket` is reintroduced.
 - Removed two unused, out-of-date message schemas (`RegisterRequest` / `RegisterReply`) that described a registration protocol no longer used by the indicators service; the live protocol is `{cmd:"subscribe", …}` → `{status, stream_id}`.
 
 ---
