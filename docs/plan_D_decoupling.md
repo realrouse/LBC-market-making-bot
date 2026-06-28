@@ -233,6 +233,44 @@ lowest-value, highest-cost rung.
   self-bootstrap (cex_feed + strategy engines, on grid/swing accounts). A `test_multibot_deploy` run
   closes it; (ii) would touch cex_feed so re-validate there.
 
+#### DECISION (2026-06-28): user chose (iii) FULL SPLIT (4b). Drivers (all three, named): technical
+debt, future non-polymarket/non-cex strategy families/connectors, AND clean separable packages
+(open-source-style boundaries). ⇒ target = clean separable packages (`botcore` + polymarket plugin +
+cex plugin) behind a GENERALIZED entrypoint↔plugin interface so a 3rd family plugs in.
+
+#### Step 4b execution plan (safety-first, ExecStart-stable, behavior-preserving per commit)
+**Invariant:** `live_bot.py` stays the runnable ExecStart entrypoint throughout; polymarket code moves
+into a plugin module that live_bot imports (re-export for account_bot/test back-compat). Each sub-step
+= 1 commit + full gate; trading-touching sub-steps also get a clean-install.
+
+- **4b-1 — CONNECTOR INJECTION (the safety enabler; the deferred 3b-2b, now first because it de-risks
+  everything after).** Add `state.connector` (injected at construction like `strategy`); convert the
+  ~21 `api.*` sites → `state.connector.*` (all enclosing fns take `state`, or `main()` has it; for
+  `compute_stake(cfg,...)` thread the connector); remove the module global `api` + the `_load_connector`
+  rebind. **Then rewrite the ~10 trading tests** that `patch("live_bot.api.*")` / read `bot.api.FEE_RATE`
+  / `assertIs(bot.api, load("polymarket"))` to patch a STABLE seam (the connector module / `state.connector`),
+  so later physical moves don't touch tests again. Done FIRST, in isolation: a gate failure here points
+  at the injection, not a move. ⚠ Riskiest test-rewrite — gate + clean-install. NB this re-opens the
+  step-2-hook work we correctly deferred; it's worth doing now precisely because 4b needs it.
+- **4b-2 — extract the CEX glue** (`cex_feed_consumer_loop` + `save_cex_snapshot`) into the cex package;
+  lazy-import in the `_use_cexfeed` dispatch branch (so polymarket-only accounts don't ship it). Removes
+  CEX code from the polymarket file. Touches no `api`. Re-validate the cex_feed path (test_multibot).
+- **4b-3 — create the polymarket plugin package** (e.g. `tradinebotte-polymarket/polymarket/`, bare-name
+  importable, shipped flat like `botcore`/`connectors`). Move leaf data types first: `TokenState`,
+  `RejectionStats`, the trading-hours filter (`_us_holidays`/`is_trading_hour`…). Re-export from live_bot.
+- **4b-4 — move the threshold trading logic** into the plugin: `ThresholdStrategy`, `check_signal`,
+  `enter_live_trade`, `check_resolution`, `close_trade`, `compute_stake`. Trading-touching → clean-install.
+- **4b-5 — move the polymarket data plane** into the plugin: `register_market`/`purge_expired_markets`/
+  `_register_market_from_feed`, `ws_loop`/`_market_refresh_loop`/`_run_ws`, `feed_consumer_loop`,
+  `handle_book_update`, `save_snapshot`, GAMMA. Trading/discovery → clean-install.
+- **4b-6 — generalize the dispatch + thin the entrypoint.** Replace `main()`'s hardcoded
+  `feed_consumer_loop`/`cex_feed_consumer_loop`/`ws_loop` branch with a plugin-provided run-loop
+  interface (each plugin registers its data-loop), so a 3rd family plugs in. Optionally relocate the
+  neutral orchestration to `botcore`; `live_bot.py` → thin entrypoint shell wiring core + the selected
+  plugin. Deploy-wide → clean-install + careful sequential deploy.
+- **Each sub-step:** stop for review (per the recipe). Mind the deploy gotchas (feed-restart ordering,
+  reconnect lag, no parallel SSH, pgrep self-match, sequential deploy).
+
 ### Step 5 — generalize the `snapshots` schema (optional / lowest priority)
 - Today `snapshots` is Polymarket-shaped (`market_id/token_id/direction/secs_remaining`);
   CEX writes placeholders via `save_cex_snapshot` (`direction='UP'`, `secs_remaining=9999`).
