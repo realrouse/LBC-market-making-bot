@@ -110,6 +110,13 @@ _rsync() {
         -e "ssh $ssh_opts" \
         "$LOCAL_REPO/tradinebotte-cex/" "$SW_USER@$SERVER:$INSTALL_DIR/" 2>&1 || return 1
 
+    # tradinebotte-core/ — botcore (neutral Strategy protocol, imported via strategy_engines.base)
+    SSHPASS="$SW_PASS" /usr/bin/sshpass -e \
+        rsync -az \
+        --exclude='__pycache__' --exclude='*.pyc' \
+        -e "ssh $ssh_opts" \
+        "$LOCAL_REPO/tradinebotte-core/botcore/" "$SW_USER@$SERVER:$INSTALL_DIR/botcore/" 2>&1 || return 1
+
     # CEX strategy JSON config files → $INSTALL_DIR/strategies/
     SSHPASS="$SW_PASS" /usr/bin/sshpass -e \
         rsync -az \

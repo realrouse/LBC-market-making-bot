@@ -3548,6 +3548,42 @@ class TestDataPathCoverage(unittest.TestCase):
         self.assertGreaterEqual(src.count("_persist_snapshot"), 3)  # def + 2 call sites
 
 
+class TestCoreShipsWithTheBot(unittest.TestCase):
+    """Structural guard (Plan D step 3): the neutral core `botcore/` must ship wherever
+    the bot ships. live_bot imports botcore at module top (the Strategy seam), so any
+    deploy script that installs live_bot/account_bot but forgets botcore/ would crash-loop
+    the bot at import. A later step that adds a deploy path must keep core travelling with
+    it — this fails at test time if a bot-shipping script drops botcore."""
+
+    # Repo root: tradinebotte-polymarket/tests/test_bot.py → ../../..
+    _REPO = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+    # Every script that installs/rsyncs the live_bot entrypoint (and hence needs the core).
+    _BOT_DEPLOY_SCRIPTS = (
+        "scripts/install.sh",
+        "scripts/test_multibot_deploy.sh",
+        "tradinebotte-polymarket/scripts/update_standalone.sh",
+        "tradinebotte-status/scripts/setup_data_plane.sh",
+        "tradinebotte-cex/scripts/deploy_grid_claude3.sh",
+        "tradinebotte-cex/scripts/deploy_grid_mexc.sh",
+        "tradinebotte-cex/scripts/update_swing.sh",
+    )
+
+    def test_bot_deploy_scripts_ship_botcore(self):
+        missing = []
+        for rel in self._BOT_DEPLOY_SCRIPTS:
+            path = os.path.join(self._REPO, rel)
+            if not os.path.isfile(path):
+                continue  # monorepo layout differs in some checkouts — skip absent
+            with open(path, encoding="utf-8") as fh:
+                if "botcore" not in fh.read():
+                    missing.append(rel)
+        self.assertEqual(
+            missing, [],
+            "deploy script(s) ship live_bot but not botcore/ — the bot will ImportError on "
+            f"`from botcore...` at startup: {missing}. Add a botcore/ copy/rsync step.")
+
+
 class TestCexFeedSnapshots(unittest.IsolatedAsyncioTestCase):
     """Regression: cex_feed_consumer_loop must persist book snapshots (it bypasses
     handle_book_update, which is the only other place snapshots are written). Before

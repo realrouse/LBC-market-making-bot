@@ -116,6 +116,11 @@ for _f in api_binance.py api_mexc.py; do
     cp "tradinebotte-cex/$_f" "$INSTALL_DIR/$_f"
 done
 
+mkdir -p "$INSTALL_DIR/botcore"
+for _f in __init__.py strategy.py; do
+    cp "tradinebotte-core/botcore/$_f" "$INSTALL_DIR/botcore/$_f"
+done
+
 mkdir -p "$INSTALL_DIR/connectors"
 cp tradinebotte-cex/connectors/__init__.py "$INSTALL_DIR/connectors/__init__.py"
 
@@ -152,6 +157,7 @@ chmod +x "$INSTALL_DIR/run.sh"
 # ── Syntax check ──────────────────────────────────────────────────
 echo "=== $(_t "Checking syntax" "Vérification syntaxe") ==="
 for _f in live_bot.py api_polymarket.py api_binance.py api_mexc.py bot_utils.py \
+          botcore/__init__.py botcore/strategy.py \
           connectors/__init__.py \
           strategy_engines/__init__.py strategy_engines/base.py strategy_engines/grid.py \
           strategy_engines/swing.py strategy_engines/swinghold.py strategy_engines/dca.py; do

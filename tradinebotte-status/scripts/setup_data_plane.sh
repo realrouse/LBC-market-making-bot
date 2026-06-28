@@ -50,6 +50,7 @@ _rsync "$REPO/tradinebotte-cex/cex_feed.py" "$R_DIR/cex_feed.py"
 for _f in api_common.py api_binance.py api_mexc.py api_mexc_futures.py mexc_spot_depth_pb2.py; do
     _rsync "$REPO/tradinebotte-cex/$_f" "$R_DIR/$_f"
 done
+_rsync "$REPO/tradinebotte-core/botcore/" "$R_DIR/botcore/"
 _rsync "$REPO/tradinebotte-cex/connectors/" "$R_DIR/connectors/"
 _rsync "$REPO/tradinebotte-polymarket/scripts/systemd/tradinebotte-feed5m.service" "$R_UNIT/tradinebotte-feed5m.service"
 _rsync "$REPO/tradinebotte-cex/scripts/systemd/tradinebotte-cexfeed.service" "$R_UNIT/tradinebotte-cexfeed.service"
