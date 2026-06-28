@@ -1348,7 +1348,7 @@ class TestCircuitBreaker(unittest.IsolatedAsyncioTestCase):
     async def test_streak_increments_on_api_failure(self):
         self.state.config = bot.BotConfig(private_key="0xdeadbeef")
         self.state.session = unittest.mock.AsyncMock()
-        with patch("live_bot.api.post_order", new=unittest.mock.AsyncMock(return_value=None)):
+        with patch.object(api_poly, "post_order", new=unittest.mock.AsyncMock(return_value=None)):
             await bot.enter_live_trade(self.state, make_token())
         self.assertEqual(self.state.api_fail_streak, 1)
 
@@ -1356,7 +1356,7 @@ class TestCircuitBreaker(unittest.IsolatedAsyncioTestCase):
         self.state.config = bot.BotConfig(private_key="0xdeadbeef")
         self.state.session = unittest.mock.AsyncMock()
         self.state.api_fail_streak = 2
-        with patch("live_bot.api.post_order", new=unittest.mock.AsyncMock(return_value=None)):
+        with patch.object(api_poly, "post_order", new=unittest.mock.AsyncMock(return_value=None)):
             await bot.enter_live_trade(self.state, make_token(market_id="mkt9", token_id="tok9"))
         self.assertGreater(self.state.api_cooldown_until, time.time())
 
@@ -1364,7 +1364,7 @@ class TestCircuitBreaker(unittest.IsolatedAsyncioTestCase):
         self.state.config = bot.BotConfig(private_key="0xdeadbeef")
         self.state.session = unittest.mock.AsyncMock()
         self.state.api_fail_streak = 2
-        with patch("live_bot.api.post_order", new=unittest.mock.AsyncMock(return_value="ord_ok")):
+        with patch.object(api_poly, "post_order", new=unittest.mock.AsyncMock(return_value="ord_ok")):
             await bot.enter_live_trade(self.state, make_token())
         self.assertEqual(self.state.api_fail_streak, 0)
 
@@ -1378,7 +1378,7 @@ class TestCircuitBreaker(unittest.IsolatedAsyncioTestCase):
         # H-1: post_order returns None in live mode → no ghost row, no open_trade entry
         self.state.config = bot.BotConfig(private_key="0xdeadbeef")
         self.state.session = unittest.mock.AsyncMock()
-        with patch("live_bot.api.post_order", new=unittest.mock.AsyncMock(return_value=None)):
+        with patch.object(api_poly, "post_order", new=unittest.mock.AsyncMock(return_value=None)):
             await bot.enter_live_trade(self.state, make_token(market_id="mkt_ghost"))
         count = self.state.conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
         self.assertEqual(count, 0, "ghost row must not be inserted on CLOB failure")
@@ -1388,7 +1388,7 @@ class TestCircuitBreaker(unittest.IsolatedAsyncioTestCase):
         # H-1 regression: post_order returns a valid order ID → row IS inserted
         self.state.config = bot.BotConfig(private_key="0xdeadbeef")
         self.state.session = unittest.mock.AsyncMock()
-        with patch("live_bot.api.post_order", new=unittest.mock.AsyncMock(return_value="ord_123")):
+        with patch.object(api_poly, "post_order", new=unittest.mock.AsyncMock(return_value="ord_123")):
             await bot.enter_live_trade(self.state, make_token(market_id="mkt_live"))
         count = self.state.conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
         self.assertEqual(count, 1)
@@ -1704,7 +1704,7 @@ class TestConnectorFactory(unittest.TestCase):
         )
         # The default connector is still polymarket, loaded through the registry.
         self.assertEqual(bot.CONNECTOR, "polymarket")
-        self.assertIs(bot.api, _connectors_mod.load("polymarket"))
+        self.assertIs(_connectors_mod.load(bot.CONNECTOR), _connectors_mod.load("polymarket"))
 
     def test_binance(self):
         mod = _connectors_mod.load("binance")
@@ -2946,7 +2946,7 @@ class TestComputeStake(unittest.TestCase):
         cfg = self._kelly_cfg(kelly_fraction=0.25, kelly_min_trades=30, stake_max=9999.0)
         # ask=0.96, WR=98%: f* ≈ 0.490; quarter-Kelly on $1000 ≈ $122
         ask = 0.96
-        b_net = (1.0 / ask - 1.0) - bot.api.FEE_RATE * min(ask, 1.0 - ask) / ask
+        b_net = (1.0 / ask - 1.0) - api_poly.FEE_RATE * min(ask, 1.0 - ask) / ask
         f_star = (0.98 * b_net - 0.02) / b_net
         expected = 0.25 * f_star * 1000.0
         result = bot.compute_stake(cfg, 0.96, 60.0, capital=1000.0,
@@ -3305,7 +3305,7 @@ class TestMarketRefreshLoop(unittest.IsolatedAsyncioTestCase):
                 raise asyncio.CancelledError
 
         market = self._make_market()
-        with patch("live_bot.api.get_markets", unittest.mock.AsyncMock(return_value=[market])), \
+        with patch.object(api_poly, "get_markets", unittest.mock.AsyncMock(return_value=[market])), \
              patch("asyncio.sleep", _fake_sleep):
             with self.assertRaises(asyncio.CancelledError):
                 await bot._market_refresh_loop(self.state, None, _FakeWs())
@@ -3328,7 +3328,7 @@ class TestMarketRefreshLoop(unittest.IsolatedAsyncioTestCase):
             if sleep_count >= 2:
                 raise asyncio.CancelledError
 
-        with patch("live_bot.api.get_markets", unittest.mock.AsyncMock(return_value=[])), \
+        with patch.object(api_poly, "get_markets", unittest.mock.AsyncMock(return_value=[])), \
              patch("asyncio.sleep", _fake_sleep):
             with self.assertRaises(asyncio.CancelledError):
                 await bot._market_refresh_loop(self.state, None, object())
@@ -3344,7 +3344,7 @@ class TestMarketRefreshLoop(unittest.IsolatedAsyncioTestCase):
             if sleep_count >= 2:
                 raise asyncio.CancelledError
 
-        with patch("live_bot.api.get_markets",
+        with patch.object(api_poly, "get_markets",
                    unittest.mock.AsyncMock(side_effect=RuntimeError("network down"))), \
              patch("asyncio.sleep", _fake_sleep):
             with self.assertRaises(asyncio.CancelledError):
