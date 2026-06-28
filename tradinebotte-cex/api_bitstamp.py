@@ -325,6 +325,9 @@ async def get_open_orders(session, symbol=DEFAULT_SYMBOL):
 
     Normalized format (matches api_binance/api_mexc contract):
       {"order_id": str, "side": str, "price": float, "qty": float, "status": str}
+
+    Returns None on an API/network error (a transient failure must not be read as
+    "no open orders"); [] in simulation mode (no credentials) or genuinely no orders.
     """
     if not _has_creds():
         return []
@@ -351,7 +354,7 @@ async def get_open_orders(session, symbol=DEFAULT_SYMBOL):
         ]
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning("Bitstamp get_open_orders: %s", exc)
-        return []
+        return None   # error sentinel — not [] (sim/no-orders)
 
 
 # ─── USER STREAM STUBS ───────────────────────────────────────────────────────

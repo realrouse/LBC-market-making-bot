@@ -377,7 +377,9 @@ async def get_open_orders(session, symbol, *, api_key=None, api_secret=None):
     Each element: {"order_id": str, "side": str, "price": float,
                    "qty": float, "status": str}
 
-    Returns [] on error or in simulation mode (no credentials).
+    Returns None on an API/network error (so a transient failure is NOT mistaken for
+    "no open orders" — which would let a strategy re-place orders it already has); [] in
+    simulation mode (no credentials) or when there are genuinely no open orders.
     Prefer this over repeated get_order_status calls: costs 40 weight vs
     4 × N weight for N individual status queries.
 
@@ -402,7 +404,7 @@ async def get_open_orders(session, symbol, *, api_key=None, api_secret=None):
             data = await resp.json(content_type=None)
             if resp.status != 200:
                 logger.warning("Binance get_open_orders error %d : %.300s", resp.status, data)
-                return []
+                return None   # error sentinel — not [] (sim/no-orders); strategies must not reconcile on this
             return [
                 {
                     "order_id": str(o.get("orderId", "")),
@@ -415,7 +417,7 @@ async def get_open_orders(session, symbol, *, api_key=None, api_secret=None):
             ]
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("Binance get_open_orders error : %s", e)
-        return []
+        return None   # error sentinel — not [] (sim/no-orders); strategies must not reconcile on this
 
 
 # ─── USER DATA STREAM ─────────────────────────────────────────────────────────

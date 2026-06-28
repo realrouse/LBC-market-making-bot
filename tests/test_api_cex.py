@@ -1164,5 +1164,34 @@ class TestGetMarketsErrorSentinel(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(r), 1)
 
 
+class TestGetOpenOrdersErrorSentinel(unittest.IsolatedAsyncioTestCase):
+    """B2: get_open_orders returns None on an API error so a transient failure is not read
+    as "no open orders" (which would let a strategy re-place / falsely book live orders).
+    The sim-mode [] (no credentials) is LOAD-BEARING — strategies reconcile on it — and
+    must NOT become the error sentinel."""
+
+    _GET_MODS = (binance, mexc, mexc_futures)   # GET-based, creds via kwargs
+
+    async def test_no_creds_returns_empty_list_not_none(self):
+        for mod in self._GET_MODS:
+            with self.subTest(mod.__name__):
+                r = await mod.get_open_orders(_Session(), "BTCUSDT", api_key="", api_secret="")
+                self.assertEqual(r, [])   # sim mode stays [] — the load-bearing case
+
+    async def test_http_error_returns_none(self):
+        for mod in self._GET_MODS:
+            with self.subTest(mod.__name__):
+                r = await mod.get_open_orders(_Session(status=500, payload={}),
+                                              "BTCUSDT", api_key="k", api_secret="s")
+                self.assertIsNone(r)
+
+    async def test_exception_returns_none(self):
+        for mod in self._GET_MODS:
+            with self.subTest(mod.__name__):
+                r = await mod.get_open_orders(_Session(exc=RuntimeError("boom")),
+                                              "BTCUSDT", api_key="k", api_secret="s")
+                self.assertIsNone(r)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

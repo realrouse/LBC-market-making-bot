@@ -351,7 +351,8 @@ async def get_open_orders(session, symbol, *, api_key=None, api_secret=None):
     Each element: {"order_id": str, "side": str, "price": float,
                    "qty": float, "status": str}
 
-    Returns [] on error or in simulation mode.
+    Returns None on an API/network error (a transient failure must not be read as
+    "no open orders"); [] in simulation mode (no credentials) or genuinely no orders.
     MEXC v3 endpoint: GET /api/v3/openOrders (Binance-compatible).
     """
     _key    = api_key    or os.environ.get("MEXC_API_KEY", "")
@@ -373,7 +374,7 @@ async def get_open_orders(session, symbol, *, api_key=None, api_secret=None):
             data = await resp.json(content_type=None)
             if resp.status != 200:
                 logger.warning("MEXC get_open_orders error %d : %.300s", resp.status, data)
-                return []
+                return None   # error sentinel — not [] (sim/no-orders)
             return [
                 {
                     "order_id": str(o.get("orderId", "")),
@@ -386,7 +387,7 @@ async def get_open_orders(session, symbol, *, api_key=None, api_secret=None):
             ]
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("MEXC get_open_orders error : %s", e)
-        return []
+        return None   # error sentinel — not [] (sim/no-orders)
 
 
 # ─── USER DATA STREAM ─────────────────────────────────────────────────────────

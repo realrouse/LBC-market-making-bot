@@ -281,13 +281,14 @@ class DCAStrategy:
 
     async def _check_rest_fills(self, state: Any, ts: Any) -> None:
         try:
-            open_oids = {
-                o["order_id"]
-                for o in await self._api.get_open_orders(state.session, self.dca.symbol)
-            }
+            open_orders = await self._api.get_open_orders(state.session, self.dca.symbol)
         except Exception as exc:
             logger.warning("DCAStrategy [%s] get_open_orders failed: %s", self.dca.symbol, exc)
             return
+        if open_orders is None:   # API error — skip reconcile (don't book live orders as filled)
+            logger.warning("DCAStrategy [%s]: get_open_orders error — skipping reconcile", self.dca.symbol)
+            return
+        open_oids = {o["order_id"] for o in open_orders}
 
         bid = ts.best_bid
         for pos in list(self._open_positions()):

@@ -454,10 +454,14 @@ class SwingStrategy:
         logger.info("SwingStrategy [%s] — reconciling with exchange...", self.sw.symbol)
         try:
             open_orders = await self._api.get_open_orders(state.session, self.sw.symbol)
-            open_ids    = {str(o["order_id"]) for o in (open_orders or [])}
         except Exception as exc:
             logger.warning("SwingStrategy reconcile: get_open_orders failed: %s — skipping", exc)
             return True
+        if open_orders is None:   # API error returns None (not raised) — skip reconcile,
+            # else an empty open_ids books every live order as "filled offline".
+            logger.warning("SwingStrategy [%s] reconcile: get_open_orders error — skipping", self.sw.symbol)
+            return True
+        open_ids = {str(o["order_id"]) for o in open_orders}
 
         for pos in list(self.sw.positions):
             if pos.status == "buy_placed" and pos.buy_order_id:
@@ -661,7 +665,10 @@ class SwingStrategy:
                         await self._on_sell_filled(state, pos, pos.sell_price)
         else:
             open_orders = await self._api.get_open_orders(state.session, self.sw.symbol)
-            open_ids    = {str(o["order_id"]) for o in (open_orders or [])}
+            if open_orders is None:   # API error — skip this poll's reconcile (don't book fills)
+                logger.warning("SwingStrategy [%s] poll: get_open_orders error — skipping", self.sw.symbol)
+                return
+            open_ids    = {str(o["order_id"]) for o in open_orders}
             for pos in list(open_pos):
                 if pos.status == "buy_placed" and pos.buy_order_id:
                     if str(pos.buy_order_id) not in open_ids:

@@ -360,7 +360,12 @@ class GridStrategy:
         )
         open_orders = await self._api.get_open_orders(
             state.session, self.grid.symbol)
-        open_ids = {str(o["order_id"]) for o in (open_orders or [])}
+        if open_orders is None:   # API error (None, not []) — skip reconcile: an empty
+            # open_ids would book every live order as "filled". (Not falsiness: `or []`
+            # here was the latent double-fill bug.)
+            logger.warning("GridStrategy [%s] reconcile: get_open_orders error — skipping", self.grid.symbol)
+            return True
+        open_ids = {str(o["order_id"]) for o in open_orders}
 
         filled = 0
         for lvl in self.grid.levels:
@@ -642,7 +647,10 @@ class GridStrategy:
         else:
             open_orders = await self._api.get_open_orders(
                 state.session, self.grid.symbol)
-            open_ids = {str(o["order_id"]) for o in (open_orders or [])}
+            if open_orders is None:   # API error — skip this poll's reconcile (don't book fills)
+                logger.warning("GridStrategy [%s] poll: get_open_orders error — skipping", self.grid.symbol)
+                return
+            open_ids = {str(o["order_id"]) for o in open_orders}
             for lvl in active:
                 if lvl.status == "buy_placed" and lvl.buy_order_id:
                     if str(lvl.buy_order_id) not in open_ids:

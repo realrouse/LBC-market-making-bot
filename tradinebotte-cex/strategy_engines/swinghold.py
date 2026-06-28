@@ -503,10 +503,14 @@ class SwingHoldStrategy:
         else:
             try:
                 open_orders = await self._api.get_open_orders(state.session, self.sh.symbol)
-                open_ids    = {str(o["order_id"]) for o in (open_orders or [])}
             except Exception as exc:
                 logger.warning("SwingHoldStrategy get_open_orders failed: %s", exc)
                 return
+            if open_orders is None:   # API error (None, not raised) — skip reconcile,
+                # else an empty open_ids books every live order as filled.
+                logger.warning("SwingHoldStrategy [%s] poll: get_open_orders error — skipping", self.sh.symbol)
+                return
+            open_ids    = {str(o["order_id"]) for o in open_orders}
 
             for pos in list(open_pos):
                 if pos.status == "buy_placed" and pos.buy_order_id:
