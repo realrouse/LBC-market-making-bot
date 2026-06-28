@@ -149,6 +149,33 @@ are symmetric plugins behind **one Strategy interface** + **one connector interf
     deliberately-thin neutral core. Less BotState surgery; reaches the Plan C shape faster.
   - Recommendation to discuss: **(B)** — the partition shows the neutral core is inherently thin, so
     forcing a full neutral BotState (A) is high-effort for a base that little neutral code consumes.
+  - **DECISION (2026-06-28): user chose (B) — thin core, pivot to Step 4.**
+
+- **PATH B EXECUTION PLAN.** Phase 1 = extract the neutral leaf helpers to `botcore` (each a
+  separate commit + full gate; all behavior-preserving). Re-export from `live_bot` so existing
+  `bot.<fn>` callers (live_bot, account_bot, tests) keep working with **zero churn** — the same
+  shim pattern used for the Strategy protocol and the connector registry. `botcore` stays pure
+  (these helpers take `conn` or a duck-typed `state`/`strategy`; no polymarket type imported — the
+  `import botcore` loads-no-`api_*` invariant still holds). Caller/feasibility verified 2026-06-28:
+  - **3b-3a:** `botcore/persistence.py` ← `read_capital_base` / `write_capital_base` (`conn`-only,
+    zero coupling; callers: live_bot ×1 each + tests). Smallest first.
+  - **3b-3b:** move `_persist_snapshot` (+ the `SNAPSHOT_COMMIT_SECS` constant) into
+    `botcore/persistence.py` — touches only `state.{conn,config.enable_snapshots,last_write_ts,
+    last_snapshot_commit_ts}` (verified), so type the param duck/Protocol, not `BotState`. The
+    `row_writer` callables (`save_snapshot`/`save_cex_snapshot`) stay in their plugins. ⚠ Update
+    `TestDataPathCoverage` (it `inspect.getsource(bot)`-scans for `_persist_snapshot` — make it
+    follow the move / keep scanning live_bot's re-export).
+  - **3b-3c (optional):** move `equity` / `cumulative_pnl` (duck-typed on `state`/`strategy`).
+  - After Phase 1, `botcore` = strategy protocol + connector registry + persistence helpers (the
+    deliberately-thin neutral core). Heartbeat/control wiring is ALREADY neutral (in `tradinetools`);
+    `_hb_payload` is a `main()` closure (entrypoint glue) — leave it.
+- **Phase 2 = Step 4 (its OWN design pass + user go — do not fold into Phase 1).** Physically split
+  `live_bot.py`'s polymarket bulk (BotState, handle_book_update, ThresholdStrategy, enter_live_trade,
+  register_market/_run_ws/_market_refresh_loop, the `api` global, TokenState, check_signal/resolution,
+  GAMMA) into the `tradinebotte-polymarket/` plugin, leaving `live_bot.py` a thin entrypoint wiring
+  core + plugin. This is where the `api` global + the `live_bot.api.*` test patches relocate. HIGH
+  risk — touches ExecStart paths, every deploy script, test sys.path; the clean-install becomes
+  load-bearing again.
   - **Coverage gap to close later (low risk):** the standalone clean-install only runs live_bot,
     which imports `botcore.connectors` directly — it does NOT exercise the `connectors/` shim's
     flat self-bootstrap (only cex_feed + the strategy engines hit that, on grid/swing accounts).
