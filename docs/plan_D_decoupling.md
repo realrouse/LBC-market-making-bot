@@ -104,6 +104,18 @@ are symmetric plugins behind **one Strategy interface** + **one connector interf
   a neutral base. **Watch the step-2 hook:** the import-time `api = connectors.load(CONNECTOR)`
   binding + tests patching `live_bot.api.*` must be restructured (inject connector into
   `BotState`) so core imports no plugin. Then CEX engines explicitly conform too (symmetry).
+  - **⚠ LANDMINE to resolve BEFORE designing 3b-2:** there appear to be two competing
+    "default strategy" conventions — `BotState.__init__` sets `self.strategy = ThresholdStrategy()`
+    (L936), but a test sets `st.strategy = None` commented "built-in threshold strategy" (L3354)
+    while another asserts `isinstance(state.strategy, ThresholdStrategy)` (L2245). Grep how
+    `state.strategy is None` is handled in `handle_book_update`/`check_signal` and decide which
+    is authoritative — you can't have both `None`-means-threshold AND an injected default
+    instance. This tie-breaker decides the whole injection shape.
+  - **Coverage gap to close later (low risk):** the standalone clean-install only runs live_bot,
+    which imports `botcore.connectors` directly — it does NOT exercise the `connectors/` shim's
+    flat self-bootstrap (only cex_feed + the strategy engines hit that, on grid/swing accounts).
+    Covered by composition (shim monorepo bootstrap passes in `test_grid_trail`; flat resolution
+    is the pattern live_bot proved on a real install). A `test_multibot_deploy` run closes it.
 - **Validate:** import graph clean (no core→plugin import), full suite, canary.
 
 ### Step 4 — move Polymarket into a plugin package (reach Plan C)
