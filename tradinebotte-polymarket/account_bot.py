@@ -58,7 +58,9 @@ _FEED_ADDR = os.environ.get(
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# live_bot no longer has module-level side effects — safe to import anywhere.
+# Importing live_bot pulls in its module-top deps (the connector registry + the neutral
+# botcore.Strategy, and an importlib-load of the default connector) but performs no I/O —
+# safe to import here. botcore/ and connectors/ ship flat beside this file (see deploy scripts).
 import live_bot as bot  # pylint: disable=wrong-import-order,wrong-import-position
 
 _INSTALL_DIR = os.environ.get("TRADINEBOTTE_DIR", os.getcwd())
