@@ -29,7 +29,7 @@ from collections import deque
 from dataclasses import dataclass, field
 import functools
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 import aiohttp, websockets
 
 # process start epoch — used for uptime display; harmless to capture at import
@@ -54,7 +54,9 @@ from botcore.connectors import load as _load_connector_module
 from botcore import Strategy
 # Neutral persistence helpers — re-exported so existing live_bot.<fn> / bot.<fn>
 # callers keep working while the implementation lives in the core (Plan D step 3b).
-from botcore.persistence import read_capital_base, write_capital_base
+from botcore.persistence import (
+    read_capital_base, write_capital_base, _persist_snapshot, SNAPSHOT_COMMIT_SECS,
+)
 import bot_utils
 from bot_utils import print_dashboard, write_web_status
 from tradinetools import (
@@ -94,7 +96,7 @@ US_WEEKLY_CLOSE:        bool                  = True
 
 # ─── TIMING / SNAPSHOT DEFAULTS ───────────────────────────────────────────────
 SNAPSHOT_INTERVAL       = 1
-SNAPSHOT_COMMIT_SECS    = 30   # batch snapshot commits: one flush every 30 s
+# SNAPSHOT_COMMIT_SECS lives in botcore.persistence (re-exported at the top of this module).
 DASHBOARD_INTERVAL      = 300
 MARKET_REFRESH          = 30
 
@@ -1471,30 +1473,7 @@ def save_cex_snapshot(state: BotState, symbol: str, book: Any) -> None:
     )
 
 
-def _persist_snapshot(state: BotState, row_writer: Callable[[], None]) -> None:
-    """The single shared snapshot-persistence step — invoked by EVERY data path.
-
-    Honours the enable-snapshots guard, writes one row (its shape delegated to
-    `row_writer`: save_snapshot for the polymarket/WS path, save_cex_snapshot for the
-    CEX consumer), advances the data-freshness clock (state.last_write_ts → status
-    ⚠data), and batch-commits every SNAPSHOT_COMMIT_SECS. Callers own only their cadence
-    gate (per-token for WS, per-loop for CEX).
-
-    Persistence used to be a side-effect buried inside handle_book_update; the
-    2026-06-16 CEX path bypassed that function and silently stopped recording. This
-    extraction does NOT by itself prevent that — a path that bypasses _persist_snapshot
-    too would record silently again. What it does: give every data path one named,
-    enable-guarded, tested step to call instead of a hidden side-effect. The actual
-    safety net for a silent recording-stop is the status ⚠data monitor (it flags a
-    stale last_write_ts regardless of which path dropped the write)."""
-    if not state.config.enable_snapshots:
-        return
-    row_writer()
-    now = time.time()
-    state.last_write_ts = now
-    if now - state.last_snapshot_commit_ts >= SNAPSHOT_COMMIT_SECS:
-        state.conn.commit()
-        state.last_snapshot_commit_ts = now
+# _persist_snapshot lives in botcore.persistence (re-exported at the top of this module).
 
 # ─── MARKET DISCOVERY ─────────────────────────────────────────────────────────
 
