@@ -104,22 +104,56 @@ are symmetric plugins behind **one Strategy interface** + **one connector interf
   factory (that would be a service-locator with an import-order landmine when BotState moves to
   core). Gate: tests 411 / poly 441 / cex 126 / indicators 139 / status 75 / tools 168. Clean-install
   NOT load-bearing here (no file/install.sh/import-shape change) → not run.
-- **Step 3b+ REMAINING (stop for review before each):** incrementally move the strategy-agnostic
-  machinery into `botcore` — `BotState`, `handle_book_update`, `_persist_snapshot`, the consumer
-  loops, heartbeat/control wiring — one sub-step = one commit, keeping `live_bot.py` the
-  ExecStart entrypoint that imports from core. **Still-coupled (verified):** `BotState` still holds
-  polymarket fields (`tokens`/`TokenState`, `market_tokens`, `traded_direction`, `signalled`), so
-  it can't move to core yet. **Next sub-step (3b-2b): connector injection** — replace the module
-  global `api` (the import-time `api = connectors.load(CONNECTOR)` binding) with `state.connector`,
-  and restructure the tests patching `live_bot.api.*` accordingly, so the state-taking functions
-  reference an injected connector, not a plugin global. Then field-neutralize BotState / split a
-  neutral base, then move the machinery, then CEX engines explicitly conform too (symmetry).
+- **DESIGN PASS (2026-06-28) — corrects this plan's core/plugin partition. READ THIS.**
+  An earlier steer (and the doc's own Step-3 list) treated `BotState`, `handle_book_update`,
+  the consumer loops and a "connector-injection (3b-2b)" step as the neutral core to extract.
+  **That is wrong** — verified by the `api.*` usage map + `handle_book_update` caller analysis:
+  - **`handle_book_update` is polymarket, not core** — it is token-keyed
+    (`state.tokens.get(parsed["token_id"])`), called only by polymarket paths (account_bot,
+    `feed_consumer_loop`, `_run_ws`); CEX **bypasses** it (`cex_feed_consumer_loop`).
+  - **The consumer loops are per-plugin**, not one shared loop: `feed_consumer_loop` = polymarket,
+    `cex_feed_consumer_loop` = CEX.
+  - **The module global `api` is exclusively polymarket-bound** — all 21 `api.*` sites are in
+    `enter_live_trade` / `register_market` / `_run_ws` / `_market_refresh_loop` / `compute_stake`
+    / `main`(GAMMA, gated by `connector=="polymarket"`). No core-bound function uses `api`.
+  - ⇒ **"3b-2b connector injection" is NOT a core prerequisite** — `api` already belongs to the
+    polymarket plugin by usage; it travels to the plugin in Step 4. The tests patching
+    `live_bot.api.*` are a Step-4 mechanical concern (follow `api` to its new home), not a blocker.
+  - **Headline:** `live_bot.py` is *mostly the polymarket plugin with a thin neutral core embedded*,
+    not a neutral core with polymarket bolted on. What is genuinely neutral is thin and mostly
+    already done (Strategy protocol 3a, connector registry 3b-1).
+
+- **BotState surface partition (the discriminating artifact):**
+  - *Neutral fields:* `conn`, `config`, `capital`, `total_trades/wins/losses/total_pnl`,
+    `daily_pnl/_daily_pnl_day/weekly_pnl/_weekly_pnl_week`, `last_snapshot_commit_ts/last_book_ts/
+    last_write_ts`, `api_fail_streak/api_cooldown_until`, `strategy` (injected 3b-2a), `session`.
+  - *Polymarket fields:* `tokens` (→`TokenState`), `market_tokens`, `open_trades`,
+    `traded_direction`, `signalled`, `rejection_stats`.
+  - *Neutral state-taking fns (touch only neutral fields):* `_persist_snapshot` (config.enable_snapshots,
+    last_write_ts, last_snapshot_commit_ts, conn — verified), `equity`/`cumulative_pnl`,
+    `read/write_capital_base` (conn-only), the heartbeat payload.
+  - *Polymarket state-taking fns:* `handle_book_update`, `check_signal`, `check_resolution`,
+    `enter_live_trade`, `register_market`/`_run_ws`/`_market_refresh_loop`, `compute_stake`.
+
+- **⏸ STRATEGIC FORK — the user's call (do NOT pick unilaterally):** further extraction is blocked
+  on BotState's fate. The neutral state-taking fns all take `BotState`, which is polymarket-coupled.
+  Two paths:
+  - **(A) Split BotState** into a neutral base (neutral fields + the neutral fns) in `botcore` +
+    a `PolymarketState(base)` extension (polymarket fields/fns) in the plugin. Classic clean split;
+    enables symmetric plugins; larger refactor (every `state.<polymarket field>` access must be on
+    the subclass; tests touch BotState heavily).
+  - **(B) Thin core, pivot to Step 4.** Accept `live_bot.py` is mostly the polymarket plugin. Move
+    only the genuinely-neutral *leaf* helpers (`_persist_snapshot`, capital-base helpers, heartbeat
+    wiring) to `botcore` opportunistically, then jump to Step 4: package the polymarket bulk into
+    `tradinebotte-polymarket/` as a plugin peer of `tradinebotte-cex/`, leaving `botcore` as the
+    deliberately-thin neutral core. Less BotState surgery; reaches the Plan C shape faster.
+  - Recommendation to discuss: **(B)** — the partition shows the neutral core is inherently thin, so
+    forcing a full neutral BotState (A) is high-effort for a base that little neutral code consumes.
   - **Coverage gap to close later (low risk):** the standalone clean-install only runs live_bot,
     which imports `botcore.connectors` directly — it does NOT exercise the `connectors/` shim's
     flat self-bootstrap (only cex_feed + the strategy engines hit that, on grid/swing accounts).
-    Covered by composition (shim monorepo bootstrap passes in `test_grid_trail`; flat resolution
-    is the pattern live_bot proved on a real install). A `test_multibot_deploy` run closes it.
-- **Validate:** import graph clean (no core→plugin import), full suite, canary.
+    A `test_multibot_deploy` run closes it.
+- **Validate:** import graph clean (no core→plugin import), full suite, clean-install.
 
 ### Step 4 — move Polymarket into a plugin package (reach Plan C)
 - Move ThresholdStrategy + the Polymarket connector + Polymarket market discovery
