@@ -162,16 +162,17 @@ are symmetric plugins behind **one Strategy interface** + **one connector interf
     …`) so `bot.<fn>` callers are unchanged. Verified re-export identity + core-purity invariant
     (now imports `botcore.persistence`) + full gate green. No install.sh edit needed (whole-dir
     botcore copy from 3b-1 ships it; flat test globs it).
-  - **3b-3b:** move `_persist_snapshot` (+ the `SNAPSHOT_COMMIT_SECS` constant) into
-    `botcore/persistence.py` — touches only `state.{conn,config.enable_snapshots,last_write_ts,
-    last_snapshot_commit_ts}` (verified), so type the param duck/Protocol, not `BotState`. The
-    `row_writer` callables (`save_snapshot`/`save_cex_snapshot`) stay in their plugins. ⚠ Update
-    `TestDataPathCoverage` (it `inspect.getsource(bot)`-scans for `_persist_snapshot` — make it
-    follow the move / keep scanning live_bot's re-export).
-  - **3b-3c (optional):** move `equity` / `cumulative_pnl` (duck-typed on `state`/`strategy`).
-  - After Phase 1, `botcore` = strategy protocol + connector registry + persistence helpers (the
-    deliberately-thin neutral core). Heartbeat/control wiring is ALREADY neutral (in `tradinetools`);
-    `_hb_payload` is a `main()` closure (entrypoint glue) — leave it.
+  - **3b-3b DONE (committed → see git log):** `_persist_snapshot` (+ `SNAPSHOT_COMMIT_SECS`) moved
+    into `botcore/persistence.py`, param duck-typed (`Any`) not `BotState`; live_bot re-exports both.
+    `TestDataPathCoverage` needed NO change — its AST scan keys off the call sites, which stay in
+    live_bot; the count guard sees the re-export + calls. Dropped the now-unused `Callable` import.
+  - **3b-3c DONE (committed → see git log):** `cumulative_pnl` / `equity` moved (duck-typed on
+    `state`/`strategy`); live_bot re-exports both; account_bot's `bot.cumulative_pnl` unchanged.
+  - **PHASE 1 COMPLETE.** `botcore` = strategy protocol + connector registry + persistence helpers
+    (capital-base, `_persist_snapshot`, `cumulative_pnl`/`equity`) = the deliberately-thin neutral
+    core. Heartbeat/control wiring is ALREADY neutral (in `tradinetools`); `_hb_payload` is a
+    `main()` closure (entrypoint glue) — left in place. Core-purity invariant (imports
+    `botcore.persistence`, loads no `api_*`) + full gate green throughout.
 - **Phase 2 = Step 4 (its OWN design pass + user go — do not fold into Phase 1).** Physically split
   `live_bot.py`'s polymarket bulk (BotState, handle_book_update, ThresholdStrategy, enter_live_trade,
   register_market/_run_ws/_market_refresh_loop, the `api` global, TokenState, check_signal/resolution,

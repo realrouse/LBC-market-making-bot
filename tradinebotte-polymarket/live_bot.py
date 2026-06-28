@@ -56,6 +56,7 @@ from botcore import Strategy
 # callers keep working while the implementation lives in the core (Plan D step 3b).
 from botcore.persistence import (
     read_capital_base, write_capital_base, _persist_snapshot, SNAPSHOT_COMMIT_SECS,
+    cumulative_pnl, equity,
 )
 import bot_utils
 from bot_utils import print_dashboard, write_web_status
@@ -953,32 +954,7 @@ class BotState:
         return (self.wins / t * 100) if t else 0.0
 
 
-def cumulative_pnl(state: "BotState") -> tuple[float, int]:
-    """Realized cumulative PnL and completed-trade count for the active strategy.
-
-    Sourced from the persisted, restart-restored state (grid_state for grid,
-    swing_state for swing, the threshold trades table otherwise), so the cumulative
-    survives restarts — only the operator reset command zeroes it. Exported on the
-    heartbeat so the status page shows the real cumulative, not just the daily PnL.
-    """
-    strat = getattr(state, "strategy", None)
-    grid = getattr(strat, "grid", None)
-    if grid is not None:
-        return float(grid.total_profit_usd), int(grid.total_cycles)
-    sw = getattr(strat, "sw", None)
-    if sw is not None:
-        return float(sw.total_pnl), int(sw.total_trades)
-    return float(state.total_pnl), int(state.total_trades)
-
-
-def equity(state: "BotState") -> float:
-    """Current equity = persisted capital base + realized cumulative PnL.
-
-    Reported uniformly on the heartbeat. For the threshold strategy this equals the
-    live state.capital; for grid/swing it folds in their strategy-table cumulative
-    (which state.capital does not track), so the figure resumes across restarts.
-    """
-    return state.config.capital_start + cumulative_pnl(state)[0]
+# cumulative_pnl / equity live in botcore.persistence (re-exported at the top of this module).
 
 
 # ─── WEBSOCKET MESSAGE HANDLING ───────────────────────────────────────────────

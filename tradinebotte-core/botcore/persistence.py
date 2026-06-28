@@ -45,6 +45,37 @@ def _persist_snapshot(state: Any, row_writer: Callable[[], None]) -> None:
         state.last_snapshot_commit_ts = now
 
 
+def cumulative_pnl(state: Any) -> "tuple[float, int]":
+    """Realized cumulative PnL and completed-trade count for the active strategy.
+
+    Sourced from the persisted, restart-restored state (grid_state for grid,
+    swing_state for swing, the threshold trades table otherwise), so the cumulative
+    survives restarts — only the operator reset command zeroes it. Exported on the
+    heartbeat so the status page shows the real cumulative, not just the daily PnL.
+
+    `state`/`strategy` are duck-typed: the strategy's cumulative is read via getattr
+    (`grid`/`sw`), falling back to the state's own totals — no plugin type imported.
+    """
+    strat = getattr(state, "strategy", None)
+    grid = getattr(strat, "grid", None)
+    if grid is not None:
+        return float(grid.total_profit_usd), int(grid.total_cycles)
+    sw = getattr(strat, "sw", None)
+    if sw is not None:
+        return float(sw.total_pnl), int(sw.total_trades)
+    return float(state.total_pnl), int(state.total_trades)
+
+
+def equity(state: Any) -> float:
+    """Current equity = persisted capital base + realized cumulative PnL.
+
+    Reported uniformly on the heartbeat. For the threshold strategy this equals the
+    live state.capital; for grid/swing it folds in their strategy-table cumulative
+    (which state.capital does not track), so the figure resumes across restarts.
+    """
+    return state.config.capital_start + cumulative_pnl(state)[0]
+
+
 def read_capital_base(conn: sqlite3.Connection) -> "float | None":
     """Persisted effective capital base, or None if never written (fresh DB)."""
     try:
