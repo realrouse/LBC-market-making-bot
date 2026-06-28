@@ -45,7 +45,13 @@ sys.path.insert(0, _THIS_DIR)
 _cex_dir = os.path.join(_THIS_DIR, "..", "tradinebotte-cex")
 if os.path.isdir(_cex_dir) and _cex_dir not in sys.path:
     sys.path.insert(0, os.path.normpath(_cex_dir))
+# botcore/ (neutral core — the Strategy protocol) lives in tradinebotte-core/ in the
+# monorepo (flat deploy: same dir, copied into INSTALL_DIR beside connectors/).
+_core_dir = os.path.join(_THIS_DIR, "..", "tradinebotte-core")
+if os.path.isdir(_core_dir) and _core_dir not in sys.path:
+    sys.path.insert(0, os.path.normpath(_core_dir))
 from connectors import load as _load_connector_module
+from botcore import Strategy
 import bot_utils
 from bot_utils import print_dashboard, write_web_status
 from tradinetools import (
@@ -1427,7 +1433,7 @@ def close_trade(state: BotState, ts: TokenState, trade_id: int, outcome: str) ->
     write_web_status(state, state.config)
 
 
-class ThresholdStrategy:
+class ThresholdStrategy(Strategy):
     """Polymarket binary-market threshold strategy: single-entry signal + resolution.
 
     The default strategy (BotState sets it; used when strategy_type is "threshold" or
@@ -1436,10 +1442,10 @@ class ThresholdStrategy:
     GridStrategy/SwingStrategy behind one dispatch, so handle_book_update no longer
     special-cases it (Plan D step 1 — strategy-agnostic dispatch).
 
-    Satisfies strategy_engines.base.Strategy STRUCTURALLY (duck-typed) — deliberately NOT
-    importing/subclassing the Protocol: strategy_engines already imports live_bot, and a
-    top-level import here would harden that cycle into an import-time failure. Explicit
-    conformance waits for the step that moves the protocol to a neutral core package.
+    Explicitly conforms to the neutral-core `botcore.Strategy` protocol (Plan D step 3):
+    the protocol now lives in the core that every plugin may depend on, so subclassing it
+    here introduces no plugin↔plugin cycle (the dependency is plugin → core). This replaces
+    the step-1 duck-typing — `Strategy` is the first real conformer of the protocol.
     """
 
     STRATEGY_TYPE = "threshold"

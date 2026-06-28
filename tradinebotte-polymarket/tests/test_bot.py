@@ -3478,6 +3478,14 @@ class TestThresholdStrategy(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(state.strategy, bot.ThresholdStrategy)
         self.assertEqual(state.strategy.STRATEGY_TYPE, "threshold")
 
+    def test_threshold_explicitly_conforms_to_core_strategy_protocol(self):
+        """Plan D step 3: ThresholdStrategy subclasses the neutral-core botcore.Strategy
+        protocol explicitly (the step-1 duck-typing is gone). Guards against a regression
+        that drops the base class or re-introduces a privileged import of the protocol."""
+        from botcore import Strategy as CoreStrategy
+        self.assertIn(CoreStrategy, bot.ThresholdStrategy.__mro__)
+        self.assertIsInstance(bot.ThresholdStrategy(), CoreStrategy)  # runtime_checkable
+
     async def test_on_book_update_delegates_signal_then_resolution(self):
         from unittest.mock import AsyncMock, MagicMock
         state = make_state()

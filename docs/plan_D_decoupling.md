@@ -54,21 +54,40 @@ are symmetric plugins behind **one Strategy interface** + **one connector interf
   core→plugin coupling: it will need the test-patch pattern restructured (e.g. strategy/
   connector injected into `BotState`, tests patching that) so core imports no plugin.
 
-### Step 3 — neutral core package + move the `Strategy` protocol there
-- Today the `Strategy` protocol is in `tradinebotte-cex/strategy_engines/base.py`, and
-  `live_bot` (polymarket pkg) imports `strategy_engines` (cex pkg). **VERIFY the real import
-  graph first** — a grep found only *docstring* references to live_bot in
-  `strategy_engines/__init__.py`, so the "cycle" may be one-directional; confirm before
-  designing.
-- **Task:** create a neutral package (`tradinebotte-core/` or `tradinebotte-engine/`) and
-  move into it the strategy-agnostic machinery: the `Strategy` protocol, `BotState`,
-  `handle_book_update`, `_persist_snapshot`, the consumer loops, heartbeat/control wiring,
-  and the connector-load interface. Core imports neither polymarket nor cex.
-- Once the protocol is neutral, ThresholdStrategy + CEX engines **explicitly** conform
-  (import it) — removing the Step-1 duck-typing workaround.
-- **Risk: HIGH** — moves the core of the 2040-line `live_bot.py` out of the polymarket
-  package; touches every deploy script, systemd `ExecStart`, and test sys.path. Sub-step it;
-  keep ExecStart paths working at each commit.
+### Step 3 — neutral core package + move the `Strategy` protocol there — **IN PROGRESS**
+- **Import-graph VERIFIED (the "cycle" is a myth):** `strategy_engines` does NOT import
+  `live_bot` — only docstrings mention it. Dependency is one-directional
+  `live_bot → {connectors, strategy_engines.base, botcore}`. Also: NOTHING imported,
+  subclassed, or isinstance-checked the `Strategy` protocol before step 3 — all five
+  strategies were duck-typed, the protocol was pure documentation.
+- **Step 3a DONE (commits `e98bac4` + the 3a-2 commit), NOT yet deployed:**
+  - **3a-1** (`e98bac4`): created `tradinebotte-core/botcore/` (importable as `botcore`)
+    holding the `Strategy` protocol; `strategy_engines/base.py` re-exports it (self-bootstraps
+    the sibling core dir onto sys.path → zero test-path churn). Wired `botcore/` into all 7
+    bot-shipping deploy scripts (install, update_standalone, setup_data_plane, deploy_grid_×2,
+    update_swing, test_multibot) + syntax-check list. Guard `TestCoreShipsWithTheBot`. Also
+    fixed a step-2 regression: `cleanup_server.sh` deleted `connectors/` which live_bot now
+    needs at import. Pure scaffolding, no live_bot edit.
+  - **3a-2**: `live_bot` imports `from botcore import Strategy` at module top (added a
+    `_core_dir` sys.path insert mirroring `_cex_dir`); `ThresholdStrategy(Strategy)` subclasses
+    it — first real conformer, step-1 duck-typing removed. Guard
+    `test_threshold_explicitly_conforms_to_core_strategy_protocol`. This is the dependency
+    inversion the advisor flagged: importing live_bot now imports botcore unconditionally
+    (botcore must ship everywhere — done in 3a-1).
+  - Gate green each commit: poly 441 / cex 126 / tests 409 / indicators 139 / status 75 /
+    tradinetools 168.
+- **⚠ Validate before 3b:** a CLEAN INSTALL on the ephemeral fresh-install test account
+  (`TEST_STANDALONE_USER_IDX`, via `test_standalone_deploy.sh` / `test_multibot_deploy.sh`) —
+  grepping scripts proves intent, a fresh install proves botcore lands on a flat-deploy account
+  where live_bot now imports it at startup. All sim now → cheap.
+- **Step 3b+ REMAINING (stop for review before each):** incrementally move the strategy-agnostic
+  machinery into `botcore` — `BotState`, `handle_book_update`, `_persist_snapshot`, the consumer
+  loops, heartbeat/control wiring, the connector-load interface — one sub-step = one commit,
+  keeping `live_bot.py` the ExecStart entrypoint that imports from core. Then have the CEX
+  engines explicitly conform too (symmetry). HIGH risk: touches the 2079-line `live_bot.py`,
+  every deploy script, systemd `ExecStart`, test sys.path. **Watch the step-3 hook from step 2:**
+  the import-time `api = connectors.load(CONNECTOR)` binding + tests patching `live_bot.api.*`
+  must be restructured (inject connector/strategy into `BotState`) so core imports no plugin.
 - **Validate:** import graph clean (no core→plugin import), full suite, canary.
 
 ### Step 4 — move Polymarket into a plugin package (reach Plan C)
