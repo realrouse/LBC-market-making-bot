@@ -186,11 +186,52 @@ are symmetric plugins behind **one Strategy interface** + **one connector interf
     A `test_multibot_deploy` run closes it.
 - **Validate:** import graph clean (no core→plugin import), full suite, clean-install.
 
-### Step 4 — move Polymarket into a plugin package (reach Plan C)
-- Move ThresholdStrategy + the Polymarket connector + Polymarket market discovery
-  (`register_market`, market-refresh, token bookkeeping) into `tradinebotte-polymarket/` as a
-  **plugin** — peer of `tradinebotte-cex/`. Core then has nothing Polymarket-specific.
-- End-state = Plan C: core neutral; polymarket and cex symmetric behind the interfaces.
+### Step 4 — DESIGN PASS (2026-06-28): a value/risk decision, mostly declinable
+**Headline: interface symmetry is ALREADY done.** Polymarket and CEX go through one Strategy
+protocol, one connector registry, one strategy-agnostic dispatch, and the shared neutral core
+(Phase 1). What Step 4 buys is only **layout/packaging** symmetry (moving polymarket code out of
+the entrypoint *file*) — cosmetic relative to [[feedback_not_polymarket_first]], whose archi/test/
+observability/diagnostics bias is largely already addressed. Layout purity for its own sake is the
+lowest-value, highest-cost rung.
+
+**Structural map — `live_bot.py` (2025 lines) is a 3-way tangle:**
+- *Neutral entrypoint/orchestration:* logging, `BotConfig`/`make_config`, `init_db`/`SCHEMA`,
+  `main()` lifecycle (heartbeat/control/health via tradinetools), `_load_connector`, the dispatch
+  seam (`main` L1998-2006: `feed_consumer_loop` / `cex_feed_consumer_loop` / `ws_loop`).
+- *Polymarket plugin (bulk):* `TokenState`, `ThresholdStrategy`, `check_signal`/`enter_live_trade`/
+  `check_resolution`/`close_trade`/`compute_stake`, `register_market`/`purge_expired_markets`/
+  `_register_market_from_feed`, `ws_loop`/`_market_refresh_loop`/`_run_ws`, `feed_consumer_loop`,
+  `handle_book_update`, `save_snapshot`, the `api` global, GAMMA, trading-hours filter, `RejectionStats`.
+- *CEX glue in the polymarket file:* `cex_feed_consumer_loop`, `save_cex_snapshot`.
+
+**Why a FULL split (4b) is expensive/risky out of proportion to the value:**
+1. **ExecStart pins `live_bot.py` as the runnable entrypoint** — it can't become a thin shell without
+   touching every deploy script + systemd unit + account_bot's import (the deploy surface that has
+   bitten this project: feed-restart, pgrep, shipping gaps).
+2. **The gate is weakest exactly where 4b is riskiest.** Trading-behavior coverage lives in the unit
+   tests that `patch("live_bot.api.*")` (~10 sites) — and 4b *rewrites those very patch points* as
+   `api` relocates. Moving the trading code AND rewriting its safety net in one step = "behavior-
+   preserving" genuinely hard; the clean-install only proves "starts + WS connects", not "still
+   trades correctly". 4b would need a behavior-level integration check that doesn't exist yet.
+
+**THREE OPTIONS (the user's call — recommendation: (i) or (ii)):**
+- **(i) Declare Plan D structurally DONE.** Interfaces + core + dispatch are symmetric; the remainder
+  is layout. Stop here. (Step 5 snapshots-schema remains optional/separate.)
+- **(ii) CEX-glue tidy (4a) then stop.** Extract `cex_feed_consumer_loop` + `save_cex_snapshot` out
+  of the polymarket file into the CEX package — the most glaring layout wart (CEX data-path code
+  living in the polymarket entrypoint). Self-contained: touches NO `api` global; deps are
+  `botcore._persist_snapshot` + the strategy + `save_cex_snapshot`. Gotcha: lazy-import it inside the
+  `_use_cexfeed` dispatch branch (mirroring the lazy `strategy_engines` import) so polymarket-only
+  accounts need not ship it. Honest: removes a wart, NOT the asymmetry — live_bot.py stays a
+  polymarket-resident universal entrypoint.
+- **(iii) Full split (4b).** Neutral entrypoint + polymarket plugin package. Large, deploy-wide, risky
+  per above. **Justified only by a concrete roadmap driver** — a 3rd strategy family, or hard package
+  boundaries for an open-source release. If no concrete driver, decline it.
+
+- **Coverage gap (close if any Step-4 work happens):** the standalone clean-install only runs live_bot
+  (imports `botcore.connectors` directly) — it does NOT exercise the `connectors/` shim's flat
+  self-bootstrap (cex_feed + strategy engines, on grid/swing accounts). A `test_multibot_deploy` run
+  closes it; (ii) would touch cex_feed so re-validate there.
 
 ### Step 5 — generalize the `snapshots` schema (optional / lowest priority)
 - Today `snapshots` is Polymarket-shaped (`market_id/token_id/direction/secs_remaining`);
