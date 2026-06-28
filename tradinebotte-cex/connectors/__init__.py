@@ -1,88 +1,32 @@
 """
-Connector factory — maps exchange names to their api_* modules.
+Connector registry — re-exported from the neutral core.
 
-Each connector module exposes the same interface:
-    parse_book_update(msg)          → dict | None
-    get_markets(session, ...)       → list[dict]
-    post_order(session, ...)        → str | None
-    compute_fee(price, qty)         → float
-    make_subscribe_msg(symbols)     → str
-    get_market_id/question/...      → str
-    WS_URL                          → str
-    WS_BATCH_SIZE                   → int
+The registry now lives in `botcore.connectors` (Plan D step 3) so the core owns the
+connector-load interface and it no longer physically sits in the CEX package. This
+module keeps the historical import path `from connectors import load` working for
+cex_feed, the strategy engines, and tests.
 
-Usage from live_bot.py:
-    from connectors import load as _load_connector_module
-    # module-level default, resolved by name (no privileged import):
-    api = _load_connector_module(CONNECTOR)
-    # main() rebinds the same global for the configured connector:
-    _load_connector(config.connector)
+`botcore/` is shipped flat beside this package on a deployed account (install/update
+copy it like this one), so `import botcore` resolves there. In the monorepo it lives
+at the sibling `tradinebotte-core/`, added to sys.path below — mirroring how
+strategy_engines/base.py and live_bot reconcile the flat-deploy vs monorepo layouts.
 """
 
-import importlib
-from types import ModuleType
+import os
+import sys
 
-_REGISTRY: dict[str, str] = {
-    "polymarket":   "api_polymarket",
-    "binance":      "api_binance",
-    "mexc":         "api_mexc",
-    "mexc_futures": "api_mexc_futures",
-    "bitstamp":     "api_bitstamp",
-}
+# Monorepo: botcore lives at ../../tradinebotte-core relative to this file.
+# Flat deploy: that directory does not exist here (botcore/ sits in INSTALL_DIR,
+# already on sys.path), so the insert is skipped and `import botcore` resolves there.
+_CORE_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tradinebotte-core")
+)
+if os.path.isdir(_CORE_DIR) and _CORE_DIR not in sys.path:
+    sys.path.insert(0, _CORE_DIR)
 
-_STRATEGY_REQUIREMENTS: dict[str, list[str]] = {
-    "grid": [
-        "get_open_orders",
-        "cancel_order",
-        "get_order_status",
-        "get_listen_key",
-        "keepalive_listen_key",
-        "make_user_stream_url",
-        "parse_user_stream_msg",
-    ],
-    "swing": [
-        "post_order",
-        "get_open_orders",
-        "cancel_order",
-        "compute_fee",
-    ],
-    "swinghold": [
-        "post_order",
-        "get_open_orders",
-        "cancel_order",
-        "compute_fee",
-    ],
-    "dca": [
-        "post_order",
-        "get_open_orders",
-        "compute_fee",
-    ],
-}
+# noqa/pylint: re-export the public surface so `from connectors import load` etc. work.
+from botcore.connectors import (  # noqa: E402  pylint: disable=wrong-import-position
+    load, validate, available,
+)
 
-
-def load(name: str) -> ModuleType:
-    """Return the api_* module for the given connector name."""
-    module_name = _REGISTRY.get(name)
-    if module_name is None:
-        raise ValueError(
-            f"Unknown connector: {name!r}. "
-            f"Valid connectors: {sorted(_REGISTRY)}"
-        )
-    return importlib.import_module(module_name)
-
-
-def validate(connector_module: ModuleType, strategy_type: str) -> None:
-    """Raise RuntimeError if connector_module is missing methods required by strategy_type."""
-    missing = [
-        m for m in _STRATEGY_REQUIREMENTS.get(strategy_type, [])
-        if not hasattr(connector_module, m)
-    ]
-    if missing:
-        raise RuntimeError(
-            f"Connector {connector_module.__name__!r} is incompatible with "
-            f"strategy_type={strategy_type!r}: missing methods: {missing}"
-        )
-
-
-def available() -> list[str]:
-    return sorted(_REGISTRY)
+__all__ = ["load", "validate", "available"]

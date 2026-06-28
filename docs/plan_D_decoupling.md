@@ -80,14 +80,30 @@ are symmetric plugins behind **one Strategy interface** + **one connector interf
   (`TEST_STANDALONE_USER_IDX`, via `test_standalone_deploy.sh` / `test_multibot_deploy.sh`) —
   grepping scripts proves intent, a fresh install proves botcore lands on a flat-deploy account
   where live_bot now imports it at startup. All sim now → cheap.
+- **Step 3b-1 DONE (not yet committed at time of writing → see git log), connector-load
+  interface → core:** moved the connector registry from the CEX package into `botcore.connectors`;
+  `connectors/__init__.py` is now a self-bootstrapping shim re-exporting it (cex_feed, the
+  strategy engines, and tests keep `from connectors import load`); live_bot imports
+  `from botcore.connectors import load, validate`. Robustness: `install.sh` now copies `botcore/`
+  as a whole dir + globs the syntax check (no more hand-listed file set — the flat-sim test had
+  its own hardcoded list that could drift to a false green). Invariant test: `import botcore`
+  loads no `api_*`. Blast radius verified: every `connectors` importer (live_bot, cex_feed,
+  strategy_engines/*) already ships botcore from 3a-1; accumulation/orderbook/scalping don't
+  import it. NB this is a peripheral win — live_bot does NOT shrink, and its lazy
+  `from strategy_engines import load` (~L1980) is still a real core→cex plugin dep for later.
 - **Step 3b+ REMAINING (stop for review before each):** incrementally move the strategy-agnostic
   machinery into `botcore` — `BotState`, `handle_book_update`, `_persist_snapshot`, the consumer
-  loops, heartbeat/control wiring, the connector-load interface — one sub-step = one commit,
-  keeping `live_bot.py` the ExecStart entrypoint that imports from core. Then have the CEX
-  engines explicitly conform too (symmetry). HIGH risk: touches the 2079-line `live_bot.py`,
-  every deploy script, systemd `ExecStart`, test sys.path. **Watch the step-3 hook from step 2:**
-  the import-time `api = connectors.load(CONNECTOR)` binding + tests patching `live_bot.api.*`
-  must be restructured (inject connector/strategy into `BotState`) so core imports no plugin.
+  loops, heartbeat/control wiring — one sub-step = one commit, keeping `live_bot.py` the
+  ExecStart entrypoint that imports from core. **The hard blocker (verified this session):**
+  `BotState` is polymarket-coupled — it holds `tokens`/`TokenState`, `market_tokens`,
+  `traded_direction`, `signalled`, and instantiates `ThresholdStrategy()` in `__init__` (L936).
+  So `handle_book_update(state)`/`_persist_snapshot(state)` can't move to core until BotState is
+  neutralized. Likely first BotState sub-step: stop instantiating the plugin in `__init__` —
+  inject the default strategy at the construction boundary (2 non-test sites: live_bot main +
+  account_bot; plus `make_state` and tests asserting the default). Then neutralize fields / split
+  a neutral base. **Watch the step-2 hook:** the import-time `api = connectors.load(CONNECTOR)`
+  binding + tests patching `live_bot.api.*` must be restructured (inject connector into
+  `BotState`) so core imports no plugin. Then CEX engines explicitly conform too (symmetry).
 - **Validate:** import graph clean (no core→plugin import), full suite, canary.
 
 ### Step 4 — move Polymarket into a plugin package (reach Plan C)

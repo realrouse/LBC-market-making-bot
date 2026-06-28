@@ -32,8 +32,10 @@ _FLAT_FILES = [
     (_PM, "feed.py"), (_PM, "account_bot.py"),
     (_CEX, "api_binance.py"), (_CEX, "api_mexc.py"),
 ]
+# files=None → copy every *.py in the package (mirrors install.sh's whole-dir copy;
+# avoids a hardcoded list that could drift from install.sh and go falsely green).
 _FLAT_PKGS = [
-    (_CORE, "botcore", ["__init__.py", "strategy.py"]),
+    (_CORE, "botcore", None),
     (_CEX, "connectors", ["__init__.py"]),
     (_CEX, "strategy_engines",
      ["__init__.py", "base.py", "grid.py", "swing.py", "swinghold.py", "dca.py"]),
@@ -51,6 +53,8 @@ class TestFlatDeployImport(unittest.TestCase):
             shutil.copy(os.path.join(src, name), os.path.join(dst, name))
         for src, pkg, files in _FLAT_PKGS:
             os.makedirs(os.path.join(dst, pkg), exist_ok=True)
+            if files is None:
+                files = [f for f in os.listdir(os.path.join(src, pkg)) if f.endswith(".py")]
             for f in files:
                 shutil.copy(os.path.join(src, pkg, f), os.path.join(dst, pkg, f))
 
@@ -89,6 +93,34 @@ class TestFlatDeployImport(unittest.TestCase):
             self.assertIn("OK", res.stdout)
         finally:
             shutil.rmtree(flat, ignore_errors=True)
+
+
+class TestCorePurity(unittest.TestCase):
+    """Invariant (Plan D step 3): importing the neutral core must not pull in any exchange
+    plugin. Runs in a fresh interpreter — in-process other tests have already imported the
+    api_* modules, so sys.modules there is polluted and useless for this check."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not os.path.isdir(_CORE):
+            raise unittest.SkipTest("tradinebotte-core not present in this checkout")
+
+    def test_importing_botcore_loads_no_exchange_module(self):
+        probe = (
+            "import sys\n"
+            f"sys.path.insert(0, {_CORE!r})\n"
+            "import botcore, botcore.connectors, botcore.strategy\n"
+            "leaked = sorted(m for m in sys.modules if m.startswith('api_'))\n"
+            "assert not leaked, f'botcore imported exchange module(s): {leaked}'\n"
+            "print('OK')\n"
+        )
+        env = dict(os.environ)
+        env.pop("PYTHONPATH", None)
+        res = subprocess.run([sys.executable, "-c", probe],
+                             env=env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(res.returncode, 0,
+                         f"core purity violated:\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}")
+        self.assertIn("OK", res.stdout)
 
 
 if __name__ == "__main__":

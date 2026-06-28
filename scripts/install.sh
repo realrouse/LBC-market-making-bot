@@ -117,9 +117,8 @@ for _f in api_binance.py api_mexc.py; do
 done
 
 mkdir -p "$INSTALL_DIR/botcore"
-for _f in __init__.py strategy.py; do
-    cp "tradinebotte-core/botcore/$_f" "$INSTALL_DIR/botcore/$_f"
-done
+# Whole-package copy: adding a module to botcore/ never needs editing this script.
+cp tradinebotte-core/botcore/*.py "$INSTALL_DIR/botcore/"
 
 mkdir -p "$INSTALL_DIR/connectors"
 cp tradinebotte-cex/connectors/__init__.py "$INSTALL_DIR/connectors/__init__.py"
@@ -156,8 +155,11 @@ chmod +x "$INSTALL_DIR/run.sh"
 
 # ── Syntax check ──────────────────────────────────────────────────
 echo "=== $(_t "Checking syntax" "Vérification syntaxe") ==="
+# Whole botcore/ package — globbed so new core modules are checked automatically.
+for _f in "$INSTALL_DIR"/botcore/*.py; do
+    _check_syntax "$_f"
+done
 for _f in live_bot.py api_polymarket.py api_binance.py api_mexc.py bot_utils.py \
-          botcore/__init__.py botcore/strategy.py \
           connectors/__init__.py \
           strategy_engines/__init__.py strategy_engines/base.py strategy_engines/grid.py \
           strategy_engines/swing.py strategy_engines/swinghold.py strategy_engines/dca.py; do

@@ -50,7 +50,7 @@ if os.path.isdir(_cex_dir) and _cex_dir not in sys.path:
 _core_dir = os.path.join(_THIS_DIR, "..", "tradinebotte-core")
 if os.path.isdir(_core_dir) and _core_dir not in sys.path:
     sys.path.insert(0, os.path.normpath(_core_dir))
-from connectors import load as _load_connector_module
+from botcore.connectors import load as _load_connector_module
 from botcore import Strategy
 import bot_utils
 from bot_utils import print_dashboard, write_web_status
@@ -1896,7 +1896,7 @@ async def main() -> None:
     _setup_logging(config)
     _load_connector(config.connector)
     if config.strategy_type != "threshold":
-        from connectors import validate as _validate_conn
+        from botcore.connectors import validate as _validate_conn
         _validate_conn(api, config.strategy_type)
 
     _up = int(time.time() - _BOT_START)
