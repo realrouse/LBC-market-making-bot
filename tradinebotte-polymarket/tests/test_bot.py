@@ -1491,6 +1491,22 @@ class TestSchemaVersioning(unittest.TestCase):
         self.assertEqual(conn.execute("SELECT version FROM schema_version").fetchone()[0], 4)
         conn.close()
 
+    def test_init_db_with_mmap_enabled_does_not_raise(self):
+        # Regression: PRAGMA does not accept a bound parameter (sqlite raises
+        # "near ?: syntax error"), so init_db with db_mmap_mb > 0 must interpolate it.
+        import tempfile
+        cfg = bot.BotConfig()
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        try:
+            cfg.db_path = path
+            cfg.db_mmap_mb = 64
+            conn = bot.init_db(cfg)   # must not raise
+            self.assertEqual(conn.execute("PRAGMA mmap_size").fetchone()[0], 64 * 1024 * 1024)
+            conn.close()
+        finally:
+            os.unlink(path)
+
     def test_step5_convergence_old_v4_db(self):
         # Advisor's bar: a pre-step-5 v4 DB (bot_meta created by old migration v4,
         # schema_version in the old SCHEMA) and a fresh DB must converge under the new

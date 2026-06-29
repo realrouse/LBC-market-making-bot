@@ -810,7 +810,9 @@ def init_db(config: "BotConfig") -> sqlite3.Connection:
     if config.db_mmap_mb > 0:
         # Memory-map the DB file so SQLite accesses it via RAM pages managed
         # by the kernel rather than read() syscalls.
-        conn.execute("PRAGMA mmap_size = ?", (config.db_mmap_mb * 1024 * 1024,))
+        # PRAGMA does not accept a bound parameter (sqlite raises "near ?: syntax
+        # error"); db_mmap_mb is an int, so interpolate it directly.
+        conn.execute(f"PRAGMA mmap_size = {int(config.db_mmap_mb) * 1024 * 1024}")
         logger.info("DB mmap enabled: %d MB", config.db_mmap_mb)
     conn.commit()
     logger.info("DB initialized: %s", config.db_path)

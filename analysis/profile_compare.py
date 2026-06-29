@@ -18,8 +18,10 @@ for f in glob.glob("strategies/**/*.json", recursive=True):
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     shutil.copy(f, dest)
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-import bot.live_bot as bot  # pylint: disable=import-error
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _d in ("tradinebotte-polymarket", "tradinebotte-cex", "tradinebotte-core"):
+    sys.path.insert(0, os.path.join(_HERE, "..", _d))
+import live_bot as bot
 
 N   = 20_000
 SEP = "=" * 72
@@ -60,7 +62,7 @@ def conn_default() -> sqlite3.Connection:
 
 def conn_mmap() -> sqlite3.Connection:
     c = conn_default()
-    c.execute("PRAGMA mmap_size = ?", (MMAP_MB * 1024 * 1024,))
+    c.execute(f"PRAGMA mmap_size = {int(MMAP_MB) * 1024 * 1024}")
     c.commit()
     return c
 
