@@ -305,10 +305,20 @@ into a plugin module that live_bot imports (re-export for account_bot/test back-
   it out in the pass): the core already owns the connector registry — have each plugin expose/register its
   run-loop so `main()` stops naming `feed_consumer_loop`/`cex_feed_consumer_loop` and the core imports
   neither plugin. **Scope tightly — dispatch only, in-place in live_bot (ExecStart unchanged).**
-  - **Wire the guard to the registry here:** `TestDataPathCoverage._CONSUMER_MODULES = (pm_data,
-    cex_consumer)` is now a hardcoded tuple — it reintroduces the exact silent-partial failure the guard
-    exists to prevent (a future 3rd-family consumer module won't be scanned). Derive the scan list from
-    the plugin run-loop registry built in this step.
+  - **Wire the guard to the registry here:** done — `TestDataPathCoverage._consumer_modules()` now derives
+    the scan list from `bot._RUN_LOOPS` + `bot._DIRECT_WS` module names, so a future 3rd-family consumer
+    module is scanned automatically.
+- **4b-6 DONE (commit → see git log).** Replaced `main()`'s hardcoded `if _use_feed / elif _use_cexfeed /
+  else ws_loop` (+ the `_cex_connectors` tuple + `connector=="polymarket"` checks) with a registry
+  (`_RUN_LOOPS` keyed by data_source: supported connectors + plugin module + loop attr + args-builder) and
+  a PURE selector `_resolve_run_loop(config) → (module, loop_attr, args, warn)`. main() resolves + lazily
+  `importlib.import_module`s the loop. NEW code (not a move): behavioral equivalence proven by 7 unit tests
+  (`TestDataSourceDispatch`) covering all 4 historical cases + the mismatched-source warning + the cex
+  symbol logic + that every registry entry resolves to a real callable. Lazy-cex preserved (only the
+  cex_feed branch imports cex_consumer). Advisor was unavailable; leaned on the unit-test equivalence
+  (possible precisely because the selector is now a pure, testable function). Gate green (poly 448) +
+  clean-install. NB the dispatch lives in live_bot (the entrypoint), referencing plugins by string — a
+  4b-7 thin-shell move could relocate it to botcore, but that's optional.
 - **4b-7 (SEPARATE, EXPLICITLY OPTIONAL — may not be worth doing): thin-shell relocation.** Move the
   neutral orchestration into `botcore`, `live_bot.py` → thin shell. This is the ExecStart-wide change
   (every deploy unit + systemd) flagged at the start of Step 4 — least value-per-risk. 4b is already a

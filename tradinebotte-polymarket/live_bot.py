@@ -979,6 +979,50 @@ def restore_state_from_db(state: BotState) -> None:
 # (re-exported at the top of this module).
 
 
+# ─── DATA-SOURCE DISPATCH (Plan D step 4b-6) ──────────────────────────────────
+# Registry: data_source → which plugin run-loop serves it. A strategy family plugs in by
+# adding an entry here; main()'s dispatch never names a plugin loop. Loops are resolved by
+# (plugin module, attr) and imported lazily at dispatch, so a polymarket-only account never
+# imports the CEX consumer.
+_CEX_CONNECTORS = ("binance", "mexc", "mexc_futures", "bitstamp")
+
+
+def _cex_symbol(config: "BotConfig") -> str:
+    """Symbol a CEX bot subscribes to: the grid symbol, else the strategy cfg's symbol."""
+    return (config.grid_symbol if config.strategy_type == "grid"
+            else config.strategy_cfg.get("symbol", config.grid_symbol))
+
+
+# data_source -> (supported connector(s), plugin module, loop attr, args from (state, config, session))
+_RUN_LOOPS: dict = {
+    "feed": ("polymarket", "pm_data", "feed_consumer_loop",
+             lambda state, config, session: (state, config.feed_addr)),
+    "cex_feed": (_CEX_CONNECTORS, "cex_consumer", "cex_feed_consumer_loop",
+                 lambda state, config, session: (state, config.feed_addr,
+                                                 _cex_symbol(config), config.connector)),
+}
+# Fallback when no feed data_source matches the connector: the direct WS path.
+_DIRECT_WS = ("pm_data", "ws_loop", lambda state, config, session: (state, session))
+
+
+def _resolve_run_loop(config: "BotConfig"):
+    """Pure selection (no import / no I/O) → (module, loop_attr, args_builder, warn).
+
+    Mirrors the historical dispatch exactly: a feed/cex_feed data_source whose connector
+    does not match falls back to the direct WS path WITH a warning; any other data_source
+    (e.g. "ws") falls back to direct WS silently.
+    """
+    spec = _RUN_LOOPS.get(config.data_source)
+    if spec is not None:
+        connectors, mod, loop, args = spec
+        ok = (config.connector == connectors if isinstance(connectors, str)
+              else config.connector in connectors)
+        if ok:
+            return mod, loop, args, False
+        return (*_DIRECT_WS, True)   # feed source, wrong connector → warn + direct WS
+    return (*_DIRECT_WS, False)      # e.g. data_source="ws" → direct WS, no warning
+
+
 async def main() -> None:
     args   = _parse_args()
     config = make_config(
@@ -1144,22 +1188,15 @@ async def main() -> None:
                     is_live=_is_live,
                 )
             )
-            _cex_connectors = ("binance", "mexc", "mexc_futures", "bitstamp")
-            _use_feed    = config.data_source == "feed"     and config.connector == "polymarket"
-            _use_cexfeed = config.data_source == "cex_feed" and config.connector in _cex_connectors
-            if config.data_source in ("feed", "cex_feed") and not (_use_feed or _use_cexfeed):
+            import importlib  # noqa: PLC0415
+            _mod, _loop, _args, _warn = _resolve_run_loop(config)
+            if _warn:
                 logger.warning("data_source=%s ignored for connector=%s — using direct WS",
                                config.data_source, config.connector)
             try:
-                if _use_feed:
-                    await feed_consumer_loop(state, config.feed_addr)
-                elif _use_cexfeed:
-                    from cex_consumer import cex_feed_consumer_loop  # lazy — CEX path only
-                    _sym = (config.grid_symbol if config.strategy_type == "grid"
-                            else config.strategy_cfg.get("symbol", config.grid_symbol))
-                    await cex_feed_consumer_loop(state, config.feed_addr, _sym, config.connector)
-                else:
-                    await ws_loop(state, session)
+                # Lazy import keeps a polymarket-only account from loading the CEX consumer.
+                _run_loop = getattr(importlib.import_module(_mod), _loop)
+                await _run_loop(*_args(state, config, session))
             finally:
                 _hb_task.cancel()
                 _ctl_task.cancel()

@@ -3525,6 +3525,62 @@ class TestThresholdStrategy(unittest.IsolatedAsyncioTestCase):
         cr.assert_called_once()
 
 
+class TestDataSourceDispatch(unittest.TestCase):
+    """_resolve_run_loop routes each (data_source, connector) to the historical loop
+    (Plan D step 4b-6) — the behavioral-equivalence guard for the generalized dispatch."""
+
+    def _cfg(self, **kw):
+        c = bot.BotConfig()
+        for k, v in kw.items():
+            setattr(c, k, v)
+        return c
+
+    def test_poly_feed(self):
+        cfg = self._cfg(data_source="feed", connector="polymarket", feed_addr="tcp://x")
+        mod, loop, args, warn = bot._resolve_run_loop(cfg)
+        self.assertEqual((mod, loop, warn), ("pm_data", "feed_consumer_loop", False))
+        self.assertEqual(args("S", cfg, "SESS"), ("S", "tcp://x"))
+
+    def test_cex_feed_grid(self):
+        cfg = self._cfg(data_source="cex_feed", connector="binance", feed_addr="tcp://y",
+                        grid_symbol="BTCUSDT", strategy_type="grid")
+        mod, loop, args, warn = bot._resolve_run_loop(cfg)
+        self.assertEqual((mod, loop, warn), ("cex_consumer", "cex_feed_consumer_loop", False))
+        self.assertEqual(args("S", cfg, "SESS"), ("S", "tcp://y", "BTCUSDT", "binance"))
+
+    def test_direct_ws_is_default_no_warning(self):
+        cfg = self._cfg(data_source="ws", connector="polymarket")
+        mod, loop, args, warn = bot._resolve_run_loop(cfg)
+        self.assertEqual((mod, loop, warn), ("pm_data", "ws_loop", False))
+        self.assertEqual(args("S", cfg, "SESS"), ("S", "SESS"))
+
+    def test_feed_wrong_connector_warns_falls_back_to_ws(self):
+        cfg = self._cfg(data_source="feed", connector="binance")
+        mod, loop, _, warn = bot._resolve_run_loop(cfg)
+        self.assertEqual((mod, loop, warn), ("pm_data", "ws_loop", True))
+
+    def test_cex_feed_wrong_connector_warns_falls_back_to_ws(self):
+        cfg = self._cfg(data_source="cex_feed", connector="polymarket")
+        mod, loop, _, warn = bot._resolve_run_loop(cfg)
+        self.assertEqual((mod, loop, warn), ("pm_data", "ws_loop", True))
+
+    def test_cex_symbol_grid_vs_swing(self):
+        grid = self._cfg(connector="mexc", strategy_type="grid", grid_symbol="BTCUSDT")
+        self.assertEqual(bot._cex_symbol(grid), "BTCUSDT")
+        swing = self._cfg(connector="mexc", strategy_type="swing", grid_symbol="DEFLT")
+        swing.strategy_cfg = {"symbol": "ETHUSDT"}
+        self.assertEqual(bot._cex_symbol(swing), "ETHUSDT")
+
+    def test_every_registry_entry_resolves_to_a_real_callable(self):
+        # The dispatch resolves loops by (module, attr) strings — a typo would only fail at
+        # runtime on a real account. Assert every entry (+ the fallback) names a callable.
+        import importlib
+        specs = [(s[1], s[2]) for s in bot._RUN_LOOPS.values()] + [(bot._DIRECT_WS[0], bot._DIRECT_WS[1])]
+        for mod, loop in specs:
+            self.assertTrue(callable(getattr(importlib.import_module(mod), loop)),
+                            f"{mod}.{loop} is not callable")
+
+
 class TestDataPathCoverage(unittest.TestCase):
     """Structural guard against the 2026-06-16 bug class. That bug shipped because a new
     data-consumer loop (cex_feed_consumer_loop) drove a strategy but never persisted a
@@ -3535,7 +3591,18 @@ class TestDataPathCoverage(unittest.TestCase):
     the runtime ⚠data monitor is only the second line of defence."""
 
     _PERSIST = {"_persist_snapshot", "save_snapshot", "save_cex_snapshot"}
-    _CONSUMER_MODULES = (pm_data, cex_consumer)
+
+    @staticmethod
+    def _consumer_modules():
+        # Derived from the run-loop registry so a future 3rd-family consumer module is
+        # scanned automatically (not a hardcoded list that could go silently partial).
+        import importlib
+        names = {spec[1] for spec in bot._RUN_LOOPS.values()} | {bot._DIRECT_WS[0]}
+        return tuple(importlib.import_module(n) for n in sorted(names))
+
+    @property
+    def _CONSUMER_MODULES(self):
+        return self._consumer_modules()
 
     def test_every_book_consumer_persists_a_snapshot(self):
         import ast
