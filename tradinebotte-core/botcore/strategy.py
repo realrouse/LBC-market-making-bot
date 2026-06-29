@@ -17,7 +17,7 @@ class Strategy(Protocol):
 
     Implementations
     ---------------
-    ThresholdStrategy  (Polymarket plugin — built into live_bot.py)
+    ThresholdStrategy  (Polymarket plugin — pm_strategy.py)
         Single-entry threshold signal on Polymarket binary prediction markets.
         Default when strategy_type is "threshold" or absent from config.
 

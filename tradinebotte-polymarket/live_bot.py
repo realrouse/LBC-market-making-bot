@@ -49,25 +49,28 @@ _core_dir = os.path.join(_THIS_DIR, "..", "tradinebotte-core")
 if os.path.isdir(_core_dir) and _core_dir not in sys.path:
     sys.path.insert(0, os.path.normpath(_core_dir))
 from botcore.connectors import load as _load_connector_module
-# Neutral persistence helpers — re-exported so existing live_bot.<fn> / bot.<fn>
-# callers keep working while the implementation lives in the core (Plan D step 3b).
+# ── Re-exports (Plan D steps 3b–4b) ───────────────────────────────────────────
+# The trading logic, data plane, calendar, and shared helpers moved into the neutral
+# core (botcore) and the co-located pm_* / cex plugins. live_bot re-exports them so
+# existing `live_bot.<name>` / `bot.<name>` callers (tests, backtests, account_bot) keep
+# working unchanged. Several names below are also used directly in this module; the rest
+# are pure re-exports — pylint can't tell the two apart, so unused-import is disabled here.
+# pylint: disable=unused-import
 from botcore.persistence import (
-    read_capital_base, write_capital_base, _persist_snapshot, SNAPSHOT_COMMIT_SECS,
-    cumulative_pnl, equity,
+    read_capital_base, write_capital_base, _persist_snapshot, cumulative_pnl, equity,
 )
 from botcore.schema import apply_base_schema
-# Polymarket plugin leaf modules (co-located, shipped flat beside this file) — re-exported
-# so existing live_bot.<name> / bot.<name> callers keep working (Plan D step 4b).
 from pm_types import VOL_WINDOW, TokenState, RejectionStats
-from pm_calendar import is_trading_hour, _in_weekend_session, _is_us_holiday, _us_holidays
+from pm_calendar import is_trading_hour, _in_weekend_session, _us_holidays
 from pm_strategy import (
-    compute_stake, check_signal, enter_live_trade, check_resolution, close_trade,
-    ThresholdStrategy, _STAKE_SECS_MIN_FACTOR, _STAKE_STEP_BREAKS,
+    compute_stake, check_signal, enter_live_trade, check_resolution,
+    ThresholdStrategy, _STAKE_SECS_MIN_FACTOR,
 )
 from pm_data import (
     handle_book_update, save_snapshot, purge_expired_markets, register_market,
-    _register_market_from_feed, ws_loop, _market_refresh_loop, _run_ws, feed_consumer_loop,
+    _register_market_from_feed, ws_loop, _market_refresh_loop,
 )
+# pylint: enable=unused-import
 import bot_utils
 from tradinetools import (
     heartbeat_loop, control_loop, Command, health_server,
@@ -886,7 +889,8 @@ class BotState:
 # ─── WEBSOCKET MESSAGE HANDLING ───────────────────────────────────────────────
 
 # handle_book_update / save_snapshot / purge_expired_markets / register_market /
-# ws_loop / _market_refresh_loop / _run_ws live in pm_data (re-exported at the top).
+# ws_loop / _market_refresh_loop / _run_ws live in pm_data (the entrypoint re-exports the
+# first two; _run_ws is internal to pm_data).
 
 
 def restore_state_from_db(state: BotState) -> None:
@@ -977,8 +981,9 @@ def restore_state_from_db(state: BotState) -> None:
 # happens inside handle_book_update via this bot's own credentials (order plane).
 # Mirrors account_bot's consumer loop; does NOT auto-start a feed.
 
-# _register_market_from_feed / feed_consumer_loop live in pm_data
-# (re-exported at the top of this module).
+# _register_market_from_feed / feed_consumer_loop live in pm_data (the entrypoint
+# re-exports _register_market_from_feed; main() reaches feed_consumer_loop via the
+# data-source dispatch registry).
 
 
 # ─── DATA-SOURCE DISPATCH (Plan D step 4b-6) ──────────────────────────────────

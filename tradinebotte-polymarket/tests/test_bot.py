@@ -25,7 +25,6 @@ import live_bot as bot
 import api_polymarket as api_poly
 import cex_consumer
 import pm_strategy
-import pm_data
 import bot_utils
 
 
