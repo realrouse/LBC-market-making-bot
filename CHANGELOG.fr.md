@@ -6,7 +6,7 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
-## [Non publié]
+## [0.89] — 2026-06-29
 
 ### Ajouté
 - **Planification versionnée de la page de statut** — la page HTML était régénérée par une crontab opérateur maintenue à la main, hors du dépôt. Elle est désormais pilotée par un timer systemd `--user` versionné (`tradinebotte-statuspage.timer` → `.service`, toutes les 2 minutes) installé par `install_statuspage_timer.sh`, donc la cadence est reproductible depuis le checkout. L'installeur localise seul le dépôt/venv, avertit si le linger est désactivé (le timer se mettrait en pause à la déconnexion) et signale toute ligne de crontab résiduelle à retirer.
