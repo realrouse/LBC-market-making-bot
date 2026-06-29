@@ -275,8 +275,16 @@ into a plugin module that live_bot imports (re-export for account_bot/test back-
   (all refs are `bot.<name>`). Dropped now-unused imports (functools/deque/date). Shipping: whole-dir
   `tradinebotte-polymarket/` rsyncs auto-ship them; install.sh + the flat-import test's file list updated.
   Gate green + clean-install.
-- **4b-4 — move the threshold trading logic** into the plugin: `ThresholdStrategy`, `check_signal`,
-  `enter_live_trade`, `check_resolution`, `close_trade`, `compute_stake`. Trading-touching → clean-install.
+- **4b-4 — DONE (commit → see git log): threshold trading logic.** `compute_stake`, `check_signal`,
+  `enter_live_trade`, `check_resolution`, `close_trade`, `ThresholdStrategy` (+ the `_STAKE_*` sizing
+  constants) → `pm_strategy.py` (duck-typed state; imports TokenState/RejectionStats from pm_types,
+  is_trading_hour/_in_weekend_session from pm_calendar, Strategy from botcore, write_web_status from
+  bot_utils; "live" logger). Bodies copied verbatim. live_bot re-exports all of them. Dropped now-unused
+  imports (math, Strategy, write_web_status). **Monkeypatch-indirection (as the advisor predicted):**
+  5 tests patched `bot.{is_trading_hour,check_signal,check_resolution,logger}` to intercept what the
+  moved code calls — retargeted to `pm_strategy.*` (the api_polymarket patches from 4b-1a were already
+  module-targeted, so they survived). Gate green (incl. full signal/Kelly/latency/resolution suite) +
+  clean-install. install.sh + flat-import test updated.
 - **4b-5 — move the polymarket data plane** into the plugin: `register_market`/`purge_expired_markets`/
   `_register_market_from_feed`, `ws_loop`/`_market_refresh_loop`/`_run_ws`, `feed_consumer_loop`,
   `handle_book_update`, `save_snapshot`, GAMMA. Trading/discovery → clean-install.

@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "tradineb
 import live_bot as bot
 import api_polymarket as api_poly
 import cex_consumer
+import pm_strategy
 import bot_utils
 
 
@@ -483,14 +484,14 @@ class TestCheckSignal(unittest.IsolatedAsyncioTestCase):
     async def test_blocked_by_hour_filter(self):
         # When is_trading_hour() returns False (filter active, outside window)
         # check_signal must not fire regardless of other conditions.
-        with patch.object(bot, "is_trading_hour", return_value=False):
+        with patch.object(pm_strategy, "is_trading_hour", return_value=False):
             await bot.check_signal(self.state, make_token())
         self.assertNotIn("mkt1", self.state.signalled)
         self.assertEqual(self.state.total_trades, 0)
 
     async def test_fires_when_hour_filter_allows(self):
         # Explicit guard: signal fires when is_trading_hour() returns True.
-        with patch.object(bot, "is_trading_hour", return_value=True):
+        with patch.object(pm_strategy, "is_trading_hour", return_value=True):
             await bot.check_signal(self.state, make_token())
         self.assertIn("mkt1", self.state.signalled)
 
@@ -2698,7 +2699,7 @@ class TestRejectionCounters(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.state.rejection_stats.market_ended, 1)
 
     async def test_counter_trading_hour(self):
-        with patch.object(bot, "is_trading_hour", return_value=False):
+        with patch.object(pm_strategy, "is_trading_hour", return_value=False):
             await bot.check_signal(self.state, make_token())
         self.assertEqual(self.state.rejection_stats.trading_hour, 1)
 
@@ -2767,15 +2768,15 @@ class TestLatencyLog(unittest.IsolatedAsyncioTestCase):
         ts = make_token()
 
         logged: list[str] = []
-        original_info = bot.logger.info
+        original_info = pm_strategy.logger.info
 
         def capture_info(msg, *args, **kwargs):
             logged.append(msg % args if args else msg)
             original_info(msg, *args, **kwargs)
 
-        with patch.object(bot, "logger") as mock_logger:
+        with patch.object(pm_strategy, "logger") as mock_logger:
             mock_logger.info.side_effect = capture_info
-            mock_logger.warning = bot.logger.warning
+            mock_logger.warning = pm_strategy.logger.warning
             t_ws = time.monotonic()
             await bot.enter_live_trade(state, ts, _t_ws=t_ws)
 
@@ -3500,8 +3501,8 @@ class TestThresholdStrategy(unittest.IsolatedAsyncioTestCase):
         from unittest.mock import AsyncMock, MagicMock
         state = make_state()
         ts = make_token()
-        with patch.object(bot, "check_signal", new=AsyncMock()) as cs, \
-             patch.object(bot, "check_resolution", new=MagicMock()) as cr:
+        with patch.object(pm_strategy, "check_signal", new=AsyncMock()) as cs, \
+             patch.object(pm_strategy, "check_resolution", new=MagicMock()) as cr:
             await bot.ThresholdStrategy().on_book_update(state, ts, _t_ws=123.0)
         cs.assert_awaited_once_with(state, ts, _t_ws=123.0)   # signal first, _t_ws threaded
         cr.assert_called_once_with(state, ts)                 # then resolution
@@ -3516,8 +3517,8 @@ class TestThresholdStrategy(unittest.IsolatedAsyncioTestCase):
         state.tokens["tid"] = ts
         parsed = {"token_id": "tid", "best_bid": 0.55, "best_ask": 0.56,
                   "spread": 0.01, "bid_vol": 100.0, "ask_vol": 80.0, "obi": 0.1}
-        with patch.object(bot, "check_signal", new=AsyncMock()) as cs, \
-             patch.object(bot, "check_resolution", new=MagicMock()) as cr:
+        with patch.object(pm_strategy, "check_signal", new=AsyncMock()) as cs, \
+             patch.object(pm_strategy, "check_resolution", new=MagicMock()) as cr:
             await bot.handle_book_update(state, parsed)
         cs.assert_awaited_once()
         cr.assert_called_once()

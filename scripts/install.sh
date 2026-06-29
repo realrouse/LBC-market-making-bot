@@ -110,7 +110,7 @@ mkdir -p "$INSTALL_DIR"
 
 echo "=== $(_t "Copying bot files" "Copie du bot") ==="
 for _f in live_bot.py api_polymarket.py bot_utils.py feed.py account_bot.py \
-          pm_types.py pm_calendar.py; do
+          pm_types.py pm_calendar.py pm_strategy.py; do
     cp "tradinebotte-polymarket/$_f" "$INSTALL_DIR/$_f"
 done
 for _f in api_binance.py api_mexc.py cex_consumer.py; do
@@ -161,7 +161,7 @@ for _f in "$INSTALL_DIR"/botcore/*.py; do
     _check_syntax "$_f"
 done
 for _f in live_bot.py api_polymarket.py api_binance.py api_mexc.py bot_utils.py \
-          pm_types.py pm_calendar.py cex_consumer.py \
+          pm_types.py pm_calendar.py pm_strategy.py cex_consumer.py \
           connectors/__init__.py \
           strategy_engines/__init__.py strategy_engines/base.py strategy_engines/grid.py \
           strategy_engines/swing.py strategy_engines/swinghold.py strategy_engines/dca.py; do
