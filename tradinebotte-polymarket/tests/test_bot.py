@@ -25,6 +25,7 @@ import live_bot as bot
 import api_polymarket as api_poly
 import cex_consumer
 import pm_strategy
+import pm_data
 import bot_utils
 
 
@@ -3212,7 +3213,7 @@ class TestWsLoopBackoff(unittest.IsolatedAsyncioTestCase):
                 raise asyncio.CancelledError
             raise RuntimeError("ws error")
 
-        with patch("live_bot._run_ws", _failing_run_ws), \
+        with patch("pm_data._run_ws", _failing_run_ws), \
              patch("asyncio.sleep", _fake_sleep):
             with self.assertRaises(asyncio.CancelledError):
                 await bot.ws_loop(self.state, None)
@@ -3234,7 +3235,7 @@ class TestWsLoopBackoff(unittest.IsolatedAsyncioTestCase):
                 raise asyncio.CancelledError
             raise RuntimeError("ws error")
 
-        with patch("live_bot._run_ws", _failing_run_ws), \
+        with patch("pm_data._run_ws", _failing_run_ws), \
              patch("asyncio.sleep", _fake_sleep):
             with self.assertRaises(asyncio.CancelledError):
                 await bot.ws_loop(self.state, None)
@@ -3260,7 +3261,7 @@ class TestWsLoopBackoff(unittest.IsolatedAsyncioTestCase):
                 raise RuntimeError("second failure")  # sleep(1) — backoff was reset
             raise asyncio.CancelledError              # terminates loop
 
-        with patch("live_bot._run_ws", _mixed_run_ws), \
+        with patch("pm_data._run_ws", _mixed_run_ws), \
              patch("asyncio.sleep", _fake_sleep):
             with self.assertRaises(asyncio.CancelledError):
                 await bot.ws_loop(self.state, None)
@@ -3527,44 +3528,47 @@ class TestThresholdStrategy(unittest.IsolatedAsyncioTestCase):
 class TestDataPathCoverage(unittest.TestCase):
     """Structural guard against the 2026-06-16 bug class. That bug shipped because a new
     data-consumer loop (cex_feed_consumer_loop) drove a strategy but never persisted a
-    snapshot — and no test caught it. This inspects live_bot's source: every function
-    that drives a strategy from book updates (calls on_book_update) MUST also reach a
-    snapshot-persistence call. A future consumer that forgets persistence fails here, at
-    test time — the runtime ⚠data monitor is only the second line of defence."""
+    snapshot — and no test caught it. The book-consumer loops now live in the plugins
+    (pm_data = Polymarket, cex_consumer = CEX); this inspects both: every function that
+    drives a strategy from book updates (calls on_book_update) MUST also reach a snapshot-
+    persistence call. A future consumer that forgets persistence fails here, at test time —
+    the runtime ⚠data monitor is only the second line of defence."""
 
     _PERSIST = {"_persist_snapshot", "save_snapshot", "save_cex_snapshot"}
+    _CONSUMER_MODULES = (pm_data, cex_consumer)
 
     def test_every_book_consumer_persists_a_snapshot(self):
         import ast
         import inspect
-        tree = ast.parse(inspect.getsource(bot))
         offenders = []
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)):
-                continue
-            called = set()
-            for sub in ast.walk(node):
-                if isinstance(sub, ast.Call):
-                    fn = sub.func
-                    if isinstance(fn, ast.Attribute):
-                        called.add(fn.attr)
-                    elif isinstance(fn, ast.Name):
-                        called.add(fn.id)
-            if "on_book_update" in called and not (called & self._PERSIST):
-                offenders.append(node.name)
+        for mod in self._CONSUMER_MODULES:
+            tree = ast.parse(inspect.getsource(mod))
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)):
+                    continue
+                called = set()
+                for sub in ast.walk(node):
+                    if isinstance(sub, ast.Call):
+                        fn = sub.func
+                        if isinstance(fn, ast.Attribute):
+                            called.add(fn.attr)
+                        elif isinstance(fn, ast.Name):
+                            called.add(fn.id)
+                if "on_book_update" in called and not (called & self._PERSIST):
+                    offenders.append(f"{mod.__name__}.{node.name}")
         self.assertEqual(
             offenders, [],
-            "live_bot function(s) drive a strategy (on_book_update) but never persist a "
-            f"snapshot — the 2026-06-16 silent-recording bug shape: {offenders}. "
+            "function(s) drive a strategy (on_book_update) but never persist a snapshot — "
+            f"the 2026-06-16 silent-recording bug shape: {offenders}. "
             "Route the write through _persist_snapshot.")
 
     def test_guard_is_wired_to_the_real_consumers(self):
         # Sanity: the guard actually has something to check (catches a future refactor
         # that renames on_book_update and silently makes the guard vacuous).
         import inspect
-        src = inspect.getsource(bot)
+        src = "".join(inspect.getsource(m) for m in self._CONSUMER_MODULES)
         self.assertIn("on_book_update", src)
-        self.assertGreaterEqual(src.count("_persist_snapshot"), 3)  # def + 2 call sites
+        self.assertGreaterEqual(src.count("_persist_snapshot"), 3)
 
 
 class TestCoreShipsWithTheBot(unittest.TestCase):

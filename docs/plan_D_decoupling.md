@@ -285,9 +285,18 @@ into a plugin module that live_bot imports (re-export for account_bot/test back-
   moved code calls — retargeted to `pm_strategy.*` (the api_polymarket patches from 4b-1a were already
   module-targeted, so they survived). Gate green (incl. full signal/Kelly/latency/resolution suite) +
   clean-install. install.sh + flat-import test updated.
-- **4b-5 — move the polymarket data plane** into the plugin: `register_market`/`purge_expired_markets`/
-  `_register_market_from_feed`, `ws_loop`/`_market_refresh_loop`/`_run_ws`, `feed_consumer_loop`,
-  `handle_book_update`, `save_snapshot`, GAMMA. Trading/discovery → clean-install.
+- **4b-5 — DONE (commit → see git log): polymarket data plane.** All 9 functions
+  (`handle_book_update`, `save_snapshot`, `purge_expired_markets`, `register_market`,
+  `_register_market_from_feed`, `ws_loop`, `_market_refresh_loop`, `_run_ws`, `feed_consumer_loop`)
+  → `pm_data.py` (duck-typed state; imports TokenState from pm_types, `_persist_snapshot` from botcore,
+  make_sub/MarketMessage from tradinetools, print_dashboard from bot_utils; "live" logger). Bodies
+  proven byte-identical (function-by-function AST diff vs HEAD~1: only `state: BotState`→`Any`).
+  live_bot re-exports all 9; account_bot's `bot.handle_book_update` unchanged. Dropped now-unused
+  imports (websockets, make_sub, MarketMessage, print_dashboard). Monkeypatch: 3 `patch("live_bot._run_ws")`
+  → `pm_data._run_ws` (ws_loop calls it module-locally). `TestDataPathCoverage` retargeted to scan
+  pm_data + cex_consumer (the book consumers now live there, not live_bot). Gate green + clean-install.
+  **live_bot.py is now the neutral-ish entrypoint: config/db/logging/lifecycle/dispatch + re-exports;
+  no Polymarket trading/data code remains in it.**
 - **4b-6 — generalize the dispatch + thin the entrypoint.** Replace `main()`'s hardcoded
   `feed_consumer_loop`/`cex_feed_consumer_loop`/`ws_loop` branch with a plugin-provided run-loop
   interface (each plugin registers its data-loop), so a 3rd family plugs in. Optionally relocate the
