@@ -52,7 +52,7 @@ if [[ ! -f "$REPO_DIR/tradinebotte-status/generate_status.py" ]]; then
     exit 1
 fi
 if [[ ! -f "$HOME/.tradinebotte-test.conf" ]]; then
-    warn "~/.tradinebotte-test.conf not found — the generator needs it for SSH credentials"
+    warn "\$HOME/.tradinebotte-test.conf not found — the generator needs it for SSH credentials"
 fi
 
 # ─── Guard against '|' in any value used as a sed substitution ──────────────────
