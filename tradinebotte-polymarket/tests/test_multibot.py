@@ -85,6 +85,7 @@ def _book_msg(token_id="tok-up", best_bid=0.97, best_ask=0.975,
 
 def make_state():
     conn = sqlite3.connect(":memory:", check_same_thread=False)
+    bot.apply_base_schema(conn)   # schema_version + bot_meta (neutral base)
     conn.executescript(bot.SCHEMA)
     conn.commit()
     # Inject the threshold default + connector the way the entrypoint does (Plan D step 3b/4b).

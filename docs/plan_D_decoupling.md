@@ -354,7 +354,25 @@ into a plugin module that live_bot imports (re-export for account_bot/test back-
 - **Each sub-step:** stop for review (per the recipe). Mind the deploy gotchas (feed-restart ordering,
   reconnect lag, no parallel SSH, pgrep self-match, sequential deploy).
 
-### Step 5 — generalize the `snapshots` schema (optional / lowest priority)
+### Step 5 — neutral base schema (partial; the genuinely-neutral slice DONE)
+- **Design pass found (c) "move SCHEMA to botcore" doesn't survive contact:** the `snapshots` table is
+  polymarket-shaped IN ITS COLUMNS (`direction`/`secs_remaining`/`has_open_trade`) — moving its DDL into
+  botcore would put exchange specifics in the neutral package (a step backward). The genuinely-neutral
+  slice is `schema_version` (migration infra) + `bot_meta` (generic k/v; botcore.persistence already owns
+  its access). User chose that slice.
+- **DONE (commit → see git log):** `botcore/schema.py` (`apply_base_schema`: schema_version + bot_meta);
+  init_db applies it BEFORE the entrypoint SCHEMA + migrations. Removed schema_version from live_bot SCHEMA;
+  `MIGRATIONS[4]` → "" (no-op; bot_meta now in base, version sequence/recorded version unchanged). Test
+  helpers (make_db, _fresh_conn, test_multibot make_state) apply the base too. **Convergence proven**
+  (`test_step5_convergence_old_v4_db`): a pre-step-5 v4 DB and a fresh DB converge to identical tables +
+  version 4, no duplicate version row. New botcore module auto-ships (install.sh globs botcore/*.py; flat
+  test globs botcore). Gate green (poly 450) + clean-install. Core-purity invariant now imports botcore.schema.
+- **NOT done (deferred — same value/risk as 4b-7, agreed skip):** the column-level neutralization
+  (`snapshots` direction/secs_remaining → nullable/renamed, stop CEX placeholders) — broad (~10 backtest
+  readers) on a frozen CEX path; and the schema-REGISTRY split (each plugin owns its DDL, fixing the smell
+  that the universal entrypoint's MIGRATIONS defines the CEX grid_* tables). Both optional.
+
+### Step 5 (original note) — generalize the `snapshots` schema (optional / lowest priority)
 - Today `snapshots` is Polymarket-shaped (`market_id/token_id/direction/secs_remaining`);
   CEX writes placeholders via `save_cex_snapshot` (`direction='UP'`, `secs_remaining=9999`).
 - **Decide:** (a) keep the shared table with the documented placeholder convention (cheapest;

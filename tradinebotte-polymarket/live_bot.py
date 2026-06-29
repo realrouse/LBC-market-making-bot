@@ -55,6 +55,7 @@ from botcore.persistence import (
     read_capital_base, write_capital_base, _persist_snapshot, SNAPSHOT_COMMIT_SECS,
     cumulative_pnl, equity,
 )
+from botcore.schema import apply_base_schema
 # Polymarket plugin leaf modules (co-located, shipped flat beside this file) — re-exported
 # so existing live_bot.<name> / bot.<name> callers keep working (Plan D step 4b).
 from pm_types import VOL_WINDOW, TokenState, RejectionStats
@@ -731,7 +732,7 @@ CREATE TABLE IF NOT EXISTS snapshots (
     direction TEXT, secs_remaining REAL,
     best_bid REAL, best_ask REAL, spread REAL,
     ask_vol REAL, obi REAL, has_open_trade INTEGER DEFAULT 0);
-CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
+-- schema_version + bot_meta live in botcore.schema (the neutral base, applied first).
 CREATE INDEX IF NOT EXISTS idx_trades_market ON trades(market_id);
 CREATE INDEX IF NOT EXISTS idx_trades_resolved ON trades(resolved);
 """
@@ -770,10 +771,10 @@ CREATE TABLE IF NOT EXISTS grid_levels (
     # v3: entry price of the BUY a SELL is closing, so a completed BUY→SELL cycle
     # can book its PnL. Without it, GridStrategy never counted a cycle (PnL stuck $0).
     3: "ALTER TABLE grid_levels ADD COLUMN entry_price REAL;\n",
-    # v4: persist the effective capital base (capital_start) so equity resumes across
-    # restarts instead of reverting to the config default. Equity = base + cumulative.
-    4: "CREATE TABLE IF NOT EXISTS bot_meta (key TEXT PRIMARY KEY, value REAL NOT NULL, "
-       "updated_at REAL NOT NULL);\n",
+    # v4: bot_meta (effective capital base, so equity resumes across restarts). The table
+    # now lives in botcore.schema (applied before migrations); v4 stays as a no-op so the
+    # version sequence and existing DBs' recorded version are unchanged (Plan D step 5).
+    4: "",
 }
 
 
@@ -800,6 +801,7 @@ def init_db(config: "BotConfig") -> sqlite3.Connection:
     # check_same_thread=False is safe here because asyncio is single-threaded;
     # the connection is only ever accessed from the event loop.
     conn = sqlite3.connect(config.db_path, check_same_thread=False)
+    apply_base_schema(conn)   # neutral core tables first, so schema_version exists
     conn.executescript(SCHEMA)
     _apply_migrations(conn)
     if config.db_mmap_mb > 0:

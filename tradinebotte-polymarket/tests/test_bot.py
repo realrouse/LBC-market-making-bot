@@ -34,6 +34,7 @@ import bot_utils
 def make_db():
     """In-memory SQLite database with the production schema and migrations applied."""
     conn = sqlite3.connect(":memory:", check_same_thread=False)
+    bot.apply_base_schema(conn)   # neutral base (schema_version + bot_meta), like init_db
     conn.executescript(bot.SCHEMA)
     bot._apply_migrations(conn)
     conn.commit()
@@ -1412,6 +1413,7 @@ class TestSchemaVersioning(unittest.TestCase):
 
     def _fresh_conn(self):
         conn = sqlite3.connect(":memory:", check_same_thread=False)
+        bot.apply_base_schema(conn)   # schema_version now lives in the neutral base
         conn.executescript(bot.SCHEMA)
         return conn
 
@@ -1472,6 +1474,50 @@ class TestSchemaVersioning(unittest.TestCase):
         ver = conn.execute("SELECT version FROM schema_version").fetchone()[0]
         self.assertEqual(ver, max(bot.MIGRATIONS))
         conn.close()
+
+    @staticmethod
+    def _tables(conn):
+        return sorted(r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall())
+
+    def test_step5_fresh_db_has_base_tables_at_v4(self):
+        # bot_meta + schema_version now come from the neutral base; the fresh DB still
+        # reaches version 4 with both present.
+        conn = self._fresh_conn()
+        bot._apply_migrations(conn)
+        conn.commit()
+        tables = self._tables(conn)
+        self.assertIn("bot_meta", tables)
+        self.assertIn("schema_version", tables)
+        self.assertEqual(conn.execute("SELECT version FROM schema_version").fetchone()[0], 4)
+        conn.close()
+
+    def test_step5_convergence_old_v4_db(self):
+        # Advisor's bar: a pre-step-5 v4 DB (bot_meta created by old migration v4,
+        # schema_version in the old SCHEMA) and a fresh DB must converge under the new
+        # init_db schema setup — same tables, same version, no duplicate version row.
+        old = sqlite3.connect(":memory:", check_same_thread=False)
+        old.executescript("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);")
+        old.executescript(bot.SCHEMA)               # trades + snapshots (+ index)
+        old.executescript(bot.MIGRATIONS[2])        # grid_state, grid_levels
+        old.executescript(bot.MIGRATIONS[3])        # grid_levels.entry_price
+        old.executescript("CREATE TABLE IF NOT EXISTS bot_meta "
+                          "(key TEXT PRIMARY KEY, value REAL NOT NULL, updated_at REAL NOT NULL);")
+        old.execute("INSERT INTO schema_version(version) VALUES (4)")
+        old.commit()
+        # Run the NEW init_db schema setup (idempotent) on this existing DB:
+        bot.apply_base_schema(old)
+        old.executescript(bot.SCHEMA)
+        bot._apply_migrations(old)
+        old.commit()
+        self.assertEqual(old.execute("SELECT version FROM schema_version").fetchone()[0], 4)
+        self.assertEqual(old.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0], 1)
+        # Fresh DB through the same path:
+        fresh = self._fresh_conn()
+        bot._apply_migrations(fresh)
+        fresh.commit()
+        self.assertEqual(self._tables(old), self._tables(fresh))
+        old.close(); fresh.close()
 
 
 class TestUsHolidays(unittest.TestCase):

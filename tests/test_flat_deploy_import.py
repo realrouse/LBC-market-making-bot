@@ -110,7 +110,7 @@ class TestCorePurity(unittest.TestCase):
         probe = (
             "import sys\n"
             f"sys.path.insert(0, {_CORE!r})\n"
-            "import botcore, botcore.connectors, botcore.strategy, botcore.persistence\n"
+            "import botcore, botcore.connectors, botcore.strategy, botcore.persistence, botcore.schema\n"
             "leaked = sorted(m for m in sys.modules if m.startswith('api_'))\n"
             "assert not leaked, f'botcore imported exchange module(s): {leaked}'\n"
             "print('OK')\n"
