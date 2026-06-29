@@ -297,11 +297,28 @@ into a plugin module that live_bot imports (re-export for account_bot/test back-
   pm_data + cex_consumer (the book consumers now live there, not live_bot). Gate green + clean-install.
   **live_bot.py is now the neutral-ish entrypoint: config/db/logging/lifecycle/dispatch + re-exports;
   no Polymarket trading/data code remains in it.**
-- **4b-6 — generalize the dispatch + thin the entrypoint.** Replace `main()`'s hardcoded
-  `feed_consumer_loop`/`cex_feed_consumer_loop`/`ws_loop` branch with a plugin-provided run-loop
-  interface (each plugin registers its data-loop), so a 3rd family plugs in. Optionally relocate the
-  neutral orchestration to `botcore`; `live_bot.py` → thin entrypoint shell wiring core + the selected
-  plugin. Deploy-wide → clean-install + careful sequential deploy.
+- **4b-6 — generalize the dispatch. ⚠ NOT A MOVE — NEW ABSTRACTION, needs its OWN design pass first.**
+  Unlike 4b-1..4b-5 (relocations provable byte-identical), this changes behavior, so there's no verbatim
+  diff to lean on: the design pass must enumerate every existing dispatch case (poly feed / cex feed /
+  poly direct-WS / the "data_source ignored → direct WS" warning path + the `_cex_connectors` tuple +
+  `connector=="polymarket"` checks) and argue the new mechanism routes each IDENTICALLY. Direction (work
+  it out in the pass): the core already owns the connector registry — have each plugin expose/register its
+  run-loop so `main()` stops naming `feed_consumer_loop`/`cex_feed_consumer_loop` and the core imports
+  neither plugin. **Scope tightly — dispatch only, in-place in live_bot (ExecStart unchanged).**
+  - **Wire the guard to the registry here:** `TestDataPathCoverage._CONSUMER_MODULES = (pm_data,
+    cex_consumer)` is now a hardcoded tuple — it reintroduces the exact silent-partial failure the guard
+    exists to prevent (a future 3rd-family consumer module won't be scanned). Derive the scan list from
+    the plugin run-loop registry built in this step.
+- **4b-7 (SEPARATE, EXPLICITLY OPTIONAL — may not be worth doing): thin-shell relocation.** Move the
+  neutral orchestration into `botcore`, `live_bot.py` → thin shell. This is the ExecStart-wide change
+  (every deploy unit + systemd) flagged at the start of Step 4 — least value-per-risk. 4b is already a
+  success without it. Decide separately; default = skip.
+- **⚠ DEBT TO CLOSE before declaring Step 4 done (accumulated across 4b-1b/4b-2/4b-5): account_bot
+  RUNTIME never exercised.** Its import is covered (flat-import test), but its `main()` — the 4b-1b
+  connector load, BotState construction, the consume loop calling the relocated `handle_book_update` (it's
+  the 2nd handle_book_update caller) — and the cex_feed path have only run in unit tests / never on a real
+  flat deploy. Run ONE `test_multibot_deploy` / data-plane validation (all sim → cheap) before calling
+  Step 4 complete. ⚠ first confirm the script targets ephemeral/test accounts, not the live fleet.
 - **Each sub-step:** stop for review (per the recipe). Mind the deploy gotchas (feed-restart ordering,
   reconnect lag, no parallel SSH, pgrep self-match, sequential deploy).
 
