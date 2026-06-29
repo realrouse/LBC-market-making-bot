@@ -30,6 +30,7 @@ _CORE = os.path.join(_REPO, "tradinebotte-core")
 _FLAT_FILES = [
     (_PM, "live_bot.py"), (_PM, "api_polymarket.py"), (_PM, "bot_utils.py"),
     (_PM, "feed.py"), (_PM, "account_bot.py"),
+    (_PM, "pm_types.py"), (_PM, "pm_calendar.py"),
     (_CEX, "api_binance.py"), (_CEX, "api_mexc.py"),
 ]
 # files=None → copy every *.py in the package (mirrors install.sh's whole-dir copy;

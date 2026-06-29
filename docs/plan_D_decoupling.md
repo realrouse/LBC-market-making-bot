@@ -267,9 +267,14 @@ into a plugin module that live_bot imports (re-export for account_bot/test back-
   polymarket entrypoint still starts WITHOUT importing cex_consumer (lazy); the cex_feed path running on
   a real cex account is covered by the behavioral suite + the whole-dir ship — a multibot deploy would
   confirm it live but risks the fleet, so deferred unless a cex account is (re)deployed.
-- **4b-3 — create the polymarket plugin package** (e.g. `tradinebotte-polymarket/polymarket/`, bare-name
-  importable, shipped flat like `botcore`/`connectors`). Move leaf data types first: `TokenState`,
-  `RejectionStats`, the trading-hours filter (`_us_holidays`/`is_trading_hour`…). Re-export from live_bot.
+- **4b-3 — DONE (commit → see git log): polymarket leaf modules.** For SYMMETRY with how the CEX plugin
+  is organized (flat modules in `tradinebotte-cex/`, not a nested package), the polymarket plugin uses
+  flat modules co-located with live_bot (shipped like live_bot.py): `pm_types.py` (TokenState,
+  RejectionStats, VOL_WINDOW) + `pm_calendar.py` (the US trading-hours/holiday filter). live_bot
+  re-exports them (module-top import, before BotConfig since VOL_WINDOW feeds it) → zero caller churn
+  (all refs are `bot.<name>`). Dropped now-unused imports (functools/deque/date). Shipping: whole-dir
+  `tradinebotte-polymarket/` rsyncs auto-ship them; install.sh + the flat-import test's file list updated.
+  Gate green + clean-install.
 - **4b-4 — move the threshold trading logic** into the plugin: `ThresholdStrategy`, `check_signal`,
   `enter_live_trade`, `check_resolution`, `close_trade`, `compute_stake`. Trading-touching → clean-install.
 - **4b-5 — move the polymarket data plane** into the plugin: `register_market`/`purge_expired_markets`/

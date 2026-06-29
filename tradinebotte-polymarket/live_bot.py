@@ -25,10 +25,8 @@ Launch:
 """
 
 import argparse, asyncio, copy, json, logging, logging.handlers, math, os, queue, sqlite3, sys, time, uuid
-from collections import deque
 from dataclasses import dataclass, field
-import functools
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 import aiohttp, websockets
 
@@ -58,6 +56,10 @@ from botcore.persistence import (
     read_capital_base, write_capital_base, _persist_snapshot, SNAPSHOT_COMMIT_SECS,
     cumulative_pnl, equity,
 )
+# Polymarket plugin leaf modules (co-located, shipped flat beside this file) — re-exported
+# so existing live_bot.<name> / bot.<name> callers keep working (Plan D step 4b).
+from pm_types import VOL_WINDOW, TokenState, RejectionStats
+from pm_calendar import is_trading_hour, _in_weekend_session, _is_us_holiday, _us_holidays
 import bot_utils
 from bot_utils import print_dashboard, write_web_status
 from tradinetools import (
@@ -121,7 +123,7 @@ GRID_TRAIL_MODE      = "static"   # "static" | "bull" | "bear"
 # ─── VOLATILITY FILTER DEFAULTS ───────────────────────────────────────────────
 VOL_FILTER_ENABLED      = True
 VOL_FILTER_WEEKDAY_ONLY = True
-VOL_WINDOW              = 12
+# VOL_WINDOW lives in pm_types (re-exported at the top of this module).
 VOL_MIN_SAMPLES         = 6
 VOL_BID_MAX             = 0.07
 RANGE_BID_MAX           = 0.30
@@ -809,78 +811,7 @@ def init_db(config: "BotConfig") -> sqlite3.Connection:
 
 # ─── STATE CLASSES ────────────────────────────────────────────────────────────
 
-class TokenState:
-    """
-    Per-token market data updated in real time from the WebSocket feed.
-    Uses __slots__ to minimize memory overhead when tracking many tokens.
-    """
-    __slots__ = ("token_id", "market_id", "direction", "question",
-                 "market_end_ms", "market_start_ms",
-                 "best_bid", "best_ask", "spread",
-                 "bid_vol", "ask_vol", "obi",
-                 "last_update_ts", "last_snapshot_ts",
-                 "bid_history", "obi_history")
-
-    def __init__(self, token_id: str, market_id: str, direction: str, question: str,
-                 market_start_ms: int, market_end_ms: int,
-                 vol_window: int = VOL_WINDOW) -> None:
-        self.token_id = token_id
-        self.market_id = market_id
-        self.direction = direction
-        self.question = question
-        self.market_start_ms = market_start_ms
-        self.market_end_ms = market_end_ms
-        # Start bid/ask at 0.5 (fair coin flip) until the first WebSocket update
-        # arrives. This prevents spurious signals from uninitialized state.
-        self.best_bid = 0.5; self.best_ask = 0.5; self.spread = 0.0
-        # ask_vol=0.0 before the first snapshot — the signal guard checks this
-        # explicitly to avoid entering trades with no visible ask-side liquidity.
-        self.bid_vol = 0.0; self.ask_vol = 0.0; self.obi = 0.0
-        self.last_update_ts = 0.0; self.last_snapshot_ts = 0.0
-        # Rolling windows sampled every SNAPSHOT_INTERVAL seconds.
-        # Used by the volatility filter in check_signal to detect choppy markets.
-        self.bid_history: deque[float] = deque(maxlen=vol_window)
-        self.obi_history: deque[float] = deque(maxlen=vol_window)
-
-    @property
-    def secs_remaining(self) -> float:
-        """Seconds until the market's scheduled end time (0 if already past)."""
-        if not self.market_end_ms: return 9999.0
-        return max(0.0, (self.market_end_ms - time.time() * 1000) / 1000.0)
-
-    @property
-    def seconds_elapsed(self) -> float:
-        """Seconds since the market's scheduled start time."""
-        if not self.market_start_ms: return 0.0
-        return max(0.0, (time.time() * 1000 - self.market_start_ms) / 1000.0)
-
-    @property
-    def market_ended(self) -> bool:
-        """
-        True if the market is past its end time plus a 5-second grace period.
-        The grace period prevents treating a market as ended due to clock skew.
-        """
-        return self.market_end_ms > 0 and time.time() * 1000 > self.market_end_ms + 5000
-
-
-@dataclass
-class RejectionStats:
-    """Counts of check_signal() early-exits per reason, logged every 60 s."""
-    signalled:     int = 0
-    market_ended:  int = 0
-    trading_hour:  int = 0
-    best_bid:      int = 0
-    entry_max:     int = 0
-    best_ask:      int = 0
-    ask_vol:       int = 0
-    secs_remaining: int = 0
-    obi:           int = 0
-    vol_filter:    int = 0
-    capital:       int = 0
-    daily_stop:    int = 0
-    weekly_stop:   int = 0
-    api_cooldown:  int = 0
-
+# TokenState + RejectionStats live in pm_types (re-exported at the top of this module).
 
 class BotState:
     """
@@ -1051,109 +982,8 @@ def compute_stake(cfg: "BotConfig", bid: float, secs: float,
 
 # ─── SIGNAL & TRADE LOGIC ─────────────────────────────────────────────────────
 
-@functools.lru_cache(maxsize=4)
-def _us_holidays(year: int) -> frozenset:
-    """Return the frozenset of US federal holiday *observed* dates for `year`.
-
-    Covers the 10 NYSE-recognised holidays.  Saturday holidays shift to Friday;
-    Sunday holidays shift to Monday.  Results are cached per year (lru_cache).
-    """
-    def _observed(d: date) -> date:
-        if d.weekday() == 5: return d - timedelta(days=1)   # Sat → Fri
-        if d.weekday() == 6: return d + timedelta(days=1)   # Sun → Mon
-        return d
-
-    def _nth_weekday(y: int, m: int, wd: int, n: int) -> date:
-        first = date(y, m, 1)
-        delta = (wd - first.weekday()) % 7
-        return first.replace(day=1 + delta + (n - 1) * 7)
-
-    def _last_monday(y: int, m: int) -> date:
-        for day in range(31, 21, -1):
-            try:
-                d = date(y, m, day)
-                if d.weekday() == 0:
-                    return d
-            except ValueError:
-                continue
-        raise ValueError  # pragma: no cover
-
-    def _easter(y: int) -> date:
-        a, b, c = y % 19, y // 100, y % 100
-        d, e, f = b // 4, b % 4, (b + 8) // 25
-        g = (b - f + 1) // 3
-        h = (19 * a + b - d - g + 15) % 30
-        i, k = c // 4, c % 4
-        ll = (32 + 2 * e + 2 * i - h - k) % 7
-        m = (a + 11 * h + 22 * ll) // 451
-        mo = (h + ll - 7 * m + 114) // 31
-        dy = (h + ll - 7 * m + 114) % 31 + 1
-        return date(y, mo, dy)
-
-    mon, thu = 0, 3
-    return frozenset([
-        _observed(date(year, 1,  1)),               # New Year's Day
-        _nth_weekday(year, 1, mon, 3),              # MLK Day (3rd Mon Jan)
-        _nth_weekday(year, 2, mon, 3),              # Presidents' Day (3rd Mon Feb)
-        _easter(year) - timedelta(days=2),          # Good Friday
-        _last_monday(year, 5),                      # Memorial Day (last Mon May)
-        _observed(date(year, 6, 19)),               # Juneteenth
-        _observed(date(year, 7,  4)),               # Independence Day
-        _nth_weekday(year, 9, mon, 1),              # Labor Day (1st Mon Sep)
-        _nth_weekday(year, 11, thu, 4),             # Thanksgiving (4th Thu Nov)
-        _observed(date(year, 12, 25)),              # Christmas Day
-    ])
-
-
-def _is_us_holiday(dt: datetime) -> bool:
-    """Return True if `dt` (UTC) falls on a US federal holiday (observed date)."""
-    return dt.date() in _us_holidays(dt.year)
-
-
-def _in_weekend_session(ts_ms: Optional[int] = None) -> bool:
-    """Return True if timestamp falls in the weekend session (Fri 20:00 → Mon 13:30 UTC)."""
-    dt     = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc) if ts_ms is not None \
-             else datetime.now(timezone.utc)
-    dow    = dt.weekday()
-    hour   = dt.hour
-    minute = dt.minute
-    if dow in (5, 6):                                  # Sat / Sun: always weekend
-        return True
-    if dow == 4 and hour >= 20:                       # Fri from US weekly close
-        return True
-    if dow == 0 and (hour < 13 or (hour == 13 and minute < 30)):  # Mon before US open
-        return True
-    return False
-
-
-def is_trading_hour(config: "BotConfig", ts_ms: Optional[int] = None) -> bool:
-    """Return True if the timestamp (or now) falls in the configured trading window."""
-    dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc) if ts_ms is not None \
-         else datetime.now(timezone.utc)
-    if config.us_holiday_filter and _is_us_holiday(dt):
-        return False
-    if not config.hour_filter_enabled:
-        return True
-    dow    = dt.weekday()
-    hour   = dt.hour
-    minute = dt.minute
-
-    if dow >= 5:
-        if not config.weekend_utc_ranges:
-            return False
-        return any(s <= hour < e for s, e in config.weekend_utc_ranges)
-
-    if dow == 0 and config.us_weekly_open:
-        if hour < 13 or (hour == 13 and minute < 30):
-            return False
-    if dow == 4 and config.us_weekly_close:
-        if hour >= 20:
-            return False
-
-    if not config.weekday_utc_ranges:
-        return True
-    return any(s <= hour < e for s, e in config.weekday_utc_ranges)
-
+# _us_holidays / _is_us_holiday / _in_weekend_session / is_trading_hour live in
+# pm_calendar (re-exported at the top of this module).
 
 async def check_signal(state: BotState, ts: TokenState, _t_ws: Optional[float] = None) -> None:
     """
