@@ -313,12 +313,15 @@ into a plugin module that live_bot imports (re-export for account_bot/test back-
   neutral orchestration into `botcore`, `live_bot.py` → thin shell. This is the ExecStart-wide change
   (every deploy unit + systemd) flagged at the start of Step 4 — least value-per-risk. 4b is already a
   success without it. Decide separately; default = skip.
-- **⚠ DEBT TO CLOSE before declaring Step 4 done (accumulated across 4b-1b/4b-2/4b-5): account_bot
-  RUNTIME never exercised.** Its import is covered (flat-import test), but its `main()` — the 4b-1b
-  connector load, BotState construction, the consume loop calling the relocated `handle_book_update` (it's
-  the 2nd handle_book_update caller) — and the cex_feed path have only run in unit tests / never on a real
-  flat deploy. Run ONE `test_multibot_deploy` / data-plane validation (all sim → cheap) before calling
-  Step 4 complete. ⚠ first confirm the script targets ephemeral/test accounts, not the live fleet.
+- **account_bot RUNTIME debt — CLOSED (2026-06-29).** `test_multibot_deploy.sh --duration 45` on the
+  ephemeral test account (it self-guards to TEST_STANDALONE_USER_IDX only, uses ~/account-sim, wipes at
+  teardown): account_bot ran 45s and **received 890 book updates, no critical errors, clean teardown** —
+  exercising its `main()`, the 4b-1b connector load/inject, BotState construction, and the consume loop
+  driving the relocated `pm_data.handle_book_update` on real messages. The 2nd handle_book_update caller
+  is now validated end-to-end on a real flat deploy.
+  - Still NOT live-exercised (lower priority): the **cex_feed path** (`cex_consumer.cex_feed_consumer_loop`,
+    a grid/swing bot) — covered by the behavioral suite + the whole-dir cex ship; confirm live if/when a
+    grid/swing account is (re)deployed.
 - **Each sub-step:** stop for review (per the recipe). Mind the deploy gotchas (feed-restart ordering,
   reconnect lag, no parallel SSH, pgrep self-match, sequential deploy).
 
