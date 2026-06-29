@@ -43,7 +43,7 @@ def make_state(conn=None):
     Injects the Polymarket threshold default the way the entrypoint does (Plan D
     step 3b — BotState no longer self-defaults a strategy)."""
     return bot.BotState(conn if conn is not None else make_db(),
-                        strategy=bot.ThresholdStrategy())
+                        strategy=bot.ThresholdStrategy(), connector=api_poly)
 
 
 def make_token(
@@ -2950,7 +2950,8 @@ class TestComputeStake(unittest.TestCase):
         f_star = (0.98 * b_net - 0.02) / b_net
         expected = 0.25 * f_star * 1000.0
         result = bot.compute_stake(cfg, 0.96, 60.0, capital=1000.0,
-                                   win_rate=0.98, n_trades=50, ask=ask)
+                                   win_rate=0.98, n_trades=50, ask=ask,
+                                   fee_rate=api_poly.FEE_RATE)
         self.assertAlmostEqual(result, expected, places=5)
         self.assertGreater(result, 0.0)
 

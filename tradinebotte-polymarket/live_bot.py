@@ -105,12 +105,10 @@ MARKET_REFRESH          = 30
 CONNECTOR      = "polymarket"   # api_* module to use; see bot/connectors/
 STRATEGY_TYPE  = "threshold"    # "threshold" (built-in) or "grid" (bot/strategy_engines/grid.py)
 
-# Module-level `api` connector — resolved through the registry by name, not a
-# privileged `import api_polymarket`, so the entrypoint has no hard dependency on
-# any one exchange (Plan D step 2). make_config() may override CONNECTOR per
-# strategy; main() rebinds via _load_connector(config.connector) before any I/O.
-# Bound here (not in main) so live_bot.api exists at import for tests that patch it.
-api = _load_connector_module(CONNECTOR)
+# The exchange connector is no longer a module global (Plan D step 4b): the entrypoint
+# (main / account_bot) loads it via the registry by name and injects it into BotState,
+# and the trading code reaches it through `state.connector`. The default connector name
+# is CONNECTOR above; make_config() may override it per strategy.
 
 # Grid strategy defaults (ignored when strategy_type == "threshold")
 GRID_SYMBOL          = "BTCUSDT"
@@ -650,19 +648,6 @@ def make_config(simulate: bool = False, no_log: bool = False,
     return config
 
 
-def _load_connector(name: str) -> None:
-    """
-    Bind the module-level `api` global to the requested exchange connector.
-
-    Loaded through the registry by name for every connector — no exchange is
-    privileged (Plan D step 2). Re-binding the default is cheap: importlib
-    caches the module, so this returns the same object bound at import.
-    """
-    global api  # pylint: disable=global-statement
-    api = _load_connector_module(name)
-    logger.info("Connector loaded: %s (%s)", name, api.__name__)
-
-
 def _setup_logging(config: "BotConfig") -> Optional[logging.handlers.QueueListener]:
     """
     Configure the root logger according to config and return the QueueListener
@@ -904,8 +889,13 @@ class BotState:
     """
     def __init__(self, conn: sqlite3.Connection,
                  config: Optional["BotConfig"] = None,
-                 strategy: Any = None) -> None:
+                 strategy: Any = None,
+                 connector: Any = None) -> None:
         self.conn = conn
+        # Exchange connector (api_* module) — INJECTED by the entrypoint (Plan D step 4b),
+        # not a module global: the data/order functions reach it via state.connector, so
+        # the trading code carries no hard reference to any one exchange module.
+        self.connector: Any = connector
         self.config: BotConfig = config if config is not None else BotConfig()
         self.capital = self.config.capital_start
         self.session: Optional[aiohttp.ClientSession] = None
@@ -990,7 +980,8 @@ async def handle_book_update(state: BotState, parsed: dict[str, Any]) -> None:
 
 def compute_stake(cfg: "BotConfig", bid: float, secs: float,
                   capital: float = 0.0, win_rate: float = 0.5,
-                  n_trades: int = 0, ask: float = 0.0) -> float:
+                  n_trades: int = 0, ask: float = 0.0,
+                  fee_rate: float = 0.0) -> float:
     """
     Compute the effective stake for one trade.
 
@@ -1015,7 +1006,7 @@ def compute_stake(cfg: "BotConfig", bid: float, secs: float,
     Flat path (all above disabled): returns cfg.stake.
     """
     if cfg.kelly_fraction > 0 and n_trades >= cfg.kelly_min_trades and capital > 0 and ask > 0:
-        b_net = (1.0 / ask - 1.0) - api.FEE_RATE * min(ask, 1.0 - ask) / ask
+        b_net = (1.0 / ask - 1.0) - fee_rate * min(ask, 1.0 - ask) / ask
         p = win_rate
         q = 1.0 - p
         f_star = (p * b_net - q) / b_net if b_net > 0 else 0.0
@@ -1258,6 +1249,7 @@ async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[floa
     stake = compute_stake(
         cfg, ts.best_bid, ts.secs_remaining, state.capital,
         win_rate=state.win_rate / 100.0, n_trades=n_trades, ask=ep,
+        fee_rate=state.connector.FEE_RATE,
     )
     if stake <= 0:
         logger.info("[KELLY] f*≤0 — no edge at ask=%.4f wr=%.1f%% — skipping %s",
@@ -1274,7 +1266,7 @@ async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[floa
         )
         return
     tb    = stake / ep if ep > 0 else 0                         # tokens bought
-    fee   = api.compute_fee(ep, tb)
+    fee   = state.connector.compute_fee(ep, tb)
     cost  = stake + fee
     oid   = None
 
@@ -1286,7 +1278,7 @@ async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[floa
     # can isolate network RTT from in-process signal latency.
     t_pre_order = time.monotonic()
     if state.session:
-        oid = await api.post_order(
+        oid = await state.connector.post_order(
             state.session, ts.token_id, ep, stake,
             private_key=cfg.private_key, install_dir=cfg.install_dir,
         )
@@ -1475,6 +1467,7 @@ def register_market(state: BotState, market: dict[str, Any]) -> list[str]:
     Skips markets that have already ended. Returns a list of newly added token IDs
     so the caller can subscribe them to the WebSocket.
     """
+    api = state.connector
     mid = api.get_market_id(market)
     if not mid: return []
     up = api.get_up_token_id(market)
@@ -1518,6 +1511,7 @@ async def _market_refresh_loop(state: BotState, session: aiohttp.ClientSession, 
     subscribes newly discovered tokens while the main recv loop continues
     processing messages uninterrupted.
     """
+    api = state.connector
     while True:
         await asyncio.sleep(state.config.market_refresh)
         try:
@@ -1561,6 +1555,7 @@ async def _run_ws(state: BotState, session: aiohttp.ClientSession) -> None:
     so a recv timeout just means no market messages arrived — normal between
     5-minute candles. We only reconnect if all tracked markets have expired.
     """
+    api = state.connector
     markets = await api.get_markets(
         session,
         tag_id=state.config.market_tag_id,
@@ -1834,10 +1829,11 @@ async def main() -> None:
         snapshot_interval=args.snapshot_interval,
     )
     _setup_logging(config)
-    _load_connector(config.connector)
+    connector = _load_connector_module(config.connector)
+    logger.info("Connector loaded: %s (%s)", config.connector, connector.__name__)
     if config.strategy_type != "threshold":
         from botcore.connectors import validate as _validate_conn
-        _validate_conn(api, config.strategy_type)
+        _validate_conn(connector, config.strategy_type)
 
     _up = int(time.time() - _BOT_START)
     _start_str = datetime.fromtimestamp(_BOT_START, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -1857,7 +1853,7 @@ async def main() -> None:
     else:
         logger.info("  Strategy: file not found — using defaults")
     if config.connector == "polymarket":
-        _tf = "15M" if config.market_tag_id == api.GAMMA_TAG_15M else "5M"
+        _tf = "15M" if config.market_tag_id == connector.GAMMA_TAG_15M else "5M"
         logger.info("  Markets: BTC Up/Down %s (tag=%d, window=±%dmin)",
                     _tf, config.market_tag_id, config.market_window_mins)
     if config.hour_filter_enabled:
@@ -1908,7 +1904,7 @@ async def main() -> None:
 
     conn = init_db(config)
     try:
-        state = BotState(conn, config, strategy=ThresholdStrategy())
+        state = BotState(conn, config, strategy=ThresholdStrategy(), connector=connector)
         restore_state_from_db(state)
 
         async with aiohttp.ClientSession(

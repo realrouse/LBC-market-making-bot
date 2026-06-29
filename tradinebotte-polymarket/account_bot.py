@@ -395,7 +395,12 @@ async def main() -> None:
         logger.debug("[INIT] init_db...")
     conn  = bot.init_db(config)
     try:
-        state = bot.BotState(conn, config, strategy=bot.ThresholdStrategy())
+        # Load the exchange connector via the registry and inject it (Plan D step 4b) —
+        # account_bot is the Polymarket feed consumer, so this resolves to api_polymarket.
+        from botcore.connectors import load as _load_connector
+        connector = _load_connector(config.connector)
+        state = bot.BotState(conn, config, strategy=bot.ThresholdStrategy(),
+                             connector=connector)
         bot.restore_state_from_db(state)
         if VERBOSE:
             logger.debug("[INIT] capital=%.2f open_trades=%d",

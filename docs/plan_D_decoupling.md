@@ -243,15 +243,19 @@ cex plugin) behind a GENERALIZED entrypoint↔plugin interface so a 3rd family p
 into a plugin module that live_bot imports (re-export for account_bot/test back-compat). Each sub-step
 = 1 commit + full gate; trading-touching sub-steps also get a clean-install.
 
-- **4b-1 — CONNECTOR INJECTION (the safety enabler; the deferred 3b-2b, now first because it de-risks
-  everything after).** Add `state.connector` (injected at construction like `strategy`); convert the
-  ~21 `api.*` sites → `state.connector.*` (all enclosing fns take `state`, or `main()` has it; for
-  `compute_stake(cfg,...)` thread the connector); remove the module global `api` + the `_load_connector`
-  rebind. **Then rewrite the ~10 trading tests** that `patch("live_bot.api.*")` / read `bot.api.FEE_RATE`
-  / `assertIs(bot.api, load("polymarket"))` to patch a STABLE seam (the connector module / `state.connector`),
-  so later physical moves don't touch tests again. Done FIRST, in isolation: a gate failure here points
-  at the injection, not a move. ⚠ Riskiest test-rewrite — gate + clean-install. NB this re-opens the
-  step-2-hook work we correctly deferred; it's worth doing now precisely because 4b needs it.
+- **4b-1 — CONNECTOR INJECTION (the safety enabler) — DONE (commits → see git log).** Split into two
+  commits to honor "don't move trading code + rewrite its test net together":
+  - **4b-1a (tests only, production untouched):** rewrote the ~10 trading/discovery tests from
+    `patch("live_bot.api.*")` / `bot.api.FEE_RATE` / `assertIs(bot.api, …)` to patch the connector
+    MODULE (`api_poly.*`) / the registry. Behavior-identical today (`live_bot.api IS api_polymarket`)
+    and survives the global's removal (`state.connector` is the same module object). Gate green.
+  - **4b-1b (production):** added `state.connector` (injected at construction like `strategy`);
+    converted all ~21 `api.*` sites → `state.connector.*` (local `api = state.connector` alias in
+    `register_market`/`_market_refresh_loop`/`_run_ws`; `compute_stake` gained a `fee_rate` param fed
+    `state.connector.FEE_RATE`); `main()`/`account_bot` load via the registry and inject; removed the
+    module global `api` + `_load_connector`. Only ONE test needed a value fix (the positive-edge Kelly
+    case). Side effect: importing live_bot no longer eagerly loads a connector. Gate green
+    (tests 411 / poly 441 / cex 126 / indicators 139 / status 75 / tools 168) + clean-install.
 - **4b-2 — extract the CEX glue** (`cex_feed_consumer_loop` + `save_cex_snapshot`) into the cex package;
   lazy-import in the `_use_cexfeed` dispatch branch (so polymarket-only accounts don't ship it). Removes
   CEX code from the polymarket file. Touches no `api`. Re-validate the cex_feed path (test_multibot).

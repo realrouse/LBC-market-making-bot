@@ -32,7 +32,8 @@ def make_state(conn: sqlite3.Connection) -> tuple:
     """Return (BotState, TokenState) with a single active token."""
     # BotState no longer self-defaults a strategy (Plan D step 3b) — inject the
     # threshold default so handle_book_update can dispatch.
-    state = bot.BotState(conn, strategy=bot.ThresholdStrategy())
+    state = bot.BotState(conn, strategy=bot.ThresholdStrategy(),
+                         connector=bot._load_connector_module("polymarket"))
     token_id  = "abc123token"
     market_id = "mkt001"
     state.tokens[token_id] = bot.TokenState(
