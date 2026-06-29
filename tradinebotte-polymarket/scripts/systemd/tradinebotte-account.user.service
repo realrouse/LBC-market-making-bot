@@ -14,11 +14,13 @@ Environment=TRADINEBOTTE_DIR=%h/tradinebotte
 # To force TCP (e.g. multi-stack), uncomment and set:
 # Environment=TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5557
 WorkingDirectory=%h/tradinebotte
-ExecStart=%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/bot/account_bot.py
+ExecStart=%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/account_bot.py
 Restart=on-failure
 RestartSec=30
 StandardOutput=null
-StandardError=null
+# Capture stderr to the journal so an uncaught exception / crash-loop is diagnosable
+# (account.log only holds the logger's INFO lines; tracebacks go to stderr).
+StandardError=journal
 
 [Install]
 WantedBy=default.target

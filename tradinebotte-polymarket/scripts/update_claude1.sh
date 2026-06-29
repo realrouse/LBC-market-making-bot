@@ -275,7 +275,11 @@ if [[ "$RESTART_ACCOUNT" == "true" ]]; then
 
     echo -e "\n${BOLD}${YELLOW}═══ RSYNC account_bot ═══${NC}"
 
-    # Push account_bot.py to both the flat install dir and bot/ subdir (service uses bot/)
+    # account_bot runs FLAT from $_install_dir/account_bot.py (uniform with every other
+    # account — the old ~/tradinebotte/bot/ subdir layout is gone). update_standalone (called
+    # above) already shipped live_bot.py + pm_*.py + botcore/ flat; setup_data_plane ships the
+    # feeds + botcore flat. So only account_bot.py needs syncing here (update_standalone
+    # excludes it).
     SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
         rsync -az \
         -e "ssh $_ssh_opts" \
@@ -283,23 +287,6 @@ if [[ "$RESTART_ACCOUNT" == "true" ]]; then
         "$_c1_user@$_server:$_install_dir/account_bot.py" 2>&1 \
         && echo -e "${GREEN}  ✓ account_bot.py synced (flat)${NC}" \
         || { echo -e "${RED}  ✗ rsync account_bot.py failed${NC}"; exit 1; }
-
-    SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
-        rsync -az \
-        -e "ssh $_ssh_opts" \
-        "$LOCAL_REPO/tradinebotte-polymarket/account_bot.py" \
-        "$_c1_user@$_server:$_install_dir/bot/account_bot.py" 2>&1 \
-        && echo -e "${GREEN}  ✓ account_bot.py synced (bot/)${NC}" \
-        || echo -e "${YELLOW}  ! bot/ subdir not present — skipping${NC}"
-
-    # Push live_bot.py to bot/ — account_bot imports it from there (sys.path includes bot/)
-    SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
-        rsync -az \
-        -e "ssh $_ssh_opts" \
-        "$LOCAL_REPO/tradinebotte-polymarket/live_bot.py" \
-        "$_c1_user@$_server:$_install_dir/bot/live_bot.py" 2>&1 \
-        && echo -e "${GREEN}  ✓ live_bot.py synced (bot/)${NC}" \
-        || echo -e "${YELLOW}  ! bot/live_bot.py sync skipped${NC}"
 
     _restart_service "tradinebotte-account-${_c1_user}.service" "ACCOUNT BOT" "ACCOUNT BOT|Connected to feed|ERROR"
 fi

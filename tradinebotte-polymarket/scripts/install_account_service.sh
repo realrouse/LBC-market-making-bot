@@ -26,7 +26,9 @@ _IPC_DIR="/run/user/${_UID}"; [ -d "${_IPC_DIR}" ] || { _IPC_DIR="/tmp/tradinebo
 FEED_ADDR="${TRADINEBOTTE_FEED_ADDR:-ipc://${_IPC_DIR}/tradinebotte-feed.sock}"
 INSTALL_DIR="${TRADINEBOTTE_INSTALL_DIR:-$HOME/tradinebotte}"
 INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
-BOT_DIR="$PROJECT_DIR/bot"
+# account_bot runs FLAT from the install dir (uniform with live_bot on every account —
+# the old PROJECT_DIR/bot subdir layout is eliminated).
+BOT_DIR="$INSTALL_DIR"
 
 # ── Validations ───────────────────────────────────────────────────────────────
 if [[ -z "$ACCOUNT_DIR" ]]; then
