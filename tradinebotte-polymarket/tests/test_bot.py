@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "tradinebotte-cex"))
 import live_bot as bot
 import api_polymarket as api_poly
+import cex_consumer
 import bot_utils
 
 
@@ -3618,7 +3619,7 @@ class TestCexFeedSnapshots(unittest.IsolatedAsyncioTestCase):
         state = make_state()
         book = SimpleNamespace(best_bid=60000.0, best_ask=60000.01, spread=0.01,
                                ask_vol=2.0, obi=-0.3)
-        bot.save_cex_snapshot(state, "BTC_USDT", book)
+        cex_consumer.save_cex_snapshot(state, "BTC_USDT", book)
         state.conn.commit()
         row = state.conn.execute(
             "SELECT market_id, token_id, direction, secs_remaining, best_bid, "
@@ -3644,10 +3645,10 @@ class TestCexFeedSnapshots(unittest.IsolatedAsyncioTestCase):
             pass
         state.strategy = SimpleNamespace(on_book_update=on_book_update)
 
-        with patch.object(bot, "make_sub", return_value=sock), \
+        with patch.object(cex_consumer, "make_sub", return_value=sock), \
              patch("zmq.asyncio.Context", return_value=SimpleNamespace(term=lambda: None)):
             with self.assertRaises(_Stop):
-                await bot.cex_feed_consumer_loop(state, "tcp://x", symbol, exchange)
+                await cex_consumer.cex_feed_consumer_loop(state, "tcp://x", symbol, exchange)
         state.conn.commit()
 
     def _count(self, state):

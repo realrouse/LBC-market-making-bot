@@ -256,9 +256,17 @@ into a plugin module that live_bot imports (re-export for account_bot/test back-
     module global `api` + `_load_connector`. Only ONE test needed a value fix (the positive-edge Kelly
     case). Side effect: importing live_bot no longer eagerly loads a connector. Gate green
     (tests 411 / poly 441 / cex 126 / indicators 139 / status 75 / tools 168) + clean-install.
-- **4b-2 — extract the CEX glue** (`cex_feed_consumer_loop` + `save_cex_snapshot`) into the cex package;
-  lazy-import in the `_use_cexfeed` dispatch branch (so polymarket-only accounts don't ship it). Removes
-  CEX code from the polymarket file. Touches no `api`. Re-validate the cex_feed path (test_multibot).
+- **4b-2 — extract the CEX glue — DONE (commit → see git log).** `cex_feed_consumer_loop` +
+  `save_cex_snapshot` moved to `tradinebotte-cex/cex_consumer.py` (duck-typed state, logs to the "live"
+  logger, imports `_persist_snapshot` from botcore). `main()` lazy-imports the loop in the `_use_cexfeed`
+  branch, so polymarket-only accounts never import it. Ships via the whole-dir cex rsyncs (grid/swing/
+  mexc deploys) + install.sh (defensive). Tests retargeted to `cex_consumer.*` (incl. the `make_sub`
+  patch); behavioral coverage (`TestCexFeedSnapshots`) intact — it now drives `cex_consumer`'s loop and
+  asserts persistence (stronger than the structural `TestDataPathCoverage`, which no longer scans the
+  moved loop). Gate green. NB: standalone clean-install validates install.sh's new copy + that the
+  polymarket entrypoint still starts WITHOUT importing cex_consumer (lazy); the cex_feed path running on
+  a real cex account is covered by the behavioral suite + the whole-dir ship — a multibot deploy would
+  confirm it live but risks the fleet, so deferred unless a cex account is (re)deployed.
 - **4b-3 — create the polymarket plugin package** (e.g. `tradinebotte-polymarket/polymarket/`, bare-name
   importable, shipped flat like `botcore`/`connectors`). Move leaf data types first: `TokenState`,
   `RejectionStats`, the trading-hours filter (`_us_holidays`/`is_trading_hour`…). Re-export from live_bot.
