@@ -196,7 +196,8 @@ def parse_book_update(msg):
 async def get_markets(session, symbol=DEFAULT_SYMBOL, **_):
     """
     Fetch current ticker for the given symbol from Bitstamp REST.
-    Returns a list with one normalized market dict.
+    Returns a 1-element list with the normalized market dict on success, or None on an
+    API/network error (callers distinguish failure from data via `is None`).
     """
     clean = symbol.lower().split(":")[0]
     try:
@@ -206,11 +207,11 @@ async def get_markets(session, symbol=DEFAULT_SYMBOL, **_):
         ) as resp:
             if resp.status != 200:
                 logger.warning("Bitstamp ticker HTTP %s [symbol=%s]", resp.status, clean)
-                return []
+                return None   # error sentinel — not [] ("ran fine, no data")
             data = await resp.json(content_type=None)
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning("Bitstamp get_markets error: %s", exc)
-        return []
+        return None   # error sentinel — not [] ("ran fine, no data")
 
     return [{
         "symbol":      clean.upper(),
@@ -324,6 +325,9 @@ async def get_open_orders(session, symbol=DEFAULT_SYMBOL):
 
     Normalized format (matches api_binance/api_mexc contract):
       {"order_id": str, "side": str, "price": float, "qty": float, "status": str}
+
+    Returns None on an API/network error (a transient failure must not be read as
+    "no open orders"); [] in simulation mode (no credentials) or genuinely no orders.
     """
     if not _has_creds():
         return []
@@ -350,7 +354,7 @@ async def get_open_orders(session, symbol=DEFAULT_SYMBOL):
         ]
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning("Bitstamp get_open_orders: %s", exc)
-        return []
+        return None   # error sentinel — not [] (sim/no-orders)
 
 
 # ─── USER STREAM STUBS ───────────────────────────────────────────────────────

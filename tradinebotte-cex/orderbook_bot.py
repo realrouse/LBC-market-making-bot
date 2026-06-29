@@ -704,7 +704,16 @@ async def _run(p: dict, db: sqlite3.Connection, install_dir: str = "") -> None:
                 if p.get("liq_gate") else "disabled")
     logger.info("Liq gate: %s", liq_mode)
 
-    from tradinetools import heartbeat_loop
+    from tradinetools import heartbeat_loop, health_server
+
+    def _hb_payload() -> dict:
+        return {
+            "bounds_ok":       any(s.last_price > 0 for s in states),
+            "open_positions":  sum(1 for s in states if s.position is not None),
+            "total_pnl":       round(sum(s.total_pnl for s in states), 2),
+            "last_price":      max((s.last_price for s in states if s.last_price > 0), default=0.0),
+        }
+
     tasks = [
         asyncio.create_task(_zmq_loop(states, db, p)),
         asyncio.create_task(_stats_loop(states)),
@@ -712,14 +721,14 @@ async def _run(p: dict, db: sqlite3.Connection, install_dir: str = "") -> None:
             heartbeat_loop(
                 "orderbook_bot",
                 install_dir or None,
-                lambda: {
-                    "bounds_ok":       any(s.last_price > 0 for s in states),
-                    "open_positions":  sum(1 for s in states if s.position is not None),
-                    "total_pnl":       round(sum(s.total_pnl for s in states), 2),
-                    "last_price":      max((s.last_price for s in states if s.last_price > 0), default=0.0),
-                },
+                _hb_payload,
                 mode="sim",  # paper trading only — no real exchange connector
             )
+        ),
+        # Opt-in HTTP /health (no-op unless TRADINEBOTTE_HEALTH_PORT is set);
+        # reuses _hb_payload so the pulled view matches the pushed heartbeat.
+        asyncio.create_task(
+            health_server("orderbook_bot", install_dir or None, _hb_payload, mode="sim")
         ),
     ]
     try:

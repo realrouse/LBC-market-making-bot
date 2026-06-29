@@ -221,7 +221,8 @@ def parse_book_update(msg):
 async def get_markets(session, symbol=DEFAULT_SYMBOL, **_):
     """
     Fetch current order book ticker for the given symbol from MEXC Futures REST.
-    Returns a list with one normalized market dict.
+    Returns a 1-element list with the normalized market dict on success, or None on an
+    API/network error (callers distinguish failure from data via `is None`).
     """
     _sym = symbol.split(":")[0]
     try:
@@ -232,7 +233,7 @@ async def get_markets(session, symbol=DEFAULT_SYMBOL, **_):
         ) as resp:
             if resp.status != 200:
                 logger.warning("MEXC Futures get_markets error %d [symbol=%s]", resp.status, _sym)
-                return []
+                return None   # error sentinel — not [] ("ran fine, no data")
             outer = await resp.json(content_type=None)
         raw = outer.get("data") or {}
         return [{
@@ -243,7 +244,7 @@ async def get_markets(session, symbol=DEFAULT_SYMBOL, **_):
         }]
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.warning("MEXC Futures get_markets error [symbol=%s]: %s", _sym, e)
-        return []
+        return None   # error sentinel — not [] ("ran fine, no data")
 
 
 # ── ORDER PLACEMENT ───────────────────────────────────────────────────────────
@@ -452,7 +453,8 @@ async def get_open_orders(session, symbol, *, api_key=None, api_secret=None):
     Each element: {"order_id": str, "side": str, "price": float,
                    "qty": float, "status": str}
 
-    Returns [] on error or in simulation mode.
+    Returns None on an API/network error (a transient failure must not be read as
+    "no open orders"); [] in simulation mode (no credentials) or genuinely no orders.
     MEXC Futures endpoint: GET /api/v1/private/order/list/open_orders/{symbol}
     """
     _key    = api_key    or os.environ.get("MEXC_FUTURES_API_KEY", "")
@@ -472,7 +474,7 @@ async def get_open_orders(session, symbol, *, api_key=None, api_secret=None):
             data = await resp.json(content_type=None)
             if resp.status != 200 or not data.get("success"):
                 logger.warning("MEXC Futures get_open_orders error %d : %.300s", resp.status, data)
-                return []
+                return None   # error sentinel — not [] (sim/no-orders)
             orders = data.get("data") or []
             return [
                 {
@@ -488,7 +490,7 @@ async def get_open_orders(session, symbol, *, api_key=None, api_secret=None):
             ]
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("MEXC Futures get_open_orders error : %s", e)
-        return []
+        return None   # error sentinel — not [] (sim/no-orders)
 
 
 # ── USER DATA STREAM (WebSocket private) ──────────────────────────────────────

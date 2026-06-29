@@ -18,15 +18,20 @@ for f in glob.glob("strategies/**/*.json", recursive=True):
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     shutil.copy(f, dest)
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-import bot.live_bot as bot
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _d in ("tradinebotte-polymarket", "tradinebotte-cex", "tradinebotte-core"):
+    sys.path.insert(0, os.path.join(_HERE, "..", _d))
+import live_bot as bot
 
 N       = 20_000   # iterations per benchmark
 SEP     = "=" * 64
 
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
 conn  = bot.init_db(bot.BotConfig())
-state = bot.BotState(conn)
+# BotState no longer self-defaults a strategy (Plan D step 3b) — inject the threshold
+# default so handle_book_update can dispatch.
+state = bot.BotState(conn, strategy=bot.ThresholdStrategy(),
+                     connector=bot._load_connector_module("polymarket"))
 
 token_id  = "abc123token"
 market_id = "mkt001"
@@ -148,15 +153,22 @@ print("  cPROFILE — run_backtest (basicsunday.db — 24 870 snapshots)")
 print(SEP)
 
 import sqlite3 as _sqlite3  # pylint: disable=wrong-import-position,wrong-import-order
-rows = bt.load_rows(_sqlite3.connect("data/basicsunday.db"))
-default_params = bt.Params()
-pr2  = cProfile.Profile()
-pr2.enable()
-bt.run_backtest(rows, default_params)
-pr2.disable()
-s2 = io.StringIO()
-pstats.Stats(pr2, stream=s2).sort_stats("tottime").print_stats(15)
-print(s2.getvalue())
+_BT_DB = os.path.join(_HERE, "..", "data", "basicsunday.db")
+if not os.path.isfile(_BT_DB) or os.path.getsize(_BT_DB) == 0:
+    print(f"  (skipped — fixture {_BT_DB} not present)")
+else:
+    try:
+        rows = bt.load_rows(_sqlite3.connect(f"file:{_BT_DB}?mode=ro", uri=True))
+        default_params = bt.Params()
+        pr2  = cProfile.Profile()
+        pr2.enable()
+        bt.run_backtest(rows, default_params)
+        pr2.disable()
+        s2 = io.StringIO()
+        pstats.Stats(pr2, stream=s2).sort_stats("tottime").print_stats(15)
+        print(s2.getvalue())
+    except _sqlite3.OperationalError as _e:
+        print(f"  (skipped — {_e})")
 
 
 # ─── 5. cProfile — save_snapshot (SQLite writes) ──────────────────────────────

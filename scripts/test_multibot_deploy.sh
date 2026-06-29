@@ -190,6 +190,13 @@ deploy_code() {
         -e "ssh $ssh_opts" \
         "$LOCAL_REPO/tradinebotte-cex/" "$user@$SERVER:$REMOTE_INSTALL_DIR/" 2>&1 || return 1
 
+    # tradinebotte-core/ — botcore (neutral Strategy protocol, imported via strategy_engines.base)
+    SSHPASS="${ALL_PASSWORDS[$idx]}" /usr/bin/sshpass -e \
+        rsync -az \
+        --exclude='__pycache__' --exclude='*.pyc' \
+        -e "ssh $ssh_opts" \
+        "$LOCAL_REPO/tradinebotte-core/botcore/" "$user@$SERVER:$REMOTE_INSTALL_DIR/botcore/" 2>&1 || return 1
+
     SSHPASS="${ALL_PASSWORDS[$idx]}" /usr/bin/sshpass -e \
         rsync -az \
         --filter='+ **/' --filter='+ *.json' --filter='- *' \

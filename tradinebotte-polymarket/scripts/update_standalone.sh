@@ -140,6 +140,13 @@ _rsync() {
         -e "ssh $ssh_opts" \
         "$LOCAL_REPO/tradinetools/" "$SA_USER@$SERVER:$INSTALL_DIR/tradinetools/" 2>&1 || return 1
 
+    # Neutral core (botcore.Strategy — imported by live_bot via strategy_engines.base)
+    SSHPASS="$SA_PASS" /usr/bin/sshpass -e \
+        rsync -az \
+        --exclude='__pycache__' --exclude='*.pyc' \
+        -e "ssh $ssh_opts" \
+        "$LOCAL_REPO/tradinebotte-core/botcore/" "$SA_USER@$SERVER:$INSTALL_DIR/botcore/" 2>&1 || return 1
+
     # CEX connector adapters (used by live_bot.py via `from connectors import load`)
     SSHPASS="$SA_PASS" /usr/bin/sshpass -e \
         rsync -az \

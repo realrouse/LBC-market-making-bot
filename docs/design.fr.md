@@ -306,12 +306,13 @@ async def heartbeat_loop(
     install_dir: str | None,
     get_extra: Callable[[], dict[str, Any]],
     *,
-    interval: int = 3600,
+    mode: str | None = None,
+    interval: int = 120,
 ) -> None:
 ```
 
 - **Déclenché immédiatement** au démarrage, puis toutes les `interval` secondes
-  (défaut 3600 s).
+  (défaut 120 s ; surchargé par `TRADINEBOTTE_HB_INTERVAL`).
 - Construit un payload JSON via `build_heartbeat()` et l'envoie en une seule
   frame ZMQ PUSH.
 - L'adresse est résolue depuis la variable `TRADINEBOTTE_STATUS_ADDR`, puis
@@ -341,6 +342,15 @@ async def heartbeat_loop(
 | `version` | string | Hash git court depuis `version.stamp` ou `TRADINEBOTTE_VERSION` |
 | `status` | string | Toujours `"running"` (futur : `"degraded"`, `"stopping"`) |
 | `bounds_ok` | bool\|null | Optionnel ; défini par les bots qui suivent les bornes de paramètres |
+
+Les bots fusionnent aussi des **champs extra spécifiques à leur famille** dans le payload
+(transportés tels quels dans le blob JSON `payload` stocké, pas en colonnes dédiées),
+p. ex. `pnl_total`, `daily_pnl`, `capital`, `open_trades`, `last_book_ts` (dernier book
+*reçu*). La status page les lit depuis le blob.
+
+| Champ extra | Type | Description |
+|---|---|---|
+| `last_write_ts` | float | Epoch (secondes) de la dernière ligne de données **persistée** par le bot (snapshot / accum_snapshot) — distinct de `last_book_ts` (reçu). La status page lève `⚠data` quand il prend du retard au-delà de `DATA_STALE_S` (défaut 600s) alors que le bot bat encore — détecte « vivant mais enregistrement arrêté ». Omis par les bots qui n'enregistrent pas (infra) ou tournent snapshots désactivés, pour qu'ils n'alarment jamais ; présent-mais-`0.0` = « démarré, jamais écrit » et alarme. |
 
 ### Schéma de heartbeat.db
 
@@ -379,6 +389,84 @@ bash tradinebotte-status/scripts/heartbeat_status.sh
 # Rapport complet : heartbeats + états de services par compte :
 bash tradinebotte-status/scripts/bot_status.sh
 ```
+
+### Endpoint HTTP de santé (optionnel)
+
+`heartbeat_loop` **pousse** l'état vers le collecteur. `health_server`
+(`tradinetools/__init__.py`) en est le pendant en **pull** : un endpoint
+`aiohttp` minimal permettant à un cron externe, un reverse proxy ou un moniteur
+d'uptime de lire le même état en HTTP sans parler ZMQ. Il est monté comme
+troisième tâche de fond à côté de `heartbeat_loop` et `control_loop` dans chaque
+bot de trading (`live_bot`, `account_bot`, `accumulation_bot`, `orderbook_bot`).
+
+```python
+async def health_server(
+    bot_name: str,
+    install_dir: str | None,
+    get_extra: Callable[[], dict[str, Any]],
+    *,
+    mode: str | None = None,
+    host: str = "127.0.0.1",
+    port: int | None = None,
+) -> None:
+```
+
+- **Optionnel.** Désactivé tant que `TRADINEBOTTE_HEALTH_PORT` n'est pas défini ;
+  sans cette variable la coroutine retourne immédiatement et ne bind rien —
+  empreinte par défaut nulle, déploiements existants inchangés.
+- **Pas de dérive.** On lui passe le *même* callback `get_extra` qu'à
+  `heartbeat_loop` : la vue HTTP ne peut donc jamais diverger du heartbeat poussé.
+- **Loopback uniquement.** Bind `127.0.0.1` par défaut et journalise un
+  avertissement `SECURITY` s'il est pointé vers un hôte non-loopback — le payload
+  contient capital/PnL et n'a pas d'authentification propre. À placer derrière un
+  tunnel SSH ou un proxy authentifiant pour tout accès distant.
+- **Tolérant aux pannes.** Les erreurs de setup/service sont journalisées et
+  avalées ; une panne du serveur de santé ne crashe jamais le bot. La tâche est
+  annulée à l'arrêt.
+
+#### Activation
+
+Définir le port dans l'unité systemd du bot (ou l'environnement) puis redémarrer :
+
+```ini
+# ~/.config/systemd/user/tradinebotte-live.service  → [Service]
+Environment=TRADINEBOTTE_HEALTH_PORT=9101
+```
+
+```bash
+curl -s http://127.0.0.1:9101/health | jq
+```
+
+#### Réponse
+
+`GET /health` renvoie le payload de `build_heartbeat()` (cf. schéma ci-dessus)
+plus un champ `uptime_s` — c.-à-d. les champs du heartbeat fusionnés avec les
+stats `get_extra` du bot (capital, PnL, trades ouverts, …) :
+
+```json
+{
+  "ts":           1745664123,
+  "bot_name":     "live_bot",
+  "account":      "acct-2",
+  "version":      "10fa979",
+  "status":       "running",
+  "mode":         "sim",
+  "capital":      1139.47,
+  "daily_pnl":    25.10,
+  "pnl_total":    65.31,
+  "open_trades":  3,
+  "uptime_s":     842
+}
+```
+
+Les clés de stats exactes dépendent du bot (chacun fournit son propre
+`get_extra`) ; l'enveloppe `ts`/`bot_name`/`account`/`version`/`status`/`uptime_s`
+est toujours présente. En cas d'erreur interne, l'endpoint renvoie un HTTP 500
+avec `{"status": "error", "error": "<détail>"}`.
+
+> Choisir un port distinct par bot lorsque plusieurs tournent sous le même compte
+> (p. ex. `live` 9101, `accumulation` 9102), exactement comme les ports ZMQ sont
+> décalés par pile.
 
 ---
 
@@ -1095,6 +1183,7 @@ sont re-publiés au prochain refresh de 30 secondes.
 | `TRADINEBOTTE_DIR` | `~/tradinebotte` | account_bot.py, live_bot.py | Répertoire de données par compte (BD, log, config, stratégies) |
 | `TRADINEBOTTE_ACCOUNT` | (fallback `USER`) | tous les bots | Identifiant de compte écrit dans les payloads heartbeat |
 | `TRADINEBOTTE_VERSION` | (fallback version.stamp) | tous les bots | Hash git écrit dans les payloads heartbeat ; défini par les scripts de déploiement |
+| `TRADINEBOTTE_HEALTH_PORT` | (non défini) | tous les bots de trading | Si défini, expose un endpoint HTTP `GET /health` sur `127.0.0.1:<port>` renvoyant le payload heartbeat du bot + `uptime_s`. Non défini = pas de serveur HTTP (défaut). Loopback uniquement — ne pas exposer sans couche d'authentification en façade. |
 
 ### Faire tourner deux piles indépendantes sur la même machine
 

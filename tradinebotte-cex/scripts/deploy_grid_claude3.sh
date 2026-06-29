@@ -113,6 +113,13 @@ _rsync() {
         -e "ssh $ssh_opts" \
         "$LOCAL_REPO/tradinebotte-cex/" "$GR_USER@$SERVER:$INSTALL_DIR/" 2>&1 || return 1
 
+    # tradinebotte-core/ — botcore (neutral Strategy protocol, imported via strategy_engines.base)
+    SSHPASS="$GR_PASS" /usr/bin/sshpass -e \
+        rsync -az \
+        --exclude='__pycache__' --exclude='*.pyc' \
+        -e "ssh $ssh_opts" \
+        "$LOCAL_REPO/tradinebotte-core/botcore/" "$GR_USER@$SERVER:$INSTALL_DIR/botcore/" 2>&1 || return 1
+
     # Grid strategy JSON configs (recursive — includes strategies/grid/ subdir)
     SSHPASS="$GR_PASS" /usr/bin/sshpass -e \
         rsync -az \

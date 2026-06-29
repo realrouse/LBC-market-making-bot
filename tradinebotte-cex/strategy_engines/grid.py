@@ -53,6 +53,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from tradinetools.pnl import round_trip_pnl
+
 logger = logging.getLogger(__name__)
 
 STRATEGY_TYPE = "grid"
@@ -358,7 +360,12 @@ class GridStrategy:
         )
         open_orders = await self._api.get_open_orders(
             state.session, self.grid.symbol)
-        open_ids = {str(o["order_id"]) for o in (open_orders or [])}
+        if open_orders is None:   # API error (None, not []) — skip reconcile: an empty
+            # open_ids would book every live order as "filled". (Not falsiness: `or []`
+            # here was the latent double-fill bug.)
+            logger.warning("GridStrategy [%s] reconcile: get_open_orders error — skipping", self.grid.symbol)
+            return True
+        open_ids = {str(o["order_id"]) for o in open_orders}
 
         filled = 0
         for lvl in self.grid.levels:
@@ -640,7 +647,10 @@ class GridStrategy:
         else:
             open_orders = await self._api.get_open_orders(
                 state.session, self.grid.symbol)
-            open_ids = {str(o["order_id"]) for o in (open_orders or [])}
+            if open_orders is None:   # API error — skip this poll's reconcile (don't book fills)
+                logger.warning("GridStrategy [%s] poll: get_open_orders error — skipping", self.grid.symbol)
+                return
+            open_ids = {str(o["order_id"]) for o in open_orders}
             for lvl in active:
                 if lvl.status == "buy_placed" and lvl.buy_order_id:
                     if str(lvl.buy_order_id) not in open_ids:
@@ -700,9 +710,7 @@ class GridStrategy:
         profit = 0.0
         if buy_p is not None and new_buy > 0:
             qty      = self.grid.order_size_usdt / buy_p
-            fee_buy  = self._api.compute_fee(buy_p, qty)
-            fee_sell = self._api.compute_fee(sell_p, qty)
-            profit   = (sell_p - buy_p) * qty - fee_buy - fee_sell
+            profit   = round_trip_pnl(buy_p, sell_p, qty, self._api.FEE_RATE)
             self.grid.total_profit_usd += profit
             self.grid.total_cycles     += 1
 

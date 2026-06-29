@@ -81,16 +81,21 @@ show_heartbeat_status "HEARTBEAT — PRE-DEPLOY SNAPSHOT"
 
 # ── Account-1: rsync only (default) or full service restart (--restart-infra)
 if [[ "$RESTART_INFRA" == "true" ]]; then
-    run_step "account-1 — full restart (indicators + feed + account_bot)" \
-        "$PM/update_claude1.sh" \
-        --restart-indicators --restart-feed --restart-account
-    _c1="${STEP_RESULTS[-1]}"
-    add_row "  └─ account-1 — indicators  (restarted)" "$_c1"
-    add_row "  └─ account-1 — feed        (restarted)" "$_c1"
-    add_row "  └─ account-1 — account_bot (restarted)" "$_c1"
-    # Shared data plane (feed5m + cex_feed + tradinetools refresh) — only with infra
-    # restart, since it (re)starts the feeds and briefly reconnects all consumers.
-    run_step "account-1 — data plane (feed5m + cex_feed)" "$STATUS/setup_data_plane.sh"
+    # Order matters: the feed must be restarted exactly ONCE and BEFORE account_bot, or
+    # the 15M consumer orphans on a dead feed (the recurring stale-feed gotcha came from
+    # restarting the feed in update_claude1 AND again in setup_data_plane, with account_bot
+    # connecting in between). So: rsync + restart indicators only → data plane does the
+    # single feed restart → account_bot last, onto the now-stable feed.
+    run_step "account-1 — indicators (rsync + restart)" \
+        "$PM/update_claude1.sh" --restart-indicators
+    add_row "  └─ account-1 — indicators  (restarted)" "${STEP_RESULTS[-1]}"
+    # Shared data plane: the SINGLE restart of every feed (15M + feed5m + cex_feed).
+    run_step "account-1 — data plane (feeds: 15M + feed5m + cex_feed)" "$STATUS/setup_data_plane.sh"
+    add_row "  └─ account-1 — feed        (restarted via data plane)" "${STEP_RESULTS[-1]}"
+    # account_bot LAST — connects to the now-stable feed (no orphaning).
+    run_step "account-1 — account_bot (after feeds stable)" \
+        "$PM/update_claude1.sh" --restart-account
+    add_row "  └─ account-1 — account_bot (restarted after feeds)" "${STEP_RESULTS[-1]}"
 else
     run_step "account-1 — rsync (indicators + feed + account_bot)" \
         "$PM/update_claude1.sh" --skip-restart

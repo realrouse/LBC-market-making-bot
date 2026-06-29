@@ -18,8 +18,10 @@ for f in glob.glob("strategies/**/*.json", recursive=True):
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     shutil.copy(f, dest)
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-import bot.live_bot as bot  # pylint: disable=import-error
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _d in ("tradinebotte-polymarket", "tradinebotte-cex", "tradinebotte-core"):
+    sys.path.insert(0, os.path.join(_HERE, "..", _d))
+import live_bot as bot
 
 N   = 20_000
 SEP = "=" * 72
@@ -30,7 +32,10 @@ MMAP_MB = 256
 
 def make_state(conn: sqlite3.Connection) -> tuple:
     """Return (BotState, TokenState) with a single active token."""
-    state = bot.BotState(conn)
+    # BotState no longer self-defaults a strategy (Plan D step 3b) — inject the
+    # threshold default so handle_book_update can dispatch.
+    state = bot.BotState(conn, strategy=bot.ThresholdStrategy(),
+                         connector=bot._load_connector_module("polymarket"))
     token_id  = "abc123token"
     market_id = "mkt001"
     state.tokens[token_id] = bot.TokenState(
@@ -57,7 +62,7 @@ def conn_default() -> sqlite3.Connection:
 
 def conn_mmap() -> sqlite3.Connection:
     c = conn_default()
-    c.execute("PRAGMA mmap_size = ?", (MMAP_MB * 1024 * 1024,))
+    c.execute(f"PRAGMA mmap_size = {int(MMAP_MB) * 1024 * 1024}")
     c.commit()
     return c
 

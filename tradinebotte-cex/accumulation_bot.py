@@ -208,6 +208,7 @@ class AccumState:
     pending_rebuys:     list  = field(default_factory=list)
     active_bands:       set   = field(default_factory=set)
     snap_counter:       int   = 0
+    last_write_ts:      float = 0.0   # epoch secs of last accum_snapshots row (status ⚠data)
     total_realized:     float = 0.0
     peak_holdings_btc:  float = 0.0
     # VWAP context
@@ -614,6 +615,24 @@ def _handle_4h(state: AccumState, msg: dict) -> None:
     logger.debug("4h RSI: %.1f", state.rsi_4h)
 
 
+def _record_accum_snapshot(state: AccumState, db: sqlite3.Connection,
+                           mid: float, ts_ms: int) -> None:
+    """Persist one accum_snapshots row and advance the data-freshness clock
+    (state.last_write_ts → status ⚠data). Named, tested step — same rationale as
+    live_bot._persist_snapshot: keep the freshness clock from being silently skipped by
+    a future caller, and make the write unit-testable without the trading logic."""
+    invested = state.holdings_btc * state.avg_entry if state.avg_entry > 0 else 0.0
+    db.execute("""
+        INSERT INTO accum_snapshots
+            (ts_ms, price, holdings_btc, avg_entry, invested_usdt,
+             free_usdt, unrealized_pct, obi_ema)
+        VALUES (?,?,?,?,?,?,?,?)""",
+        (ts_ms, float(mid), state.holdings_btc, state.avg_entry or 0.0,
+         invested, state.free_usdt, state.unrealized_pct(), state.obi_ema))
+    db.commit()
+    state.last_write_ts = ts_ms / 1000.0
+
+
 async def _handle_indicator(state: AccumState, db: sqlite3.Connection,
                              msg: dict, ts_ms: int) -> None:
     mid = msg.get("mid")
@@ -634,15 +653,7 @@ async def _handle_indicator(state: AccumState, db: sqlite3.Connection,
 
     state.snap_counter += 1
     if state.snap_counter % state.p["snapshot_every_n"] == 0:
-        invested = state.holdings_btc * state.avg_entry if state.avg_entry > 0 else 0.0
-        db.execute("""
-            INSERT INTO accum_snapshots
-                (ts_ms, price, holdings_btc, avg_entry, invested_usdt,
-                 free_usdt, unrealized_pct, obi_ema)
-            VALUES (?,?,?,?,?,?,?,?)""",
-            (ts_ms, float(mid), state.holdings_btc, state.avg_entry or 0.0,
-             invested, state.free_usdt, state.unrealized_pct(), state.obi_ema))
-        db.commit()
+        _record_accum_snapshot(state, db, float(mid), ts_ms)
 
     price = float(mid)
 
@@ -862,7 +873,22 @@ async def _run(p: dict, db: sqlite3.Connection, install_dir: str = "") -> None:
                     p.get("scale_in_cooldown_min_s", p.get("min_scale_interval_s", 3600)),
                     p.get("scale_in_obi_strong_thresh", 0.80))
 
-        from tradinetools import heartbeat_loop
+        from tradinetools import heartbeat_loop, health_server
+
+        def _hb_payload() -> dict:
+            return {
+                "bounds_ok":      state.free_usdt > 0,
+                "holdings_btc":   round(state.holdings_btc, 6),
+                "free_usdt":      round(state.free_usdt, 2),
+                "avg_entry":      round(state.avg_entry, 2),
+                "total_realized": round(state.total_realized, 2),
+                # Unified cumulative-PnL field (alias of total_realized) so the
+                # status page reads one key across all bots. Persisted +
+                # restored at boot → survives restarts.
+                "pnl_total":      round(state.total_realized, 2),
+                # Data-recording freshness for the status ⚠data flag (accum_snapshots).
+                "last_write_ts":  state.last_write_ts,
+            }
 
         def _reset_handler(cmd_args: dict) -> dict:
             """Sim-only: record a reset and hard-exit so systemd restarts cold,
@@ -876,6 +902,9 @@ async def _run(p: dict, db: sqlite3.Connection, install_dir: str = "") -> None:
             asyncio.get_running_loop().call_later(0.5, os._exit, 1)
             return {"capital": cap, "wiped_on_restart": True, "restart_in_s": 30}
 
+        # Start the data-freshness clock at boot (see live_bot.main) so a
+        # never-recording restart ages to ⚠data instead of staying silently green.
+        state.last_write_ts = time.time()
         tasks = [
             asyncio.create_task(_zmq_loop(state, db)),
             asyncio.create_task(_stats_loop(state)),
@@ -884,18 +913,18 @@ async def _run(p: dict, db: sqlite3.Connection, install_dir: str = "") -> None:
                 heartbeat_loop(
                     "accumulation_bot",
                     install_dir or None,
-                    lambda: {
-                        "bounds_ok":      state.free_usdt > 0,
-                        "holdings_btc":   round(state.holdings_btc, 6),
-                        "free_usdt":      round(state.free_usdt, 2),
-                        "avg_entry":      round(state.avg_entry, 2),
-                        "total_realized": round(state.total_realized, 2),
-                        # Unified cumulative-PnL field (alias of total_realized) so the
-                        # status page reads one key across all bots. Persisted +
-                        # restored at boot → survives restarts.
-                        "pnl_total":      round(state.total_realized, 2),
-                    },
+                    _hb_payload,
                     mode="sim",  # paper trading only — no real exchange connector
+                )
+            ),
+            asyncio.create_task(
+                # Opt-in HTTP /health (no-op unless TRADINEBOTTE_HEALTH_PORT is set);
+                # reuses _hb_payload so the pulled view matches the pushed heartbeat.
+                health_server(
+                    "accumulation_bot",
+                    install_dir or None,
+                    _hb_payload,
+                    mode="sim",
                 )
             ),
             asyncio.create_task(

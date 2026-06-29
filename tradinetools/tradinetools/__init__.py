@@ -138,6 +138,89 @@ async def heartbeat_loop(
         ctx.term()
 
 
+# ─── HEALTH CHECK (HTTP, opt-in, loopback) ────────────────────────────────────
+# A lightweight `GET /health` endpoint that mirrors the heartbeat payload over
+# HTTP, so an external cron / reverse proxy / uptime monitor can pull liveness +
+# stats without speaking ZMQ. Opt-in via TRADINEBOTTE_HEALTH_PORT — a no-op when
+# unset, so default behavior is unchanged. Binds 127.0.0.1 only (no network
+# surface); never expose to a non-loopback host without a fronting auth layer.
+
+_health_logger = logging.getLogger("tradinetools.health")
+
+
+async def health_server(
+    bot_name: str,
+    install_dir: str | None,
+    get_extra: Callable[[], dict[str, Any]],
+    *,
+    mode: str | None = None,
+    host: str = "127.0.0.1",
+    port: int | None = None,
+) -> None:
+    """Serve `GET /health` with the bot's live stats over HTTP loopback.
+
+    Opt-in: when `port` is None and TRADINEBOTTE_HEALTH_PORT is unset/invalid the
+    coroutine returns immediately without binding anything, so callers can mount
+    it unconditionally beside heartbeat_loop with zero default footprint.
+
+    Reuses the same `get_extra` callback as heartbeat_loop, so the HTTP view can
+    never drift from the pushed heartbeat. The response body is the
+    build_heartbeat() payload plus an `uptime_s` field.
+
+    Swallows setup/serve errors (logs a warning) so a health-server failure never
+    crashes the bot. Callers must cancel this task to stop it.
+    """
+    if port is None:
+        env_port = os.environ.get("TRADINEBOTTE_HEALTH_PORT", "").strip()
+        if not env_port:
+            _health_logger.debug("TRADINEBOTTE_HEALTH_PORT unset — health server disabled")
+            return
+        try:
+            port = int(env_port)
+        except ValueError:
+            _health_logger.warning(
+                "TRADINEBOTTE_HEALTH_PORT=%r is not an integer — health server disabled", env_port)
+            return
+
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        _health_logger.warning(
+            "SECURITY: health server bound to non-loopback host %s — the /health "
+            "payload (capital, PnL) will be reachable on the network without auth.", host)
+
+    try:
+        from aiohttp import web  # noqa: PLC0415
+    except ImportError:
+        _health_logger.warning("aiohttp not installed — health server disabled")
+        return
+
+    start_ts = time.time()
+
+    async def _handle(_request: "web.Request") -> "web.Response":
+        try:
+            payload = build_heartbeat(bot_name, install_dir, get_extra(), mode=mode)
+            payload["uptime_s"] = int(time.time() - start_ts)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            return web.json_response({"status": "error", "error": str(exc)}, status=500)
+        return web.json_response(payload)
+
+    app = web.Application()
+    app.add_routes([web.get("/health", _handle)])
+    runner = web.AppRunner(app)
+    try:
+        await runner.setup()
+        site = web.TCPSite(runner, host, port)
+        await site.start()
+        _health_logger.info("health server listening on http://%s:%d/health", host, port)
+        while True:                       # serve until the task is cancelled
+            await asyncio.sleep(3600)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        _health_logger.warning("health server failed: %s", exc)
+    finally:
+        await runner.cleanup()
+
+
 # ─── CONTROL PLANE ────────────────────────────────────────────────────────────
 # An extensible request/reply control channel mounted beside heartbeat_loop in
 # every bot/service. Transport is an IPC REP socket (per-UID, chmod 0600) reached

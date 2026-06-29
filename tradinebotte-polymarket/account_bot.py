@@ -33,7 +33,7 @@ Message types consumed from feed.py:
 import argparse, asyncio, fcntl, hashlib, logging, os, subprocess, sys, time
 import zmq, zmq.asyncio
 from tradinetools import (
-    heartbeat_loop, control_loop, Command,
+    heartbeat_loop, control_loop, Command, health_server,
     write_reset_marker, consume_reset_marker,
 )
 from tradinetools.logging import setup_logger
@@ -58,7 +58,9 @@ _FEED_ADDR = os.environ.get(
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# live_bot no longer has module-level side effects — safe to import anywhere.
+# Importing live_bot pulls in its module-top deps (the connector registry + the neutral
+# botcore.Strategy, and an importlib-load of the default connector) but performs no I/O —
+# safe to import here. botcore/ and connectors/ ship flat beside this file (see deploy scripts).
 import live_bot as bot  # pylint: disable=wrong-import-order,wrong-import-position
 
 _INSTALL_DIR = os.environ.get("TRADINEBOTTE_DIR", os.getcwd())
@@ -393,7 +395,12 @@ async def main() -> None:
         logger.debug("[INIT] init_db...")
     conn  = bot.init_db(config)
     try:
-        state = bot.BotState(conn, config)
+        # Load the exchange connector via the registry and inject it (Plan D step 4b) —
+        # account_bot is the Polymarket feed consumer, so this resolves to api_polymarket.
+        from botcore.connectors import load as _load_connector
+        connector = _load_connector(config.connector)
+        state = bot.BotState(conn, config, strategy=bot.ThresholdStrategy(),
+                             connector=connector)
         bot.restore_state_from_db(state)
         if VERBOSE:
             logger.debug("[INIT] capital=%.2f open_trades=%d",
@@ -404,7 +411,7 @@ async def main() -> None:
             state.session = session
             def _hb_payload() -> dict:
                 pnl_total, trades_total = bot.cumulative_pnl(state)
-                return {
+                hb = {
                     "bounds_ok":         state.daily_pnl >= -config.daily_stop_loss,
                     "daily_pnl":         round(state.daily_pnl, 2),
                     "pnl_total":         round(pnl_total, 2),
@@ -413,8 +420,22 @@ async def main() -> None:
                     "open_trades":       len(state.open_trades),
                     "last_feed_msg_ts":  _last_feed_msg_ts,
                 }
+                # Data-recording freshness for the status page ⚠data flag (set by
+                # bot.handle_book_update on each snapshot write). See live_bot._hb_payload.
+                if config.enable_snapshots:
+                    hb["last_write_ts"] = state.last_write_ts
+                return hb
+            # Start the data-freshness clock at boot (see live_bot.main) so a
+            # never-recording restart ages to ⚠data instead of staying silently green.
+            if config.enable_snapshots:
+                state.last_write_ts = time.time()
             _hb_task = asyncio.create_task(
                 heartbeat_loop("account_bot", config.install_dir, _hb_payload, mode=_hb_mode)
+            )
+            # Opt-in HTTP /health (no-op unless TRADINEBOTTE_HEALTH_PORT is set);
+            # reuses _hb_payload so the pulled view matches the pushed heartbeat.
+            _health_task = asyncio.create_task(
+                health_server("account_bot", config.install_dir, _hb_payload, mode=_hb_mode)
             )
 
             def _reset_handler(cmd_args: dict) -> dict:
@@ -442,7 +463,9 @@ async def main() -> None:
             finally:
                 _hb_task.cancel()
                 _ctl_task.cancel()
-                await asyncio.gather(_hb_task, _ctl_task, return_exceptions=True)
+                _health_task.cancel()
+                await asyncio.gather(_hb_task, _ctl_task, _health_task,
+                                     return_exceptions=True)
     finally:
         conn.close()
 

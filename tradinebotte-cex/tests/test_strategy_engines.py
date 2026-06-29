@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 # ── Inject fake connectors module BEFORE importing strategy modules ─────────
 _fake_api = MagicMock()
 _fake_api.compute_fee = MagicMock(return_value=0.0)
+_fake_api.FEE_RATE = 0.0   # engines now compute round-trip PnL via FEE_RATE (round_trip_pnl)
 _fake_api.post_order = AsyncMock(return_value="sim_001")
 _fake_api.get_open_orders = AsyncMock(return_value=[])
 _fake_api.cancel_order = AsyncMock(return_value=None)
@@ -337,6 +338,7 @@ class TestDCAPriceCalc(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         _fake_api.post_order = AsyncMock(return_value="sim_buy_001")
         _fake_api.compute_fee = MagicMock(return_value=0.0)
+        _fake_api.FEE_RATE = 0.0
         self.d = _dca()
         self.state = _state()
         self.d.ensure_schema(self.state.conn)
@@ -381,6 +383,7 @@ class TestDCASimFills(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         _fake_api.post_order = AsyncMock(return_value="sim_001")
         _fake_api.compute_fee = MagicMock(return_value=0.0)
+        _fake_api.FEE_RATE = 0.0
         self.d = _dca()
         self.state = _state()
         self.d.ensure_schema(self.state.conn)
@@ -539,6 +542,7 @@ class TestGridCycleAccounting(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         _fake_api.post_order  = AsyncMock(return_value="sim_x")
         _fake_api.compute_fee = MagicMock(return_value=0.0)
+        _fake_api.FEE_RATE    = 0.0
         self.g     = _grid()
         self.state = _state()
 
@@ -563,14 +567,14 @@ class TestGridCycleAccounting(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(lvl.entry_price)              # cleared after booking
 
     async def test_profit_is_net_of_fees(self):
-        _fake_api.compute_fee = MagicMock(return_value=0.1)  # 0.1 per side
+        _fake_api.FEE_RATE = 0.001   # 0.1% per leg (round_trip_pnl model)
         lvl = self.g.levels[0]
         lvl.buy_price = 100.0
         lvl.status    = "buy_placed"
         await self.g._on_buy_filled(self.state, lvl)
         await self.g._on_sell_filled(self.state, lvl)
-        # gross 0.5 − 2×0.1 fees = 0.3
-        self.assertAlmostEqual(self.g.grid.total_profit_usd, 0.3)
+        # qty 0.5; gross (101-100)*0.5 = 0.5; fees 0.001*0.5*(100+101) = 0.1005 → 0.3995
+        self.assertAlmostEqual(self.g.grid.total_profit_usd, 0.3995)
 
     async def test_init_placed_sell_does_not_count_cycle(self):
         """A SELL placed at init (no prior BUY → entry_price None) must not book PnL."""
@@ -588,6 +592,7 @@ class TestGridEntryPricePersistence(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         _fake_api.post_order  = AsyncMock(return_value="sim_x")
         _fake_api.compute_fee = MagicMock(return_value=0.0)
+        _fake_api.FEE_RATE = 0.0
         self.state = _state()
         self.state.conn.executescript(_GRID_SCHEMA)
 

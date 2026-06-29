@@ -16,6 +16,7 @@
 - [Security rules](#security-rules)
 - [Adding an exchange adapter](#adding-an-exchange-adapter)
 - [Adding a strategy engine](#adding-a-strategy-engine)
+- [Changing shared code: the symmetry rule](#changing-shared-code-the-symmetry-rule)
 
 ---
 
@@ -308,3 +309,41 @@ git config core.hooksPath .git-hooks
 3. Add tests in `tradinebotte-cex/tests/test_strategy_engines.py` covering entry logic, exit logic, SL/TP, and state restore on restart.
 
 4. If the strategy consumes indicator data, subscribe to the ZMQ PUB from `indicators.py` — see `docs/design.md` for the message format.
+
+## Changing shared code: the symmetry rule
+
+No strategy family is "main". Polymarket (threshold/grid), CEX grid/swing, and
+accumulation are **peers**. One consequence is not obvious: `live_bot.py` lives under
+`tradinebotte-polymarket/` but is the **universal** entrypoint — it runs the CEX
+grid/swing strategies too (selected by `strategy_type` / `connector`). Several
+side-effects are coupled to its shared functions; for example snapshot persistence used
+to ride *inside* `handle_book_update`.
+
+This is exactly how the 2026-06-16 silent-recording bug shipped: a new CEX consumer loop
+(`cex_feed_consumer_loop`) bypassed `handle_book_update` for good reasons (it doesn't
+need the Polymarket token bookkeeping) and **silently dropped the snapshot-persistence
+side-effect** that rode inside it — and no test caught it, because that side-effect was
+only ever exercised on the Polymarket path. The bots kept heartbeating; only a
+background table stopped growing, for ~10 days.
+
+**The rule:** before merging a change to code shared across families, enumerate *every*
+side-effect of the function you touch or bypass, and verify each **for all families** —
+not just the one you are working on. When you bypass a shared function, re-check what
+*else* it did and re-create or test the parts you still need.
+
+Checklist for any new or changed data-consumer path / shared hot-path function:
+
+- [ ] **Snapshots persisted?** Route the write through the shared step
+      (`_persist_snapshot` in `live_bot.py`, `_record_accum_snapshot` in
+      `accumulation_bot.py`) — do not inline a bare `INSERT`.
+- [ ] **Data-freshness clock advanced?** Set `last_write_ts` on every persisted row.
+      The status page `⚠data` badge depends on it — a bot that records but never updates
+      it (or that records nothing) must show stale, not silent.
+- [ ] **Trades / strategy state** written to that family's ledger (`trades`,
+      `grid_levels`, `swing_orders`, `accum_trades`, …)?
+- [ ] **Cumulative PnL** exported on the heartbeat (`pnl_total`)?
+- [ ] **A test for each of the above, for THIS family.** See
+      `docs/test_coverage_matrix.md` for the current grid and gaps. The structural guard
+      `tradinebotte-polymarket/tests/test_bot.py::TestDataPathCoverage` fails any
+      `live_bot` consumer that drives a strategy without persisting a snapshot — extend
+      it (or add an equivalent) when you add a consumer elsewhere.

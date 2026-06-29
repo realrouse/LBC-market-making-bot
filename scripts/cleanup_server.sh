@@ -369,12 +369,14 @@ if should_run 6; then
     # if swing bot is ever activated — acceptable until then)
     USER="${TEST_USERS[4]}"; PASS="${TEST_PASSWORDS[4]}"
     info "[${USER}] removing CEX files (swing bot inactive — clean now, re-synced if activated)..."
+    # NB: connectors/ and botcore/ are NOT removed — live_bot imports both at module
+    # top (the connector registry and the neutral Strategy core), regardless of exchange.
     _ssh "$USER" "$PASS" '
         D=~/tradinebotte
         rm -f $D/accumulation_bot.py $D/orderbook_bot.py $D/scalping_bot.py 2>/dev/null
         rm -f $D/scalping_math.py $D/earn_manager.py 2>/dev/null
         rm -f $D/api_bitstamp.py $D/api_mexc.py 2>/dev/null
-        rm -rf $D/connectors $D/strategy_engines 2>/dev/null
+        rm -rf $D/strategy_engines 2>/dev/null
         echo "done"
     ' || true
     ok "${USER}: done"

@@ -23,6 +23,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "tradinebotte-cex"))
 import live_bot as bot
 import api_polymarket as api_poly
+import cex_consumer
+import pm_strategy
 import bot_utils
 
 
@@ -31,6 +33,7 @@ import bot_utils
 def make_db():
     """In-memory SQLite database with the production schema and migrations applied."""
     conn = sqlite3.connect(":memory:", check_same_thread=False)
+    bot.apply_base_schema(conn)   # neutral base (schema_version + bot_meta), like init_db
     conn.executescript(bot.SCHEMA)
     bot._apply_migrations(conn)
     conn.commit()
@@ -38,8 +41,12 @@ def make_db():
 
 
 def make_state(conn=None):
-    """BotState backed by an in-memory database (or a provided connection)."""
-    return bot.BotState(conn if conn is not None else make_db())
+    """BotState backed by an in-memory database (or a provided connection).
+
+    Injects the Polymarket threshold default the way the entrypoint does (Plan D
+    step 3b — BotState no longer self-defaults a strategy)."""
+    return bot.BotState(conn if conn is not None else make_db(),
+                        strategy=bot.ThresholdStrategy(), connector=api_poly)
 
 
 def make_token(
@@ -478,14 +485,14 @@ class TestCheckSignal(unittest.IsolatedAsyncioTestCase):
     async def test_blocked_by_hour_filter(self):
         # When is_trading_hour() returns False (filter active, outside window)
         # check_signal must not fire regardless of other conditions.
-        with patch.object(bot, "is_trading_hour", return_value=False):
+        with patch.object(pm_strategy, "is_trading_hour", return_value=False):
             await bot.check_signal(self.state, make_token())
         self.assertNotIn("mkt1", self.state.signalled)
         self.assertEqual(self.state.total_trades, 0)
 
     async def test_fires_when_hour_filter_allows(self):
         # Explicit guard: signal fires when is_trading_hour() returns True.
-        with patch.object(bot, "is_trading_hour", return_value=True):
+        with patch.object(pm_strategy, "is_trading_hour", return_value=True):
             await bot.check_signal(self.state, make_token())
         self.assertIn("mkt1", self.state.signalled)
 
@@ -968,6 +975,8 @@ class TestHandleBookUpdate(unittest.IsolatedAsyncioTestCase):
         await bot.handle_book_update(self.state, parsed)
         self.assertAlmostEqual(ts.best_bid, 0.55)
         self.assertAlmostEqual(ts.ask_vol, 80.0)
+        # snapshot persisted → data-freshness clock advances (status page ⚠data signal)
+        self.assertGreater(self.state.last_write_ts, 0)
 
     async def test_unknown_token_ignored(self):
         parsed = {"token_id": "unknown", "best_bid": 0.97, "best_ask": 0.975,
@@ -1342,7 +1351,7 @@ class TestCircuitBreaker(unittest.IsolatedAsyncioTestCase):
     async def test_streak_increments_on_api_failure(self):
         self.state.config = bot.BotConfig(private_key="0xdeadbeef")
         self.state.session = unittest.mock.AsyncMock()
-        with patch("live_bot.api.post_order", new=unittest.mock.AsyncMock(return_value=None)):
+        with patch.object(api_poly, "post_order", new=unittest.mock.AsyncMock(return_value=None)):
             await bot.enter_live_trade(self.state, make_token())
         self.assertEqual(self.state.api_fail_streak, 1)
 
@@ -1350,7 +1359,7 @@ class TestCircuitBreaker(unittest.IsolatedAsyncioTestCase):
         self.state.config = bot.BotConfig(private_key="0xdeadbeef")
         self.state.session = unittest.mock.AsyncMock()
         self.state.api_fail_streak = 2
-        with patch("live_bot.api.post_order", new=unittest.mock.AsyncMock(return_value=None)):
+        with patch.object(api_poly, "post_order", new=unittest.mock.AsyncMock(return_value=None)):
             await bot.enter_live_trade(self.state, make_token(market_id="mkt9", token_id="tok9"))
         self.assertGreater(self.state.api_cooldown_until, time.time())
 
@@ -1358,7 +1367,7 @@ class TestCircuitBreaker(unittest.IsolatedAsyncioTestCase):
         self.state.config = bot.BotConfig(private_key="0xdeadbeef")
         self.state.session = unittest.mock.AsyncMock()
         self.state.api_fail_streak = 2
-        with patch("live_bot.api.post_order", new=unittest.mock.AsyncMock(return_value="ord_ok")):
+        with patch.object(api_poly, "post_order", new=unittest.mock.AsyncMock(return_value="ord_ok")):
             await bot.enter_live_trade(self.state, make_token())
         self.assertEqual(self.state.api_fail_streak, 0)
 
@@ -1372,7 +1381,7 @@ class TestCircuitBreaker(unittest.IsolatedAsyncioTestCase):
         # H-1: post_order returns None in live mode → no ghost row, no open_trade entry
         self.state.config = bot.BotConfig(private_key="0xdeadbeef")
         self.state.session = unittest.mock.AsyncMock()
-        with patch("live_bot.api.post_order", new=unittest.mock.AsyncMock(return_value=None)):
+        with patch.object(api_poly, "post_order", new=unittest.mock.AsyncMock(return_value=None)):
             await bot.enter_live_trade(self.state, make_token(market_id="mkt_ghost"))
         count = self.state.conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
         self.assertEqual(count, 0, "ghost row must not be inserted on CLOB failure")
@@ -1382,7 +1391,7 @@ class TestCircuitBreaker(unittest.IsolatedAsyncioTestCase):
         # H-1 regression: post_order returns a valid order ID → row IS inserted
         self.state.config = bot.BotConfig(private_key="0xdeadbeef")
         self.state.session = unittest.mock.AsyncMock()
-        with patch("live_bot.api.post_order", new=unittest.mock.AsyncMock(return_value="ord_123")):
+        with patch.object(api_poly, "post_order", new=unittest.mock.AsyncMock(return_value="ord_123")):
             await bot.enter_live_trade(self.state, make_token(market_id="mkt_live"))
         count = self.state.conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
         self.assertEqual(count, 1)
@@ -1403,6 +1412,7 @@ class TestSchemaVersioning(unittest.TestCase):
 
     def _fresh_conn(self):
         conn = sqlite3.connect(":memory:", check_same_thread=False)
+        bot.apply_base_schema(conn)   # schema_version now lives in the neutral base
         conn.executescript(bot.SCHEMA)
         return conn
 
@@ -1463,6 +1473,66 @@ class TestSchemaVersioning(unittest.TestCase):
         ver = conn.execute("SELECT version FROM schema_version").fetchone()[0]
         self.assertEqual(ver, max(bot.MIGRATIONS))
         conn.close()
+
+    @staticmethod
+    def _tables(conn):
+        return sorted(r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall())
+
+    def test_step5_fresh_db_has_base_tables_at_v4(self):
+        # bot_meta + schema_version now come from the neutral base; the fresh DB still
+        # reaches version 4 with both present.
+        conn = self._fresh_conn()
+        bot._apply_migrations(conn)
+        conn.commit()
+        tables = self._tables(conn)
+        self.assertIn("bot_meta", tables)
+        self.assertIn("schema_version", tables)
+        self.assertEqual(conn.execute("SELECT version FROM schema_version").fetchone()[0], 4)
+        conn.close()
+
+    def test_init_db_with_mmap_enabled_does_not_raise(self):
+        # Regression: PRAGMA does not accept a bound parameter (sqlite raises
+        # "near ?: syntax error"), so init_db with db_mmap_mb > 0 must interpolate it.
+        import tempfile
+        cfg = bot.BotConfig()
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        try:
+            cfg.db_path = path
+            cfg.db_mmap_mb = 64
+            conn = bot.init_db(cfg)   # must not raise
+            self.assertEqual(conn.execute("PRAGMA mmap_size").fetchone()[0], 64 * 1024 * 1024)
+            conn.close()
+        finally:
+            os.unlink(path)
+
+    def test_step5_convergence_old_v4_db(self):
+        # Advisor's bar: a pre-step-5 v4 DB (bot_meta created by old migration v4,
+        # schema_version in the old SCHEMA) and a fresh DB must converge under the new
+        # init_db schema setup — same tables, same version, no duplicate version row.
+        old = sqlite3.connect(":memory:", check_same_thread=False)
+        old.executescript("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);")
+        old.executescript(bot.SCHEMA)               # trades + snapshots (+ index)
+        old.executescript(bot.MIGRATIONS[2])        # grid_state, grid_levels
+        old.executescript(bot.MIGRATIONS[3])        # grid_levels.entry_price
+        old.executescript("CREATE TABLE IF NOT EXISTS bot_meta "
+                          "(key TEXT PRIMARY KEY, value REAL NOT NULL, updated_at REAL NOT NULL);")
+        old.execute("INSERT INTO schema_version(version) VALUES (4)")
+        old.commit()
+        # Run the NEW init_db schema setup (idempotent) on this existing DB:
+        bot.apply_base_schema(old)
+        old.executescript(bot.SCHEMA)
+        bot._apply_migrations(old)
+        old.commit()
+        self.assertEqual(old.execute("SELECT version FROM schema_version").fetchone()[0], 4)
+        self.assertEqual(old.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0], 1)
+        # Fresh DB through the same path:
+        fresh = self._fresh_conn()
+        bot._apply_migrations(fresh)
+        fresh.commit()
+        self.assertEqual(self._tables(old), self._tables(fresh))
+        old.close(); fresh.close()
 
 
 class TestUsHolidays(unittest.TestCase):
@@ -1679,6 +1749,26 @@ class TestConnectorFactory(unittest.TestCase):
         self.assertTrue(hasattr(mod, "parse_book_update"))
         self.assertTrue(hasattr(mod, "post_order"))
         self.assertTrue(hasattr(mod, "compute_fee"))
+
+    def test_live_bot_loads_default_via_registry_not_hard_import(self):
+        """
+        Plan D step 2: live_bot must not privilege any exchange with a hard
+        `import api_polymarket`; its module-level `api` is resolved through the
+        connector registry from the CONNECTOR default. Guards the inversion.
+        """
+        with open(bot.__file__, encoding="utf-8") as _fh:
+            src = _fh.read()
+        code_lines = [
+            ln for ln in src.splitlines()
+            if not ln.lstrip().startswith("#")
+        ]
+        self.assertFalse(
+            any("import api_polymarket" in ln for ln in code_lines),
+            "live_bot has a privileged `import api_polymarket` — load via the registry instead",
+        )
+        # The default connector is still polymarket, loaded through the registry.
+        self.assertEqual(bot.CONNECTOR, "polymarket")
+        self.assertIs(_connectors_mod.load(bot.CONNECTOR), _connectors_mod.load("polymarket"))
 
     def test_binance(self):
         mod = _connectors_mod.load("binance")
@@ -2215,10 +2305,16 @@ class TestBotConfigStrategyFields(unittest.TestCase):
         self.assertAlmostEqual(cfg.grid_lower, 0.0)
         self.assertAlmostEqual(cfg.grid_upper, 0.0)
 
-    def test_state_strategy_is_none_by_default(self):
+    def test_state_strategy_is_injected_not_self_defaulted(self):
+        # Plan D step 3b: BotState names no concrete strategy. A bare BotState carries
+        # no strategy (None); the entrypoint injects ThresholdStrategy() at construction,
+        # which make_state() mirrors. main() overrides it for grid/swing.
         conn = make_db()
-        state = bot.BotState(conn)
-        self.assertIsNone(state.strategy)
+        self.assertIsNone(bot.BotState(conn).strategy)
+        self.assertIsInstance(
+            bot.BotState(conn, strategy=bot.ThresholdStrategy()).strategy,
+            bot.ThresholdStrategy)
+        self.assertIsInstance(make_state().strategy, bot.ThresholdStrategy)
 
     def test_state_strategy_can_be_set(self):
         cfg = bot.BotConfig()
@@ -2665,7 +2761,7 @@ class TestRejectionCounters(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.state.rejection_stats.market_ended, 1)
 
     async def test_counter_trading_hour(self):
-        with patch.object(bot, "is_trading_hour", return_value=False):
+        with patch.object(pm_strategy, "is_trading_hour", return_value=False):
             await bot.check_signal(self.state, make_token())
         self.assertEqual(self.state.rejection_stats.trading_hour, 1)
 
@@ -2734,15 +2830,15 @@ class TestLatencyLog(unittest.IsolatedAsyncioTestCase):
         ts = make_token()
 
         logged: list[str] = []
-        original_info = bot.logger.info
+        original_info = pm_strategy.logger.info
 
         def capture_info(msg, *args, **kwargs):
             logged.append(msg % args if args else msg)
             original_info(msg, *args, **kwargs)
 
-        with patch.object(bot, "logger") as mock_logger:
+        with patch.object(pm_strategy, "logger") as mock_logger:
             mock_logger.info.side_effect = capture_info
-            mock_logger.warning = bot.logger.warning
+            mock_logger.warning = pm_strategy.logger.warning
             t_ws = time.monotonic()
             await bot.enter_live_trade(state, ts, _t_ws=t_ws)
 
@@ -2914,11 +3010,12 @@ class TestComputeStake(unittest.TestCase):
         cfg = self._kelly_cfg(kelly_fraction=0.25, kelly_min_trades=30, stake_max=9999.0)
         # ask=0.96, WR=98%: f* ≈ 0.490; quarter-Kelly on $1000 ≈ $122
         ask = 0.96
-        b_net = (1.0 / ask - 1.0) - bot.api.FEE_RATE * min(ask, 1.0 - ask) / ask
+        b_net = (1.0 / ask - 1.0) - api_poly.FEE_RATE * min(ask, 1.0 - ask) / ask
         f_star = (0.98 * b_net - 0.02) / b_net
         expected = 0.25 * f_star * 1000.0
         result = bot.compute_stake(cfg, 0.96, 60.0, capital=1000.0,
-                                   win_rate=0.98, n_trades=50, ask=ask)
+                                   win_rate=0.98, n_trades=50, ask=ask,
+                                   fee_rate=api_poly.FEE_RATE)
         self.assertAlmostEqual(result, expected, places=5)
         self.assertGreater(result, 0.0)
 
@@ -3177,7 +3274,7 @@ class TestWsLoopBackoff(unittest.IsolatedAsyncioTestCase):
                 raise asyncio.CancelledError
             raise RuntimeError("ws error")
 
-        with patch("live_bot._run_ws", _failing_run_ws), \
+        with patch("pm_data._run_ws", _failing_run_ws), \
              patch("asyncio.sleep", _fake_sleep):
             with self.assertRaises(asyncio.CancelledError):
                 await bot.ws_loop(self.state, None)
@@ -3199,7 +3296,7 @@ class TestWsLoopBackoff(unittest.IsolatedAsyncioTestCase):
                 raise asyncio.CancelledError
             raise RuntimeError("ws error")
 
-        with patch("live_bot._run_ws", _failing_run_ws), \
+        with patch("pm_data._run_ws", _failing_run_ws), \
              patch("asyncio.sleep", _fake_sleep):
             with self.assertRaises(asyncio.CancelledError):
                 await bot.ws_loop(self.state, None)
@@ -3225,7 +3322,7 @@ class TestWsLoopBackoff(unittest.IsolatedAsyncioTestCase):
                 raise RuntimeError("second failure")  # sleep(1) — backoff was reset
             raise asyncio.CancelledError              # terminates loop
 
-        with patch("live_bot._run_ws", _mixed_run_ws), \
+        with patch("pm_data._run_ws", _mixed_run_ws), \
              patch("asyncio.sleep", _fake_sleep):
             with self.assertRaises(asyncio.CancelledError):
                 await bot.ws_loop(self.state, None)
@@ -3273,7 +3370,7 @@ class TestMarketRefreshLoop(unittest.IsolatedAsyncioTestCase):
                 raise asyncio.CancelledError
 
         market = self._make_market()
-        with patch("live_bot.api.get_markets", unittest.mock.AsyncMock(return_value=[market])), \
+        with patch.object(api_poly, "get_markets", unittest.mock.AsyncMock(return_value=[market])), \
              patch("asyncio.sleep", _fake_sleep):
             with self.assertRaises(asyncio.CancelledError):
                 await bot._market_refresh_loop(self.state, None, _FakeWs())
@@ -3296,7 +3393,7 @@ class TestMarketRefreshLoop(unittest.IsolatedAsyncioTestCase):
             if sleep_count >= 2:
                 raise asyncio.CancelledError
 
-        with patch("live_bot.api.get_markets", unittest.mock.AsyncMock(return_value=[])), \
+        with patch.object(api_poly, "get_markets", unittest.mock.AsyncMock(return_value=[])), \
              patch("asyncio.sleep", _fake_sleep):
             with self.assertRaises(asyncio.CancelledError):
                 await bot._market_refresh_loop(self.state, None, object())
@@ -3312,7 +3409,7 @@ class TestMarketRefreshLoop(unittest.IsolatedAsyncioTestCase):
             if sleep_count >= 2:
                 raise asyncio.CancelledError
 
-        with patch("live_bot.api.get_markets",
+        with patch.object(api_poly, "get_markets",
                    unittest.mock.AsyncMock(side_effect=RuntimeError("network down"))), \
              patch("asyncio.sleep", _fake_sleep):
             with self.assertRaises(asyncio.CancelledError):
@@ -3422,6 +3519,299 @@ class TestFeedConsumer(unittest.TestCase):
 
     def test_data_source_defaults_to_ws(self):
         self.assertEqual(bot.BotConfig().data_source, "ws")
+
+
+class TestPersistSnapshot(unittest.TestCase):
+    """The single shared persistence step both data paths converge on (Phase 2):
+    enable-guard + write delegation + data-freshness clock."""
+
+    def test_writes_and_advances_freshness_when_enabled(self):
+        state = make_state()
+        called = []
+        bot._persist_snapshot(state, lambda: called.append(1))
+        self.assertEqual(called, [1])                 # row_writer was invoked
+        self.assertGreater(state.last_write_ts, 0)    # freshness clock advanced
+
+    def test_noop_when_snapshots_disabled(self):
+        state = make_state()
+        state.config.enable_snapshots = False
+        called = []
+        bot._persist_snapshot(state, lambda: called.append(1))
+        self.assertEqual(called, [])                  # guard short-circuits the write
+        self.assertEqual(state.last_write_ts, 0)      # and never fakes freshness
+
+
+class TestThresholdStrategy(unittest.IsolatedAsyncioTestCase):
+    """Plan D step 1: the Polymarket threshold path is a Strategy peer (ThresholdStrategy),
+    not a special case inside handle_book_update. BotState defaults to it; it delegates to
+    check_signal/check_resolution so the dispatch is strategy-agnostic."""
+
+    def test_botstate_defaults_to_threshold_strategy(self):
+        state = make_state()
+        self.assertIsInstance(state.strategy, bot.ThresholdStrategy)
+        self.assertEqual(state.strategy.STRATEGY_TYPE, "threshold")
+
+    def test_threshold_explicitly_conforms_to_core_strategy_protocol(self):
+        """Plan D step 3: ThresholdStrategy subclasses the neutral-core botcore.Strategy
+        protocol explicitly (the step-1 duck-typing is gone). Guards against a regression
+        that drops the base class or re-introduces a privileged import of the protocol."""
+        from botcore import Strategy as CoreStrategy
+        self.assertIn(CoreStrategy, bot.ThresholdStrategy.__mro__)
+        self.assertIsInstance(bot.ThresholdStrategy(), CoreStrategy)  # runtime_checkable
+
+    async def test_on_book_update_delegates_signal_then_resolution(self):
+        from unittest.mock import AsyncMock, MagicMock
+        state = make_state()
+        ts = make_token()
+        with patch.object(pm_strategy, "check_signal", new=AsyncMock()) as cs, \
+             patch.object(pm_strategy, "check_resolution", new=MagicMock()) as cr:
+            await bot.ThresholdStrategy().on_book_update(state, ts, _t_ws=123.0)
+        cs.assert_awaited_once_with(state, ts, _t_ws=123.0)   # signal first, _t_ws threaded
+        cr.assert_called_once_with(state, ts)                 # then resolution
+
+    async def test_dispatch_uses_threshold_by_default(self):
+        # handle_book_update on a known token must still run the threshold path via the
+        # default strategy (behaviour-preserving: dispatch now unconditional).
+        from unittest.mock import AsyncMock, MagicMock
+        state = make_state()
+        state.session = None
+        ts = make_token(token_id="tid")
+        state.tokens["tid"] = ts
+        parsed = {"token_id": "tid", "best_bid": 0.55, "best_ask": 0.56,
+                  "spread": 0.01, "bid_vol": 100.0, "ask_vol": 80.0, "obi": 0.1}
+        with patch.object(pm_strategy, "check_signal", new=AsyncMock()) as cs, \
+             patch.object(pm_strategy, "check_resolution", new=MagicMock()) as cr:
+            await bot.handle_book_update(state, parsed)
+        cs.assert_awaited_once()
+        cr.assert_called_once()
+
+
+class TestDataSourceDispatch(unittest.TestCase):
+    """_resolve_run_loop routes each (data_source, connector) to the historical loop
+    (Plan D step 4b-6) — the behavioral-equivalence guard for the generalized dispatch."""
+
+    def _cfg(self, **kw):
+        c = bot.BotConfig()
+        for k, v in kw.items():
+            setattr(c, k, v)
+        return c
+
+    def test_poly_feed(self):
+        cfg = self._cfg(data_source="feed", connector="polymarket", feed_addr="tcp://x")
+        mod, loop, args, warn = bot._resolve_run_loop(cfg)
+        self.assertEqual((mod, loop, warn), ("pm_data", "feed_consumer_loop", False))
+        self.assertEqual(args("S", cfg, "SESS"), ("S", "tcp://x"))
+
+    def test_cex_feed_grid(self):
+        cfg = self._cfg(data_source="cex_feed", connector="binance", feed_addr="tcp://y",
+                        grid_symbol="BTCUSDT", strategy_type="grid")
+        mod, loop, args, warn = bot._resolve_run_loop(cfg)
+        self.assertEqual((mod, loop, warn), ("cex_consumer", "cex_feed_consumer_loop", False))
+        self.assertEqual(args("S", cfg, "SESS"), ("S", "tcp://y", "BTCUSDT", "binance"))
+
+    def test_direct_ws_is_default_no_warning(self):
+        cfg = self._cfg(data_source="ws", connector="polymarket")
+        mod, loop, args, warn = bot._resolve_run_loop(cfg)
+        self.assertEqual((mod, loop, warn), ("pm_data", "ws_loop", False))
+        self.assertEqual(args("S", cfg, "SESS"), ("S", "SESS"))
+
+    def test_feed_wrong_connector_warns_falls_back_to_ws(self):
+        cfg = self._cfg(data_source="feed", connector="binance")
+        mod, loop, _, warn = bot._resolve_run_loop(cfg)
+        self.assertEqual((mod, loop, warn), ("pm_data", "ws_loop", True))
+
+    def test_cex_feed_wrong_connector_warns_falls_back_to_ws(self):
+        cfg = self._cfg(data_source="cex_feed", connector="polymarket")
+        mod, loop, _, warn = bot._resolve_run_loop(cfg)
+        self.assertEqual((mod, loop, warn), ("pm_data", "ws_loop", True))
+
+    def test_cex_symbol_grid_vs_swing(self):
+        grid = self._cfg(connector="mexc", strategy_type="grid", grid_symbol="BTCUSDT")
+        self.assertEqual(bot._cex_symbol(grid), "BTCUSDT")
+        swing = self._cfg(connector="mexc", strategy_type="swing", grid_symbol="DEFLT")
+        swing.strategy_cfg = {"symbol": "ETHUSDT"}
+        self.assertEqual(bot._cex_symbol(swing), "ETHUSDT")
+
+    def test_every_registry_entry_resolves_to_a_real_callable(self):
+        # The dispatch resolves loops by (module, attr) strings — a typo would only fail at
+        # runtime on a real account. Assert every entry (+ the fallback) names a callable.
+        import importlib
+        specs = [(s[1], s[2]) for s in bot._RUN_LOOPS.values()] + [(bot._DIRECT_WS[0], bot._DIRECT_WS[1])]
+        for mod, loop in specs:
+            self.assertTrue(callable(getattr(importlib.import_module(mod), loop)),
+                            f"{mod}.{loop} is not callable")
+
+
+class TestDataPathCoverage(unittest.TestCase):
+    """Structural guard against the 2026-06-16 bug class. That bug shipped because a new
+    data-consumer loop (cex_feed_consumer_loop) drove a strategy but never persisted a
+    snapshot — and no test caught it. The book-consumer loops now live in the plugins
+    (pm_data = Polymarket, cex_consumer = CEX); this inspects both: every function that
+    drives a strategy from book updates (calls on_book_update) MUST also reach a snapshot-
+    persistence call. A future consumer that forgets persistence fails here, at test time —
+    the runtime ⚠data monitor is only the second line of defence."""
+
+    _PERSIST = {"_persist_snapshot", "save_snapshot", "save_cex_snapshot"}
+
+    @staticmethod
+    def _consumer_modules():
+        # Derived from the run-loop registry so a future 3rd-family consumer module is
+        # scanned automatically (not a hardcoded list that could go silently partial).
+        import importlib
+        names = {spec[1] for spec in bot._RUN_LOOPS.values()} | {bot._DIRECT_WS[0]}
+        return tuple(importlib.import_module(n) for n in sorted(names))
+
+    @property
+    def _CONSUMER_MODULES(self):
+        return self._consumer_modules()
+
+    def test_every_book_consumer_persists_a_snapshot(self):
+        import ast
+        import inspect
+        offenders = []
+        for mod in self._CONSUMER_MODULES:
+            tree = ast.parse(inspect.getsource(mod))
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)):
+                    continue
+                called = set()
+                for sub in ast.walk(node):
+                    if isinstance(sub, ast.Call):
+                        fn = sub.func
+                        if isinstance(fn, ast.Attribute):
+                            called.add(fn.attr)
+                        elif isinstance(fn, ast.Name):
+                            called.add(fn.id)
+                if "on_book_update" in called and not (called & self._PERSIST):
+                    offenders.append(f"{mod.__name__}.{node.name}")
+        self.assertEqual(
+            offenders, [],
+            "function(s) drive a strategy (on_book_update) but never persist a snapshot — "
+            f"the 2026-06-16 silent-recording bug shape: {offenders}. "
+            "Route the write through _persist_snapshot.")
+
+    def test_guard_is_wired_to_the_real_consumers(self):
+        # Sanity: the guard actually has something to check (catches a future refactor
+        # that renames on_book_update and silently makes the guard vacuous).
+        import inspect
+        src = "".join(inspect.getsource(m) for m in self._CONSUMER_MODULES)
+        self.assertIn("on_book_update", src)
+        self.assertGreaterEqual(src.count("_persist_snapshot"), 3)
+
+
+class TestCoreShipsWithTheBot(unittest.TestCase):
+    """Structural guard (Plan D step 3): the neutral core `botcore/` must ship wherever
+    the bot ships. live_bot imports botcore at module top (the Strategy seam), so any
+    deploy script that installs live_bot/account_bot but forgets botcore/ would crash-loop
+    the bot at import. A later step that adds a deploy path must keep core travelling with
+    it — this fails at test time if a bot-shipping script drops botcore."""
+
+    # Repo root: tradinebotte-polymarket/tests/test_bot.py → ../../..
+    _REPO = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+    # Every script that installs/rsyncs the live_bot entrypoint (and hence needs the core).
+    _BOT_DEPLOY_SCRIPTS = (
+        "scripts/install.sh",
+        "scripts/test_multibot_deploy.sh",
+        "tradinebotte-polymarket/scripts/update_standalone.sh",
+        "tradinebotte-status/scripts/setup_data_plane.sh",
+        "tradinebotte-cex/scripts/deploy_grid_claude3.sh",
+        "tradinebotte-cex/scripts/deploy_grid_mexc.sh",
+        "tradinebotte-cex/scripts/update_swing.sh",
+    )
+
+    def test_bot_deploy_scripts_ship_botcore(self):
+        missing = []
+        for rel in self._BOT_DEPLOY_SCRIPTS:
+            path = os.path.join(self._REPO, rel)
+            if not os.path.isfile(path):
+                continue  # monorepo layout differs in some checkouts — skip absent
+            with open(path, encoding="utf-8") as fh:
+                if "botcore" not in fh.read():
+                    missing.append(rel)
+        self.assertEqual(
+            missing, [],
+            "deploy script(s) ship live_bot but not botcore/ — the bot will ImportError on "
+            f"`from botcore...` at startup: {missing}. Add a botcore/ copy/rsync step.")
+
+
+class TestCexFeedSnapshots(unittest.IsolatedAsyncioTestCase):
+    """Regression: cex_feed_consumer_loop must persist book snapshots (it bypasses
+    handle_book_update, which is the only other place snapshots are written). Before
+    this was fixed the CEX grid/swing bots wrote zero snapshots in consumer mode."""
+
+    def _book(self, symbol="BTCUSDT", exchange="binance", **kw):
+        d = dict(t="book", exchange=exchange, symbol=symbol,
+                 best_bid=60000.0, best_ask=60000.01, spread=0.01,
+                 bid_vol=1.0, ask_vol=2.0, obi=-0.3)
+        d.update(kw)
+        return d
+
+    def test_save_cex_snapshot_row_shape(self):
+        """CEX snapshot reuses the polymarket-shaped table with the historical placeholders."""
+        state = make_state()
+        book = SimpleNamespace(best_bid=60000.0, best_ask=60000.01, spread=0.01,
+                               ask_vol=2.0, obi=-0.3)
+        cex_consumer.save_cex_snapshot(state, "BTC_USDT", book)
+        state.conn.commit()
+        row = state.conn.execute(
+            "SELECT market_id, token_id, direction, secs_remaining, best_bid, "
+            "best_ask, spread, ask_vol, obi, has_open_trade FROM snapshots").fetchone()
+        self.assertEqual(
+            row, ("BTC_USDT", "BTC_USDT", "UP", 9999.0,
+                  60000.0, 60000.01, 0.01, 2.0, -0.3, 0))
+
+    async def _run_loop(self, state, msgs, symbol="BTCUSDT", exchange="binance"):
+        """Drive cex_feed_consumer_loop over a fake socket that yields `msgs` then stops."""
+        class _Stop(Exception):
+            pass
+        q = list(msgs)
+
+        async def recv_json():
+            if not q:
+                raise _Stop()
+            return q.pop(0)
+
+        sock = SimpleNamespace(recv_json=recv_json, close=lambda **kw: None)
+
+        async def on_book_update(st, ts, **kw):
+            pass
+        state.strategy = SimpleNamespace(on_book_update=on_book_update)
+
+        with patch.object(cex_consumer, "make_sub", return_value=sock), \
+             patch("zmq.asyncio.Context", return_value=SimpleNamespace(term=lambda: None)):
+            with self.assertRaises(_Stop):
+                await cex_consumer.cex_feed_consumer_loop(state, "tcp://x", symbol, exchange)
+        state.conn.commit()
+
+    def _count(self, state):
+        return state.conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
+
+    async def test_loop_writes_one_snapshot_per_book(self):
+        state = make_state()
+        state.config.snapshot_interval = 0          # no interval gating in this test
+        await self._run_loop(state, [self._book(), self._book()])
+        self.assertEqual(self._count(state), 2)
+        self.assertGreater(state.last_write_ts, 0)   # data-freshness clock advanced
+
+    async def test_loop_respects_enable_snapshots_false(self):
+        state = make_state()
+        state.config.enable_snapshots = False
+        state.config.snapshot_interval = 0
+        await self._run_loop(state, [self._book(), self._book()])
+        self.assertEqual(self._count(state), 0)
+        self.assertEqual(state.last_write_ts, 0)     # nothing persisted → no false freshness
+
+    async def test_loop_skips_filtered_messages(self):
+        state = make_state()
+        state.config.snapshot_interval = 0
+        await self._run_loop(
+            state,
+            [self._book(symbol="ETHUSDT"),     # wrong symbol → skipped
+             self._book(exchange="mexc"),      # wrong exchange → skipped
+             self._book()],                    # match → 1 snapshot
+            symbol="BTCUSDT", exchange="binance")
+        self.assertEqual(self._count(state), 1)
 
 
 if __name__ == "__main__":

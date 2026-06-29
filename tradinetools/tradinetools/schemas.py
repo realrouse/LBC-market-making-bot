@@ -105,20 +105,3 @@ class IndicatorsMessage(_Base):
             ts=int(d.get("ts", 0)),
             payload=payload,
         )
-
-
-# ─── Registration messages (bots → indicators REP/REQ) ───────────────────────
-
-@dataclass
-class RegisterRequest(_Base):
-    t: str = "register"
-    stream_id: str = ""
-    bot_id: str = ""
-
-
-@dataclass
-class RegisterReply(_Base):
-    t: str = "register_ack"
-    stream_id: str = ""
-    ok: bool = True
-    error: str = ""

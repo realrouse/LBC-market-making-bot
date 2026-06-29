@@ -31,6 +31,7 @@ BOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, BOT_DIR)
 
 import live_bot as bot
+import api_polymarket as api_poly
 import feed as feed_mod
 import account_bot as abot
 
@@ -84,9 +85,11 @@ def _book_msg(token_id="tok-up", best_bid=0.97, best_ask=0.975,
 
 def make_state():
     conn = sqlite3.connect(":memory:", check_same_thread=False)
+    bot.apply_base_schema(conn)   # schema_version + bot_meta (neutral base)
     conn.executescript(bot.SCHEMA)
     conn.commit()
-    return bot.BotState(conn)
+    # Inject the threshold default + connector the way the entrypoint does (Plan D step 3b/4b).
+    return bot.BotState(conn, strategy=bot.ThresholdStrategy(), connector=api_poly)
 
 
 # ── 1. feed.register_market() ─────────────────────────────────────────────────

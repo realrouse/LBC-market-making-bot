@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from tradinetools.schemas import (
     BookMessage, MarketMessage, PingMessage,
-    IndicatorsMessage, RegisterRequest, RegisterReply,
+    IndicatorsMessage,
 )
 
 
@@ -26,8 +26,6 @@ class TestVersionField(unittest.TestCase):
     def test_market_message_v1(self):     self._check_v(MarketMessage)
     def test_ping_message_v1(self):       self._check_v(PingMessage)
     def test_indicators_message_v1(self): self._check_v(IndicatorsMessage)
-    def test_register_request_v1(self):   self._check_v(RegisterRequest)
-    def test_register_reply_v1(self):     self._check_v(RegisterReply)
 
 
 class TestBookMessage(unittest.TestCase):
@@ -156,48 +154,6 @@ class TestIndicatorsMessage(unittest.TestCase):
         restored = IndicatorsMessage.from_dict(m.to_dict())
         self.assertEqual(restored.stream_id, "btc_1d")
         self.assertEqual(restored.payload,   {})
-
-
-class TestRegisterRequest(unittest.TestCase):
-
-    def test_default_type(self):
-        self.assertEqual(RegisterRequest().t, "register")
-
-    def test_roundtrip(self):
-        req = RegisterRequest(stream_id="btc_4h", bot_id="bot_abc")
-        restored = RegisterRequest.from_dict(req.to_dict())
-        self.assertEqual(restored.stream_id, "btc_4h")
-        self.assertEqual(restored.bot_id,    "bot_abc")
-        self.assertEqual(restored.v, 1)
-
-    def test_default_fields(self):
-        r = RegisterRequest()
-        self.assertEqual(r.stream_id, "")
-        self.assertEqual(r.bot_id,    "")
-
-
-class TestRegisterReply(unittest.TestCase):
-
-    def test_default_type(self):
-        self.assertEqual(RegisterReply().t, "register_ack")
-
-    def test_ok_true_by_default(self):
-        self.assertTrue(RegisterReply().ok)
-
-    def test_roundtrip_success(self):
-        rep = RegisterReply(stream_id="btc_4h", ok=True)
-        restored = RegisterReply.from_dict(rep.to_dict())
-        self.assertTrue(restored.ok)
-        self.assertEqual(restored.stream_id, "btc_4h")
-
-    def test_roundtrip_error(self):
-        rep = RegisterReply(stream_id="btc_4h", ok=False, error="stream not found")
-        restored = RegisterReply.from_dict(rep.to_dict())
-        self.assertFalse(restored.ok)
-        self.assertEqual(restored.error, "stream not found")
-
-    def test_default_error_empty(self):
-        self.assertEqual(RegisterReply().error, "")
 
 
 if __name__ == "__main__":

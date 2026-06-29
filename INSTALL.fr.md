@@ -456,10 +456,26 @@ python3 tradinebotte-status/generate_status.py --conf /chemin/vers/autre.conf
 - **Cartes par compte** — liste des trades actifs, trades récents résolus, métriques CEX
 - **Horodatage de génération** et temps de collecte total en secondes
 
-### Planification avec cron
+### Planification — timer systemd `--user` (recommandé)
 
-Pour regénérer la page automatiquement toutes les 5 minutes, ajouter dans la crontab
-(`crontab -e`) :
+Installer le timer versionné ; il regénère la page toutes les 2 minutes et est reproductible
+depuis le checkout (pas de crontab maintenue à la main) :
+
+```bash
+bash tradinebotte-status/scripts/install_statuspage_timer.sh
+```
+
+L'installeur localise seul le dépôt et le venv, active + démarre
+`tradinebotte-statuspage.timer`, et avertit si le *linger* utilisateur est désactivé (sans
+linger, le timer se met en pause à la déconnexion — l'activer avec
+`loginctl enable-linger <utilisateur>`). Inspection :
+`systemctl --user list-timers tradinebotte-statuspage.timer` et
+`journalctl --user -u tradinebotte-statuspage.service`.
+
+### Planification avec cron (alternative)
+
+Si vous préférez cron à un timer systemd, ajouter dans la crontab (`crontab -e`). N'utiliser
+qu'**une** des deux méthodes, sinon les deux exécutions se chevauchent sur le fichier de sortie :
 
 ```
 */5 * * * * TRADINEBOTTE_STATUS_OUT=~/public_html/tradinebottestatus.html \

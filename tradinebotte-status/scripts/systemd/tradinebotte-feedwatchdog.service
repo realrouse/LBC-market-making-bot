@@ -1,0 +1,17 @@
+[Unit]
+# Restart the 15M Polymarket feed when it is alive but no longer publishing (the
+# get_markets()-masks-errors stuck state: 0 books / 0 pings while systemd shows active).
+# One-shot, driven by tradinebotte-feedwatchdog.timer. Decision is read from the feed's
+# own heartbeat (ws_connected / last_book_ts) in the shared state DB.
+Description=tradinebotte — feed watchdog (restart an alive-but-silent feed)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/tradinebotte
+Environment=TRADINEBOTTE_DB=/data1/tradinebotte-shared/database/tradinebotte.db
+# `sg claudes` for group read of the shared DB (same reason as the collector). systemctl
+# --user (to restart the feed) still works under sg — same uid, XDG_RUNTIME_DIR inherited.
+ExecStart=/usr/bin/sg claudes -c "%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/feed_watchdog.py --bot-name feed --service tradinebotte-feed.service"
+StandardOutput=journal
+StandardError=journal

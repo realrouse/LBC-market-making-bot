@@ -43,10 +43,10 @@ def _fetch_btc_24h(symbol: str = "BTCUSDT") -> dict:
 # ─── Remote data-collection snippet (runs via SSH on each account) ────────────
 
 _REMOTE_COLLECT = r"""
-import sqlite3, json, os, subprocess
+import sqlite3, json, os, subprocess, glob
 
-data = {"version": "?", "services": [], "live": None, "accum": None,
-        "heartbeats": None}
+data = {"version": "?", "services": [], "live": None, "grids": [],
+        "accum": None, "heartbeats": None}
 
 try:
     data["version"] = open(os.path.expanduser("~/tradinebotte/version.stamp")).read().strip()
@@ -93,7 +93,7 @@ def _qdb(path, queries):
 # live.db: Polymarket bot. PnL/capital now come from the heartbeat payload (the single
 # source of truth shared with the pills + fleet headline); live.db is queried only for
 # the win-rate counts and the recent/open trade tables that payloads don't carry.
-data["live"] = _qdb("~/tradinebotte/live.db", {
+_LIVE_QUERIES = {
     "totals": (
         "SELECT count(*) t,"
         " sum(CASE WHEN outcome='WIN'  THEN 1 ELSE 0 END) w,"
@@ -111,7 +111,28 @@ data["live"] = _qdb("~/tradinebotte/live.db", {
         "SELECT id, entry_ts_ms/1000 entry_ts, direction, entry_price,"
         " substr(question,1,42) q FROM trades WHERE resolved=0"
     ),
-})
+}
+data["live"] = _qdb("~/tradinebotte/live.db", _LIVE_QUERIES)
+
+# Grid bots keep aggregate state (bounds / cycles / level fills / halted) in grid_state
+# + grid_levels rather than a per-trade log, so the Polymarket trade queries above find
+# nothing for them. Collect that aggregate from every candidate db: the standard path
+# (an account running only a grid) and any alternate data dir
+# (TRADINEBOTTE_DIR=~/tradinebotte-grid). The heartbeat carries only PnL — bounds, level
+# fills, and the halted flag are otherwise absent from the page.
+_GRID_QUERIES = {
+    "state": (
+        "SELECT symbol, grid_lower, grid_upper, grid_step, order_size_usdt,"
+        " total_cycles, total_profit_usd, halted FROM grid_state LIMIT 1"
+    ),
+    "levels": "SELECT status, count(*) n FROM grid_levels GROUP BY status",
+}
+data["grids"] = []
+for _p in [os.path.expanduser("~/tradinebotte/live.db")] + sorted(
+        glob.glob(os.path.expanduser("~/tradinebotte-*/live.db"))):
+    _g = _qdb(_p, _GRID_QUERIES)
+    if _g and _g.get("state"):
+        data["grids"].append({"dir": os.path.basename(os.path.dirname(_p)), **_g})
 
 # live_accum.db: accumulation bot — table accum_trades
 data["accum"] = _qdb("~/tradinebotte/live_accum.db", {
@@ -190,6 +211,26 @@ def _collect_account(user: str, password: str, server: str, port: int) -> dict:
 # missing ~2 heartbeats is STALE and ~5 is DEAD — a real death shows in minutes.
 _STALE_AFTER = int(os.environ.get("HEARTBEAT_STALE_S", 240))
 _DEAD_AFTER  = int(os.environ.get("HEARTBEAT_DEAD_S",  600))
+
+# Data-recording freshness. A bot can heartbeat fine (ALIVE) while its time-series
+# table stops growing — the 2026-06-16 CEX snapshots bug hid for 10 days exactly this
+# way. Bots report last_write_ts (epoch of last PERSISTED data row); if it falls behind
+# this many seconds the page flags ⚠data, independently of the heartbeat flag. Generous
+# default (snapshots are written ~1/s, so 10 min behind is unambiguous, not flapping).
+_DATA_STALE_AFTER = int(os.environ.get("DATA_STALE_S", 600))
+
+
+def _data_flag(payload: dict, now: int) -> str:
+    """"STALE" if the bot's data table stopped growing, else "".
+
+    last_write_ts ABSENT → infra service / snapshots disabled → never alarms.
+    last_write_ts == 0.0 (present) → bot claims to record but has written NOTHING →
+    must alarm: that's the post-restart reproduction of the 2026-06-16 bug (the bot
+    boots in a mode that never writes). So test `is None`, not falsiness."""
+    wts = payload.get("last_write_ts")
+    if wts is None:
+        return ""
+    return "STALE" if now - int(wts) > _DATA_STALE_AFTER else ""
 
 
 def _classify_heartbeats(raw_rows: list, user_to_label: dict) -> list:
@@ -293,6 +334,13 @@ h2{color:#8b949e;font-size:.85em;text-transform:uppercase;letter-spacing:1.5px;
   .tip-label{font-size:1.05em}
   .tip-dim{font-size:1em}
 }
+
+/* ── Degraded-collection banners ──────────────────────── */
+.banner{border-radius:7px;padding:11px 15px;margin:12px 0;font-size:.95em;
+        border:1px solid;line-height:1.45}
+.banner.bad{background:#2d1418;border-color:#f8514955;color:#ff7b72}
+.banner.warn{background:#2b2412;border-color:#d2992255;color:#e3b341}
+.banner code{background:#00000033;padding:1px 5px;border-radius:4px;font-size:.92em}
 
 /* ── Summary bar ──────────────────────────────────────── */
 .summary-bar{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}
@@ -433,7 +481,11 @@ def _render_payload_summary(bot_name: str, payload: dict, now: int) -> str:
         age = now - int(ts)
         if age < 120:
             return f"{age}s ago"
-        return f"{age // 60}min ago"
+        if age < 7200:
+            return f"{age // 60}min ago"
+        if age < 172800:
+            return f"{age // 3600}h ago"
+        return f"{age // 86400}d ago"
 
     parts = []
     if bot_name in ("live_bot", "grid_bot", "swing_bot"):
@@ -482,6 +534,16 @@ def _render_payload_summary(bot_name: str, payload: dict, now: int) -> str:
         r = payload.get("total_realized")
         if r is not None:
             parts.append(f"pnl=${r:+.2f}")
+    elif bot_name == "orderbook_bot":
+        tp = payload.get("total_pnl")
+        if tp is not None:
+            parts.append(f"pnl=${tp:+.2f}")
+        op = payload.get("open_positions")
+        if op is not None:
+            parts.append(f"pos={op}")
+        lp = payload.get("last_price")
+        if lp:
+            parts.append(f"px=${lp:,.0f}")
     elif bot_name == "feed":
         ws = payload.get("ws_connected")
         if ws is not None:
@@ -496,6 +558,14 @@ def _render_payload_summary(bot_name: str, payload: dict, now: int) -> str:
         ts = payload.get("last_pub_ts")
         if ts:
             parts.append(f"pub={_ago(ts)}")
+
+    # Data-recording freshness — uniform across every family that persists a
+    # time-series table (snapshots / accum_snapshots / …). ⚠ when the table has
+    # stopped growing while the bot still heartbeats (the 2026-06-16 failure mode).
+    wts = payload.get("last_write_ts")
+    if wts is not None:
+        mark = " ⚠" if now - int(wts) > _DATA_STALE_AFTER else ""
+        parts.append(f"data={_ago(wts)}{mark}")
 
     return " · ".join(parts) if parts else "—"
 
@@ -517,6 +587,12 @@ def _key_metric(bot_name: str, payload: dict) -> str:
         btc = payload.get("holdings_btc")
         if btc is not None:
             return f"{btc:.4f} BTC"
+    elif bot_name == "orderbook_bot":
+        # No daily window in the payload; cumulative realized PnL is the headline.
+        pnl = payload.get("total_pnl")
+        if pnl is not None:
+            sign = "+" if pnl >= 0 else "-"
+            return f"{sign}${abs(pnl):.2f}"
     return ""
 
 
@@ -538,6 +614,12 @@ def _render_heartbeat_pills(hb_rows: list) -> str:
         bounds_ok = r["bounds_ok"]
         bounds_warn = bounds_ok not in ("ok", "-", "")
         mode = _mode_badge(acct_short, bot)
+        data_warn = _data_flag(r.get("payload", {}), now)
+        data_badge = (
+            "<span class='badge stale' style='font-size:.63em' "
+            "title='data table not growing — bot heartbeats but stopped recording'>"
+            "⚠data</span>" if data_warn else ""
+        )
         km_cls = ""
         if km.startswith("+"):
             km_cls = " pnl-pos"
@@ -559,6 +641,7 @@ def _render_heartbeat_pills(hb_rows: list) -> str:
         pills += (
             f"<div class='bot-pill tt'>"
             f"<span class='badge {flag}' style='font-size:.63em'>{r['flag']}</span>"
+            f"{data_badge}"
             f"{mode}"
             f"<span class='pill-name'>{escape(bot)}</span>"
             f"<span class='pill-acct'>{escape(acct_short)}</span>"
@@ -676,8 +759,9 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
         f"</div>"
     )
 
-    if error == "unreachable":
-        return f"<div class='account'>{header}<p class='no-data'>⚠ unreachable</p></div>"
+    if error:
+        _msg = "unreachable" if error == "unreachable" else f"collect failed ({escape(str(error))})"
+        return f"<div class='account'>{header}<p class='no-data'>⚠ {_msg}</p></div>"
 
     # Determine whether this account runs Polymarket bots (live_bot / account_bot).
     _POLY_BOT_NAMES = {"live_bot", "account_bot"}
@@ -787,6 +871,38 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
                 f"</details>"
             )
 
+    # Grid bots track aggregate state (bounds / cycles / level fills / halted), not a
+    # per-trade log — surface it from grid_state + grid_levels. Covers both the standard
+    # path (an account running only a grid) and an alternate data dir (~/tradinebotte-grid).
+    grid_html = ""
+    for gr in (data.get("grids") or []):
+        st = (gr.get("state") or [{}])[0]
+        if not st:
+            continue
+        lvls = {row.get("status"): row.get("n", 0) for row in (gr.get("levels") or [])}
+        total_lvls = sum(lvls.values())
+        holding    = lvls.get("sell_placed", 0)        # bought, waiting to sell
+        lo, hi     = st.get("grid_lower"), st.get("grid_upper")
+        bounds = (f"${lo/1000:.1f}k–${hi/1000:.1f}k"
+                  if isinstance(lo, (int, float)) and isinstance(hi, (int, float)) else "—")
+        cycles  = st.get("total_cycles")
+        profit  = st.get("total_profit_usd")
+        sym     = escape(str(st.get("symbol", "")))
+        halted_badge = ("<span class='badge dead' style='margin-left:5px'>HALTED</span>"
+                        if st.get("halted") else "")
+        profit_cls = "pnl-pos" if (profit or 0) >= 0 else "pnl-neg"
+        grid_html += (
+            f"<div style='margin-top:4px;font-size:.8em'>"
+            f"<span style='color:#8b949e;text-transform:uppercase;letter-spacing:.8px;"
+            f"font-size:.85em'>grid</span>"
+            f" {sym} · <span style='color:#58a6ff'>{bounds}</span>"
+            f" · {holding}/{total_lvls} holding"
+            f" · {cycles if cycles is not None else '?'} cycles"
+            f" · <span class='{profit_cls}'>{_fmt_pnl(profit)}</span>"
+            f"{halted_badge}"
+            f"</div>"
+        )
+
     cex_html = ""
     accum = data.get("accum")
     if accum:
@@ -812,7 +928,7 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
 
     return (
         f"<div class='account'>"
-        f"{header}{stats_html}{open_html}{trade_html}{cex_html}{bot_section}"
+        f"{header}{stats_html}{open_html}{trade_html}{grid_html}{cex_html}{bot_section}"
         f"</div>"
     )
 
@@ -904,6 +1020,48 @@ def _render_expected_actual(inventory: list, deploys: list, heartbeats: list,
     )
 
 
+def _render_banners(accounts: list, heartbeats: list) -> str:
+    """Make a degraded collection cycle look like a failure, never like silence.
+
+    The collector account (index 0) is the single source of all heartbeat, inventory
+    and deploy data. If its SSH/collect failed, the entire fleet view is blank — which
+    must read as 'fleet status unknown', not 'all quiet'. Other accounts failing only
+    affects their own card, but is still called out so a partial page is visibly partial.
+    """
+    if not accounts:
+        return ""
+    banners = []
+    collector = accounts[0]
+    coll_err = collector.get("error")
+    if coll_err:
+        banners.append(
+            f"<div class='banner bad'>⚠ <b>Collector account unreachable</b> "
+            f"(<code>{escape(str(coll_err))}</code>) — fleet heartbeats, inventory and "
+            f"deploy history are unavailable this cycle. Bot liveness shown below is "
+            f"<b>unknown</b>, not necessarily down.</div>"
+        )
+    elif not heartbeats:
+        banners.append(
+            "<div class='banner warn'>⚠ Collector reachable but the shared state DB "
+            "returned no heartbeats — fleet liveness is unknown this cycle.</div>"
+        )
+
+    # Per-account collect failures (the collector is handled above). Their own cards
+    # show '⚠ unreachable'; surface the set so the partial page is obviously partial.
+    failed = [
+        (label.split()[0] if label else "?")
+        for label, acc in zip(_ACCOUNT_LABELS, accounts)
+        if acc is not collector and acc.get("error")
+    ]
+    if failed:
+        banners.append(
+            f"<div class='banner warn'>⚠ {len(failed)} account(s) unreachable this cycle: "
+            f"<code>{escape(', '.join(failed))}</code> — their service/trade cards are "
+            f"missing data; the rest of the fleet is unaffected.</div>"
+        )
+    return "".join(banners)
+
+
 def _render_html(
     heartbeats: list,
     accounts: list,
@@ -913,18 +1071,31 @@ def _render_html(
     deploys: list | None = None,
     user_to_label: dict | None = None,
 ) -> str:
+    # The collector account (index 0) is the sole source of fleet heartbeat data — if it
+    # failed, an empty `heartbeats` means "unknown", not "nothing wrong".
+    collector_down = bool(accounts and accounts[0].get("error"))
     hb_issues  = sum(1 for r in heartbeats if r["flag"] != "ALIVE")
     svc_issues = sum(1 for acc in accounts for svc in acc.get("services", []) if not svc["active"])
-    unreachable = sum(1 for a in accounts if a.get("error") == "unreachable")
+    unreachable = sum(1 for a in accounts if a.get("error"))
     total_issues = hb_issues + svc_issues + unreachable
 
-    dot_cls     = "ok" if total_issues == 0 else ("warn" if hb_issues == 0 else "bad")
-    status_text = "All systems nominal" if total_issues == 0 else f"{total_issues} issue(s)"
-    ts_str      = generated_at.strftime("%Y-%m-%d %H:%M UTC")
+    if collector_down:
+        dot_cls, status_text = "bad", "collector unreachable — fleet status unknown"
+    elif total_issues == 0:
+        dot_cls, status_text = "ok", "All systems nominal"
+    else:
+        dot_cls = "warn" if hb_issues == 0 else "bad"
+        status_text = f"{total_issues} issue(s)"
+    ts_str = generated_at.strftime("%Y-%m-%d %H:%M UTC")
 
     total_bots = len(heartbeats)
     alive_bots = sum(1 for r in heartbeats if r["flag"] == "ALIVE")
-    alive_cls  = "alive" if alive_bots == total_bots else "stale"
+    # With no heartbeats (collector down) never render a falsely-green "0/0".
+    if total_bots == 0:
+        alive_cls, alive_display = "dead", "—"
+    else:
+        alive_cls = "alive" if alive_bots == total_bots else "stale"
+        alive_display = f"{alive_bots}/{total_bots}"
     hb_cls     = "alive" if hb_issues == 0 else "dead"
     svc_cls    = "alive" if svc_issues == 0 else "dead"
     unr_cls    = "alive" if unreachable == 0 else "dead"
@@ -946,7 +1117,7 @@ def _render_html(
     summary_bar = (
         f"<div class='summary-bar'>"
         f"<div class='sb-item'><div class='lbl'>Bots alive</div>"
-        f"<div class='val {alive_cls}'>{alive_bots}/{total_bots}</div></div>"
+        f"<div class='val {alive_cls}'>{alive_display}</div></div>"
         f"<div class='sb-item tt'>"
         f"<div class='lbl'>Today PnL</div>"
         f"<div class='val {pnl_val_cls}'>{pnl_sign}${today_pnl_total:.2f}</div>"
@@ -1007,6 +1178,8 @@ def _render_html(
         for label, data in zip(_ACCOUNT_LABELS, accounts)
     )
 
+    banners_html  = _render_banners(accounts, heartbeats)
+
     expected_html = _render_expected_actual(
         inventory or [], deploys or [], heartbeats, user_to_label or {})
 
@@ -1026,6 +1199,7 @@ def _render_html(
   {btc_price_html}
   <span style="font-size:.6em;color:#8b949e;font-weight:400">{ts_str}</span>
 </h1>
+{banners_html}
 {summary_bar}
 {expected_html}
 <h2>Infrastructure — Heartbeats</h2>

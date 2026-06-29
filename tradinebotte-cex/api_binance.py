@@ -151,7 +151,9 @@ def parse_book_update(msg):
 async def get_markets(session, symbol=DEFAULT_SYMBOL, **_):
     """
     Fetch the current order book ticker for the given symbol from Binance REST.
-    Returns a list with one normalized market dict.
+    Returns a 1-element list with the normalized market dict on success, or None on an
+    API/network error (callers must distinguish a failure from data — masking errors as []
+    let the polymarket feed stall silently; the same shape applies here).
     """
     try:
         async with session.get(
@@ -161,7 +163,7 @@ async def get_markets(session, symbol=DEFAULT_SYMBOL, **_):
         ) as resp:
             if resp.status != 200:
                 logger.warning("Binance get_markets error %d [symbol=%s]", resp.status, symbol)
-                return []
+                return None   # error sentinel — not [] (which means "ran fine, no data")
             # content_type=None: bypass aiohttp's MIME check — some APIs omit charset
             data = await resp.json(content_type=None)
         return [{
@@ -174,7 +176,7 @@ async def get_markets(session, symbol=DEFAULT_SYMBOL, **_):
         }]
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.warning("Binance get_markets fetch error [symbol=%s]: %s", symbol, e)
-        return []
+        return None   # error sentinel — not [] (which means "ran fine, no data")
 
 
 # ─── ORDER PLACEMENT ──────────────────────────────────────────────────────────
@@ -375,7 +377,9 @@ async def get_open_orders(session, symbol, *, api_key=None, api_secret=None):
     Each element: {"order_id": str, "side": str, "price": float,
                    "qty": float, "status": str}
 
-    Returns [] on error or in simulation mode (no credentials).
+    Returns None on an API/network error (so a transient failure is NOT mistaken for
+    "no open orders" — which would let a strategy re-place orders it already has); [] in
+    simulation mode (no credentials) or when there are genuinely no open orders.
     Prefer this over repeated get_order_status calls: costs 40 weight vs
     4 × N weight for N individual status queries.
 
@@ -400,7 +404,7 @@ async def get_open_orders(session, symbol, *, api_key=None, api_secret=None):
             data = await resp.json(content_type=None)
             if resp.status != 200:
                 logger.warning("Binance get_open_orders error %d : %.300s", resp.status, data)
-                return []
+                return None   # error sentinel — not [] (sim/no-orders); strategies must not reconcile on this
             return [
                 {
                     "order_id": str(o.get("orderId", "")),
@@ -413,7 +417,7 @@ async def get_open_orders(session, symbol, *, api_key=None, api_secret=None):
             ]
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("Binance get_open_orders error : %s", e)
-        return []
+        return None   # error sentinel — not [] (sim/no-orders); strategies must not reconcile on this
 
 
 # ─── USER DATA STREAM ─────────────────────────────────────────────────────────

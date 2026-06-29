@@ -24,35 +24,59 @@ Launch:
   bash scripts/start_bot.sh     # starts the bot in the background
 """
 
-import argparse, asyncio, copy, json, logging, logging.handlers, math, os, queue, sqlite3, sys, time, uuid
-from collections import deque
+import argparse, asyncio, copy, json, logging, logging.handlers, os, queue, sqlite3, sys, time, uuid
 from dataclasses import dataclass, field
-import functools
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
-import aiohttp, websockets
+import aiohttp
 
 # process start epoch — used for uptime display; harmless to capture at import
 _BOT_START: float = time.time()
 
-# sys.path insert finds api_polymarket.py in the same directory as this file,
-# whether running standalone from INSTALL_DIR or imported as tradinebotte-polymarket.live_bot
-# from the project root. To target a different exchange, replace the import below.
+# sys.path insert finds the connector modules (api_polymarket.py et al.) in the same
+# directory as this file, whether running standalone from INSTALL_DIR or imported as
+# tradinebotte-polymarket.live_bot from the project root.
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
-# connectors/ lives in tradinebotte-cex/ in the monorepo (flat deploy: same dir)
+# connectors/ lives in tradinebotte-cex/ in the monorepo (flat deploy: same dir,
+# install.sh/update_standalone.sh copy connectors/ into INSTALL_DIR).
 _cex_dir = os.path.join(_THIS_DIR, "..", "tradinebotte-cex")
 if os.path.isdir(_cex_dir) and _cex_dir not in sys.path:
     sys.path.insert(0, os.path.normpath(_cex_dir))
-import api_polymarket as api
+# botcore/ (neutral core — the Strategy protocol) lives in tradinebotte-core/ in the
+# monorepo (flat deploy: same dir, copied into INSTALL_DIR beside connectors/).
+_core_dir = os.path.join(_THIS_DIR, "..", "tradinebotte-core")
+if os.path.isdir(_core_dir) and _core_dir not in sys.path:
+    sys.path.insert(0, os.path.normpath(_core_dir))
+from botcore.connectors import load as _load_connector_module
+# ── Re-exports (Plan D steps 3b–4b) ───────────────────────────────────────────
+# The trading logic, data plane, calendar, and shared helpers moved into the neutral
+# core (botcore) and the co-located pm_* / cex plugins. live_bot re-exports them so
+# existing `live_bot.<name>` / `bot.<name>` callers (tests, backtests, account_bot) keep
+# working unchanged. Several names below are also used directly in this module; the rest
+# are pure re-exports — pylint can't tell the two apart, so unused-import is disabled here.
+# pylint: disable=unused-import
+from botcore.persistence import (
+    read_capital_base, write_capital_base, _persist_snapshot, cumulative_pnl, equity,
+)
+from botcore.schema import apply_base_schema
+from pm_types import VOL_WINDOW, TokenState, RejectionStats
+from pm_calendar import is_trading_hour, _in_weekend_session, _us_holidays
+from pm_strategy import (
+    compute_stake, check_signal, enter_live_trade, check_resolution,
+    ThresholdStrategy, _STAKE_SECS_MIN_FACTOR,
+)
+from pm_data import (
+    handle_book_update, save_snapshot, purge_expired_markets, register_market,
+    _register_market_from_feed, ws_loop, _market_refresh_loop,
+)
+# pylint: enable=unused-import
 import bot_utils
-from bot_utils import print_dashboard, write_web_status
 from tradinetools import (
-    heartbeat_loop, control_loop, Command,
+    heartbeat_loop, control_loop, Command, health_server,
     write_reset_marker, consume_reset_marker,
 )
-from tradinetools.zmq import PORT_FEED, PORT_INDICATORS, PORT_IND_REG, default_ipc_addr, make_sub
-from tradinetools.schemas import MarketMessage
+from tradinetools.zmq import PORT_FEED, PORT_INDICATORS, PORT_IND_REG, default_ipc_addr
 
 # ─── STRATEGY DEFAULTS (module-level — tests reference these directly) ────────
 # Hardcoded defaults — overridden by make_config() when a strategy JSON is
@@ -84,13 +108,18 @@ US_WEEKLY_CLOSE:        bool                  = True
 
 # ─── TIMING / SNAPSHOT DEFAULTS ───────────────────────────────────────────────
 SNAPSHOT_INTERVAL       = 1
-SNAPSHOT_COMMIT_SECS    = 30   # batch snapshot commits: one flush every 30 s
+# SNAPSHOT_COMMIT_SECS lives in botcore.persistence (re-exported at the top of this module).
 DASHBOARD_INTERVAL      = 300
 MARKET_REFRESH          = 30
 
 # ─── CONNECTOR / STRATEGY DEFAULTS ────────────────────────────────────────────
 CONNECTOR      = "polymarket"   # api_* module to use; see bot/connectors/
 STRATEGY_TYPE  = "threshold"    # "threshold" (built-in) or "grid" (bot/strategy_engines/grid.py)
+
+# The exchange connector is no longer a module global (Plan D step 4b): the entrypoint
+# (main / account_bot) loads it via the registry by name and injects it into BotState,
+# and the trading code reaches it through `state.connector`. The default connector name
+# is CONNECTOR above; make_config() may override it per strategy.
 
 # Grid strategy defaults (ignored when strategy_type == "threshold")
 GRID_SYMBOL          = "BTCUSDT"
@@ -103,7 +132,7 @@ GRID_TRAIL_MODE      = "static"   # "static" | "bull" | "bear"
 # ─── VOLATILITY FILTER DEFAULTS ───────────────────────────────────────────────
 VOL_FILTER_ENABLED      = True
 VOL_FILTER_WEEKDAY_ONLY = True
-VOL_WINDOW              = 12
+# VOL_WINDOW lives in pm_types (re-exported at the top of this module).
 VOL_MIN_SAMPLES         = 6
 VOL_BID_MAX             = 0.07
 RANGE_BID_MAX           = 0.30
@@ -121,8 +150,7 @@ STAKE_SECS_REF:        float = 45.0  # safe zone (s): no secs penalty below this
 STAKE_SECS_ALPHA:      float = 0.0   # penalty intensity for secs > secs_ref
 STAKE_MAX:             float = 10.0  # absolute stake cap; overridden by JSON
 STAKE_MAX_PCT_CAPITAL: float = 0.0   # 0 = off; 0.12 = cap at 12 % of current capital
-# Floor multiplier applied by compute_stake(); not exposed in JSON.
-_STAKE_SECS_MIN_FACTOR: float = 0.3
+# _STAKE_SECS_MIN_FACTOR / _STAKE_STEP_BREAKS live in pm_strategy (re-exported at the top).
 
 # ─── WEEKLY STOP-LOSS DEFAULT ─────────────────────────────────────────────────
 WEEKLY_STOP_LOSS: float = 0.0   # 0 = disabled; e.g. 60.0 = halt after −$60/week
@@ -142,7 +170,6 @@ STAKE_STEP_S0:      float = 15.0   # stake when secs_remaining < 45
 STAKE_STEP_S1:      float = 12.0   # stake when 45 ≤ secs_remaining < 60
 STAKE_STEP_S2:      float =  6.0   # stake when 60 ≤ secs_remaining < 90
 STAKE_STEP_S3:      float =  6.0   # stake when secs_remaining ≥ 90
-_STAKE_STEP_BREAKS: tuple = (45.0, 60.0, 90.0)
 
 # ─── LOGGING FORMATTERS ───────────────────────────────────────────────────────
 _SESSION_ID = uuid.uuid4().hex[:8].upper()
@@ -301,11 +328,15 @@ class BotConfig:
     indicators_reg_addr: str  = f"tcp://127.0.0.1:{PORT_IND_REG}"
     indicators_streams:  list = field(default_factory=list)
 
-    # Credentials
-    private_key:    str = ""
-    api_key:        str = ""
-    api_secret:     str = ""
-    api_passphrase: str = ""
+    # Credentials.
+    # repr=False keeps secrets out of the dataclass __repr__ so they cannot leak
+    # into logs or tracebacks if a BotConfig instance is ever logged/printed.
+    # The values are still plain str (used as-is by eth_account / ClobClient);
+    # this is log-masking only, not secure memory zeroing — see TODO L-1.
+    private_key:    str = field(default="", repr=False)
+    api_key:        str = field(default="", repr=False)
+    api_secret:     str = field(default="", repr=False)
+    api_passphrase: str = field(default="", repr=False)
 
     # DB options
     db_mmap_mb: int = 0
@@ -626,19 +657,6 @@ def make_config(simulate: bool = False, no_log: bool = False,
     return config
 
 
-def _load_connector(name: str) -> None:
-    """
-    Replace the module-level `api` global with the requested exchange connector.
-    No-op when name == "polymarket" (default import already in place).
-    """
-    global api  # pylint: disable=global-statement
-    if name == "polymarket":
-        return
-    from connectors import load as _load
-    api = _load(name)
-    logger.info("Connector loaded: %s (%s)", name, api.__name__)
-
-
 def _setup_logging(config: "BotConfig") -> Optional[logging.handlers.QueueListener]:
     """
     Configure the root logger according to config and return the QueueListener
@@ -717,7 +735,7 @@ CREATE TABLE IF NOT EXISTS snapshots (
     direction TEXT, secs_remaining REAL,
     best_bid REAL, best_ask REAL, spread REAL,
     ask_vol REAL, obi REAL, has_open_trade INTEGER DEFAULT 0);
-CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
+-- schema_version + bot_meta live in botcore.schema (the neutral base, applied first).
 CREATE INDEX IF NOT EXISTS idx_trades_market ON trades(market_id);
 CREATE INDEX IF NOT EXISTS idx_trades_resolved ON trades(resolved);
 """
@@ -756,10 +774,10 @@ CREATE TABLE IF NOT EXISTS grid_levels (
     # v3: entry price of the BUY a SELL is closing, so a completed BUY→SELL cycle
     # can book its PnL. Without it, GridStrategy never counted a cycle (PnL stuck $0).
     3: "ALTER TABLE grid_levels ADD COLUMN entry_price REAL;\n",
-    # v4: persist the effective capital base (capital_start) so equity resumes across
-    # restarts instead of reverting to the config default. Equity = base + cumulative.
-    4: "CREATE TABLE IF NOT EXISTS bot_meta (key TEXT PRIMARY KEY, value REAL NOT NULL, "
-       "updated_at REAL NOT NULL);\n",
+    # v4: bot_meta (effective capital base, so equity resumes across restarts). The table
+    # now lives in botcore.schema (applied before migrations); v4 stays as a no-op so the
+    # version sequence and existing DBs' recorded version are unchanged (Plan D step 5).
+    4: "",
 }
 
 
@@ -786,12 +804,15 @@ def init_db(config: "BotConfig") -> sqlite3.Connection:
     # check_same_thread=False is safe here because asyncio is single-threaded;
     # the connection is only ever accessed from the event loop.
     conn = sqlite3.connect(config.db_path, check_same_thread=False)
+    apply_base_schema(conn)   # neutral core tables first, so schema_version exists
     conn.executescript(SCHEMA)
     _apply_migrations(conn)
     if config.db_mmap_mb > 0:
         # Memory-map the DB file so SQLite accesses it via RAM pages managed
         # by the kernel rather than read() syscalls.
-        conn.execute("PRAGMA mmap_size = ?", (config.db_mmap_mb * 1024 * 1024,))
+        # PRAGMA does not accept a bound parameter (sqlite raises "near ?: syntax
+        # error"); db_mmap_mb is an int, so interpolate it directly.
+        conn.execute(f"PRAGMA mmap_size = {int(config.db_mmap_mb) * 1024 * 1024}")
         logger.info("DB mmap enabled: %d MB", config.db_mmap_mb)
     conn.commit()
     logger.info("DB initialized: %s", config.db_path)
@@ -800,78 +821,7 @@ def init_db(config: "BotConfig") -> sqlite3.Connection:
 
 # ─── STATE CLASSES ────────────────────────────────────────────────────────────
 
-class TokenState:
-    """
-    Per-token market data updated in real time from the WebSocket feed.
-    Uses __slots__ to minimize memory overhead when tracking many tokens.
-    """
-    __slots__ = ("token_id", "market_id", "direction", "question",
-                 "market_end_ms", "market_start_ms",
-                 "best_bid", "best_ask", "spread",
-                 "bid_vol", "ask_vol", "obi",
-                 "last_update_ts", "last_snapshot_ts",
-                 "bid_history", "obi_history")
-
-    def __init__(self, token_id: str, market_id: str, direction: str, question: str,
-                 market_start_ms: int, market_end_ms: int,
-                 vol_window: int = VOL_WINDOW) -> None:
-        self.token_id = token_id
-        self.market_id = market_id
-        self.direction = direction
-        self.question = question
-        self.market_start_ms = market_start_ms
-        self.market_end_ms = market_end_ms
-        # Start bid/ask at 0.5 (fair coin flip) until the first WebSocket update
-        # arrives. This prevents spurious signals from uninitialized state.
-        self.best_bid = 0.5; self.best_ask = 0.5; self.spread = 0.0
-        # ask_vol=0.0 before the first snapshot — the signal guard checks this
-        # explicitly to avoid entering trades with no visible ask-side liquidity.
-        self.bid_vol = 0.0; self.ask_vol = 0.0; self.obi = 0.0
-        self.last_update_ts = 0.0; self.last_snapshot_ts = 0.0
-        # Rolling windows sampled every SNAPSHOT_INTERVAL seconds.
-        # Used by the volatility filter in check_signal to detect choppy markets.
-        self.bid_history: deque[float] = deque(maxlen=vol_window)
-        self.obi_history: deque[float] = deque(maxlen=vol_window)
-
-    @property
-    def secs_remaining(self) -> float:
-        """Seconds until the market's scheduled end time (0 if already past)."""
-        if not self.market_end_ms: return 9999.0
-        return max(0.0, (self.market_end_ms - time.time() * 1000) / 1000.0)
-
-    @property
-    def seconds_elapsed(self) -> float:
-        """Seconds since the market's scheduled start time."""
-        if not self.market_start_ms: return 0.0
-        return max(0.0, (time.time() * 1000 - self.market_start_ms) / 1000.0)
-
-    @property
-    def market_ended(self) -> bool:
-        """
-        True if the market is past its end time plus a 5-second grace period.
-        The grace period prevents treating a market as ended due to clock skew.
-        """
-        return self.market_end_ms > 0 and time.time() * 1000 > self.market_end_ms + 5000
-
-
-@dataclass
-class RejectionStats:
-    """Counts of check_signal() early-exits per reason, logged every 60 s."""
-    signalled:     int = 0
-    market_ended:  int = 0
-    trading_hour:  int = 0
-    best_bid:      int = 0
-    entry_max:     int = 0
-    best_ask:      int = 0
-    ask_vol:       int = 0
-    secs_remaining: int = 0
-    obi:           int = 0
-    vol_filter:    int = 0
-    capital:       int = 0
-    daily_stop:    int = 0
-    weekly_stop:   int = 0
-    api_cooldown:  int = 0
-
+# TokenState + RejectionStats live in pm_types (re-exported at the top of this module).
 
 class BotState:
     """
@@ -879,8 +829,14 @@ class BotState:
     A single instance lives for the entire process lifetime.
     """
     def __init__(self, conn: sqlite3.Connection,
-                 config: Optional["BotConfig"] = None) -> None:
+                 config: Optional["BotConfig"] = None,
+                 strategy: Any = None,
+                 connector: Any = None) -> None:
         self.conn = conn
+        # Exchange connector (api_* module) — INJECTED by the entrypoint (Plan D step 4b),
+        # not a module global: the data/order functions reach it via state.connector, so
+        # the trading code carries no hard reference to any one exchange module.
+        self.connector: Any = connector
         self.config: BotConfig = config if config is not None else BotConfig()
         self.capital = self.config.capital_start
         self.session: Optional[aiohttp.ClientSession] = None
@@ -905,12 +861,19 @@ class BotState:
         # Batched snapshot commits — flushed every SNAPSHOT_COMMIT_SECS seconds.
         self.last_snapshot_commit_ts: float = 0.0
         self.last_book_ts: float = 0.0       # epoch time of last processed book update
+        self.last_write_ts: float = 0.0      # epoch time of last PERSISTED data row
+                                             # (snapshot). Distinct from last_book_ts
+                                             # (received): catches "heartbeating but
+                                             # recording stopped" via the status page.
         # Circuit-breaker: suspend new entries after 3 consecutive CLOB failures.
         self.api_fail_streak: int = 0
         self.api_cooldown_until: float = 0.0
-        # Active strategy instance (None = built-in threshold strategy).
-        # Set in main() after make_config() when strategy_type != "threshold".
-        self.strategy: Any = None
+        # Active strategy instance — INJECTED by the entrypoint (Plan D step 3b), not
+        # named here: BotState carries no dependency on any concrete strategy/plugin. The
+        # Polymarket entrypoint (main / account_bot) passes ThresholdStrategy(); main()
+        # then overrides it with a GridStrategy/SwingStrategy when strategy_type !=
+        # "threshold". None until injected — the book-update dispatch requires it set.
+        self.strategy: Any = strategy
         # Rejection counters — reset and logged every 60 s.
         self.rejection_stats = RejectionStats()
         self._last_stats_log: float = time.time()
@@ -922,690 +885,15 @@ class BotState:
         return (self.wins / t * 100) if t else 0.0
 
 
-def cumulative_pnl(state: "BotState") -> tuple[float, int]:
-    """Realized cumulative PnL and completed-trade count for the active strategy.
-
-    Sourced from the persisted, restart-restored state (grid_state for grid,
-    swing_state for swing, the threshold trades table otherwise), so the cumulative
-    survives restarts — only the operator reset command zeroes it. Exported on the
-    heartbeat so the status page shows the real cumulative, not just the daily PnL.
-    """
-    strat = getattr(state, "strategy", None)
-    grid = getattr(strat, "grid", None)
-    if grid is not None:
-        return float(grid.total_profit_usd), int(grid.total_cycles)
-    sw = getattr(strat, "sw", None)
-    if sw is not None:
-        return float(sw.total_pnl), int(sw.total_trades)
-    return float(state.total_pnl), int(state.total_trades)
-
-
-def equity(state: "BotState") -> float:
-    """Current equity = persisted capital base + realized cumulative PnL.
-
-    Reported uniformly on the heartbeat. For the threshold strategy this equals the
-    live state.capital; for grid/swing it folds in their strategy-table cumulative
-    (which state.capital does not track), so the figure resumes across restarts.
-    """
-    return state.config.capital_start + cumulative_pnl(state)[0]
-
-
-def read_capital_base(conn: sqlite3.Connection) -> "float | None":
-    """Persisted effective capital base, or None if never written (fresh DB)."""
-    try:
-        row = conn.execute(
-            "SELECT value FROM bot_meta WHERE key='capital_base'").fetchone()
-    except sqlite3.OperationalError:
-        return None
-    return float(row[0]) if row else None
-
-
-def write_capital_base(conn: sqlite3.Connection, value: float) -> None:
-    """Persist the effective capital base so it survives restarts (until the next
-    reset overrides it)."""
-    conn.execute(
-        "INSERT INTO bot_meta(key, value, updated_at) VALUES('capital_base', ?, ?) "
-        "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-        (float(value), time.time()),
-    )
-    conn.commit()
+# cumulative_pnl / equity live in botcore.persistence (re-exported at the top of this module).
 
 
 # ─── WEBSOCKET MESSAGE HANDLING ───────────────────────────────────────────────
 
-async def handle_book_update(state: BotState, parsed: dict[str, Any]) -> None:
-    """Apply a parsed book update to the token's state, then check for signals."""
-    # Capture the monotonic clock as early as possible — before even the token
-    # lookup — so t_ws represents the true start of processing this WS message.
-    t_ws = time.monotonic()
-    ts = state.tokens.get(parsed["token_id"])
-    if not ts: return
-    ts.best_bid  = parsed["best_bid"]
-    ts.best_ask  = parsed["best_ask"]
-    ts.spread    = parsed["spread"]
-    ts.bid_vol   = parsed["bid_vol"]
-    ts.ask_vol   = parsed["ask_vol"]
-    ts.obi       = parsed["obi"]
-    ts.last_update_ts = time.time()
-    state.last_book_ts = ts.last_update_ts
-    # Dispatch to the active strategy.
-    # state.strategy is None for the built-in threshold strategy (default),
-    # or a GridStrategy/SwingStrategy instance for "grid"/"swing".
-    if state.strategy is not None:
-        await state.strategy.on_book_update(state, ts, _t_ws=t_ws)
-    else:
-        # Default: Polymarket threshold strategy (check_signal / check_resolution).
-        await check_signal(state, ts, _t_ws=t_ws)
-        check_resolution(state, ts)
-    now = time.time()
-    if now - ts.last_snapshot_ts >= state.config.snapshot_interval:
-        ts.bid_history.append(ts.best_bid)
-        ts.obi_history.append(ts.obi)
-        if state.config.enable_snapshots:
-            save_snapshot(state, ts)
-            if now - state.last_snapshot_commit_ts >= SNAPSHOT_COMMIT_SECS:
-                state.conn.commit()
-                state.last_snapshot_commit_ts = now
-        ts.last_snapshot_ts = now
+# handle_book_update / save_snapshot / purge_expired_markets / register_market /
+# ws_loop / _market_refresh_loop / _run_ws live in pm_data (the entrypoint re-exports the
+# first two; _run_ws is internal to pm_data).
 
-
-# ─── STAKE SCALING ────────────────────────────────────────────────────────────
-
-def compute_stake(cfg: "BotConfig", bid: float, secs: float,
-                  capital: float = 0.0, win_rate: float = 0.5,
-                  n_trades: int = 0, ask: float = 0.0) -> float:
-    """
-    Compute the effective stake for one trade.
-
-    Priority order (first matching path wins):
-
-    Kelly path (kelly_fraction > 0, n_trades ≥ kelly_min_trades):
-      b_net   = (1/ask − 1) − FEE_RATE × min(ask, 1−ask) / ask
-      f*      = (p × b_net − q) / b_net
-      stake   = kelly_fraction × f* × capital, capped at stake_max.
-      Returns 0.0 when f* ≤ 0 (no mathematical edge).
-
-    Step path (stake_step_enabled=True):
-      Zones: <45s → s0, 45-60s → s1, 60-90s → s2, ≥90s → s3.
-      Returns the zone stake directly (no additional cap applied).
-
-    Bid×secs path (bid_alpha or secs_alpha > 0):
-      bid_score   = (bid − threshold) / (1 − threshold)
-      bid_boost   = 1 + stake_bid_alpha × bid_score
-      secs_factor = max(floor, 1 − secs_alpha × excess)
-      stake       = clip(base × bid_boost × secs_factor, floor, eff_max)
-
-    Flat path (all above disabled): returns cfg.stake.
-    """
-    if cfg.kelly_fraction > 0 and n_trades >= cfg.kelly_min_trades and capital > 0 and ask > 0:
-        b_net = (1.0 / ask - 1.0) - api.FEE_RATE * min(ask, 1.0 - ask) / ask
-        p = win_rate
-        q = 1.0 - p
-        f_star = (p * b_net - q) / b_net if b_net > 0 else 0.0
-        if f_star <= 0:
-            return 0.0
-        kelly_stake = cfg.kelly_fraction * f_star * capital
-        eff_max = (min(cfg.stake_max, cfg.stake_max_pct_capital * capital)
-                   if cfg.stake_max_pct_capital > 0 else cfg.stake_max)
-        return min(kelly_stake, eff_max)
-
-    if cfg.stake_step_enabled:
-        secs_b = cfg.stake_step_s3
-        if secs < _STAKE_STEP_BREAKS[0]:
-            secs_b = cfg.stake_step_s0
-        elif secs < _STAKE_STEP_BREAKS[1]:
-            secs_b = cfg.stake_step_s1
-        elif secs < _STAKE_STEP_BREAKS[2]:
-            secs_b = cfg.stake_step_s2
-        return secs_b
-
-    if cfg.stake_bid_alpha == 0.0 and cfg.stake_secs_alpha == 0.0:
-        if cfg.stake_max_pct_capital > 0 and capital > 0:
-            return min(cfg.stake, cfg.stake_max_pct_capital * capital)
-        return cfg.stake
-
-    bid_range  = 1.0 - cfg.signal_threshold
-    bid_score  = (bid - cfg.signal_threshold) / bid_range if bid_range > 0 else 0.0
-    bid_boost  = 1.0 + cfg.stake_bid_alpha * bid_score
-
-    if secs <= cfg.stake_secs_ref:
-        secs_factor = 1.0
-    else:
-        excess      = (secs - cfg.stake_secs_ref) / cfg.stake_secs_ref
-        secs_factor = max(_STAKE_SECS_MIN_FACTOR, 1.0 - cfg.stake_secs_alpha * excess)
-
-    eff_max = (min(cfg.stake_max, cfg.stake_max_pct_capital * capital)
-               if cfg.stake_max_pct_capital > 0 and capital > 0
-               else cfg.stake_max)
-    floor = cfg.stake * _STAKE_SECS_MIN_FACTOR
-    return min(eff_max, max(floor, cfg.stake * bid_boost * secs_factor))
-
-
-# ─── SIGNAL & TRADE LOGIC ─────────────────────────────────────────────────────
-
-@functools.lru_cache(maxsize=4)
-def _us_holidays(year: int) -> frozenset:
-    """Return the frozenset of US federal holiday *observed* dates for `year`.
-
-    Covers the 10 NYSE-recognised holidays.  Saturday holidays shift to Friday;
-    Sunday holidays shift to Monday.  Results are cached per year (lru_cache).
-    """
-    def _observed(d: date) -> date:
-        if d.weekday() == 5: return d - timedelta(days=1)   # Sat → Fri
-        if d.weekday() == 6: return d + timedelta(days=1)   # Sun → Mon
-        return d
-
-    def _nth_weekday(y: int, m: int, wd: int, n: int) -> date:
-        first = date(y, m, 1)
-        delta = (wd - first.weekday()) % 7
-        return first.replace(day=1 + delta + (n - 1) * 7)
-
-    def _last_monday(y: int, m: int) -> date:
-        for day in range(31, 21, -1):
-            try:
-                d = date(y, m, day)
-                if d.weekday() == 0:
-                    return d
-            except ValueError:
-                continue
-        raise ValueError  # pragma: no cover
-
-    def _easter(y: int) -> date:
-        a, b, c = y % 19, y // 100, y % 100
-        d, e, f = b // 4, b % 4, (b + 8) // 25
-        g = (b - f + 1) // 3
-        h = (19 * a + b - d - g + 15) % 30
-        i, k = c // 4, c % 4
-        ll = (32 + 2 * e + 2 * i - h - k) % 7
-        m = (a + 11 * h + 22 * ll) // 451
-        mo = (h + ll - 7 * m + 114) // 31
-        dy = (h + ll - 7 * m + 114) % 31 + 1
-        return date(y, mo, dy)
-
-    mon, thu = 0, 3
-    return frozenset([
-        _observed(date(year, 1,  1)),               # New Year's Day
-        _nth_weekday(year, 1, mon, 3),              # MLK Day (3rd Mon Jan)
-        _nth_weekday(year, 2, mon, 3),              # Presidents' Day (3rd Mon Feb)
-        _easter(year) - timedelta(days=2),          # Good Friday
-        _last_monday(year, 5),                      # Memorial Day (last Mon May)
-        _observed(date(year, 6, 19)),               # Juneteenth
-        _observed(date(year, 7,  4)),               # Independence Day
-        _nth_weekday(year, 9, mon, 1),              # Labor Day (1st Mon Sep)
-        _nth_weekday(year, 11, thu, 4),             # Thanksgiving (4th Thu Nov)
-        _observed(date(year, 12, 25)),              # Christmas Day
-    ])
-
-
-def _is_us_holiday(dt: datetime) -> bool:
-    """Return True if `dt` (UTC) falls on a US federal holiday (observed date)."""
-    return dt.date() in _us_holidays(dt.year)
-
-
-def _in_weekend_session(ts_ms: Optional[int] = None) -> bool:
-    """Return True if timestamp falls in the weekend session (Fri 20:00 → Mon 13:30 UTC)."""
-    dt     = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc) if ts_ms is not None \
-             else datetime.now(timezone.utc)
-    dow    = dt.weekday()
-    hour   = dt.hour
-    minute = dt.minute
-    if dow in (5, 6):                                  # Sat / Sun: always weekend
-        return True
-    if dow == 4 and hour >= 20:                       # Fri from US weekly close
-        return True
-    if dow == 0 and (hour < 13 or (hour == 13 and minute < 30)):  # Mon before US open
-        return True
-    return False
-
-
-def is_trading_hour(config: "BotConfig", ts_ms: Optional[int] = None) -> bool:
-    """Return True if the timestamp (or now) falls in the configured trading window."""
-    dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc) if ts_ms is not None \
-         else datetime.now(timezone.utc)
-    if config.us_holiday_filter and _is_us_holiday(dt):
-        return False
-    if not config.hour_filter_enabled:
-        return True
-    dow    = dt.weekday()
-    hour   = dt.hour
-    minute = dt.minute
-
-    if dow >= 5:
-        if not config.weekend_utc_ranges:
-            return False
-        return any(s <= hour < e for s, e in config.weekend_utc_ranges)
-
-    if dow == 0 and config.us_weekly_open:
-        if hour < 13 or (hour == 13 and minute < 30):
-            return False
-    if dow == 4 and config.us_weekly_close:
-        if hour >= 20:
-            return False
-
-    if not config.weekday_utc_ranges:
-        return True
-    return any(s <= hour < e for s, e in config.weekday_utc_ranges)
-
-
-async def check_signal(state: BotState, ts: TokenState, _t_ws: Optional[float] = None) -> None:
-    """
-    Evaluate entry conditions (cheapest first) and enter a trade if all pass.
-
-    Guards: signalled, market_ended, is_trading_hour, best_bid threshold,
-    best_bid/ask caps, ask_vol, secs_remaining, obi, vol_filter, capital,
-    daily_stop_loss.  _t_ws is passed through to enter_live_trade for latency
-    tracking (None = no tracking).
-    """
-    cfg = state.config
-
-    # Midnight UTC reset — deferred while trades are open so that a trade
-    # entered just before midnight counts against the correct day's stop-loss.
-    today_day = int(time.time() // 86400)
-    if state._daily_pnl_day != today_day and not state.open_trades:
-        state.daily_pnl = 0.0
-        state._daily_pnl_day = today_day
-
-    # Weekly reset — Monday UTC boundary; deferred while trades are open.
-    _dt = datetime.now(timezone.utc)
-    today_week = (_dt - timedelta(days=_dt.weekday())).toordinal()
-    if state._weekly_pnl_week != today_week and not state.open_trades:
-        state.weekly_pnl = 0.0
-        state._weekly_pnl_week = today_week
-
-    # Periodic rejection stats — every 60 s.
-    _now_t = time.time()
-    if _now_t - state._last_stats_log >= 60:
-        r = state.rejection_stats
-        logger.info(
-            "[REJECTIONS] signalled=%d ended=%d hour=%d bid=%d emax=%d"
-            " ask=%d askvol=%d secs=%d obi=%d vol=%d capital=%d dstop=%d wstop=%d cooldown=%d",
-            r.signalled, r.market_ended, r.trading_hour, r.best_bid, r.entry_max,
-            r.best_ask, r.ask_vol, r.secs_remaining, r.obi, r.vol_filter,
-            r.capital, r.daily_stop, r.weekly_stop, r.api_cooldown,
-        )
-        state.rejection_stats = RejectionStats()
-        state._last_stats_log = _now_t
-
-    if ts.market_id in state.signalled: state.rejection_stats.signalled += 1; return
-    if ts.market_ended: state.rejection_stats.market_ended += 1; return
-    if not is_trading_hour(cfg): state.rejection_stats.trading_hour += 1; return
-    if ts.best_bid < cfg.signal_threshold: state.rejection_stats.best_bid += 1; return
-    if ts.best_bid > cfg.entry_max: state.rejection_stats.entry_max += 1; return
-    if ts.best_ask >= 1.0: state.rejection_stats.best_ask += 1; return   # expired markets
-    if ts.best_ask > cfg.entry_max: state.rejection_stats.entry_max += 1; return
-    if ts.ask_vol < cfg.min_ask_vol: state.rejection_stats.ask_vol += 1; return
-    if ts.secs_remaining < cfg.min_secs_remaining: state.rejection_stats.secs_remaining += 1; return
-    if ts.obi < cfg.obi_reject_thresh: state.rejection_stats.obi += 1; return
-    if cfg.vol_filter_enabled \
-            and not (cfg.vol_filter_weekday_only and _in_weekend_session()) \
-            and len(ts.bid_history) >= cfg.vol_min_samples:
-        bids = list(ts.bid_history)
-        obis = list(ts.obi_history)
-        mean_b    = sum(bids) / len(bids)
-        vol_bid   = math.sqrt(sum((b - mean_b) ** 2 for b in bids) / len(bids))
-        range_bid = max(bids) - min(bids)
-        mean_o    = sum(obis) / len(obis)
-        obi_vol   = math.sqrt(sum((o - mean_o) ** 2 for o in obis) / len(obis))
-        if vol_bid > cfg.vol_bid_max or range_bid > cfg.range_bid_max or obi_vol > cfg.obi_vol_max:
-            logger.debug("[VOL_FILTER] bid_vol=%.3f range=%.3f obi_vol=%.3f — skip %s",
-                         vol_bid, range_bid, obi_vol, ts.market_id[:12])
-            state.rejection_stats.vol_filter += 1
-            return
-    _eff_stake = (min(cfg.stake_max, cfg.stake_max_pct_capital * state.capital)
-                  if cfg.stake_max_pct_capital > 0 else cfg.stake_max)
-    if state.capital - len(state.open_trades) * _eff_stake < _eff_stake:
-        state.rejection_stats.capital += 1; return
-    if state.daily_pnl < -cfg.daily_stop_loss: state.rejection_stats.daily_stop += 1; return
-    if cfg.weekly_stop_loss > 0 and state.weekly_pnl < -cfg.weekly_stop_loss:
-        state.rejection_stats.weekly_stop += 1; return
-    if time.time() < state.api_cooldown_until: state.rejection_stats.api_cooldown += 1; return
-
-    state.signalled.add(ts.market_id)
-    await enter_live_trade(state, ts, _t_ws=_t_ws)
-
-async def enter_live_trade(state: BotState, ts: TokenState, _t_ws: Optional[float] = None) -> None:
-    """
-    Submit the CLOB order, record the trade in the DB, and update bot state.
-    In live mode (session + private_key), returns early without inserting if
-    post_order returns None, preventing ghost rows with order_id=NULL.
-    In simulation mode (no private_key), the insert always runs with oid=None.
-
-    _t_ws: monotonic timestamp from handle_book_update. When provided, latency
-    metrics are computed and emitted as a [LATENCY] log line parseable by
-    scripts/latency.py.
-    """
-    cfg = state.config
-    now_ms = int(time.time() * 1000)
-    ep    = ts.best_ask                                                          # entry price
-    n_trades = state.wins + state.losses
-    stake = compute_stake(
-        cfg, ts.best_bid, ts.secs_remaining, state.capital,
-        win_rate=state.win_rate / 100.0, n_trades=n_trades, ask=ep,
-    )
-    if stake <= 0:
-        logger.info("[KELLY] f*≤0 — no edge at ask=%.4f wr=%.1f%% — skipping %s",
-                    ep, state.win_rate, ts.market_id[:12])
-        return
-    # Hard capital guard vs actual computed stake — check_signal uses cfg.stake
-    # as a proxy, which may underestimate when stake_step or Kelly yields a
-    # higher-than-base stake, causing capital to go negative on close.
-    _committed = len(state.open_trades) * cfg.stake
-    if stake > state.capital - _committed:
-        logger.warning(
-            "[CAPITAL] computed stake=$%.2f > available=$%.2f — skipping %s",
-            stake, state.capital - _committed, ts.market_id[:12],
-        )
-        return
-    tb    = stake / ep if ep > 0 else 0                         # tokens bought
-    fee   = api.compute_fee(ep, tb)
-    cost  = stake + fee
-    oid   = None
-
-    # Latency measurement — point A: everything from WS message receipt up to
-    # this point (token update, all signal guards, daily PnL query, fee calc).
-    t_signal_ms = (time.monotonic() - _t_ws) * 1000 if _t_ws is not None else None
-
-    # Latency measurement — point B: bracket only the CLOB API HTTP call so we
-    # can isolate network RTT from in-process signal latency.
-    t_pre_order = time.monotonic()
-    if state.session:
-        oid = await api.post_order(
-            state.session, ts.token_id, ep, stake,
-            private_key=cfg.private_key, install_dir=cfg.install_dir,
-        )
-    order_rtt_ms = (time.monotonic() - t_pre_order) * 1000
-    if state.session and cfg.private_key:
-        if oid is None:
-            state.api_fail_streak += 1
-            if state.api_fail_streak >= cfg.api_fail_threshold:
-                state.api_cooldown_until = time.time() + cfg.api_cooldown_secs
-                logger.warning(
-                    "[CIRCUIT_BREAKER] %d consecutive CLOB failures — entries suspended 5 min",
-                    state.api_fail_streak,
-                )
-            logger.warning("[GHOST_GUARD] post_order returned None — aborting entry")
-            return
-        state.api_fail_streak = 0
-    cur = state.conn.execute(
-        "INSERT INTO trades ("
-        "market_id, token_id, direction, question, "
-        "signal_ts_ms, signal_seconds_elapsed, signal_secs_remaining, "
-        "signal_best_bid, signal_best_ask, signal_spread, signal_ask_vol, signal_obi, "
-        "entry_ts_ms, entry_price, clob_order_id, stake, tokens_bought, fee, cost_total, "
-        "capital_before, resolved) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (ts.market_id, ts.token_id, ts.direction, ts.question,
-         now_ms, ts.seconds_elapsed, ts.secs_remaining,
-         ts.best_bid, ts.best_ask, ts.spread, ts.ask_vol, ts.obi,
-         now_ms, ep, oid, stake, tb, fee, cost, state.capital, 0)
-    )
-    state.conn.commit()
-    tid = cur.lastrowid or 0
-    state.open_trades[ts.market_id] = tid
-    state.traded_direction[ts.market_id] = ts.direction
-    state.total_trades += 1
-    logger.info(
-        "▶ TRADE #%d | %s %s | entry=%.4f  bid=%.4f  secs=%.0fs  obi=%.3f  ask_vol=%.0f  stake=$%.2f | order=%s",
-        tid, ts.direction, ts.market_id[:12], ep, ts.best_bid, ts.secs_remaining,
-        ts.obi, ts.ask_vol, stake, oid or "sim"
-    )
-    if t_signal_ms is not None:
-        # total_ms = signal latency + order RTT; these two intervals are
-        # contiguous so their sum equals true end-to-end time from WS to order.
-        total_ms = t_signal_ms + order_rtt_ms
-        logger.info(
-            "[LATENCY] signal_ms=%.2f order_rtt_ms=%.2f total_ms=%.2f"
-            " ts_ms=%d direction=%s market=%s",
-            t_signal_ms, order_rtt_ms, total_ms, now_ms, ts.direction, ts.market_id[:12],
-        )
-
-def check_resolution(state: BotState, ts: TokenState) -> None:
-    """
-    Check if an open trade on this token has reached a WIN or LOSS threshold.
-    We only resolve a trade for the direction we actually entered — if we
-    bought UP and are now tracking DOWN for the same market, we skip it.
-    """
-    if ts.market_id not in state.open_trades: return
-    if ts.direction != state.traded_direction[ts.market_id]: return
-    cfg = state.config
-    outcome = None
-    if ts.best_bid >= cfg.win_threshold: outcome = "WIN"
-    elif ts.best_bid <= cfg.loss_threshold: outcome = "LOSS"
-    elif ts.market_ended and ts.best_bid >= 0.50: outcome = "WIN"
-    elif ts.market_ended: outcome = "LOSS"
-    if outcome:
-        close_trade(state, ts, state.open_trades[ts.market_id], outcome)
-
-def close_trade(state: BotState, ts: TokenState, trade_id: int, outcome: str) -> None:
-    """
-    Mark a trade as resolved in the DB and update capital.
-
-    PnL calculation:
-      gross = tokens_bought - (stake + fee)  (WIN)  or  -(stake + fee)  (LOSS)
-      net   = gross - estimated gas cost
-    """
-    now_ms = int(time.time() * 1000)
-    row = state.conn.execute(
-        "SELECT stake, tokens_bought, fee, signal_ts_ms FROM trades WHERE id=?", (trade_id,)
-    ).fetchone()
-    if not row: return
-    stake, tb, fee, signal_ts_ms = row
-    duration_s = int((now_ms - signal_ts_ms) / 1000) if signal_ts_ms else 0
-    won = (outcome == "WIN")
-    pg = (tb - stake - fee) if won else (-stake - fee)
-    pn = pg - state.config.gas_fee_usd
-    roi = (pn / stake * 100) if stake else 0.0
-    ca = state.capital + pn
-    state.conn.execute(
-        "UPDATE trades SET resolved=1, resolution_ts_ms=?, resolution_bid=?, "
-        "outcome=?, pnl_gross=?, pnl_net=?, pnl_roi_pct=?, capital_after=? WHERE id=?",
-        (now_ms, ts.best_bid, outcome, pg, pn, roi, ca, trade_id)
-    )
-    state.conn.commit()
-    state.capital = ca
-    state.total_pnl  += pn
-    state.daily_pnl  += pn
-    state.weekly_pnl += pn
-    if won: state.wins += 1
-    else: state.losses += 1
-    del state.open_trades[ts.market_id]
-    del state.traded_direction[ts.market_id]
-    _icon    = "✓" if won else "✗"
-    _outcome = "WIN " if won else "LOSS"
-    logger.info(
-        "%s %s #%d | %s %s | pnl=$%+.2f (%.1f%%) | WR=%.1f%% | capital=$%.2f | duration=%ds",
-        _icon, _outcome, trade_id, ts.direction, ts.market_id[:12],
-        pn, roi, state.win_rate, state.capital, duration_s
-    )
-    write_web_status(state, state.config)
-
-def save_snapshot(state: BotState, ts: TokenState) -> None:
-    """Insert a snapshot row without committing — caller batches commits via handle_book_update."""
-    state.conn.execute(
-        "INSERT INTO snapshots (ts_ms, market_id, token_id, direction, "
-        "secs_remaining, best_bid, best_ask, spread, ask_vol, obi, has_open_trade) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        (int(time.time() * 1000), ts.market_id, ts.token_id, ts.direction,
-         ts.secs_remaining, ts.best_bid, ts.best_ask, ts.spread, ts.ask_vol, ts.obi,
-         1 if ts.market_id in state.open_trades else 0)
-    )
-
-# ─── MARKET DISCOVERY ─────────────────────────────────────────────────────────
-
-def purge_expired_markets(state: BotState) -> int:
-    """
-    Remove tokens whose market has ended (plus grace period) and has no open
-    trade, cleaning up tokens, market_tokens, and signalled in one pass.
-    Returns the number of tokens removed.
-    """
-    expired = [tid for tid, ts in list(state.tokens.items())
-               if ts.market_ended and ts.market_id not in state.open_trades]
-    for tid in expired:
-        ts = state.tokens.pop(tid, None)
-        if ts:
-            state.market_tokens.pop(ts.market_id, None)
-            state.signalled.discard(ts.market_id)
-    return len(expired)
-
-
-def register_market(state: BotState, market: dict[str, Any]) -> list[str]:
-    """
-    Add a market's UP and DOWN tokens to the state if not already tracked.
-    Skips markets that have already ended. Returns a list of newly added token IDs
-    so the caller can subscribe them to the WebSocket.
-    """
-    mid = api.get_market_id(market)
-    if not mid: return []
-    up = api.get_up_token_id(market)
-    dn = api.get_down_token_id(market)
-    if not up or not dn: return []
-    sm = api.get_market_start_ts_ms(market)
-    em = api.get_market_end_ts_ms(market)
-    if em and time.time() * 1000 > em: return []
-    q = api.get_market_question(market)[:80]
-    new = []
-    for tid, d in ((up, "UP"), (dn, "DOWN")):
-        if tid not in state.tokens:
-            state.tokens[tid] = TokenState(tid, mid, d, q, sm, em,
-                                              vol_window=state.config.vol_window)
-            new.append(tid)
-    state.market_tokens[mid] = {"UP": up, "DOWN": dn}
-    return new
-
-
-# ─── WEBSOCKET LIFECYCLE ──────────────────────────────────────────────────────
-
-async def ws_loop(state: BotState, session: aiohttp.ClientSession) -> None:
-    """
-    Outer reconnection loop with exponential backoff.
-    Doubles the wait time on each failure, capped at 60 seconds, to avoid
-    hammering the WebSocket endpoint after network disruptions.
-    """
-    backoff = 1
-    while True:
-        try:
-            await _run_ws(state, session)
-            backoff = 1
-        except Exception as e:
-            logger.warning("WS error — reconnecting in %ds: %s", backoff, e, exc_info=True)
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, 60)
-
-async def _market_refresh_loop(state: BotState, session: aiohttp.ClientSession, ws: Any) -> None:
-    """
-    Background task: polls the exchange API every market_refresh seconds and
-    subscribes newly discovered tokens while the main recv loop continues
-    processing messages uninterrupted.
-    """
-    while True:
-        await asyncio.sleep(state.config.market_refresh)
-        try:
-            nm = await api.get_markets(
-                session,
-                tag_id=state.config.market_tag_id,
-                window_minutes=state.config.market_window_mins,
-            )
-            ni = []
-            for m in nm:
-                ni.extend(register_market(state, m))
-            if ni:
-                for i in range(0, len(ni), api.WS_BATCH_SIZE):
-                    await ws.send(api.make_subscribe_msg(ni[i:i + api.WS_BATCH_SIZE]))
-                logger.info("New tokens: %d", len(ni))
-
-            n = purge_expired_markets(state)
-            if n:
-                logger.info("Expired tokens purged: %d", n)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.warning("Market refresh error: %s", e, exc_info=True)
-
-
-async def _run_ws(state: BotState, session: aiohttp.ClientSession) -> None:
-    """
-    One WebSocket session: fetch markets, subscribe to their tokens, then
-    process messages until the connection drops.
-
-    Market discovery runs in _market_refresh_loop (background task) so the
-    recv loop is never blocked during the exchange API HTTP poll.
-
-    The recv() timeout is 30s with continue rather than break: ping_interval=20
-    / ping_timeout=10 already detects dead connections via WebSocket ping/pong,
-    so a recv timeout just means no market messages arrived — normal between
-    5-minute candles. We only reconnect if all tracked markets have expired.
-    """
-    markets = await api.get_markets(
-        session,
-        tag_id=state.config.market_tag_id,
-        window_minutes=state.config.market_window_mins,
-    )
-    if not markets:
-        logger.warning("No markets — waiting 30s")
-        await asyncio.sleep(30)
-        return
-
-    new_ids = []
-    for m in markets:
-        new_ids.extend(register_market(state, m))
-
-    # Include all non-expired tokens already in state, not just newly discovered.
-    all_token_ids = list(new_ids)
-    for tid, ts in state.tokens.items():
-        if not ts.market_ended and tid not in all_token_ids:
-            all_token_ids.append(tid)
-
-    if not all_token_ids:
-        logger.warning("No active tokens — waiting 30s")
-        await asyncio.sleep(30)
-        return
-
-    state.session = session
-    logger.info("Subscribing to %d tokens...", len(all_token_ids))
-
-    async with websockets.connect(api.WS_URL, ping_interval=20, ping_timeout=10) as ws:
-        for i in range(0, len(all_token_ids), api.WS_BATCH_SIZE):
-            await ws.send(api.make_subscribe_msg(all_token_ids[i:i + api.WS_BATCH_SIZE]))
-        ld = time.time()
-        logger.info("WebSocket connected")
-        refresh_task = asyncio.create_task(_market_refresh_loop(state, session, ws))
-
-        try:
-            while True:
-                try:
-                    raw = await asyncio.wait_for(ws.recv(), timeout=30)
-                except asyncio.TimeoutError:
-                    if not any(not t.market_ended for t in state.tokens.values()):
-                        logger.warning("No active tokens — reconnecting")
-                        break
-                    continue
-                except Exception as _exc:
-                    logger.warning("Unexpected WS recv exception", exc_info=True)
-                    break
-
-                now = time.time()
-                if now - ld >= state.config.dashboard_interval:
-                    ld = now
-                    print_dashboard(state, state.config)
-
-                try:
-                    msgs = json.loads(raw)
-                    if isinstance(msgs, dict): msgs = [msgs]
-                except Exception as _json_exc:
-                    logger.debug("JSON parse failed: %s | raw=%r", _json_exc, raw[:200])
-                    continue
-
-                for msg in msgs:
-                    p = api.parse_book_update(msg)
-                    if p: await handle_book_update(state, p)
-        finally:
-            refresh_task.cancel()
-            try:
-                await refresh_task
-            except asyncio.CancelledError:
-                pass
-
-
-# ─── STARTUP ─────────────────────────────────────────────────────────────────
 
 def restore_state_from_db(state: BotState) -> None:
     """
@@ -1695,93 +983,53 @@ def restore_state_from_db(state: BotState) -> None:
 # happens inside handle_book_update via this bot's own credentials (order plane).
 # Mirrors account_bot's consumer loop; does NOT auto-start a feed.
 
-def _register_market_from_feed(state: BotState, msg: dict[str, Any]) -> None:
-    """Register a market's UP/DOWN tokens from a feed 'market' message."""
-    m = MarketMessage.from_dict(msg)
-    if not m.market_id or not m.up_token_id or not m.dn_token_id:
-        return
-    if m.end_ms and time.time() * 1000 > m.end_ms:
-        return
-    q = (m.question or "")[:80]
-    for tid, d in ((m.up_token_id, "UP"), (m.dn_token_id, "DOWN")):
-        if tid not in state.tokens:
-            state.tokens[tid] = TokenState(tid, m.market_id, d, q, m.start_ms, m.end_ms,
-                                           vol_window=state.config.vol_window)
-    state.market_tokens[m.market_id] = {"UP": m.up_token_id, "DOWN": m.dn_token_id}
+# _register_market_from_feed / feed_consumer_loop live in pm_data (the entrypoint
+# re-exports _register_market_from_feed; main() reaches feed_consumer_loop via the
+# data-source dispatch registry).
 
 
-async def feed_consumer_loop(state: BotState, feed_addr: str) -> None:
-    """Consume market + book updates from the shared feed and dispatch to the same
-    strategy handlers as the direct WS path. SUB-and-warn only (no feed auto-start)."""
-    import zmq.asyncio  # noqa: PLC0415
-    ctx  = zmq.asyncio.Context()
-    sock = make_sub(ctx, feed_addr)
-    logger.info("Data source: shared feed %s (consumer mode — no direct WS)", feed_addr)
-    last_msg = time.time()
-    try:
-        while True:
-            try:
-                raw = await asyncio.wait_for(sock.recv_json(), timeout=30)
-            except asyncio.TimeoutError:
-                logger.warning("No feed message for %.0fs — is the feed running on %s?",
-                               time.time() - last_msg, feed_addr)
-                continue
-            last_msg = time.time()
-            t = raw.get("t")
-            if t == "market":
-                _register_market_from_feed(state, raw)
-            elif t == "book":
-                if raw.get("token_id", "") not in state.tokens:
-                    continue
-                await handle_book_update(state, {k: v for k, v in raw.items() if k != "t"})
-            # t == "ping": liveness only
-    finally:
-        sock.close(linger=0)
-        ctx.term()
+# ─── DATA-SOURCE DISPATCH (Plan D step 4b-6) ──────────────────────────────────
+# Registry: data_source → which plugin run-loop serves it. A strategy family plugs in by
+# adding an entry here; main()'s dispatch never names a plugin loop. Loops are resolved by
+# (plugin module, attr) and imported lazily at dispatch, so a polymarket-only account never
+# imports the CEX consumer.
+_CEX_CONNECTORS = ("binance", "mexc", "mexc_futures", "bitstamp")
 
 
-async def cex_feed_consumer_loop(state: BotState, feed_addr: str, symbol: str,
-                                 exchange: str | None = None) -> None:
-    """Consume CEX book updates for `symbol` from the shared cex_feed and drive the
-    grid/swing strategy directly (no handle_book_update — CEX bots don't need its
-    polymarket token bookkeeping, and a token_id mismatch there fails silently).
-    Order placement stays per-bot. SUB-and-warn only (no feed auto-start).
+def _cex_symbol(config: "BotConfig") -> str:
+    """Symbol a CEX bot subscribes to: the grid symbol, else the strategy cfg's symbol."""
+    return (config.grid_symbol if config.strategy_type == "grid"
+            else config.strategy_cfg.get("symbol", config.grid_symbol))
 
-    Filters on (exchange, symbol): the shared cex_feed multiplexes several exchanges,
-    and more than one can publish the SAME symbol (e.g. binance:BTCUSDT and
-    mexc:BTCUSDT). `exchange` (the bot's connector) selects the right source; without
-    it a 2nd BTCUSDT source would contaminate this bot's book stream."""
-    import zmq.asyncio  # noqa: PLC0415
-    from types import SimpleNamespace  # noqa: PLC0415
-    ctx  = zmq.asyncio.Context()
-    sock = make_sub(ctx, feed_addr)
-    logger.info("Data source: shared CEX feed %s exchange=%s symbol=%s (consumer mode — no direct WS)",
-                feed_addr, exchange or "any", symbol)
-    last_msg = time.time()
-    try:
-        while True:
-            try:
-                raw = await asyncio.wait_for(sock.recv_json(), timeout=30)
-            except asyncio.TimeoutError:
-                logger.warning("No cex_feed message for %.0fs — is cex_feed running on %s?",
-                               time.time() - last_msg, feed_addr)
-                continue
-            last_msg = time.time()
-            if raw.get("t") != "book" or raw.get("symbol") != symbol:
-                continue
-            if exchange is not None and raw.get("exchange") != exchange:
-                continue
-            ts = SimpleNamespace(
-                best_bid=float(raw["best_bid"]), best_ask=float(raw["best_ask"]),
-                spread=float(raw.get("spread", 0.0)), bid_vol=float(raw.get("bid_vol", 0.0)),
-                ask_vol=float(raw.get("ask_vol", 0.0)), obi=float(raw.get("obi", 0.0)),
-                last_update_ts=time.time())
-            state.last_book_ts = time.time()
-            if state.strategy is not None:
-                await state.strategy.on_book_update(state, ts)
-    finally:
-        sock.close(linger=0)
-        ctx.term()
+
+# data_source -> (supported connector(s), plugin module, loop attr, args from (state, config, session))
+_RUN_LOOPS: dict = {
+    "feed": ("polymarket", "pm_data", "feed_consumer_loop",
+             lambda state, config, session: (state, config.feed_addr)),
+    "cex_feed": (_CEX_CONNECTORS, "cex_consumer", "cex_feed_consumer_loop",
+                 lambda state, config, session: (state, config.feed_addr,
+                                                 _cex_symbol(config), config.connector)),
+}
+# Fallback when no feed data_source matches the connector: the direct WS path.
+_DIRECT_WS = ("pm_data", "ws_loop", lambda state, config, session: (state, session))
+
+
+def _resolve_run_loop(config: "BotConfig"):
+    """Pure selection (no import / no I/O) → (module, loop_attr, args_builder, warn).
+
+    Mirrors the historical dispatch exactly: a feed/cex_feed data_source whose connector
+    does not match falls back to the direct WS path WITH a warning; any other data_source
+    (e.g. "ws") falls back to direct WS silently.
+    """
+    spec = _RUN_LOOPS.get(config.data_source)
+    if spec is not None:
+        connectors, mod, loop, args = spec
+        ok = (config.connector == connectors if isinstance(connectors, str)
+              else config.connector in connectors)
+        if ok:
+            return mod, loop, args, False
+        return (*_DIRECT_WS, True)   # feed source, wrong connector → warn + direct WS
+    return (*_DIRECT_WS, False)      # e.g. data_source="ws" → direct WS, no warning
 
 
 async def main() -> None:
@@ -1793,10 +1041,11 @@ async def main() -> None:
         snapshot_interval=args.snapshot_interval,
     )
     _setup_logging(config)
-    _load_connector(config.connector)
+    connector = _load_connector_module(config.connector)
+    logger.info("Connector loaded: %s (%s)", config.connector, connector.__name__)
     if config.strategy_type != "threshold":
-        from connectors import validate as _validate_conn
-        _validate_conn(api, config.strategy_type)
+        from botcore.connectors import validate as _validate_conn
+        _validate_conn(connector, config.strategy_type)
 
     _up = int(time.time() - _BOT_START)
     _start_str = datetime.fromtimestamp(_BOT_START, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -1816,7 +1065,7 @@ async def main() -> None:
     else:
         logger.info("  Strategy: file not found — using defaults")
     if config.connector == "polymarket":
-        _tf = "15M" if config.market_tag_id == api.GAMMA_TAG_15M else "5M"
+        _tf = "15M" if config.market_tag_id == connector.GAMMA_TAG_15M else "5M"
         logger.info("  Markets: BTC Up/Down %s (tag=%d, window=±%dmin)",
                     _tf, config.market_tag_id, config.market_window_mins)
     if config.hour_filter_enabled:
@@ -1867,7 +1116,7 @@ async def main() -> None:
 
     conn = init_db(config)
     try:
-        state = BotState(conn, config)
+        state = BotState(conn, config, strategy=ThresholdStrategy(), connector=connector)
         restore_state_from_db(state)
 
         async with aiohttp.ClientSession(
@@ -1882,7 +1131,7 @@ async def main() -> None:
                 await state.strategy.restore_from_db(state)
             def _hb_payload() -> dict[str, Any]:
                 pnl_total, trades_total = cumulative_pnl(state)
-                return {
+                hb: dict[str, Any] = {
                     "bounds_ok":    state.daily_pnl >= -config.daily_stop_loss,
                     "daily_pnl":    round(state.daily_pnl, 2),
                     "pnl_total":    round(pnl_total, 2),
@@ -1891,9 +1140,34 @@ async def main() -> None:
                     "open_trades":  len(state.open_trades),
                     "last_book_ts": state.last_book_ts,
                 }
+                # Data-recording freshness: lets the status page flag "bot heartbeats
+                # but its snapshots table stopped growing" (the 2026-06-16 CEX bug) —
+                # distinct from last_book_ts, which is data RECEIVED, not PERSISTED.
+                # Omitted when snapshots are disabled so --no-snapshots bots never alarm.
+                if config.enable_snapshots:
+                    hb["last_write_ts"] = state.last_write_ts
+                return hb
+
+            # Start the data-freshness clock at boot: a recorder that never writes then
+            # ages to ⚠data after _DATA_STALE_AFTER (catches "booted in a non-writing
+            # mode" — the post-restart shape of the 06-16 bug) with no false blip on
+            # every restart; a healthy recorder advances it on its first write.
+            if config.enable_snapshots:
+                state.last_write_ts = time.time()
 
             _hb_task = asyncio.create_task(
                 heartbeat_loop(
+                    _hb_bot_name,
+                    config.install_dir,
+                    _hb_payload,
+                    mode=_hb_mode,
+                )
+            )
+
+            # Opt-in HTTP /health (no-op unless TRADINEBOTTE_HEALTH_PORT is set);
+            # reuses _hb_payload so the pulled view matches the pushed heartbeat.
+            _health_task = asyncio.create_task(
+                health_server(
                     _hb_bot_name,
                     config.install_dir,
                     _hb_payload,
@@ -1923,25 +1197,21 @@ async def main() -> None:
                     is_live=_is_live,
                 )
             )
-            _cex_connectors = ("binance", "mexc", "mexc_futures", "bitstamp")
-            _use_feed    = config.data_source == "feed"     and config.connector == "polymarket"
-            _use_cexfeed = config.data_source == "cex_feed" and config.connector in _cex_connectors
-            if config.data_source in ("feed", "cex_feed") and not (_use_feed or _use_cexfeed):
+            import importlib  # noqa: PLC0415
+            _mod, _loop, _args, _warn = _resolve_run_loop(config)
+            if _warn:
                 logger.warning("data_source=%s ignored for connector=%s — using direct WS",
                                config.data_source, config.connector)
             try:
-                if _use_feed:
-                    await feed_consumer_loop(state, config.feed_addr)
-                elif _use_cexfeed:
-                    _sym = (config.grid_symbol if config.strategy_type == "grid"
-                            else config.strategy_cfg.get("symbol", config.grid_symbol))
-                    await cex_feed_consumer_loop(state, config.feed_addr, _sym, config.connector)
-                else:
-                    await ws_loop(state, session)
+                # Lazy import keeps a polymarket-only account from loading the CEX consumer.
+                _run_loop = getattr(importlib.import_module(_mod), _loop)
+                await _run_loop(*_args(state, config, session))
             finally:
                 _hb_task.cancel()
                 _ctl_task.cancel()
-                await asyncio.gather(_hb_task, _ctl_task, return_exceptions=True)
+                _health_task.cancel()
+                await asyncio.gather(_hb_task, _ctl_task, _health_task,
+                                     return_exceptions=True)
     finally:
         conn.close()
 

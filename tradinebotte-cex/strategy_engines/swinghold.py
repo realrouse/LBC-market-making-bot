@@ -62,6 +62,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from tradinetools.pnl import round_trip_pnl
+
 logger = logging.getLogger(__name__)
 
 STRATEGY_TYPE = "swinghold"
@@ -392,9 +394,7 @@ class SwingHoldStrategy:
         """Partial SELL filled → account PnL fragment, advance to next resistance."""
         entry    = pos.buy_price or pos.level_price
         sold_qty = pos.sell_qty
-        fee_b    = self._api.compute_fee(entry,      sold_qty)
-        fee_s    = self._api.compute_fee(fill_price, sold_qty)
-        pnl_part = (fill_price - entry) * sold_qty - fee_b - fee_s
+        pnl_part = round_trip_pnl(entry, fill_price, sold_qty, self._api.FEE_RATE)
 
         pos.qty_held       -= sold_qty
         pos.pnl_net        += pnl_part
@@ -439,9 +439,7 @@ class SwingHoldStrategy:
                 )
 
         entry  = pos.buy_price or pos.level_price
-        fee_b  = self._api.compute_fee(entry, pos.qty_held)
-        fee_s  = self._api.compute_fee(price, pos.qty_held)
-        pnl_sl = (price - entry) * pos.qty_held - fee_b - fee_s + pos.pnl_net
+        pnl_sl = round_trip_pnl(entry, price, pos.qty_held, self._api.FEE_RATE) + pos.pnl_net
 
         self.sh.total_pnl    += pnl_sl
         self.sh.total_trades += 1
@@ -505,10 +503,14 @@ class SwingHoldStrategy:
         else:
             try:
                 open_orders = await self._api.get_open_orders(state.session, self.sh.symbol)
-                open_ids    = {str(o["order_id"]) for o in (open_orders or [])}
             except Exception as exc:
                 logger.warning("SwingHoldStrategy get_open_orders failed: %s", exc)
                 return
+            if open_orders is None:   # API error (None, not raised) — skip reconcile,
+                # else an empty open_ids books every live order as filled.
+                logger.warning("SwingHoldStrategy [%s] poll: get_open_orders error — skipping", self.sh.symbol)
+                return
+            open_ids    = {str(o["order_id"]) for o in open_orders}
 
             for pos in list(open_pos):
                 if pos.status == "buy_placed" and pos.buy_order_id:

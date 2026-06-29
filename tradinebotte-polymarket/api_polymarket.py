@@ -206,6 +206,10 @@ async def get_markets(session, *, tag_id: int = GAMMA_TAG_5M, window_minutes: in
       GAMMA_TAG_5M  (102892) — 5-minute markets, window ±6 min
       GAMMA_TAG_15M (102467) — 15-minute markets, window ±16 min
     BTC_UPDOWN_KEYWORDS is kept as a safety net for non-BTC assets in the same tag.
+
+    Returns None on an API/network error (so callers can tell a failure from a genuinely
+    empty market window — masking errors as [] caused the feed to stall silently); [] when
+    the request succeeds but no market is in the window; the market list otherwise.
     """
     try:
         params = dict(GAMMA_PARAMS)
@@ -219,7 +223,7 @@ async def get_markets(session, *, tag_id: int = GAMMA_TAG_5M, window_minutes: in
         ) as resp:
             if resp.status != 200:
                 logger.warning("Gamma API error: %d", resp.status)
-                return []
+                return None   # error sentinel — distinct from [] (no market in window)
             data = await resp.json(content_type=None)
         batch = data if isinstance(data, list) else data.get("data", data.get("markets", []))
         results = [
@@ -230,7 +234,7 @@ async def get_markets(session, *, tag_id: int = GAMMA_TAG_5M, window_minutes: in
         return results
     except Exception as e:
         logger.warning("Fetch error: %s", e)
-        return []
+        return None   # error sentinel — distinct from [] (no market in window)
 
 
 # ─── ORDER PLACEMENT ──────────────────────────────────────────────────────────

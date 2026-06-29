@@ -1,0 +1,15 @@
+[Unit]
+# Regenerate the status page on a fixed cadence. Replaces the hand-maintained
+# operator crontab (`*/2 * * * *`) so the schedule is versioned in the repo.
+Description=tradinebotte — regenerate the status page every 2 minutes
+
+[Timer]
+# First run shortly after the timer starts, then 2 minutes after each run finishes
+# (OnUnitInactiveSec measures from service exit, so a slow run never overlaps itself).
+OnActiveSec=30s
+OnUnitInactiveSec=2min
+AccuracySec=15s
+Unit=tradinebotte-statuspage.service
+
+[Install]
+WantedBy=timers.target
