@@ -319,6 +319,25 @@ into a plugin module that live_bot imports (re-export for account_bot/test back-
   (possible precisely because the selector is now a pure, testable function). Gate green (poly 448) +
   clean-install. NB the dispatch lives in live_bot (the entrypoint), referencing plugins by string — a
   4b-7 thin-shell move could relocate it to botcore, but that's optional.
+
+### Step 4 COMPLETE — honest status + residual
+- **Achieved:** live_bot is decoupled from the Polymarket trading logic (`pm_strategy`), data plane
+  (`pm_data`), leaf types/calendar (`pm_types`/`pm_calendar`), and connector (injected `state.connector`);
+  the CEX glue lives in `cex_consumer`; the data-source dispatch is registry-driven. All behavior-preserving,
+  gate-green, clean-installed; account_bot runtime validated via multibot deploy.
+- **NOT a neutral core (don't overclaim):** `BotConfig` (signal_threshold/market_tag_id/GAMMA/kelly/
+  hour-filter), `SCHEMA`/`init_db` (poly-shaped `snapshots`/`trades` tables), `make_config`, and `main()`'s
+  logging remain polymarket-flavored; live_bot re-exports the whole plugin (importing it pulls in all of
+  Polymarket); a CEX bot still runs the poly-named `live_bot` entrypoint. Full Plan C (neutral core +
+  symmetric plugins) is NOT reached — remaining = optional 4b-7 (thin shell) + Step 5 (generalize the
+  poly-shaped snapshots schema).
+- **⚠ PRE-DEPLOY GATE — the production feed path through `main()` is unexercised.** Every clean-install runs
+  the standalone ws path (`_DIRECT_WS`→`ws_loop`); the multibot test runs `account_bot`'s OWN loop, not
+  `main()`'s `_resolve_run_loop`. So `main()` with `data_source=feed` → lazy import → `feed_consumer_loop`
+  has never run end-to-end. Low risk (selector unit-tested, `feed_consumer_loop` byte-identical) but real:
+  before any FLEET deploy, confirm the prod poly bots' `data_source`; if `feed`, validate that path once.
+- **All of Step 2..4b-6 + earlier robustness work is on `dev`, NEVER run on the real fleet.** Merge-to-main
+  + deploy are the user's call and require `prepare_release.sh` first ([[feedback_release_checklist]]).
 - **4b-7 (SEPARATE, EXPLICITLY OPTIONAL — may not be worth doing): thin-shell relocation.** Move the
   neutral orchestration into `botcore`, `live_bot.py` → thin shell. This is the ExecStart-wide change
   (every deploy unit + systemd) flagged at the start of Step 4 — least value-per-risk. 4b is already a
