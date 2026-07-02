@@ -264,8 +264,10 @@ ORDER BY palier DESC;
 
 | Fichier | Rôle |
 |---|---|
-| `bot/live_bot.py` | `save_snapshot()`, `SNAPSHOT_INTERVAL`, flag `--snapshot-interval` |
-| `bot/api_polymarket.py` | `parse_book_message()` — calcul de l'OBI et des volumes |
+| `tradinebotte-polymarket/pm_data.py` | `save_snapshot()`, `handle_book_update()` (ré-exportés par `live_bot`) |
+| `tradinebotte-polymarket/live_bot.py` | défaut `SNAPSHOT_INTERVAL` + flag `--snapshot-interval` |
+| `tradinebotte-cex/cex_consumer.py` | `save_cex_snapshot()` — writer snapshot grid/swing CEX |
+| `tradinebotte-polymarket/api_polymarket.py` | `parse_book_message()` — calcul de l'OBI et des volumes |
 | `scripts/collect_db.sh` | Téléchargement / rotation du `live.db` distant |
 | `scripts/start_collector.sh` | Déploiement du bot de collecte de données |
 | `scripts/schedule_collect.sh` | Installation du cron hebdomadaire de rotation + téléchargement |

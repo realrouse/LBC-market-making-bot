@@ -334,8 +334,9 @@ not just the one you are working on. When you bypass a shared function, re-check
 Checklist for any new or changed data-consumer path / shared hot-path function:
 
 - [ ] **Snapshots persisted?** Route the write through the shared step
-      (`_persist_snapshot` in `live_bot.py`, `_record_accum_snapshot` in
-      `accumulation_bot.py`) — do not inline a bare `INSERT`.
+      (`_persist_snapshot` in `botcore.persistence`, `_record_accum_snapshot` in
+      `accumulation_bot.py`) — do not inline a bare `INSERT`. The 2026-06-16 bug above
+      is fixed: `cex_feed_consumer_loop` now calls `save_cex_snapshot` (`cex_consumer.py`).
 - [ ] **Data-freshness clock advanced?** Set `last_write_ts` on every persisted row.
       The status page `⚠data` badge depends on it — a bot that records but never updates
       it (or that records nothing) must show stale, not silent.

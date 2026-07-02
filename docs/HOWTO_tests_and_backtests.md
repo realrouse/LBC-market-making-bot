@@ -64,7 +64,7 @@ how to interpret the results to make informed strategy decisions.
 | `capital_start` | 100 | strategy JSON | Starting capital for a backtest run. Used as the denominator for PnL%. |
 | `win_threshold` | 0.99 | strategy JSON | `best_bid` at which an open trade is auto-resolved as WIN. Do not change without re-running the full backtest. |
 | `loss_threshold` | 0.01 | strategy JSON | `best_bid` at which an open trade is auto-resolved as LOSS. Do not change without re-running the full backtest. |
-| `fee_rate` | 2% | constant in `live_bot.py` | Polymarket taker fee applied to every trade. |
+| `fee_rate` | 2% | connector constant (`FEE_RATE` in `api_polymarket.py`, via `state.connector.FEE_RATE`) | Polymarket taker fee applied to every trade. |
 
 ### Performance metrics
 

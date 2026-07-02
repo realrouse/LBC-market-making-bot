@@ -36,33 +36,36 @@ l'intérieur de la plage `[grid_lower, grid_upper]`.
 ### Fichiers concernés
 
 ```
-bot/
-  strategies/
+tradinebotte-cex/
+  strategy_engines/
     __init__.py      ← factory load("grid", config) → GridStrategy
-    base.py          ← protocole Strategy (interface commune)
+    base.py          ← protocole Strategy (ré-exporte botcore.strategy)
     grid.py          ← GridStrategy, GridLevel, GridState
   connectors/
-    __init__.py      ← factory load("binance"|"mexc") → module api_*
+    __init__.py      ← shim de registre (ré-exporte botcore.connectors : load/validate)
   api_binance.py     ← connecteur Binance (REST + WebSocket)
   api_mexc.py        ← connecteur MEXC (REST + WebSocket)
-  live_bot.py        ← orchestrateur (charge stratégie + connecteur)
 strategies/
-  grid_BTCUSDT.json  ← exemple de config grid
+  grid/
+    grid_BTCUSDT.json              ← exemple de config grid plat
+    grid_BTCUSDT_bear_trailing.json ← variante bear/trailing (account-3)
 ```
 
 ### Flux d'exécution
 
 ```
 main()
- ├─ make_config()                 lit grid_BTCUSDT.json
- ├─ _load_connector("binance")    remplace api_polymarket par api_binance
- ├─ BotState(conn, config)
- ├─ load_strategy("grid", config) → GridStrategy(config)
+ ├─ make_config()                          lit grid_BTCUSDT.json
+ ├─ botcore.connectors.load("binance")     connecteur depuis le registre (plus de global api)
+ ├─ load_strategy("grid", config)        → GridStrategy(config)
  │    └─ calcule les niveaux de prix + valide les bornes
- └─ ws_loop()
-      └─ handle_book_update()
-           └─ state.strategy.on_book_update(state, ts)
-                └─ GridStrategy.on_book_update() [voir algorithme]
+ ├─ BotState(conn, config, strategy=…, connector=…)   injectés, atteints via state.connector
+ └─ _resolve_run_loop(config)              dispatch par registre selon config.data_source :
+      • cex_feed  → cex_feed_consumer_loop()   grid/swing déployés : consomme le feed CEX partagé
+      │               └─ state.strategy.on_book_update(state, ts)   (contourne handle_book_update)
+      • ws (repli) → ws_loop() → handle_book_update()
+                       └─ state.strategy.on_book_update(state, ts)
+                            └─ GridStrategy.on_book_update() [voir algorithme]
 ```
 
 ---
@@ -291,7 +294,7 @@ Avec 20 niveaux à 50 USDT = 1 000 USDT de capital engagé maximum.
 | Validation des paramètres (bornes, niveaux, taille) | ✅ Implémenté |
 | `connectors.load("binance")` / `load("mexc")` | ✅ Implémenté |
 | `strategies.load("grid", config)` — factory | ✅ Implémenté |
-| Routage dans `handle_book_update()` | ✅ Implémenté |
+| Dispatch de stratégie (`cex_feed_consumer_loop` ; `handle_book_update` sur le repli WS) | ✅ Implémenté |
 | `_initialise_grid()` — placement initial des ordres | ✅ Implémenté |
 | `_poll_fills()` — détection des fills par REST | ✅ Implémenté |
 | `_on_buy_filled()` / `_on_sell_filled()` — counter-orders | ✅ Implémenté |
@@ -306,9 +309,9 @@ Avec 20 niveaux à 50 USDT = 1 000 USDT de capital engagé maximum.
 
 Pour brancher un exchange autre que Binance ou MEXC :
 
-1. Créer `bot/api_monexchange.py` en copiant `api_binance.py`
-2. Implémenter les 8 fonctions de l'interface (voir `bot/connectors/__init__.py`)
-3. Ajouter l'entrée dans `bot/connectors/__init__.py` :
+1. Créer `tradinebotte-cex/api_monexchange.py` en copiant `api_binance.py`
+2. Implémenter les 8 fonctions de l'interface (voir `botcore/connectors.py`, ré-exporté par `tradinebotte-cex/connectors/__init__.py`)
+3. Ajouter l'entrée dans le registre `botcore.connectors` :
    ```python
    _REGISTRY["monexchange"] = "api_monexchange"
    ```
@@ -320,11 +323,11 @@ Pour brancher un exchange autre que Binance ou MEXC :
 
 | Fichier | Rôle |
 |---|---|
-| `bot/strategy_engines/grid.py` | Implémentation `GridStrategy` |
-| `bot/strategy_engines/__init__.py` | Factory de stratégies |
-| `bot/strategy_engines/base.py` | Protocole `Strategy` (interface) |
-| `bot/connectors/__init__.py` | Factory de connecteurs |
-| `bot/api_binance.py` | Connecteur Binance REST + WebSocket |
-| `bot/api_mexc.py` | Connecteur MEXC REST + WebSocket |
-| `bot/live_bot.py` | Orchestrateur — `_load_connector()`, routage |
+| `tradinebotte-cex/strategy_engines/grid.py` | Implémentation `GridStrategy` |
+| `tradinebotte-cex/strategy_engines/__init__.py` | Factory de stratégies |
+| `tradinebotte-cex/strategy_engines/base.py` | Protocole `Strategy` (ré-exporte botcore.strategy) |
+| `tradinebotte-cex/connectors/__init__.py` | Shim du registre de connecteurs (botcore.connectors) |
+| `tradinebotte-cex/api_binance.py` | Connecteur Binance REST + WebSocket |
+| `tradinebotte-cex/api_mexc.py` | Connecteur MEXC REST + WebSocket |
 | `strategies/grid/grid_BTCUSDT.json` | Config d'exemple BTC/USDT Binance |
+| `docs/AdaptedGridTrading.md` | Variantes de grid bear/bull/latérale |

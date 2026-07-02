@@ -321,3 +321,62 @@ plt.tight_layout(pad=0)
 plt.savefig(out, dpi=150, bbox_inches="tight", facecolor=BG, edgecolor="none")
 plt.close()
 print(f"Saved → {out}")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Module architecture (neutral core + peer plugins) — compact companion figure.
+# Shows the CODE layering introduced by the Plan D decoupling (v0.89), which is
+# independent of the ZMQ service topology above. Saved as architecture_modules.png.
+# ═══════════════════════════════════════════════════════════════════════════════
+W2, H2 = 18, 12
+fig2, ax2 = plt.subplots(figsize=(W2, H2))
+fig2.patch.set_facecolor(BG)
+ax2.set_facecolor(BG)
+ax2.set_xlim(0, W2);  ax2.set_ylim(0, H2);  ax2.axis("off")
+
+txt(ax2, W2/2, 11.3,
+    "Module architecture — neutral core + peer plugins  (Plan D, v0.89)",
+    size=13, bold=True)
+
+# Entrypoints layer
+rbox(ax2, 9, 9.4, 15.6, 1.5, C_BOT, alpha=0.22)
+txt(ax2, 9, 9.75, "Entrypoints", size=11, bold=True, color=C_BOT)
+txt(ax2, 9, 9.12,
+    "live_bot.py  ·  account_bot.py   — re-export plugin symbols · registry dispatch "
+    "(_resolve_run_loop) · inject state.connector", size=8)
+
+# botcore neutral core layer
+rbox(ax2, 9, 6.8, 15.6, 1.6, C_ENGINE, alpha=0.22)
+txt(ax2, 9, 7.2, "botcore  (neutral core — no exchange code)",
+    size=11, bold=True, color=C_ENGINE)
+txt(ax2, 9, 6.5,
+    "strategy (Strategy protocol)  ·  connectors (registry)  ·  "
+    "persistence (capital/snapshot/PnL)  ·  schema (apply_base_schema)", size=8)
+
+# Polymarket plugin
+rbox(ax2, 5.0, 3.7, 7.4, 2.2, C_POLY, alpha=0.20)
+txt(ax2, 5.0, 4.5, "Polymarket plugin", size=10.5, bold=True, color=C_POLY)
+txt(ax2, 5.0, 3.95, "pm_strategy · pm_data", size=8)
+txt(ax2, 5.0, 3.55, "pm_types · pm_calendar", size=8)
+txt(ax2, 5.0, 3.15, "api_polymarket", size=8)
+
+# CEX plugin
+rbox(ax2, 13.0, 3.7, 7.4, 2.2, C_CEX, alpha=0.20)
+txt(ax2, 13.0, 4.5, "CEX plugin", size=10.5, bold=True, color=C_CEX)
+txt(ax2, 13.0, 3.95, "strategy_engines (grid/swing/dca)", size=8)
+txt(ax2, 13.0, 3.55, "cex_consumer", size=8)
+txt(ax2, 13.0, 3.15, "api_binance · api_mexc", size=8)
+
+# Arrows: entrypoints → botcore ; plugins → botcore
+arr(ax2, 9, 8.65, 9, 7.62, C_DIM, lw=1.4, se=0.05)
+arr(ax2, 5.0, 4.82, 8.0, 6.02, C_POLY, lw=1.2, rad=-0.1, se=0.05)
+arr(ax2, 13.0, 4.82, 10.0, 6.02, C_CEX, lw=1.2, rad=0.1, se=0.05)
+
+txt(ax2, 9, 1.4,
+    "Plugins implement botcore's Strategy + connector interfaces; entrypoints build "
+    "on botcore and dispatch to a plugin's run-loop.", size=8, color=C_DIM, italic=True)
+
+out2 = "/home/neofutur/tradinebotte/tradinebotte/docs/architecture_modules.png"
+plt.tight_layout(pad=0)
+plt.savefig(out2, dpi=150, bbox_inches="tight", facecolor=BG, edgecolor="none")
+plt.close()
+print(f"Saved → {out2}")

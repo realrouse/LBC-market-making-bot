@@ -175,6 +175,36 @@ sur `:5559`). Fichiers d'état : `live_ob.db` / `orderbook_bot.pid` /
 `tradinebotte-cex/strategies/scalping/orderbook_btc.json` et
 `tradinebotte-cex/strategies/accumulation/btc_accumulation.json`.
 
+### 3.1 Architecture des modules (cœur neutre + plugins pairs)
+
+La topologie des *processus* ci-dessus (quel fichier s'exécute, quels ports ZMQ)
+est indépendante de l'organisation du *code*. En interne, les points d'entrée
+reposent sur un cœur neutre, chaque famille d'exchange étant un plugin pair
+(résultat du découplage Plan D, v0.89) :
+
+![Architecture des modules — cœur neutre + plugins pairs](architecture_modules.png)
+
+| Couche | Emplacement | Contenu |
+|---|---|---|
+| **Cœur neutre** | `tradinebotte-core/botcore/` | `strategy.py` (protocole Strategy), `connectors.py` (registre de connecteurs : `load`/`validate`/`available`), `persistence.py` (capital de base, commit des snapshots, PnL/équité cumulés), `schema.py` (`apply_base_schema`). Importer `botcore` n'embarque **aucun** code d'exchange. |
+| **Plugin Polymarket** | `tradinebotte-polymarket/pm_*.py` + `api_polymarket.py` | `pm_strategy` (ThresholdStrategy + signal/mise/résolution), `pm_data` (plan de données : `handle_book_update`, `save_snapshot`, découverte de marchés, boucles WS/feed), `pm_types`, `pm_calendar`. |
+| **Plugin CEX** | `tradinebotte-cex/` | `strategy_engines/` (grid/swing/dca/…), `cex_consumer.py` (`cex_feed_consumer_loop` + `save_cex_snapshot`), adaptateurs `api_*`. |
+| **Point d'entrée** | `live_bot.py` / `account_bot.py` | Config, cycle de vie de la BD, logging, dispatch. `live_bot` **ré-exporte** les symboles déplacés du plugin, donc `live_bot.<nom>` résout toujours pour la rétrocompatibilité. |
+
+Deux détails de câblage :
+
+- **Injection du connecteur** — il n'y a plus de global de module `api`. Le connecteur
+  est chargé depuis le registre (`botcore.connectors.load(config.connector)`) et injecté
+  à la construction ; le code de trading l'atteint via `state.connector`.
+- **Dispatch piloté par registre** — `main()` choisit la boucle d'exécution dans un
+  registre `_RUN_LOOPS` via le `_resolve_run_loop(config)` pur (clé `data_source`), puis
+  importe la boucle paresseusement (un compte purement polymarket n'importe jamais le code
+  CEX, et inversement).
+
+Le déploiement embarque `botcore/` et les modules plugins **à plat** à côté des points
+d'entrée (sans sous-répertoire `bot/`) ; voir [multi.md](multi.md) et les scripts de
+déploiement.
+
 ---
 
 ## 4. Table des adresses ZMQ
@@ -532,6 +562,13 @@ selon le mode de déploiement.
 Chaque `live.db` / `live_ob.db` / `live_accum.db` est privé au compte qui en
 est propriétaire. `heartbeat.db` est partagé — il agrège les lignes de tous
 les comptes.
+
+Chaque BD de bot porte les tables de base neutres `schema_version` et `bot_meta`,
+appliquées par `botcore.schema.apply_base_schema()` avant le schéma propre au
+point d'entrée et ses migrations. Les tables `trades` et `snapshots` restent
+au format polymarket (les bots CEX les réutilisent avec des colonnes de
+remplissage — voir [snapshots.md](snapshots.md)) ; seules les tables d'infra
+réellement neutres vivent dans `botcore`.
 
 ---
 
@@ -1273,9 +1310,12 @@ scénario hors périmètre actuellement.
 
 | Fichier | Rôle |
 |---|---|
-| `tradinebotte-polymarket/live_bot.py` | Bot autonome Polymarket (Option A) |
+| `tradinebotte-core/botcore/` | Cœur neutre : `strategy.py` (protocole Strategy), `connectors.py` (registre), `persistence.py` (capital de base / commit des snapshots / PnL), `schema.py` (`apply_base_schema`) |
+| `tradinebotte-polymarket/live_bot.py` | Bot autonome Polymarket (Option A) ; point d'entrée async au-dessus de `botcore`, ré-exporte les symboles du plugin `pm_*` |
+| `tradinebotte-polymarket/pm_strategy.py` / `pm_data.py` / `pm_types.py` / `pm_calendar.py` | Plugin Polymarket : logique de trading, plan de données, types, calendrier des heures de trading |
+| `tradinebotte-cex/cex_consumer.py` | Glue CEX : `cex_feed_consumer_loop` + `save_cex_snapshot` (pilote grid/swing depuis le feed CEX partagé) |
 | `tradinebotte-polymarket/feed.py` | Diffuseur ZMQ (Option B) |
-| `tradinebotte-polymarket/account_bot.py` | Abonné par compte + logique de trading |
+| `tradinebotte-polymarket/account_bot.py` | Abonné par compte + logique de trading (exécuté à plat, sans sous-répertoire `bot/`) |
 | `tradinebotte-indicators/indicators.py` | Étage pipeline d'indicateurs techniques |
 | `tradinebotte-cex/orderbook_bot.py` | Bot de scalping OBI Binance ; moteurs interchangeables (OBI, DCA, Swing, SwingHold) |
 | `tradinebotte-cex/accumulation_bot.py` | Bot d'accumulation BTC ; consommateur ZMQ du service indicators |

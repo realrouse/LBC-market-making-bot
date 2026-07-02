@@ -1,5 +1,12 @@
 # Plan D — decoupling the universal entrypoint from Polymarket (continuation)
 
+> **STATUS: COMPLETE — merged to main, released v0.89 (2026-06-29).** This document is
+> retained as the historical execution record. The delivered architecture (botcore neutral
+> core + `pm_*`/`cex_consumer` peer plugins + registry dispatch) is described in
+> [design.md §3.1](design.md#31-module-architecture-neutral-core--peer-plugins); deferred/optional items
+> (full neutral `BotConfig`, snapshots-column neutralization, schema-registry split, the
+> 4b-7 thin-shell) were agreed out of scope. The steps below are as-executed, not a to-do.
+
 Handoff doc for the next session. Plan D is the incremental **strangler** path toward
 **Plan C**: a strategy-agnostic core with Polymarket and CEX as **peer plugins**. Each step
 is behavior-preserving + tested + deployed + validated — the recipe that worked for Step 1,

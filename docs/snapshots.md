@@ -256,8 +256,10 @@ ORDER BY bucket DESC;
 
 | File | Purpose |
 |---|---|
-| `tradinebotte-polymarket/live_bot.py` | `save_snapshot()`, `SNAPSHOT_INTERVAL`, `--snapshot-interval` flag |
-| `bot/api_polymarket.py` | `parse_book_message()` — OBI + volume computation |
+| `tradinebotte-polymarket/pm_data.py` | `save_snapshot()`, `handle_book_update()` (re-exported by `live_bot`) |
+| `tradinebotte-polymarket/live_bot.py` | `SNAPSHOT_INTERVAL` default + `--snapshot-interval` flag |
+| `tradinebotte-cex/cex_consumer.py` | `save_cex_snapshot()` — CEX grid/swing snapshot writer |
+| `tradinebotte-polymarket/api_polymarket.py` | `parse_book_message()` — OBI + volume computation |
 | `scripts/collect_db.sh` | Download / rotate the remote `live.db` |
 | `scripts/start_collector.sh` | Deploy the data-collection bot |
 | `scripts/schedule_collect.sh` | Install weekly cron to rotate + download |

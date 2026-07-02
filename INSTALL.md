@@ -270,7 +270,7 @@ bash scripts/install.sh [install_dir] [--lang EN|FR] [--with-tests]
 This will:
 - Install system packages (python3, pip, venv, sqlite3)
 - Create the install directory
-- Copy `tradinebotte-polymarket/live_bot.py` and `tradinebotte-polymarket/api_polymarket.py` to `<TRADINEBOTTE_DIR>/`
+- Copy the entrypoint + plugin modules flat to `<TRADINEBOTTE_DIR>/`: `live_bot.py`, `api_polymarket.py`, the Polymarket plugin (`pm_types.py`, `pm_calendar.py`, `pm_strategy.py`, `pm_data.py`), the CEX glue (`api_binance.py`, `api_mexc.py`, `cex_consumer.py`), the whole `botcore/` package, and `connectors/__init__.py`
 - Copy `tradinebotte-polymarket/strategies/*.json` to `<TRADINEBOTTE_DIR>/strategies/`
 - Create a virtualenv at `<TRADINEBOTTE_DIR>/.venv/`
 - Install Python dependencies into the virtualenv
@@ -1003,6 +1003,10 @@ a managed service:
 ~/tradinebotte/          ← shared install: venv, all bot files, tradinetools/
   .venv/
   live_bot.py            ← account_bot imports this (sys.path includes ~/tradinebotte/)
+  pm_*.py                ← Polymarket plugin (pm_types/pm_calendar/pm_strategy/pm_data)
+  cex_consumer.py        ← CEX glue (grid/swing feed consumer)
+  botcore/               ← neutral core (strategy/connectors/persistence/schema)
+  connectors/            ← connector registry shim (re-exports botcore.connectors)
   feed.py                ← feed service ExecStart
   indicators.py          ← indicators service ExecStart
   account_bot.py         ← account service ExecStart
@@ -1176,7 +1180,7 @@ The feed publishes three JSON message types over ZeroMQ PUB:
 ### Architecture notes
 
 - The feed has no trading logic and holds no credentials — it is safe to restart without affecting account state.
-- Each `account_bot.py` process writes to its own SQLite database; the `handle_book_update` / `check_signal` / `enter_live_trade` path from `live_bot.py` runs unmodified.
+- Each `account_bot.py` process writes to its own SQLite database; the `handle_book_update` / `check_signal` / `enter_live_trade` path (defined in `pm_data` / `pm_strategy`, re-exported by `live_bot`) runs unmodified.
 - If the feed restarts, account bots automatically recover — they will miss book updates during the gap but will not place duplicate orders because the `signalled` set is persisted to the DB between sessions.
 - The ZeroMQ PUB/SUB pattern is one-way: account bots never send messages back to the feed.
 - IPC sockets are placed in `/run/user/$UID/` (managed by systemd-logind, mode 0700).  The fallback for systems without `systemd-logind` is `/tmp/tradinebotte-$UID/` (mode 0700).
@@ -1416,14 +1420,14 @@ export BITSTAMP_API_SECRET=...
 export BITSTAMP_CUSTOMER_ID=...
 ```
 
-**Switch exchange** — change one line in `live_bot.py` (line 62):
+**Switch exchange** — set the `connector` name in the **strategy JSON** (the file
+`config.json`'s `"strategy"` key points to); no code edit. There is no module-global `api`:
+the connector is loaded from the registry (`botcore.connectors.load(config.connector)`) and
+injected as `state.connector`.
 
-```python
-import api_binance as api   # instead of api_polymarket
-# or
-import api_mexc as api
-# or
-import api_bitstamp as api
+```json
+// strategies/<your_strategy>.json
+{ "strategy_type": "grid", "connector": "binance" }   // or "mexc", "bitstamp", "polymarket" (default)
 ```
 
 **Important**: the Polymarket signal (`best_bid >= 0.95`) operates on a 0–1 probability
