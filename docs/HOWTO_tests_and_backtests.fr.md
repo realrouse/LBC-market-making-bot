@@ -64,7 +64,7 @@ interpréter les résultats pour prendre des décisions éclairées sur la strat
 | `capital_start` | 100 | JSON stratégie | Capital de départ pour un run de backtest. Utilisé comme dénominateur pour PnL%. |
 | `win_threshold` | 0,99 | JSON stratégie | `best_bid` auquel un trade ouvert est auto-résolu en WIN. Ne pas modifier sans relancer le backtest complet. |
 | `loss_threshold` | 0,01 | JSON stratégie | `best_bid` auquel un trade ouvert est auto-résolu en LOSS. Ne pas modifier sans relancer le backtest complet. |
-| `fee_rate` | 2 % | constante dans `live_bot.py` | Frais de preneur (taker) Polymarket appliqués à chaque trade. |
+| `fee_rate` | 2 % | constante du connecteur (`FEE_RATE` dans `api_polymarket.py`, via `state.connector.FEE_RATE`) | Frais de preneur (taker) Polymarket appliqués à chaque trade. |
 
 ### Métriques de performance
 
@@ -148,7 +148,7 @@ OK (skipped=1)
 
 Si un changement de paramètre dégrade silencieusement les performances, ce test le détecte. Il est automatiquement **ignoré** quand `data/paper3.db` est absent (ex : checkout CI sans données).
 
-`TestParamConsistency` vérifie que les valeurs des paramètres dans `bot/live_bot.py` (constantes au niveau module) correspondent aux valeurs par défaut dans `scripts/backtest.py` (le dataclass `Params`). Si elles divergent, les backtests ne prédisent plus les performances live.
+`TestParamConsistency` vérifie que les valeurs des paramètres dans `tradinebotte-polymarket/live_bot.py` (constantes au niveau module) correspondent aux valeurs par défaut dans `analysis/backtest.py` (le dataclass `Params`). Si elles divergent, les backtests ne prédisent plus les performances live.
 
 ### Checklist pré-release
 
@@ -682,7 +682,7 @@ Quand une meilleure configuration est trouvée :
    ```
 2. Modifier les paramètres dans le nouveau fichier.
 3. Mettre à jour le champ `_description` avec la date et le nouveau ratio.
-4. Mettre à jour le chemin par défaut dans `bot/live_bot.py` (rechercher `polymarket_BTC5M_v2.json`).
+4. Mettre à jour le chemin par défaut dans `tradinebotte-polymarket/live_bot.py` (rechercher `polymarket_BTC5M_piste3.json`).
 5. Lancer la suite de tests pour confirmer que tout passe :
    ```bash
    bash scripts/run_tests.sh

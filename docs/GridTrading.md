@@ -38,10 +38,10 @@ from volatility in both directions, as long as the price stays within the
 tradinebotte-cex/
   strategy_engines/
     __init__.py      ← factory load("grid", config) → GridStrategy
-    base.py          ← Strategy protocol (common interface)
+    base.py          ← Strategy protocol (re-exports botcore.strategy)
     grid.py          ← GridStrategy, GridLevel, GridState
   connectors/
-    __init__.py      ← factory load("binance"|"mexc") → module api_*
+    __init__.py      ← registry shim (re-exports botcore.connectors: load/validate)
   api_binance.py     ← Binance connector (REST + WebSocket)
   api_mexc.py        ← MEXC connector (REST + WebSocket)
 strategies/
@@ -54,15 +54,17 @@ strategies/
 
 ```
 main()
- ├─ make_config()                 reads the strategy JSON
- ├─ _load_connector("binance")    selects api_binance module
- ├─ BotState(conn, config)
- ├─ load_strategy("grid", config) → GridStrategy(config)
+ ├─ make_config()                          reads the strategy JSON
+ ├─ botcore.connectors.load("binance")     connector from the registry (no module-global api)
+ ├─ load_strategy("grid", config)        → GridStrategy(config)
  │    └─ computes price levels + validates bounds
- └─ ws_loop()
-      └─ handle_book_update()
-           └─ state.strategy.on_book_update(state, ts)
-                └─ GridStrategy.on_book_update() [see algorithm]
+ ├─ BotState(conn, config, strategy=…, connector=…)   both injected, reached via state.connector
+ └─ _resolve_run_loop(config)              registry dispatch on config.data_source:
+      • cex_feed  → cex_feed_consumer_loop()   deployed grid/swing: consume the shared CEX feed
+      │               └─ state.strategy.on_book_update(state, ts)   (bypasses handle_book_update)
+      • ws (fallback) → ws_loop() → handle_book_update()
+                          └─ state.strategy.on_book_update(state, ts)
+                               └─ GridStrategy.on_book_update() [see algorithm]
 ```
 
 ---
@@ -289,7 +291,7 @@ With 20 levels at 50 USDT = 1,000 USDT maximum capital at risk.
 | Parameter validation (bounds, levels, size) | ✅ Implemented |
 | `connectors.load("binance")` / `load("mexc")` | ✅ Implemented |
 | `strategies.load("grid", config)` — factory | ✅ Implemented |
-| Routing in `handle_book_update()` | ✅ Implemented |
+| Strategy dispatch (`cex_feed_consumer_loop`; `handle_book_update` on the WS fallback) | ✅ Implemented |
 | `_initialise_grid()` — initial order placement | ✅ Implemented |
 | `_poll_fills()` — fill detection via REST | ✅ Implemented |
 | `_on_buy_filled()` / `_on_sell_filled()` — counter-orders | ✅ Implemented |
@@ -320,8 +322,8 @@ To connect an exchange other than Binance or MEXC:
 |---|---|
 | `tradinebotte-cex/strategy_engines/grid.py` | `GridStrategy` implementation |
 | `tradinebotte-cex/strategy_engines/__init__.py` | Strategy factory |
-| `tradinebotte-cex/strategy_engines/base.py` | `Strategy` protocol (interface) |
-| `tradinebotte-cex/connectors/__init__.py` | Connector factory |
+| `tradinebotte-cex/strategy_engines/base.py` | `Strategy` protocol (re-exports botcore.strategy) |
+| `tradinebotte-cex/connectors/__init__.py` | Connector registry shim (botcore.connectors) |
 | `tradinebotte-cex/api_binance.py` | Binance REST + WebSocket connector |
 | `tradinebotte-cex/api_mexc.py` | MEXC REST + WebSocket connector |
 | `strategies/grid/grid_BTCUSDT.json` | Example BTC/USDT Binance config |

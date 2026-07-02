@@ -93,8 +93,8 @@ ne placeront pas d'ordres en double à la reconnexion).
 |---|---|
 | Souscripteur ZMQ | Connecte un socket SUB à l'adresse du feed ; souscrit à tous les messages |
 | Enregistrement des marchés | Construit les paires `TokenState` depuis les messages `market` du feed |
-| Évaluation du signal | Appelle `live_bot.handle_book_update()` → `check_signal()` sur chaque message `book`, avec **ses propres** paramètres de stratégie |
-| Passage d'ordres | Appelle `live_bot.enter_live_trade()` → API CLOB Polymarket |
+| Évaluation du signal | Appelle `pm_data.handle_book_update()` → `pm_strategy.check_signal()` (tous deux ré-exportés par `live_bot`) sur chaque message `book`, avec **ses propres** paramètres de stratégie |
+| Passage d'ordres | Appelle `pm_strategy.enter_live_trade()` → API CLOB Polymarket |
 | Résolution des trades | WIN/LOSS/expiration résolus via `check_resolution()` comme dans le bot autonome |
 | Persistance | Propre `live.db`, `account.log`, `config.json` sous `TRADINEBOTTE_DIR` |
 
@@ -696,7 +696,7 @@ journalctl -u tradinebotte-account-account-a -f
 | Config / clé | `~/tradinebotte/config.json` | `~/account-X/config.json` par compte |
 | Fichier stratégie | `TRADINEBOTTE_DIR/strategies/` | `TRADINEBOTTE_DIR/strategies/` par compte |
 | Reprise après crash | `restore_state_from_db()` au démarrage | identique, par compte |
-| Logique du signal | `live_bot.check_signal()` | identique (importé depuis `live_bot`) |
+| Logique du signal | `pm_strategy.check_signal()` | identique (ré-exporté via `live_bot`) |
 | Service systemd | `tradinebotte.service` | unités séparées pour le feed + chaque compte |
 
 ---

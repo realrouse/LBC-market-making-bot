@@ -6,6 +6,14 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [0.89.1] — 2026-07-02
+
+### Documentation
+- **Documentation alignée sur l'architecture des modules actuelle** — la 0.89 a réorganisé le code en un cœur neutre (`botcore` : interface de stratégie, registre de connecteurs, persistance, schéma de base) avec les bots Polymarket et CEX comme plugins pairs, mais la documentation décrivait encore l'ancienne organisation monofichier. Le README, INSTALL, CONTRIBUTING, le document de conception et les guides multi-bot / snapshots / grid / how-to décrivent désormais le cœur neutre et les modules-plugins plats `pm_*` / `cex_consumer`, attribuent les fonctions déplacées (p. ex. `save_snapshot`, `check_signal`, `cex_feed_consumer_loop`) aux fichiers qui les définissent désormais, et suppriment les chemins de l'ancien sous-répertoire `bot/` ainsi que l'instruction obsolète « modifier un import pour changer d'exchange » (l'exchange se choisit désormais par un nom de `connector` dans la config de stratégie, chargé depuis le registre). Les docs anglaise et française ont été mises à jour ensemble.
+- **Nouveau diagramme d'architecture des modules** — ajout d'une figure compagnon (`docs/architecture_modules.png`, produite par `docs/gen_architecture_diagram.py`) montrant le cœur neutre avec les plugins Polymarket et CEX comme pairs, référencée depuis le document de conception. Le diagramme de topologie des services / ZMQ existant est inchangé, car la topologie d'exécution n'a pas changé — seule l'organisation interne du code a évolué.
+
+---
+
 ## [0.89] — 2026-06-29
 
 ### Ajouté

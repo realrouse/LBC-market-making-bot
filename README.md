@@ -6,16 +6,17 @@ Multi-strategy automated BTC/USDT trading platform for CEX spot markets. Runs ac
 
 ## Architecture
 
-Four independent subsystems communicate over ZMQ IPC sockets:
+Independent subsystems communicate over ZMQ IPC sockets, built on a shared neutral core:
 
 | Subsystem | Path | Role |
 |---|---|---|
+| Bot core | `tradinebotte-core/` | Neutral `botcore` package: Strategy protocol, connector registry, persistence, base schema — no exchange-specific code |
 | CEX bots | `tradinebotte-cex/` | Trade execution, strategy engines |
 | Indicators | `tradinebotte-indicators/` | Real-time signal pipeline |
 | Status | `tradinebotte-status/` | Health monitoring, dashboard |
 | Shared library | `tradinetools/` | Math, ZMQ helpers, logging |
 
-An optional Polymarket connector (`tradinebotte-polymarket/`) targets BTC prediction markets on Polygon — see [Polymarket module](#polymarket-module) below.
+Each bot family is a peer plugin behind the `botcore` interfaces: a `Strategy` implementation, a connector (exchange adapter), and a data plane. An optional Polymarket connector (`tradinebotte-polymarket/`) targets BTC prediction markets on Polygon — see [Polymarket module](#polymarket-module) below.
 
 See [docs/design.md](docs/design.md) for the full process architecture and ZMQ message-flow reference.
 
@@ -53,7 +54,7 @@ Long-term cycle strategy: three production configs in `tradinebotte-cex/strategi
 | `api_mexc_futures.py` | MEXC Futures perpetual | HMAC-SHA256 (ApiKey + Request-Time headers) |
 | `api_bitstamp.py` | Bitstamp spot | OAuth2 |
 
-Shared helpers in `api_common.py`: order book parsing, HMAC signing, dry-run mode. Adding an exchange requires only a new adapter file. `validate()` in `tradinebotte-cex/connectors/__init__.py` checks connector/strategy method compatibility at startup and raises `RuntimeError` with the full list of missing methods.
+Shared helpers in `api_common.py`: order book parsing, HMAC signing, dry-run mode. Adding an exchange requires only a new adapter file. `validate()` in the `botcore.connectors` registry (re-exported through `tradinebotte-cex/connectors/__init__.py`) checks connector/strategy method compatibility at startup and raises `RuntimeError` with the full list of missing methods.
 
 **Binance Simple Earn Flexible** (`earn_manager.py`): `EarnManager` parks idle USDT after sell trades (`park_idle()`) and redeems before buy trades (`ensure_liquid()`). Automatic product discovery and APR reporting. Sim mode when credentials are absent. MEXC Earn not supported (API too unstable).
 
@@ -140,8 +141,8 @@ python3 analysis/download_btc_history.py --start 2024-10-15 --end 2025-01-15  # 
 
 `tradinebotte-polymarket/` — prediction market connector for BTC Up/Down 5-minute and 15-minute markets on Polygon. Fully operational; included as one connector among several rather than the primary use case.
 
-- **`live_bot.py`** — single-file async state machine; entry on `best_bid >= 0.95`; WIN at bid ≥ 0.99, LOSS at bid ≤ 0.01; daily stop-loss ($30), crash recovery (restores unresolved trades on startup), optional HTML status page with HTTP Basic Auth
-- **`feed.py` + `account_bot.py`** — multi-bot WebSocket sharing via ZMQ IPC; each `account_bot.py` trades with a fully isolated SQLite DB, log, and config
+- **`live_bot.py`** — async entrypoint over the `botcore` neutral core; the Polymarket trading logic and data plane live in flat plugin modules beside it (`pm_strategy.py`, `pm_data.py`, `pm_types.py`, `pm_calendar.py` + `api_polymarket.py`), re-exported by `live_bot` for back-compat. Entry on `best_bid >= 0.95`; WIN at bid ≥ 0.99, LOSS at bid ≤ 0.01; daily stop-loss ($30), crash recovery (restores unresolved trades on startup), optional HTML status page with HTTP Basic Auth
+- **`feed.py` + `account_bot.py`** — multi-bot WebSocket sharing via ZMQ IPC; each `account_bot.py` (run flat, no `bot/` subdir) trades with a fully isolated SQLite DB, log, and config
 - **Strategy files**: `tradinebotte-polymarket/strategies/polymarket_BTC5M.json`; `polymarket_BTC5M_piste3.json` adds dynamic stake scaling (`bid_alpha`), OBI rejection, and weekly stop-loss; see [docs/KellySizing.md](docs/KellySizing.md) for the fractional Kelly sizing design
 - **Database** `live.db` (SQLite WAL): `trades` table (21 columns — full signal context through resolution), `snapshots` table (5-second price snapshots for post-analysis); see [docs/snapshots.md](docs/snapshots.md) for schema and query reference
 - **Useful queries**:
@@ -186,7 +187,7 @@ See [docs/HOWTO_tests_and_backtests.md](docs/HOWTO_tests_and_backtests.md) for a
 - Do not modify strategy parameters without re-running the corresponding backtest.
 - `POLY_PRIVATE_KEY` absent → Polymarket orders are simulated (no on-chain execution).
 - WebSocket recv timeouts at ~30s during quiet periods are normal — auto-reconnect handles them.
-- mypy `--ignore-missing-imports` reports 0 errors across all four subsystems.
+- mypy `--ignore-missing-imports` reports 0 errors across all subsystems.
 
 ## License
 

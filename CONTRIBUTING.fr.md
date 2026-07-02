@@ -337,8 +337,10 @@ Checklist pour tout chemin consommateur de données nouveau ou modifié / foncti
 partagée du hot-path :
 
 - [ ] **Snapshots persistés ?** Faire passer l'écriture par l'étape partagée
-      (`_persist_snapshot` dans `live_bot.py`, `_record_accum_snapshot` dans
-      `accumulation_bot.py`) — ne pas inliner un `INSERT` nu.
+      (`_persist_snapshot` dans `botcore.persistence`, `_record_accum_snapshot` dans
+      `accumulation_bot.py`) — ne pas inliner un `INSERT` nu. Le bug du 2026-06-16
+      ci-dessus est corrigé : `cex_feed_consumer_loop` appelle désormais
+      `save_cex_snapshot` (`cex_consumer.py`).
 - [ ] **Horloge de fraîcheur avancée ?** Mettre à jour `last_write_ts` à chaque ligne
       persistée. Le badge `⚠data` de la status page en dépend — un bot qui enregistre
       mais ne la met jamais à jour (ou qui n'enregistre rien) doit apparaître stale, pas
