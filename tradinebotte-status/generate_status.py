@@ -46,7 +46,7 @@ _REMOTE_COLLECT = r"""
 import sqlite3, json, os, subprocess, glob
 
 data = {"version": "?", "services": [], "live": None, "grids": [],
-        "accum": None, "heartbeats": None}
+        "accum": None, "heartbeats": None, "pnl_windows": {}}
 
 try:
     data["version"] = open(os.path.expanduser("~/tradinebotte/version.stamp")).read().strip()
@@ -166,6 +166,71 @@ data["deploys"] = _qdb("/data1/tradinebotte-shared/database/tradinebotte.db", {
     ),
 })
 
+
+# ── Windowed PnL (daily / weekly / monthly / alltime) ────────────────────────
+# From heartbeat *history* in the shared state DB — the only source that (a) covers
+# every family uniformly (grid_bot keeps no per-trade log) and (b) survives a per-bot
+# live.db reset (the history lives in the shared DB, not the wiped live.db). pnl_total
+# is cumulative "since reset"; a window value is pnl_now - pnl_at(window_start). A ZMQ
+# reset zeroes pnl_total, so when a reset falls inside the window we clamp the baseline
+# to just after it (→ post-reset PnL, consistent with alltime = "since reset") and flag
+# it. daily comes straight from the bot-authoritative daily_pnl (resets UTC midnight).
+def _compute_pnl_windows(shared_path):
+    import time as _t
+    shared_path = os.path.expanduser(shared_path)
+    if not os.path.exists(shared_path):
+        return {}
+    now = int(_t.time())
+    wdb = sqlite3.connect(shared_path)
+    wdb.row_factory = sqlite3.Row
+    latest = {}
+    for r in wdb.execute("SELECT account, bot_name, payload, max(ts) FROM heartbeats"
+                         " GROUP BY account, bot_name"):
+        try:
+            p = json.loads(r["payload"]) if r["payload"] else {}
+        except Exception:
+            p = {}
+        latest[(r["account"], r["bot_name"])] = p
+    out = {}
+    windows = {"weekly": 7 * 86400, "monthly": 30 * 86400}
+    horizon = now - 30 * 86400
+    for (acct, bot), p in latest.items():
+        pt = p.get("pnl_total")
+        rec = {"daily": p.get("daily_pnl"), "alltime": pt,
+               "weekly": None, "monthly": None,
+               "weekly_reset": False, "monthly_reset": False}
+        if isinstance(pt, (int, float)):
+            series = [(row["ts"], row["p"]) for row in wdb.execute(
+                "SELECT ts, json_extract(payload,'$.pnl_total') p FROM heartbeats"
+                " WHERE account=? AND bot_name=? AND ts>=?"
+                " AND json_extract(payload,'$.pnl_total') IS NOT NULL ORDER BY ts",
+                (acct, bot, horizon))]
+            for wname, secs in windows.items():
+                wstart = now - secs
+                first_val = reset_val = None
+                reset = False
+                prev = None
+                for ts, val in series:
+                    # A reset wipes pnl_total to exactly 0 — that lands-on-zero signature
+                    # distinguishes it from an ordinary drawdown (arbitrary value).
+                    if prev is not None and abs(val) < 0.01 and abs(prev) > 1.0 and ts >= wstart:
+                        reset_val = val
+                        reset = True
+                    if ts >= wstart and first_val is None:
+                        first_val = val
+                    prev = val
+                base = reset_val if reset else first_val
+                if base is not None:
+                    rec[wname] = pt - base
+                    rec[wname + "_reset"] = reset
+        out[f"{acct}|{bot}"] = rec
+    wdb.close()
+    return out
+
+
+data["pnl_windows"] = _compute_pnl_windows(
+    "/data1/tradinebotte-shared/database/tradinebotte.db")
+
 print(json.dumps(data))
 """
 
@@ -197,12 +262,12 @@ def _collect_account(user: str, password: str, server: str, port: int) -> dict:
     stdout, _ = _ssh(user, password, server, port, cmd)
     if not stdout.strip():
         return {"version": "?", "services": [], "live": None, "accum": None,
-                "heartbeats": None, "error": "unreachable"}
+                "heartbeats": None, "pnl_windows": {}, "error": "unreachable"}
     try:
         return json.loads(stdout.strip())
     except json.JSONDecodeError:
         return {"version": "?", "services": [], "live": None, "accum": None,
-                "heartbeats": None, "error": "parse_error"}
+                "heartbeats": None, "pnl_windows": {}, "error": "parse_error"}
 
 
 # ─── Heartbeat classification ────────────────────────────────────────────────
@@ -427,6 +492,40 @@ details summary:hover{color:#c9d1d9}
 /* ── Open trade badges ────────────────────────────────── */
 .open-trades{margin:4px 0;font-size:.8em}
 
+/* ── Window toggle (daily / weekly / monthly / alltime) ─ */
+.win-toggle{display:flex;align-items:center;gap:6px;margin:14px 0 4px;flex-wrap:wrap}
+.win-toggle .wt-lbl{color:#8b949e;font-size:.78em;text-transform:uppercase;letter-spacing:1px}
+.wbtn{background:#161b22;border:1px solid #30363d;color:#8b949e;border-radius:6px;
+      padding:5px 13px;font:inherit;font-size:.82em;cursor:pointer;transition:all .12s}
+.wbtn:hover{border-color:#58a6ff55;color:#c9d1d9}
+body.win-daily .wbtn-daily,body.win-weekly .wbtn-weekly,
+body.win-monthly .wbtn-monthly,body.win-alltime .wbtn-alltime{
+  background:#1f6feb;border-color:#1f6feb;color:#fff;font-weight:600}
+/* Windowed PnL values: every value is rendered as 4 spans; only the active shows. */
+.pw{display:none}
+body.win-daily .pw-daily,body.win-weekly .pw-weekly,
+body.win-monthly .pw-monthly,body.win-alltime .pw-alltime{display:inline}
+.rst{color:#d29922;cursor:help;font-size:.9em}
+
+/* ── Bot family sections (primary "by bot" view) ──────── */
+.families{display:flex;flex-direction:column;gap:10px;margin-top:8px}
+.fam{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px 14px}
+.fam-head{display:flex;align-items:center;gap:10px;margin-bottom:6px;
+          border-bottom:1px solid #21262d;padding-bottom:6px;flex-wrap:wrap}
+.fam-name{font-weight:700;color:#c9d1d9;font-size:.95em}
+.fam-count{font-size:.78em;font-weight:600}
+.fam-pnl{margin-left:auto;font-size:1.05em;font-weight:700}
+.fam-row{display:flex;align-items:center;gap:7px;padding:4px 2px;
+         border-bottom:1px solid #1c2029;font-size:.83em}
+.fam-row:last-child{border-bottom:none}
+.fam-row:hover{background:#1c2029;border-radius:4px}
+.fam-acct{color:#8b949e;min-width:118px;flex-shrink:0}
+.fam-val{font-weight:700;min-width:82px}
+.fam-val.stale-val{opacity:.45}
+.fam-cap{color:#8b949e;font-size:.9em;margin-left:8px}
+.fam-detail{color:#8b949e;font-size:.92em;flex:1;min-width:0;overflow:hidden;
+            text-overflow:ellipsis;white-space:nowrap}
+
 /* ── Footer ───────────────────────────────────────────── */
 .footer{margin-top:28px;font-size:.72em;color:#484f58;border-top:1px solid #21262d;
          padding-top:10px}
@@ -650,6 +749,134 @@ def _render_heartbeat_pills(hb_rows: list) -> str:
             f"</div>"
         )
     return f"<div class='hb-pills'>{pills}</div>"
+
+
+# ─── Bot-family view (primary "by bot, not by account" layout) ───────────────
+
+# Families that carry a comparable cumulative PnL (pnl_total) — these get windowed
+# PnL. accumulation_bot heartbeats holdings/realized (its pnl_total is a flat 0), so it
+# is a detail family: its rows show the payload summary, not a misleading windowed $0.
+_PNL_FAMILIES = {"live_bot", "grid_bot", "swing_bot", "orderbook_bot", "account_bot"}
+_FAMILY_ORDER = ["live_bot", "grid_bot", "swing_bot", "orderbook_bot", "account_bot",
+                 "accumulation_bot", "feed", "feed5m", "cex_feed", "indicators"]
+_FAMILY_TITLES = {
+    "live_bot":         "live_bot · Polymarket",
+    "grid_bot":         "grid_bot · CEX grid",
+    "swing_bot":        "swing_bot · CEX swing",
+    "orderbook_bot":    "orderbook_bot · CEX orderbook",
+    "account_bot":      "account_bot · Polymarket feed consumer",
+    "accumulation_bot": "accumulation_bot · CEX accumulation",
+    "feed":             "feed · Polymarket 15M",
+    "feed5m":           "feed5m · Polymarket 5M",
+    "cex_feed":         "cex_feed · CEX market feed",
+    "indicators":       "indicators · signal publisher",
+}
+_RESET_MARK = ("<span class='rst' title='reset dans cette fenêtre — "
+               "PnL calculé depuis le reset'>⚠</span>")
+
+_WINS = ("daily", "weekly", "monthly", "alltime")
+
+
+def _fmt_pnl_val(v) -> str:
+    if not isinstance(v, (int, float)):
+        return "<span class='no-data'>—</span>"
+    cls = "pnl-pos" if v >= 0 else "pnl-neg"
+    return f"<span class='{cls}'>{'+' if v >= 0 else '-'}${abs(v):.2f}</span>"
+
+
+def _win_spans(rec: dict) -> str:
+    """The four window spans for one bot's PnL record; CSS shows only the active one."""
+    return "".join(
+        f"<span class='pw pw-{w}'>{_fmt_pnl_val(rec.get(w))}"
+        f"{_RESET_MARK if rec.get(w + '_reset') else ''}</span>"
+        for w in _WINS
+    )
+
+
+def _sum_windows(recs: list) -> dict:
+    """Aggregate several bots' window records into one {window: (sum|None, reset)}."""
+    agg = {}
+    for w in _WINS:
+        vals = [r.get(w) for r in recs if isinstance(r.get(w), (int, float))]
+        reset = any(r.get(w + "_reset") for r in recs)
+        agg[w] = (sum(vals), reset) if vals else (None, False)
+    return agg
+
+
+def _win_spans_agg(agg: dict) -> str:
+    return "".join(
+        f"<span class='pw pw-{w}'>{_fmt_pnl_val(agg[w][0])}"
+        f"{_RESET_MARK if agg[w][1] else ''}</span>"
+        for w in _WINS
+    )
+
+
+def _render_bot_families(heartbeats: list, pnl_windows: dict, now: int) -> str:
+    """Group every bot by family (not by account); windowed PnL toggled via the buttons.
+
+    Each family is a section; its instances (one per account) are the rows. PnL families
+    show windowed PnL + capital; detail families (feeds, accumulation) show the payload
+    summary. The account is demoted to a per-row label.
+    """
+    if not heartbeats:
+        return "<p class='no-data'>No heartbeat data available</p>"
+    pw = pnl_windows or {}
+    by_family: dict[str, list] = {}
+    for r in heartbeats:
+        by_family.setdefault(r["bot_name"], []).append(r)
+    ordered = [f for f in _FAMILY_ORDER if f in by_family]
+    ordered += sorted(f for f in by_family if f not in _FAMILY_ORDER)
+
+    sections = ""
+    for fam in ordered:
+        rows = sorted(by_family[fam], key=lambda r: (r.get("_label") or r["account"]))
+        is_pnl = fam in _PNL_FAMILIES
+        recs = [pw.get(f"{r['account']}|{fam}", {}) for r in rows]
+        alive = sum(1 for r in rows if r["flag"] == "ALIVE")
+        alive_cls = "alive" if alive == len(rows) else ("dead" if alive == 0 else "stale")
+        title = escape(_FAMILY_TITLES.get(fam, fam))
+        head_pnl = (f"<span class='fam-pnl'>{_win_spans_agg(_sum_windows(recs))}</span>"
+                    if is_pnl else "")
+
+        irows = ""
+        for r, rec in zip(rows, recs):
+            flag = r["flag"]
+            acct_short = r.get("_label") or r["account"]
+            payload = r.get("payload", {}) or {}
+            mode = _mode_badge(acct_short, fam)
+            data_badge = ("<span class='badge stale' style='font-size:.6em'>⚠data</span>"
+                          if _data_flag(payload, now) else "")
+            detail = escape(_render_payload_summary(fam, payload, now))
+            if is_pnl:
+                vcls = " stale-val" if flag != "ALIVE" else ""
+                cap = payload.get("capital")
+                cap_str = (f"<span class='fam-cap'>cap ${cap:,.0f}</span>"
+                           if isinstance(cap, (int, float)) else "")
+                val_cell = f"<span class='fam-val{vcls}'>{_win_spans(rec)}</span>{cap_str}"
+            else:
+                val_cell = f"<span class='fam-detail'>{detail}</span>"
+            age_min = r["age_s"] // 60
+            age_str = f"{age_min}min" if age_min < 120 else f"{age_min // 60}h{age_min % 60:02d}m"
+            irows += (
+                f"<div class='fam-row tt'>"
+                f"<span class='badge {flag.lower()}' style='font-size:.6em'>{flag}</span>"
+                f"{data_badge}{mode}"
+                f"<span class='fam-acct'>{escape(acct_short)}</span>"
+                f"{val_cell}"
+                f"<div class='tip tip-up'>"
+                f"<div class='tip-row'>{detail}</div>"
+                f"<div class='tip-dim'>age {age_str} · v={escape(r['version'])}</div>"
+                f"</div></div>"
+            )
+        sections += (
+            f"<div class='fam'>"
+            f"<div class='fam-head'>"
+            f"<span class='fam-name'>{title}</span>"
+            f"<span class='fam-count {alive_cls}'>{alive}/{len(rows)}</span>"
+            f"{head_pnl}"
+            f"</div>{irows}</div>"
+        )
+    return f"<div class='families'>{sections}</div>"
 
 
 def _render_trade_table(rows: list, db_type: str = "live") -> str:
@@ -1070,7 +1297,9 @@ def _render_html(
     inventory: list | None = None,
     deploys: list | None = None,
     user_to_label: dict | None = None,
+    pnl_windows: dict | None = None,
 ) -> str:
+    pnl_windows = pnl_windows or {}
     # The collector account (index 0) is the sole source of fleet heartbeat data — if it
     # failed, an empty `heartbeats` means "unknown", not "nothing wrong".
     collector_down = bool(accounts and accounts[0].get("error"))
@@ -1102,8 +1331,8 @@ def _render_html(
 
     # Fleet PnL — single source of truth: the heartbeat payload every bot emits
     # (Polymarket AND CEX), so the totals cover the whole fleet, not just live.db
-    # accounts. Only Today + Lifetime are available fleet-wide (payloads carry
-    # daily_pnl + pnl_total; they don't carry 7d/30d windows).
+    # accounts. Today + Lifetime come straight from the payloads; the weekly/monthly
+    # windows come from pnl_windows (heartbeat-history diff, computed on the collector).
     today_pnl_total = life_pnl_total = 0.0
     for _hb in heartbeats:
         _pl = _hb.get("payload") or {}
@@ -1111,16 +1340,23 @@ def _render_html(
             today_pnl_total += _pl["daily_pnl"]
         if isinstance(_pl.get("pnl_total"), (int, float)):
             life_pnl_total += _pl["pnl_total"]
-    pnl_sign    = "+" if today_pnl_total >= 0 else ""
-    pnl_val_cls = "pnl-pos" if today_pnl_total >= 0 else "pnl-neg"
+
+    # Fleet-wide windowed value follows the active window toggle. When no windowed
+    # history is available (collector down / unit tests) fall back to the daily total.
+    if pnl_windows:
+        fleet_pnl_html = _win_spans_agg(_sum_windows(list(pnl_windows.values())))
+    else:
+        _s = "+" if today_pnl_total >= 0 else ""
+        _c = "pnl-pos" if today_pnl_total >= 0 else "pnl-neg"
+        fleet_pnl_html = f"<span class='{_c}'>{_s}${today_pnl_total:.2f}</span>"
 
     summary_bar = (
         f"<div class='summary-bar'>"
         f"<div class='sb-item'><div class='lbl'>Bots alive</div>"
         f"<div class='val {alive_cls}'>{alive_display}</div></div>"
         f"<div class='sb-item tt'>"
-        f"<div class='lbl'>Today PnL</div>"
-        f"<div class='val {pnl_val_cls}'>{pnl_sign}${today_pnl_total:.2f}</div>"
+        f"<div class='lbl'>PnL (fenêtre)</div>"
+        f"<div class='val'>{fleet_pnl_html}</div>"
         f"<div class='tip'>"
         f"<span class='tip-label'>PnL — all bots (from heartbeats)</span>"
         f"<div class='tip-row'><span style='color:#8b949e;min-width:74px;display:inline-block'>Today (UTC)</span>"
@@ -1166,7 +1402,7 @@ def _render_html(
     else:
         btc_price_html = ""
 
-    hb_html    = _render_heartbeat_pills(heartbeats)
+    families_html = _render_bot_families(heartbeats, pnl_windows, int(time.time()))
 
     # Build per-account heartbeat rows (acct_short = first word of label, e.g. "acct-3")
     def _acct_hb(label: str) -> list:
@@ -1192,7 +1428,7 @@ def _render_html(
 <title>tradinebotte — status</title>
 <style>{_CSS}</style>
 </head>
-<body>
+<body class="win-daily">
 <h1>
   <span class="dot {dot_cls}"></span>
   tradinebotte — {escape(status_text)}
@@ -1200,11 +1436,27 @@ def _render_html(
   <span style="font-size:.6em;color:#8b949e;font-weight:400">{ts_str}</span>
 </h1>
 {banners_html}
+<div class="win-toggle">
+  <span class="wt-lbl tt">PnL&nbsp;:
+    <div class="tip tip-up">
+      <span class="tip-label">Fenêtres de PnL (depuis les heartbeats)</span>
+      <div class="tip-row">Jour — journée UTC en cours (remis à zéro à minuit)</div>
+      <div class="tip-row">Semaine / Mois — glissant sur 7&nbsp;/&nbsp;30 jours</div>
+      <div class="tip-row">Depuis reset — cumulé depuis le dernier reset du bot</div>
+      <div class="tip-dim">⚠ = un reset tombe dans la fenêtre → PnL calculé depuis ce reset.
+        Historique ~18&nbsp;j : « Mois » ≈ « Depuis reset » tant que 30&nbsp;j ne sont pas accumulés.</div>
+    </div>
+  </span>
+  <button class="wbtn wbtn-daily" onclick="setWin('daily')">Jour</button>
+  <button class="wbtn wbtn-weekly" onclick="setWin('weekly')">Semaine</button>
+  <button class="wbtn wbtn-monthly" onclick="setWin('monthly')">Mois</button>
+  <button class="wbtn wbtn-alltime" onclick="setWin('alltime')">Depuis reset</button>
+</div>
 {summary_bar}
+<h2>Bots — par famille</h2>
+{families_html}
 {expected_html}
-<h2>Infrastructure — Heartbeats</h2>
-{hb_html}
-<h2>Accounts — Services &amp; Trades</h2>
+<h2>Comptes — services &amp; trades (détail)</h2>
 <div class="accounts">
 {cards_html}
 </div>
@@ -1213,7 +1465,14 @@ def _render_html(
   · <span id="rf-ct">refresh in 60s</span>
 </div>
 <script>
+function setWin(w){{
+  var b=document.body,c=b.className.replace(/\\bwin-\\w+\\b/g,'').trim();
+  b.className=(c?c+' ':'')+'win-'+w;
+  try{{localStorage.setItem('tbwin',w);}}catch(e){{}}
+}}
 (function(){{
+  var w='daily';try{{w=localStorage.getItem('tbwin')||'daily';}}catch(e){{}}
+  setWin(w);
   var t=60,el=document.getElementById('rf-ct');
   setInterval(function(){{t--;if(t<=0)t=60;el&&(el.textContent='refresh in '+t+'s');}},1000);
 }})();
@@ -1289,6 +1548,9 @@ def main() -> None:
     inventory_rows = _rows("inventory")
     deploy_rows    = _rows("deploys")
 
+    # Windowed PnL is computed on the collector account (it owns the shared state DB).
+    pnl_windows = accounts_data[0].get("pnl_windows") or {}
+
     html = _render_html(
         heartbeats=heartbeats,
         accounts=accounts_data,
@@ -1297,6 +1559,7 @@ def main() -> None:
         inventory=inventory_rows,
         deploys=deploy_rows,
         user_to_label=user_to_label,
+        pnl_windows=pnl_windows,
     )
 
     if args.out:
