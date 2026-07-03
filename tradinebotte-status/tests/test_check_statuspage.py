@@ -25,25 +25,33 @@ def _stamp(age_s: int) -> str:
 
 
 def _good_body(age_s: int = 30) -> str:
-    return f"""<!DOCTYPE html><html><head>
+    # Mirrors the bilingual structure: one .langbox per language, class-based markers,
+    # setWin/setLang scripts. The en box is first (default language).
+    return f"""<!DOCTYPE html><html lang="en"><head>
 <title>tradinebotte — status</title></head>
-<body class="win-daily">
-<h1><span class="dot ok"></span>
-  tradinebotte — All systems nominal
+<body class="win-daily lang-en" data-title-en="tradinebotte — status" data-title-fr="tradinebotte — statut">
+<div class='langbox i18-en'>
+<h1><span class='dot ok'></span> tradinebotte — All systems nominal
+  <span class='lang-sel'><button onclick="setLang('en')">EN</button><button onclick="setLang('fr')">FR</button></span>
   <span>{_stamp(age_s)} UTC</span>
 </h1>
 <div class='summary-bar'>…</div>
 <div class="win-toggle">
-  <button onclick="setWin('daily')">Jour</button>
-  <button onclick="setWin('weekly')">Semaine</button>
-  <button onclick="setWin('monthly')">Mois</button>
-  <button onclick="setWin('alltime')">Depuis reset</button>
+  <button onclick="setWin('daily')">Day</button>
+  <button onclick="setWin('weekly')">Week</button>
+  <button onclick="setWin('monthly')">Month</button>
+  <button onclick="setWin('alltime')">Since reset</button>
 </div>
-<h2>Bots — par famille</h2>
+<h2>Bots — by family</h2>
 <div class='families'><span class='pw pw-weekly'><span class='pnl-pos'>+$45.21</span></span><span class='pw pw-monthly'><span class='pnl-pos'>+$226.57</span></span></div>
-<h2>Comptes</h2><div class="accounts"></div>
+<h2>Accounts</h2><div class='accounts'></div>
 <div class="footer">Generated {_stamp(age_s)} UTC</div>
-<script>function setWin(w){{}}</script>
+</div>
+<div class='langbox i18-fr'>
+<h1><span class='dot ok'></span> tradinebotte — Tous les systèmes nominaux</h1>
+<div class='families'></div>
+</div>
+<script>function setWin(w){{}}function setLang(l){{}}</script>
 </body></html>"""
 
 
@@ -97,10 +105,21 @@ class TestEvaluate(unittest.TestCase):
         self.assertIs(res["freshness"].status, c.Status.FAIL)
 
     def test_missing_core_section_fails(self):
-        body = _good_body().replace("Bots — par famille", "Bots by account")
+        # Core markers are class-based (language-agnostic): drop the family container.
+        body = _good_body().replace("class='families'", "class='fam-broken'")
         res = _by_name(c.evaluate(body, _meta(), NOW))
         self.assertIs(res["core sections"].status, c.Status.FAIL)
         self.assertIn("bot-family view", res["core sections"].detail)
+
+    def test_language_switch_present(self):
+        res = _by_name(c.evaluate(_good_body(), _meta(), NOW))
+        self.assertIs(res["language switch"].status, c.Status.PASS)
+        self.assertIn("2 language", res["language switch"].detail)
+
+    def test_language_switch_missing_warns(self):
+        body = _good_body().replace("setLang(", "noLang(")
+        res = _by_name(c.evaluate(body, _meta(), NOW))
+        self.assertIs(res["language switch"].status, c.Status.WARN)
 
     def test_missing_window_toggle_warns(self):
         body = _good_body().replace("pw-weekly", "pw-xxx")

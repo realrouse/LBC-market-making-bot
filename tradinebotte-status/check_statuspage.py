@@ -96,25 +96,29 @@ def _fmt_age(secs: int) -> str:
 
 # ── Pure evaluation ──────────────────────────────────────────────────────────
 
-# Core structural markers that MUST be present in a well-rendered page.
+# Core structural markers that MUST be present in a well-rendered page. Keyed on stable
+# CSS classes, not translated prose, so the check is language-agnostic (the page ships
+# every language inline and toggles client-side).
 _CORE_MARKERS = {
     "title":            "<title>tradinebotte",
     "summary bar":      "class='summary-bar'",
-    "bot-family view":  "Bots — par famille",
-    "accounts section": 'class="accounts"',
+    "bot-family view":  "class='families'",
+    "accounts section": "class='accounts'",
 }
-# Markers of the windowed-PnL feature (daily/weekly/monthly/alltime toggle).
+# Markers of the windowed-PnL feature (daily/weekly/monthly/alltime toggle) and the
+# language switch — all class/JS based, never button text (which is translated).
 _WINDOW_MARKERS = {
-    "toggle bar":  "win-toggle",
-    "weekly spans": "pw-weekly",
+    "toggle bar":    "win-toggle",
+    "weekly spans":  "pw-weekly",
     "monthly spans": "pw-monthly",
     "toggle script": "setWin(",
-    "Jour button":  ">Jour<",
-    "Semaine button": ">Semaine<",
-    "Mois button":  ">Mois<",
-    "reset button": ">Depuis reset<",
+}
+_I18N_MARKERS = {
+    "language switch": "setLang(",
+    "language boxes":  "class='langbox",
 }
 # Strings that must NEVER appear — unrendered templates / crash artifacts / repr leaks.
+# `fam_`, `sb_`, `win_`, `th_` etc. are i18n keys — if one leaks, a translation is missing.
 _ARTIFACTS = [
     "Traceback (most recent call last)",
     "__REPO_DIR__",
@@ -123,8 +127,9 @@ _ARTIFACTS = [
     "object at 0x",
 ]
 
-# Anchored on the status dot so it matches the H1 headline, not the <title>.
-_HEADLINE_RE = re.compile(r'class="dot \w+"></span>\s*tradinebotte\s+—\s+([^<\n]+)')
+# Anchored on the status dot so it matches the H1 headline, not the <title>. Quote-agnostic
+# (the H1 is rendered inside each language box; the first is the default language).
+_HEADLINE_RE = re.compile(r"""class=['"]dot \w+['"]></span>\s*tradinebotte\s+—\s+([^<\n]+)""")
 
 # A windowed-PnL span carrying an actual '$' value (vs the "—" no-data placeholder). The
 # lazy (?!</span>) stops at the span's own close, so this matches only a $ inside the span.
@@ -194,6 +199,14 @@ def evaluate(body: str, meta: dict, now: int,
     results.append(_r("window toggle", Status.PASS if not win_missing else Status.WARN,
                       "daily/weekly/monthly/alltime present" if not win_missing
                       else f"missing: {', '.join(win_missing)}"))
+
+    # 6c. Language switch — the selector + at least one language box must be present.
+    i18n_missing = [name for name, marker in _I18N_MARKERS.items() if marker not in body]
+    n_langs = body.count("class='langbox i18-")
+    if i18n_missing:
+        results.append(_r("language switch", Status.WARN, f"missing: {', '.join(i18n_missing)}"))
+    else:
+        results.append(_r("language switch", Status.PASS, f"{n_langs} language(s)"))
 
     # 6b. Windowed PnL has actual DATA — the markers above can all be present while every
     #     value renders "—" because the remote _compute_pnl_windows returned {} (the
