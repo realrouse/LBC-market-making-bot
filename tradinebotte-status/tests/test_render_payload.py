@@ -43,6 +43,37 @@ class TestRenderPayloadSummary(unittest.TestCase):
         self.assertNotIn("None", out)
 
 
+class TestAccountBotRendering(unittest.TestCase):
+    """account_bot (Polymarket feed consumer) shares live_bot's payload shape, so its
+    tooltip labels must mean the same thing: pnl=/day=/trades= are cumulative/daily/total,
+    NOT daily/open (the pre-fix branch mislabelled them, contradicting its windowed PnL)."""
+
+    _PAYLOAD = {"pnl_total": 64.77, "daily_pnl": 0.79, "trades_total": 513,
+                "capital": 1064.77, "open_trades": 2,
+                "last_feed_msg_ts": _NOW - 30}
+
+    def test_pnl_is_cumulative_not_daily(self):
+        out = g._render_payload_summary("account_bot", self._PAYLOAD, _NOW)
+        self.assertIn("pnl=$+64.77", out)   # cumulative headline, matches alltime span
+        self.assertIn("day=$+0.79", out)    # daily shown separately
+        self.assertNotIn("pnl=$+0.79", out)  # regression: daily must NOT be labelled pnl=
+
+    def test_trades_is_total_not_open(self):
+        out = g._render_payload_summary("account_bot", self._PAYLOAD, _NOW)
+        self.assertIn("trades=513", out)    # total, not open_trades (2)
+        self.assertIn("open=2", out)
+        self.assertIn("cap=$1065", out)
+        self.assertIn("feed=", out)
+        self.assertNotIn("None", out)
+
+    def test_old_heartbeat_without_pnl_total_falls_back_to_daily(self):
+        out = g._render_payload_summary(
+            "account_bot", {"daily_pnl": 1.5, "open_trades": 0}, _NOW)
+        self.assertIn("pnl=$+1.50", out)    # no pnl_total → daily shown as pnl=
+        self.assertNotIn("day=", out)
+        self.assertNotIn("None", out)
+
+
 class TestOrderbookBotRendering(unittest.TestCase):
     """orderbook_bot has its own payload shape (total_pnl / open_positions / last_price)."""
 

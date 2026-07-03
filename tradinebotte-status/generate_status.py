@@ -484,13 +484,23 @@ details summary:hover{color:#c9d1d9}
 .pnl-pos{color:#3fb950}.pnl-neg{color:#f85149}
 
 /* ── BTC price in header ──────────────────────────────── */
-.btc-price{font-size:.78em;color:#8b949e;margin-left:auto;display:flex;
+.btc-price{font-size:.78em;color:#8b949e;display:flex;
             align-items:center;gap:6px;white-space:nowrap}
 .btc-price .price{color:#e6a817;font-weight:700;font-size:1.05em}
 .btc-price .chg.up{color:#3fb950}.btc-price .chg.dn{color:#f85149}
 
 /* ── Open trade badges ────────────────────────────────── */
 .open-trades{margin:4px 0;font-size:.8em}
+
+/* ── Header right-hand group (BTC · timestamp · language switch, top-right) ── */
+.h1-right{margin-left:auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+
+/* ── Language switch (one .langbox per language, toggled by a body class) ── */
+.langbox{display:none}
+.lang-sel{display:inline-flex;gap:4px;align-self:center}
+.lbtn{background:#161b22;border:1px solid #30363d;color:#8b949e;border-radius:5px;
+      padding:3px 9px;font:inherit;font-size:.6em;cursor:pointer;transition:all .12s}
+.lbtn:hover{border-color:#58a6ff55;color:#c9d1d9}
 
 /* ── Window toggle (daily / weekly / monthly / alltime) ─ */
 .win-toggle{display:flex;align-items:center;gap:6px;margin:14px 0 4px;flex-wrap:wrap}
@@ -508,7 +518,9 @@ body.win-monthly .pw-monthly,body.win-alltime .pw-alltime{display:inline}
 .rst{color:#d29922;cursor:help;font-size:.9em}
 
 /* ── Bot family sections (primary "by bot" view) ──────── */
-.families{display:flex;flex-direction:column;gap:10px;margin-top:8px}
+.families{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;
+          margin-top:8px;align-items:start}
+@media (max-width:700px){.families{grid-template-columns:1fr}}
 .fam{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px 14px}
 .fam-head{display:flex;align-items:center;gap:10px;margin-bottom:6px;
           border-bottom:1px solid #21262d;padding-bottom:6px;flex-wrap:wrap}
@@ -531,6 +543,56 @@ body.win-monthly .pw-monthly,body.win-alltime .pw-alltime{display:inline}
          padding-top:10px}
 .no-data{color:#484f58;font-style:italic;font-size:.82em;padding:4px 0}
 """
+
+# ─── i18n ────────────────────────────────────────────────────────────────────
+# External per-language dictionaries in i18n/<lang>.json. Add a file to add a language;
+# the selector top-right lists whatever is present. The body is rendered once per language
+# (with _CUR_LANG switched) and the versions are toggled client-side via a body class, so
+# t() stays a plain lookup and every string is naturally contiguous (no per-token spans).
+_I18N_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "i18n")
+
+
+def _load_i18n() -> dict:
+    langs: dict[str, dict] = {}
+    try:
+        for fn in sorted(os.listdir(_I18N_DIR)):
+            if fn.endswith(".json"):
+                with open(os.path.join(_I18N_DIR, fn), encoding="utf-8") as f:
+                    langs[fn[:-5]] = json.load(f)
+    except FileNotFoundError:
+        pass
+    return langs
+
+
+_I18N = _load_i18n()
+_DEFAULT_LANG = os.environ.get("TRADINEBOTTE_STATUS_LANG", "en")
+_CUR_LANG = _DEFAULT_LANG if _DEFAULT_LANG in _I18N else ("en" if "en" in _I18N else
+            (next(iter(_I18N), "en")))
+
+
+def _langs_ordered() -> list[str]:
+    """Available languages, default first."""
+    if not _I18N:
+        return ["en"]
+    rest = sorted(l for l in _I18N if l != _CUR_LANG)
+    return ([_CUR_LANG] if _CUR_LANG in _I18N else []) + rest
+
+
+def t(key: str, **kw) -> str:
+    """Translate `key` for the current language (_CUR_LANG). Returns plain text; falls back
+    to English then to the key itself so a missing string never crashes the page."""
+    d = _I18N.get(_CUR_LANG) or {}
+    s = d.get(key)
+    if s is None:
+        s = (_I18N.get("en") or {}).get(key, key)
+    if not kw:
+        return s
+    # A stray/misnamed brace in a translation must degrade, never blank the whole page.
+    try:
+        return s.format(**kw)
+    except (KeyError, IndexError, ValueError):
+        return s
+
 
 _ACCOUNT_LABELS = [
     "acct-1 [poly+cex+status]",
@@ -576,87 +638,79 @@ def _render_payload_summary(bot_name: str, payload: dict, now: int) -> str:
 
     def _ago(ts):
         if not ts:
-            return "never"
+            return t("ago_never")
         age = now - int(ts)
         if age < 120:
-            return f"{age}s ago"
+            return t("ago_s", n=age)
         if age < 7200:
-            return f"{age // 60}min ago"
+            return t("ago_min", n=age // 60)
         if age < 172800:
-            return f"{age // 3600}h ago"
-        return f"{age // 86400}d ago"
+            return t("ago_h", n=age // 3600)
+        return t("ago_d", n=age // 86400)
 
     parts = []
-    if bot_name in ("live_bot", "grid_bot", "swing_bot"):
-        # Cumulative realized PnL is the headline; daily shown alongside.
-        # Fall back to daily_pnl for heartbeats from bots predating pnl_total.
+    if bot_name in ("live_bot", "grid_bot", "swing_bot", "account_bot"):
+        # Cumulative realized PnL is the headline; daily shown alongside. Fall back to
+        # daily_pnl for heartbeats from bots predating pnl_total. account_bot shares this
+        # payload shape (pnl_total/trades_total/capital) — same labels across trading bots;
+        # it reports a feed message ts rather than a book ts.
         pt = payload.get("pnl_total")
         if pt is not None:
-            parts.append(f"pnl=${pt:+.2f}")
+            parts.append(f"{t('k_pnl')}${pt:+.2f}")
         dp = payload.get("daily_pnl")
         if dp is not None:
             # When pnl_total is present it is the headline (pnl=); daily becomes day=.
             # For old heartbeats without pnl_total, daily is shown as pnl=.
-            parts.append(f"day=${dp:+.2f}" if pt is not None else f"pnl=${dp:+.2f}")
+            parts.append(f"{t('k_day')}${dp:+.2f}" if pt is not None else f"{t('k_pnl')}${dp:+.2f}")
         tt = payload.get("trades_total")
         if tt is not None:
-            parts.append(f"trades={tt}")
+            parts.append(f"{t('k_trades')}{tt}")
         cap = payload.get("capital")
         if cap is not None:
-            parts.append(f"cap=${cap:.0f}")
+            parts.append(f"{t('k_cap')}${cap:.0f}")
         ot = payload.get("open_trades")
         if ot is not None:
-            parts.append(f"open={ot}")
-        ts = payload.get("last_book_ts")
+            parts.append(f"{t('k_open')}{ot}")
+        ts = payload.get("last_feed_msg_ts") if bot_name == "account_bot" else payload.get("last_book_ts")
         if ts:
-            parts.append(f"book={_ago(ts)}")
-    elif bot_name == "account_bot":
-        pnl = payload.get("daily_pnl")
-        if pnl is not None:
-            parts.append(f"pnl=${pnl:+.2f}")
-        ot = payload.get("open_trades")
-        if ot is not None:
-            parts.append(f"trades={ot}")
-        ts = payload.get("last_feed_msg_ts")
-        if ts:
-            parts.append(f"feed={_ago(ts)}")
+            parts.append(f"{t('k_feed') if bot_name == 'account_bot' else t('k_book')}{_ago(ts)}")
     elif bot_name == "accumulation_bot":
         h = payload.get("holdings_btc")
         if h is not None:
-            parts.append(f"btc={h:.4f}")
+            parts.append(f"{t('k_btc')}{h:.4f}")
         u = payload.get("free_usdt")
         if u is not None:
-            parts.append(f"usdt=${u:.0f}")
+            parts.append(f"{t('k_usdt')}${u:.0f}")
         e = payload.get("avg_entry")
         if e is not None:
-            parts.append(f"entry={e:.0f}")
+            parts.append(f"{t('k_entry')}{e:.0f}")
         r = payload.get("total_realized")
         if r is not None:
-            parts.append(f"pnl=${r:+.2f}")
+            parts.append(f"{t('k_pnl')}${r:+.2f}")
     elif bot_name == "orderbook_bot":
         tp = payload.get("total_pnl")
         if tp is not None:
-            parts.append(f"pnl=${tp:+.2f}")
+            parts.append(f"{t('k_pnl')}${tp:+.2f}")
         op = payload.get("open_positions")
         if op is not None:
-            parts.append(f"pos={op}")
+            parts.append(f"{t('k_pos')}{op}")
         lp = payload.get("last_price")
         if lp:
-            parts.append(f"px=${lp:,.0f}")
+            parts.append(f"{t('k_px')}${lp:,.0f}")
     elif bot_name == "feed":
         ws = payload.get("ws_connected")
         if ws is not None:
-            parts.append("ws=✓" if ws else "ws=✗")
+            parts.append(t("k_ws_on") if ws else t("k_ws_off"))
         mt = payload.get("msgs_total")
         if mt is not None:
-            parts.append(f"msgs={mt}")
+            parts.append(f"{t('k_msgs')}{mt}")
         ts = payload.get("last_book_ts")
         if ts:
-            parts.append(f"book={_ago(ts)}")
+            parts.append(f"{t('k_book')}{_ago(ts)}")
     elif bot_name == "indicators":
         ts = payload.get("last_pub_ts")
         if ts:
-            parts.append(f"pub={_ago(ts)}")
+            parts.append(f"{t('k_pub')}{_ago(ts)}")
 
     # Data-recording freshness — uniform across every family that persists a
     # time-series table (snapshots / accum_snapshots / …). ⚠ when the table has
@@ -664,15 +718,24 @@ def _render_payload_summary(bot_name: str, payload: dict, now: int) -> str:
     wts = payload.get("last_write_ts")
     if wts is not None:
         mark = " ⚠" if now - int(wts) > _DATA_STALE_AFTER else ""
-        parts.append(f"data={_ago(wts)}{mark}")
+        parts.append(f"{t('k_data')}{_ago(wts)}{mark}")
 
     return " · ".join(parts) if parts else "—"
 
 
 def _mode_badge(acct_short: str, bot_name: str) -> str:
     if (acct_short, bot_name) in _LIVE_BOTS:
-        return "<span class='badge live-mode'>LIVE</span>"
-    return "<span class='badge sim'>SIM</span>"
+        return f"<span class='badge live-mode'>{t('badge_live')}</span>"
+    return f"<span class='badge sim'>{t('badge_sim')}</span>"
+
+
+_FLAG_KEYS = {"ALIVE": "badge_alive", "STALE": "badge_stale", "DEAD": "badge_dead",
+              "MISSING": "flag_missing"}
+
+
+def _flag_label(flag: str) -> str:
+    """Translated status-badge text; the CSS class still uses the English flag.lower()."""
+    return t(_FLAG_KEYS[flag]) if flag in _FLAG_KEYS else flag
 
 
 def _key_metric(bot_name: str, payload: dict) -> str:
@@ -695,62 +758,6 @@ def _key_metric(bot_name: str, payload: dict) -> str:
     return ""
 
 
-def _render_heartbeat_pills(hb_rows: list) -> str:
-    """Compact pill-grid: status+mode+name always visible; full details on hover."""
-    if not hb_rows:
-        return "<p class='no-data'>No heartbeat data available</p>"
-    now = int(time.time())
-    pills = ""
-    for r in hb_rows:
-        flag = r["flag"].lower()
-        acct_label = r.get("_label") or r["account"]
-        acct_short = acct_label.split()[0]
-        bot = r["bot_name"]
-        age_min = r["age_s"] // 60
-        age_str = f"{age_min}min" if age_min < 120 else f"{age_min//60}h{age_min%60:02d}m"
-        detail = _render_payload_summary(bot, r.get("payload", {}), now)
-        km = _key_metric(bot, r.get("payload", {}))
-        bounds_ok = r["bounds_ok"]
-        bounds_warn = bounds_ok not in ("ok", "-", "")
-        mode = _mode_badge(acct_short, bot)
-        data_warn = _data_flag(r.get("payload", {}), now)
-        data_badge = (
-            "<span class='badge stale' style='font-size:.63em' "
-            "title='data table not growing — bot heartbeats but stopped recording'>"
-            "⚠data</span>" if data_warn else ""
-        )
-        km_cls = ""
-        if km.startswith("+"):
-            km_cls = " pnl-pos"
-        elif km.startswith("-"):
-            km_cls = " pnl-neg"
-        km_html = (
-            f"<span class='pill-metric{km_cls}'>{escape(km)}</span>" if km else ""
-        )
-        tip_content = (
-            f"<span class='tip-label'>{escape(acct_short)} · {escape(bot)}</span>"
-            f"<div class='tip-row'>{escape(detail)}</div>"
-            f"<div class='tip-dim'>"
-            f"age {age_str}"
-            + (f" · <span style='color:#f85149'>bounds {escape(bounds_ok)}</span>" if bounds_warn
-               else f" · bounds {escape(bounds_ok)}")
-            + f" · v={escape(r['version'])}"
-            f"</div>"
-        )
-        pills += (
-            f"<div class='bot-pill tt'>"
-            f"<span class='badge {flag}' style='font-size:.63em'>{r['flag']}</span>"
-            f"{data_badge}"
-            f"{mode}"
-            f"<span class='pill-name'>{escape(bot)}</span>"
-            f"<span class='pill-acct'>{escape(acct_short)}</span>"
-            f"{km_html}"
-            f"<div class='tip'>{tip_content}</div>"
-            f"</div>"
-        )
-    return f"<div class='hb-pills'>{pills}</div>"
-
-
 # ─── Bot-family view (primary "by bot, not by account" layout) ───────────────
 
 # Families that carry a comparable cumulative PnL (pnl_total) — these get windowed
@@ -759,20 +766,14 @@ def _render_heartbeat_pills(hb_rows: list) -> str:
 _PNL_FAMILIES = {"live_bot", "grid_bot", "swing_bot", "orderbook_bot", "account_bot"}
 _FAMILY_ORDER = ["live_bot", "grid_bot", "swing_bot", "orderbook_bot", "account_bot",
                  "accumulation_bot", "feed", "feed5m", "cex_feed", "indicators"]
-_FAMILY_TITLES = {
-    "live_bot":         "live_bot · Polymarket",
-    "grid_bot":         "grid_bot · CEX grid",
-    "swing_bot":        "swing_bot · CEX swing",
-    "orderbook_bot":    "orderbook_bot · CEX orderbook",
-    "account_bot":      "account_bot · Polymarket feed consumer",
-    "accumulation_bot": "accumulation_bot · CEX accumulation",
-    "feed":             "feed · Polymarket 15M",
-    "feed5m":           "feed5m · Polymarket 5M",
-    "cex_feed":         "cex_feed · CEX market feed",
-    "indicators":       "indicators · signal publisher",
-}
-_RESET_MARK = ("<span class='rst' title='reset dans cette fenêtre — "
-               "PnL calculé depuis le reset'>⚠</span>")
+def _family_title(fam: str) -> str:
+    """"<bot_name> · <translated descriptor>". The bot name is a literal identifier; only
+    the descriptor is translated (i18n key fam_<bot_name>)."""
+    desc = t(f"fam_{fam}")
+    return f"{fam} · {desc}" if desc != f"fam_{fam}" else fam
+def _reset_mark() -> str:
+    return f"<span class='rst' title='{escape(t('reset_title'))}'>⚠</span>"
+
 
 _WINS = ("daily", "weekly", "monthly", "alltime")
 
@@ -788,7 +789,7 @@ def _win_spans(rec: dict) -> str:
     """The four window spans for one bot's PnL record; CSS shows only the active one."""
     return "".join(
         f"<span class='pw pw-{w}'>{_fmt_pnl_val(rec.get(w))}"
-        f"{_RESET_MARK if rec.get(w + '_reset') else ''}</span>"
+        f"{_reset_mark() if rec.get(w + '_reset') else ''}</span>"
         for w in _WINS
     )
 
@@ -806,7 +807,7 @@ def _sum_windows(recs: list) -> dict:
 def _win_spans_agg(agg: dict) -> str:
     return "".join(
         f"<span class='pw pw-{w}'>{_fmt_pnl_val(agg[w][0])}"
-        f"{_RESET_MARK if agg[w][1] else ''}</span>"
+        f"{_reset_mark() if agg[w][1] else ''}</span>"
         for w in _WINS
     )
 
@@ -819,7 +820,7 @@ def _render_bot_families(heartbeats: list, pnl_windows: dict, now: int) -> str:
     summary. The account is demoted to a per-row label.
     """
     if not heartbeats:
-        return "<p class='no-data'>No heartbeat data available</p>"
+        return f"<p class='no-data'>{escape(t('no_hb_data'))}</p>"
     pw = pnl_windows or {}
     by_family: dict[str, list] = {}
     for r in heartbeats:
@@ -834,7 +835,7 @@ def _render_bot_families(heartbeats: list, pnl_windows: dict, now: int) -> str:
         recs = [pw.get(f"{r['account']}|{fam}", {}) for r in rows]
         alive = sum(1 for r in rows if r["flag"] == "ALIVE")
         alive_cls = "alive" if alive == len(rows) else ("dead" if alive == 0 else "stale")
-        title = escape(_FAMILY_TITLES.get(fam, fam))
+        title = escape(_family_title(fam))
         head_pnl = (f"<span class='fam-pnl'>{_win_spans_agg(_sum_windows(recs))}</span>"
                     if is_pnl else "")
 
@@ -844,7 +845,8 @@ def _render_bot_families(heartbeats: list, pnl_windows: dict, now: int) -> str:
             acct_short = r.get("_label") or r["account"]
             payload = r.get("payload", {}) or {}
             mode = _mode_badge(acct_short, fam)
-            data_badge = ("<span class='badge stale' style='font-size:.6em'>⚠data</span>"
+            data_badge = (f"<span class='badge stale' style='font-size:.6em' "
+                          f"title='{escape(t('badge_data_title'))}'>{t('badge_data')}</span>"
                           if _data_flag(payload, now) else "")
             detail = escape(_render_payload_summary(fam, payload, now))
             if is_pnl:
@@ -859,13 +861,13 @@ def _render_bot_families(heartbeats: list, pnl_windows: dict, now: int) -> str:
             age_str = f"{age_min}min" if age_min < 120 else f"{age_min // 60}h{age_min % 60:02d}m"
             irows += (
                 f"<div class='fam-row tt'>"
-                f"<span class='badge {flag.lower()}' style='font-size:.6em'>{flag}</span>"
+                f"<span class='badge {flag.lower()}' style='font-size:.6em'>{_flag_label(flag)}</span>"
                 f"{data_badge}{mode}"
                 f"<span class='fam-acct'>{escape(acct_short)}</span>"
                 f"{val_cell}"
                 f"<div class='tip tip-up'>"
                 f"<div class='tip-row'>{detail}</div>"
-                f"<div class='tip-dim'>age {age_str} · v={escape(r['version'])}</div>"
+                f"<div class='tip-dim'>{escape(t('age', a=age_str))} · v={escape(r['version'])}</div>"
                 f"</div></div>"
             )
         sections += (
@@ -881,17 +883,19 @@ def _render_bot_families(heartbeats: list, pnl_windows: dict, now: int) -> str:
 
 def _render_trade_table(rows: list, db_type: str = "live") -> str:
     if not rows:
-        return "<p class='no-data'>No trades</p>"
-    head_extra = "<th>Market</th>" if db_type == "live" else ""
+        return f"<p class='no-data'>{escape(t('no_trades'))}</p>"
+    head_extra = f"<th>{t('th_market')}</th>" if db_type == "live" else ""
     html = (
         "<table class='tr-table'><thead><tr>"
-        "<th>#</th><th>Time</th><th>Dir</th><th>Result</th>"
-        f"<th>Entry</th><th>PnL</th><th>Capital</th>{head_extra}"
+        f"<th>{t('th_num')}</th><th>{t('th_time')}</th><th>{t('th_dir')}</th><th>{t('th_result')}</th>"
+        f"<th>{t('th_entry')}</th><th>{t('th_pnl')}</th><th>{t('th_capital')}</th>{head_extra}"
         "</tr></thead><tbody>"
     )
     for r in rows:
         result = r.get("result", "")
         cls = "win" if result == "WIN" else ("loss" if result == "LOSS" else "open-t")
+        result_disp = (t("res_win") if result == "WIN"
+                       else t("res_loss") if result == "LOSS" else result)
         pnl = r.get("pnl")
         cap = r.get("capital")
         ep  = r.get("entry_price")
@@ -902,7 +906,7 @@ def _render_trade_table(rows: list, db_type: str = "live") -> str:
             f"<td class='{cls}'>#{r.get('id','?')}</td>"
             f"<td>{_fmt_ts(r.get('entry_ts'))}</td>"
             f"<td>{escape(r.get('direction',''))}</td>"
-            f"<td class='{cls}'>{escape(result)}</td>"
+            f"<td class='{cls}'>{escape(result_disp)}</td>"
             f"<td>{ep_str}</td>"
             f"<td>{_fmt_pnl(pnl)}</td>"
             f"<td>{cap_str}</td>"
@@ -933,11 +937,11 @@ def _render_bot_section(hb_rows: list, now: int) -> str:
         km_html = f"<span class='bot-metric{km_cls}'>{escape(km)}</span>" if km else ""
         tip_content = (
             f"<div class='tip-row'>{escape(detail)}</div>"
-            f"<div class='tip-dim'>age {age_str} · v={escape(r['version'])}</div>"
+            f"<div class='tip-dim'>{escape(t('age', a=age_str))} · v={escape(r['version'])}</div>"
         )
         rows_html += (
             f"<div class='bot-row tt'>"
-            f"<span class='badge {flag}' style='font-size:.62em'>{r['flag']}</span>"
+            f"<span class='badge {flag}' style='font-size:.62em'>{_flag_label(r['flag'])}</span>"
             f"{mode_cell}"
             f"<span class='bot-name'>{escape(bot)}</span>"
             f"{km_html}"
@@ -969,7 +973,7 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
             f"<div class='tt svc-dots'>"
             f"{dots}"
             f"<div class='tip tip-up'>"
-            f"<span class='tip-label'>Services</span>{svc_tip_rows}"
+            f"<span class='tip-label'>{escape(t('services'))}</span>{svc_tip_rows}"
             f"</div>"
             f"</div>"
         )
@@ -987,7 +991,8 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
     )
 
     if error:
-        _msg = "unreachable" if error == "unreachable" else f"collect failed ({escape(str(error))})"
+        _msg = (t("card_unreachable") if error == "unreachable"
+                else t("card_collect_failed", err=escape(str(error))))
         return f"<div class='account'>{header}<p class='no-data'>⚠ {_msg}</p></div>"
 
     # Determine whether this account runs Polymarket bots (live_bot / account_bot).
@@ -1033,44 +1038,44 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
             resolved = w + l
             total_all = trades_tot if trades_tot is not None else (totals.get("t", 0) or 0)
             cap_sub = f"{_wr(w, l)} · {resolved}T"
-            open_extra = f" · {open_n} open" if open_n else ""
-            wr_tip = (f"<div class='tip-row'>Win rate {_wr(w, l)} ({w}W / {l}L)</div>"
-                      f"<div class='tip-row'>Resolved {resolved} · Total {total_all}{open_extra}</div>")
+            open_extra = t("tip_open_suffix", n=open_n) if open_n else ""
+            wr_tip = (f"<div class='tip-row'>{t('tip_win_rate', wr=_wr(w, l), w=w, l=l)}</div>"
+                      f"<div class='tip-row'>{t('tip_resolved_total', r=resolved, t=total_all, open=open_extra)}</div>")
         # Age-gate: when the source heartbeat is STALE/DEAD, dim the values and show a
         # badge so last-known payload numbers aren't read as current.
         is_stale   = bool(flag) and flag != "ALIVE"
         vcls       = " stale-val" if is_stale else ""
-        flag_badge = (f" <span class='badge {flag.lower()}'>{escape(flag)}</span>"
+        flag_badge = (f" <span class='badge {flag.lower()}'>{_flag_label(flag)}</span>"
                       if is_stale else "")
         stale_note = (
             f"<div class='tip-row'><span class='{flag.lower()}'>"
-            f"heartbeat {escape(flag)} — last-known values</span></div>"
+            f"{escape(t('hb_lastknown', flag=_flag_label(flag)))}</span></div>"
             if is_stale else ""
         )
         open_tip = (f"<div class='tip-row'><span style='color:#8b949e;min-width:64px;"
-                    f"display:inline-block'>Open</span> {open_n}</div>"
+                    f"display:inline-block'>{escape(t('lbl_open'))}</span> {open_n}</div>"
                     if open_n is not None else "")
         stats_html = (
             f"<div class='big-metrics'>"
             f"<div class='metric-big tt'>"
-            f"<div class='lbl'>Capital</div>"
+            f"<div class='lbl'>{escape(t('lbl_capital'))}</div>"
             f"<div class='val{vcls}'>{cap_str}</div>"
             f"<div class='metric-sub'>{cap_sub}{flag_badge}</div>"
             f"<div class='tip tip-up'>"
-            f"<span class='tip-label'>{escape(primary['bot_name'])} · from heartbeat</span>"
+            f"<span class='tip-label'>{escape(t('tip_from_heartbeat', bot=primary['bot_name']))}</span>"
             f"{wr_tip}"
-            f"<div class='tip-row'>Since reset {_fmt_pnl(life_pnl)}</div>"
+            f"<div class='tip-row'>{escape(t('lbl_since_reset'))} {_fmt_pnl(life_pnl)}</div>"
             f"{stale_note}"
             f"</div></div>"
             f"<div class='metric-big tt'>"
-            f"<div class='lbl'>Today PnL</div>"
+            f"<div class='lbl'>{escape(t('lbl_today_pnl'))}</div>"
             f"<div class='val {pnl_cls}{vcls}'>{pnl_str}</div>"
             f"<div class='metric-sub'>{mode_badge}{flag_badge}</div>"
             f"<div class='tip tip-up'>"
-            f"<span class='tip-label'>PnL (from heartbeat)</span>"
-            f"<div class='tip-row'><span style='color:#8b949e;min-width:64px;display:inline-block'>Today (UTC)</span>"
+            f"<span class='tip-label'>{escape(t('tip_pnl_from_hb'))}</span>"
+            f"<div class='tip-row'><span style='color:#8b949e;min-width:64px;display:inline-block'>{escape(t('lbl_today_utc'))}</span>"
             f" {_fmt_pnl(today_pnl)}</div>"
-            f"<div class='tip-row'><span style='color:#8b949e;min-width:64px;display:inline-block'>Since reset</span>"
+            f"<div class='tip-row'><span style='color:#8b949e;min-width:64px;display:inline-block'>{escape(t('lbl_since_reset'))}</span>"
             f" {_fmt_pnl(life_pnl)}</div>"
             f"{open_tip}{stale_note}"
             f"</div></div>"
@@ -1089,11 +1094,11 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
                 f"#{r['id']} {r.get('direction','')} {_ep(r)}</span>"
                 for r in open_trades
             )
-            open_html = f"<div class='open-trades'><span style='color:#d29922'>▶ Open:</span> {badges}</div>"
+            open_html = f"<div class='open-trades'><span style='color:#d29922'>{escape(t('open_label'))}</span> {badges}</div>"
         recent = live.get("recent", [])
         if recent:
             trade_html = (
-                f"<details><summary>Last {len(recent)} trades ▾</summary>"
+                f"<details><summary>{escape(t('last_n_trades', n=len(recent)))}</summary>"
                 f"{_render_trade_table(recent, 'live')}"
                 f"</details>"
             )
@@ -1115,16 +1120,16 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
         cycles  = st.get("total_cycles")
         profit  = st.get("total_profit_usd")
         sym     = escape(str(st.get("symbol", "")))
-        halted_badge = ("<span class='badge dead' style='margin-left:5px'>HALTED</span>"
+        halted_badge = (f"<span class='badge dead' style='margin-left:5px'>{t('grid_halted')}</span>"
                         if st.get("halted") else "")
         profit_cls = "pnl-pos" if (profit or 0) >= 0 else "pnl-neg"
         grid_html += (
             f"<div style='margin-top:4px;font-size:.8em'>"
             f"<span style='color:#8b949e;text-transform:uppercase;letter-spacing:.8px;"
-            f"font-size:.85em'>grid</span>"
+            f"font-size:.85em'>{escape(t('grid_label'))}</span>"
             f" {sym} · <span style='color:#58a6ff'>{bounds}</span>"
-            f" · {holding}/{total_lvls} holding"
-            f" · {cycles if cycles is not None else '?'} cycles"
+            f" · {escape(t('grid_holding', h=holding, t=total_lvls))}"
+            f" · {escape(t('grid_cycles', n=cycles if cycles is not None else '?'))}"
             f" · <span class='{profit_cls}'>{_fmt_pnl(profit)}</span>"
             f"{halted_badge}"
             f"</div>"
@@ -1139,8 +1144,8 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
         usdt = accum_port.get("free_usdt")
         avg  = accum_port.get("avg_entry")
         btc_str  = f"{btc:.6f} BTC" if btc is not None else "—"
-        usdt_str = f" · ${usdt:.0f} free" if usdt is not None else ""
-        avg_str  = f" · avg ${avg:.0f}" if avg is not None else ""
+        usdt_str = f" · {t('accum_free', u=f'{usdt:.0f}')}" if usdt is not None else ""
+        avg_str  = f" · {t('accum_avg', a=f'{avg:.0f}')}" if avg is not None else ""
         cex_html += (
             f"<div style='margin-top:4px;font-size:.8em'>"
             f"<span style='color:#8b949e;text-transform:uppercase;letter-spacing:.8px;"
@@ -1199,13 +1204,14 @@ def _render_expected_actual(inventory: list, deploys: list, heartbeats: list,
             # a service that never reports is fine — its liveness is the systemctl section
             # below (the collector cannot heartbeat itself).
             if kind == "service":
-                flag, fcol = "n/a", _C_MUTE
+                flag, fcol, flag_disp = "n/a", _C_MUTE, t("flag_na")
             else:
-                flag, fcol = "MISSING", _C_BAD
+                flag, fcol, flag_disp = "MISSING", _C_BAD, t("flag_missing")
                 n_missing += 1
         else:
             flag = hb["flag"]
             fcol = {"ALIVE": _C_OK, "STALE": _C_WARN}.get(flag, _C_BAD)
+            flag_disp = _flag_label(flag)
 
         is_live  = inv.get("is_live")
         declared = "—" if is_live is None else ("live" if is_live else "sim")
@@ -1228,21 +1234,23 @@ def _render_expected_actual(inventory: list, deploys: list, heartbeats: list,
             f"<tr><td>{escape(label)}</td><td>{escape(bot)}</td>"
             f"<td style='color:{_C_MUTE}'>{escape(inv.get('kind','') or '')}</td>"
             f"<td>{mode_cell}</td>"
-            f"<td style='color:{fcol};font-weight:600'>{escape(flag)}</td>"
+            f"<td style='color:{fcol};font-weight:600'>{escape(flag_disp)}</td>"
             f"<td>{dep_cell}</td></tr>"
         )
 
     note = []
     if n_missing:
-        note.append(f"<span style='color:{_C_BAD}'>{n_missing} expected but silent</span>")
+        note.append(f"<span style='color:{_C_BAD}'>{escape(t('ea_silent', n=n_missing))}</span>")
     if n_mismatch:
-        note.append(f"<span style='color:{_C_BAD}'>{n_mismatch} mode mismatch</span>")
-    sub = "  ·  ".join(note) if note else f"<span style='color:{_C_OK}'>all expected bots present</span>"
+        note.append(f"<span style='color:{_C_BAD}'>{escape(t('ea_mismatch', n=n_mismatch))}</span>")
+    sub = ("  ·  ".join(note) if note
+           else f"<span style='color:{_C_OK}'>{escape(t('ea_all_present'))}</span>")
     return (
-        f"<h2>Expected vs Actual <span style='font-size:.5em;color:{_C_MUTE};font-weight:400'>"
-        f"{len(inventory)} declared · {sub}</span></h2>"
+        f"<h2>{escape(t('h_expected_actual'))} <span style='font-size:.5em;color:{_C_MUTE};font-weight:400'>"
+        f"{escape(t('ea_declared', n=len(inventory)))} · {sub}</span></h2>"
         "<table class='hb-table'><thead><tr>"
-        "<th>acct</th><th>bot</th><th>kind</th><th>mode</th><th>heartbeat</th><th>last deploy</th>"
+        f"<th>{t('th_acct')}</th><th>{t('th_bot')}</th><th>{t('th_kind')}</th>"
+        f"<th>{t('th_mode')}</th><th>{t('th_heartbeat')}</th><th>{t('th_last_deploy')}</th>"
         "</tr></thead><tbody>" + "".join(body) + "</tbody></table>"
     )
 
@@ -1262,16 +1270,10 @@ def _render_banners(accounts: list, heartbeats: list) -> str:
     coll_err = collector.get("error")
     if coll_err:
         banners.append(
-            f"<div class='banner bad'>⚠ <b>Collector account unreachable</b> "
-            f"(<code>{escape(str(coll_err))}</code>) — fleet heartbeats, inventory and "
-            f"deploy history are unavailable this cycle. Bot liveness shown below is "
-            f"<b>unknown</b>, not necessarily down.</div>"
+            f"<div class='banner bad'>{t('banner_collector_down', err=escape(str(coll_err)))}</div>"
         )
     elif not heartbeats:
-        banners.append(
-            "<div class='banner warn'>⚠ Collector reachable but the shared state DB "
-            "returned no heartbeats — fleet liveness is unknown this cycle.</div>"
-        )
+        banners.append(f"<div class='banner warn'>{t('banner_no_heartbeats')}</div>")
 
     # Per-account collect failures (the collector is handled above). Their own cards
     # show '⚠ unreachable'; surface the set so the partial page is obviously partial.
@@ -1282,9 +1284,8 @@ def _render_banners(accounts: list, heartbeats: list) -> str:
     ]
     if failed:
         banners.append(
-            f"<div class='banner warn'>⚠ {len(failed)} account(s) unreachable this cycle: "
-            f"<code>{escape(', '.join(failed))}</code> — their service/trade cards are "
-            f"missing data; the rest of the fleet is unaffected.</div>"
+            f"<div class='banner warn'>"
+            f"{t('banner_partial', n=len(failed), accts=escape(', '.join(failed)))}</div>"
         )
     return "".join(banners)
 
@@ -1300,6 +1301,10 @@ def _render_html(
     pnl_windows: dict | None = None,
 ) -> str:
     pnl_windows = pnl_windows or {}
+    global _CUR_LANG
+    _saved_lang = _CUR_LANG
+
+    # ── Language-independent data prep (computed once) ───────────────────────
     # The collector account (index 0) is the sole source of fleet heartbeat data — if it
     # failed, an empty `heartbeats` means "unknown", not "nothing wrong".
     collector_down = bool(accounts and accounts[0].get("error"))
@@ -1307,14 +1312,8 @@ def _render_html(
     svc_issues = sum(1 for acc in accounts for svc in acc.get("services", []) if not svc["active"])
     unreachable = sum(1 for a in accounts if a.get("error"))
     total_issues = hb_issues + svc_issues + unreachable
-
-    if collector_down:
-        dot_cls, status_text = "bad", "collector unreachable — fleet status unknown"
-    elif total_issues == 0:
-        dot_cls, status_text = "ok", "All systems nominal"
-    else:
-        dot_cls = "warn" if hb_issues == 0 else "bad"
-        status_text = f"{total_issues} issue(s)"
+    dot_cls = "bad" if collector_down else ("ok" if total_issues == 0
+                                            else ("warn" if hb_issues == 0 else "bad"))
     ts_str = generated_at.strftime("%Y-%m-%d %H:%M UTC")
 
     total_bots = len(heartbeats)
@@ -1325,14 +1324,11 @@ def _render_html(
     else:
         alive_cls = "alive" if alive_bots == total_bots else "stale"
         alive_display = f"{alive_bots}/{total_bots}"
-    hb_cls     = "alive" if hb_issues == 0 else "dead"
-    svc_cls    = "alive" if svc_issues == 0 else "dead"
-    unr_cls    = "alive" if unreachable == 0 else "dead"
+    hb_cls  = "alive" if hb_issues == 0 else "dead"
+    svc_cls = "alive" if svc_issues == 0 else "dead"
+    unr_cls = "alive" if unreachable == 0 else "dead"
 
-    # Fleet PnL — single source of truth: the heartbeat payload every bot emits
-    # (Polymarket AND CEX), so the totals cover the whole fleet, not just live.db
-    # accounts. Today + Lifetime come straight from the payloads; the weekly/monthly
-    # windows come from pnl_windows (heartbeat-history diff, computed on the collector).
+    # Fleet PnL — Today + Lifetime from the payloads; weekly/monthly from pnl_windows.
     today_pnl_total = life_pnl_total = 0.0
     for _hb in heartbeats:
         _pl = _hb.get("payload") or {}
@@ -1341,40 +1337,7 @@ def _render_html(
         if isinstance(_pl.get("pnl_total"), (int, float)):
             life_pnl_total += _pl["pnl_total"]
 
-    # Fleet-wide windowed value follows the active window toggle. When no windowed
-    # history is available (collector down / unit tests) fall back to the daily total.
-    if pnl_windows:
-        fleet_pnl_html = _win_spans_agg(_sum_windows(list(pnl_windows.values())))
-    else:
-        _s = "+" if today_pnl_total >= 0 else ""
-        _c = "pnl-pos" if today_pnl_total >= 0 else "pnl-neg"
-        fleet_pnl_html = f"<span class='{_c}'>{_s}${today_pnl_total:.2f}</span>"
-
-    summary_bar = (
-        f"<div class='summary-bar'>"
-        f"<div class='sb-item'><div class='lbl'>Bots alive</div>"
-        f"<div class='val {alive_cls}'>{alive_display}</div></div>"
-        f"<div class='sb-item tt'>"
-        f"<div class='lbl'>PnL (fenêtre)</div>"
-        f"<div class='val'>{fleet_pnl_html}</div>"
-        f"<div class='tip'>"
-        f"<span class='tip-label'>PnL — all bots (from heartbeats)</span>"
-        f"<div class='tip-row'><span style='color:#8b949e;min-width:74px;display:inline-block'>Today (UTC)</span>"
-        f" {_fmt_pnl(today_pnl_total)}</div>"
-        f"<div class='tip-row'><span style='color:#8b949e;min-width:74px;display:inline-block'>Since reset</span>"
-        f" {_fmt_pnl(life_pnl_total)}</div>"
-        f"</div>"
-        f"</div>"
-        f"<div class='sb-item'><div class='lbl'>HB issues</div>"
-        f"<div class='val {hb_cls}'>{hb_issues}</div></div>"
-        f"<div class='sb-item'><div class='lbl'>Svc issues</div>"
-        f"<div class='val {svc_cls}'>{svc_issues}</div></div>"
-        f"<div class='sb-item'><div class='lbl'>Unreachable</div>"
-        f"<div class='val {unr_cls}'>{unreachable}</div></div>"
-        f"</div>"
-    )
-
-    # BTC 24h from the Binance API.
+    # BTC 24h (Binance) — labels are neutral (BTC/H/L), so this is language-independent.
     btc_24h   = _fetch_btc_24h()
     btc_price = float(btc_24h.get("lastPrice") or 0)
     btc_chg   = float(btc_24h.get("priceChangePercent") or 0)
@@ -1383,98 +1346,157 @@ def _render_html(
     if btc_price:
         chg_cls  = "up" if btc_chg >= 0 else "dn"
         chg_sign = "+" if btc_chg >= 0 else ""
-        chg_html = (
-            f"<span class='chg {chg_cls}'>{chg_sign}{btc_chg:.2f}%</span>"
-            if btc_24h else ""
-        )
-        range_html = (
-            f"<span style='color:#484f58;font-size:.88em'>H&thinsp;${btc_high:,.0f}"
-            f" &nbsp; L&thinsp;${btc_low:,.0f}</span>"
-            if btc_high else ""
-        )
-        btc_price_html = (
-            f"<div class='btc-price'>"
-            f"<span>BTC</span>"
-            f"<span class='price'>${btc_price:,.0f}</span>"
-            f"{chg_html}{range_html}"
-            f"</div>"
-        )
+        chg_html = (f"<span class='chg {chg_cls}'>{chg_sign}{btc_chg:.2f}%</span>"
+                    if btc_24h else "")
+        range_html = (f"<span style='color:#484f58;font-size:.88em'>H&thinsp;${btc_high:,.0f}"
+                      f" &nbsp; L&thinsp;${btc_low:,.0f}</span>" if btc_high else "")
+        btc_price_html = (f"<div class='btc-price'><span>BTC</span>"
+                          f"<span class='price'>${btc_price:,.0f}</span>{chg_html}{range_html}</div>")
     else:
         btc_price_html = ""
 
-    families_html = _render_bot_families(heartbeats, pnl_windows, int(time.time()))
+    now = int(time.time())
 
-    # Build per-account heartbeat rows (acct_short = first word of label, e.g. "acct-3")
     def _acct_hb(label: str) -> list:
         short = label.split()[0]
         return [r for r in heartbeats if (r.get("_label") or "").split()[0] == short]
 
-    cards_html = "".join(
-        _render_account_card(label, data, _acct_hb(label))
-        for label, data in zip(_ACCOUNT_LABELS, accounts)
-    )
+    langs = _langs_ordered()
 
-    banners_html  = _render_banners(accounts, heartbeats)
+    # ── Render the whole body once per language (t() reads _CUR_LANG) ────────
+    # Each language version is wrapped in a .langbox toggled client-side by a body class,
+    # so every string is contiguous and even native title= attributes are per-language.
+    langboxes = []
+    titles = {}
+    lang_sel = ("<span class='lang-sel'>" + "".join(
+        f"<button class='lbtn lbtn-{L}' onclick=\"setLang('{L}')\">{escape(L.upper())}</button>"
+        for L in langs) + "</span>")
+    for lang in langs:
+        _CUR_LANG = lang
+        titles[lang] = t("title")
 
-    expected_html = _render_expected_actual(
-        inventory or [], deploys or [], heartbeats, user_to_label or {})
+        status_text = (t("status_collector_down") if collector_down
+                       else t("status_nominal") if total_issues == 0
+                       else t("status_issues", n=total_issues))
+
+        if pnl_windows:
+            fleet_pnl_html = _win_spans_agg(_sum_windows(list(pnl_windows.values())))
+        else:
+            _s = "+" if today_pnl_total >= 0 else ""
+            _c = "pnl-pos" if today_pnl_total >= 0 else "pnl-neg"
+            fleet_pnl_html = f"<span class='{_c}'>{_s}${today_pnl_total:.2f}</span>"
+
+        summary_bar = (
+            f"<div class='summary-bar'>"
+            f"<div class='sb-item'><div class='lbl'>{escape(t('sb_bots_alive'))}</div>"
+            f"<div class='val {alive_cls}'>{alive_display}</div></div>"
+            f"<div class='sb-item tt'>"
+            f"<div class='lbl'>{escape(t('sb_pnl_window'))}</div>"
+            f"<div class='val'>{fleet_pnl_html}</div>"
+            f"<div class='tip'>"
+            f"<span class='tip-label'>{escape(t('sb_tip_title'))}</span>"
+            f"<div class='tip-row'><span style='color:#8b949e;min-width:74px;display:inline-block'>{escape(t('lbl_today_utc'))}</span>"
+            f" {_fmt_pnl(today_pnl_total)}</div>"
+            f"<div class='tip-row'><span style='color:#8b949e;min-width:74px;display:inline-block'>{escape(t('lbl_since_reset'))}</span>"
+            f" {_fmt_pnl(life_pnl_total)}</div>"
+            f"</div></div>"
+            f"<div class='sb-item'><div class='lbl'>{escape(t('sb_hb_issues'))}</div>"
+            f"<div class='val {hb_cls}'>{hb_issues}</div></div>"
+            f"<div class='sb-item'><div class='lbl'>{escape(t('sb_svc_issues'))}</div>"
+            f"<div class='val {svc_cls}'>{svc_issues}</div></div>"
+            f"<div class='sb-item'><div class='lbl'>{escape(t('sb_unreachable'))}</div>"
+            f"<div class='val {unr_cls}'>{unreachable}</div></div>"
+            f"</div>"
+        )
+
+        win_toggle = (
+            f"<div class='win-toggle'>"
+            f"<span class='wt-lbl tt'>{escape(t('win_lbl'))}"
+            f"<div class='tip tip-up'>"
+            f"<span class='tip-label'>{escape(t('win_tip_title'))}</span>"
+            f"<div class='tip-row'>{escape(t('win_tip_daily'))}</div>"
+            f"<div class='tip-row'>{escape(t('win_tip_weekmonth'))}</div>"
+            f"<div class='tip-row'>{escape(t('win_tip_sincereset'))}</div>"
+            f"<div class='tip-dim'>{escape(t('win_tip_note'))}</div>"
+            f"</div></span>"
+            f"<button class='wbtn wbtn-daily' onclick=\"setWin('daily')\">{escape(t('win_daily'))}</button>"
+            f"<button class='wbtn wbtn-weekly' onclick=\"setWin('weekly')\">{escape(t('win_weekly'))}</button>"
+            f"<button class='wbtn wbtn-monthly' onclick=\"setWin('monthly')\">{escape(t('win_monthly'))}</button>"
+            f"<button class='wbtn wbtn-alltime' onclick=\"setWin('alltime')\">{escape(t('win_alltime'))}</button>"
+            f"</div>"
+        )
+
+        families_html = _render_bot_families(heartbeats, pnl_windows, now)
+        cards_html = "".join(_render_account_card(label, data, _acct_hb(label))
+                             for label, data in zip(_ACCOUNT_LABELS, accounts))
+        banners_html = _render_banners(accounts, heartbeats)
+        expected_html = _render_expected_actual(
+            inventory or [], deploys or [], heartbeats, user_to_label or {})
+
+        # The refresh countdown number is a live span JS updates; inject it as the {n} of
+        # the (already-translated) "refresh in {n}s" phrase, so word order stays correct.
+        _rf_span = "<span class='rf-ct'>60</span>"
+        footer = (
+            f"<div class='footer'>{escape(t('footer_generated', ts=ts_str))} · "
+            f"{escape(t('footer_collection', s=f'{collection_s:.1f}'))} · "
+            f"{t('footer_refresh', n=_rf_span)}</div>"
+        )
+
+        body_inner = (
+            f"<h1><span class='dot {dot_cls}'></span>"
+            f" {escape('tradinebotte')} — {escape(status_text)}"
+            f"<span class='h1-right'>{btc_price_html}"
+            f"<span style='font-size:.6em;color:#8b949e;font-weight:400'>{ts_str}</span>"
+            f"{lang_sel}</span></h1>"
+            f"{banners_html}{win_toggle}{summary_bar}"
+            f"<h2>{escape(t('h_bots_family'))}</h2>{families_html}"
+            f"{expected_html}"
+            f"<h2>{escape(t('h_accounts'))}</h2><div class='accounts'>{cards_html}</div>"
+            f"{footer}"
+        )
+        langboxes.append(f"<div class='langbox i18-{lang}'>{body_inner}</div>")
+
+    _CUR_LANG = _saved_lang
+    default_lang = langs[0]
+    title_attrs = " ".join(f'data-title-{L}="{escape(titles[L])}"' for L in langs)
+    # Per-language display rules + active-selector highlight (static CSS only knows en/fr).
+    lang_css = "".join(
+        f"body.lang-{L} .i18-{L}{{display:block}}"
+        f"body.lang-{L} .lbtn-{L}{{background:#1f6feb;border-color:#1f6feb;color:#fff;font-weight:600}}"
+        for L in langs)
 
     return f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="{default_lang}">
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="refresh" content="60">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>tradinebotte — status</title>
-<style>{_CSS}</style>
+<title>{escape(titles[default_lang])}</title>
+<style>{_CSS}{lang_css}</style>
 </head>
-<body class="win-daily">
-<h1>
-  <span class="dot {dot_cls}"></span>
-  tradinebotte — {escape(status_text)}
-  {btc_price_html}
-  <span style="font-size:.6em;color:#8b949e;font-weight:400">{ts_str}</span>
-</h1>
-{banners_html}
-<div class="win-toggle">
-  <span class="wt-lbl tt">PnL&nbsp;:
-    <div class="tip tip-up">
-      <span class="tip-label">Fenêtres de PnL (depuis les heartbeats)</span>
-      <div class="tip-row">Jour — journée UTC en cours (remis à zéro à minuit)</div>
-      <div class="tip-row">Semaine / Mois — glissant sur 7&nbsp;/&nbsp;30 jours</div>
-      <div class="tip-row">Depuis reset — cumulé depuis le dernier reset du bot</div>
-      <div class="tip-dim">⚠ = un reset tombe dans la fenêtre → PnL calculé depuis ce reset.
-        Historique ~18&nbsp;j : « Mois » ≈ « Depuis reset » tant que 30&nbsp;j ne sont pas accumulés.</div>
-    </div>
-  </span>
-  <button class="wbtn wbtn-daily" onclick="setWin('daily')">Jour</button>
-  <button class="wbtn wbtn-weekly" onclick="setWin('weekly')">Semaine</button>
-  <button class="wbtn wbtn-monthly" onclick="setWin('monthly')">Mois</button>
-  <button class="wbtn wbtn-alltime" onclick="setWin('alltime')">Depuis reset</button>
-</div>
-{summary_bar}
-<h2>Bots — par famille</h2>
-{families_html}
-{expected_html}
-<h2>Comptes — services &amp; trades (détail)</h2>
-<div class="accounts">
-{cards_html}
-</div>
-<div class="footer">
-  Generated {ts_str} · collection {collection_s:.1f}s
-  · <span id="rf-ct">refresh in 60s</span>
-</div>
+<body class="win-daily lang-{default_lang}" {title_attrs}>
+{''.join(langboxes)}
 <script>
 function setWin(w){{
   var b=document.body,c=b.className.replace(/\\bwin-\\w+\\b/g,'').trim();
   b.className=(c?c+' ':'')+'win-'+w;
   try{{localStorage.setItem('tbwin',w);}}catch(e){{}}
 }}
+function setLang(l){{
+  var b=document.body,c=b.className.replace(/\\blang-\\w+\\b/g,'').trim();
+  b.className=(c?c+' ':'')+'lang-'+l;
+  try{{localStorage.setItem('tblang',l);}}catch(e){{}}
+  var tt=b.getAttribute('data-title-'+l);if(tt)document.title=tt;
+}}
 (function(){{
   var w='daily';try{{w=localStorage.getItem('tbwin')||'daily';}}catch(e){{}}
   setWin(w);
-  var t=60,el=document.getElementById('rf-ct');
-  setInterval(function(){{t--;if(t<=0)t=60;el&&(el.textContent='refresh in '+t+'s');}},1000);
+  var l='{default_lang}';try{{l=localStorage.getItem('tblang')||'{default_lang}';}}catch(e){{}}
+  if(document.querySelector('.i18-'+l)) setLang(l); else setLang('{default_lang}');
+  var t=60;
+  setInterval(function(){{t--;if(t<=0)t=60;
+    var els=document.getElementsByClassName('rf-ct');
+    for(var i=0;i<els.length;i++) els[i].textContent=t;}},1000);
 }})();
 </script>
 </body>
@@ -1496,7 +1518,19 @@ def main() -> None:
         default=_default_out,
         help="Output file (default: ~/public_html/tradinebottestatus.html or $TRADINEBOTTE_STATUS_OUT)",
     )
+    parser.add_argument(
+        "--lang",
+        default=None,
+        choices=sorted(_I18N) or None,
+        help=("Default UI language (the language shown before the visitor picks another; "
+              "the page always ships every language and a switcher). "
+              "Default: $TRADINEBOTTE_STATUS_LANG or en."),
+    )
     args = parser.parse_args()
+
+    if args.lang:
+        global _CUR_LANG
+        _CUR_LANG = args.lang
 
     if not os.path.exists(args.conf):
         print(f"Config not found: {args.conf}", file=sys.stderr)
