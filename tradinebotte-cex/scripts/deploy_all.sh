@@ -1,139 +1,29 @@
 #!/usr/bin/env bash
-# deploy_all.sh — Deploy all bots sequentially across all accounts.
+# deploy_all.sh — thin shim over the inventory-driven orchestrator (scripts/deploy.py).
 #
-# 13 bots total across 6 accounts (same server — never run in parallel):
-#   account-1  indicators + feed + account_bot  (Polymarket multibot infra)
-#   account-2  live_bot (Polymarket threshold) + accumulation_bot (MEXC sim)
-#   account-3  live_bot (Polymarket grid) + accumulation_bot + grid_bot (Binance CEX sim)
-#   account-4  live_bot (Polymarket) + accumulation_bot deepdip  (orderbook_bot disabled)
-#   account-5  swing live_bot (CEX)
-#   account-6  grid live_bot (MEXC Futures BTC_USDT — simulation)
+# The account→deploy-script mapping is no longer hardcoded here: it is derived from
+# inventory.toml (the single source of truth). This wrapper is kept as the stable
+# entrypoint (e.g. the "bot upgrades" trigger) and forwards every argument as-is.
 #
-# Account-1 services are rsync-only by default: restarting indicators/feed
-# disconnects all other live_bots for ~30s (RestartSec). Use --restart-infra
-# when indicators.py, feed.py, or account_bot.py have changed.
+# Usage (unchanged):
+#   bash scripts/deploy_all.sh                 # full deploy (account-1 rsync-only)
+#   bash scripts/deploy_all.sh --restart-infra # also restart account-1 feeds/services
+#   bash scripts/deploy_all.sh --skip-restart  # rsync only, no bot restarts
+#   bash scripts/deploy_all.sh --verify-only   # status check, no changes
+#   bash scripts/deploy_all.sh --list          # print the derived plan and exit
+#   bash scripts/deploy_all.sh --dry-run       # print each step, no execution
 #
-# Usage:
-#   bash scripts/deploy_all.sh
-#   bash scripts/deploy_all.sh --skip-restart     # rsync only, no bot restarts
-#   bash scripts/deploy_all.sh --verify-only      # status check, no changes
-#   bash scripts/deploy_all.sh --restart-infra  # also restart account-1 services
+# The logic (ordering, account-1 special-casing, summary) lives in scripts/deploy.py.
 
 set -uo pipefail
 
-RESTART_INFRA=false
-FORWARD_ARGS=()
-
-for arg in "$@"; do
-    case "$arg" in
-        --restart-infra) RESTART_INFRA=true ;;
-        *) FORWARD_ARGS+=("$arg") ;;
-    esac
-done
-
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-PM="$REPO/tradinebotte-polymarket/scripts"
-CEX="$REPO/tradinebotte-cex/scripts"
-STATUS="$REPO/tradinebotte-status/scripts"
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-BOLD='\033[1m'; NC='\033[0m'
-
-FAILURES=0
-STEP_LABELS=()
-STEP_RESULTS=()
-
-# Run a real deploy step; tracks result and failure count.
-run_step() {
-    local label="$1"
-    local script="$2"
-    shift 2
-    local extra_args=("$@")
-    STEP_LABELS+=("$label")
-    echo -e "\n${BOLD}${YELLOW}▶▶▶ $label ▶▶▶${NC}"
-    if bash "$script" "${extra_args[@]}" "${FORWARD_ARGS[@]+"${FORWARD_ARGS[@]}"}"; then
-        STEP_RESULTS+=("OK")
-    else
-        STEP_RESULTS+=("FAILED")
-        FAILURES=$((FAILURES + 1))
-    fi
-}
-
-# Add a display-only row to the summary (no actual execution, no failure count).
-add_row() {
-    STEP_LABELS+=("$1")
-    STEP_RESULTS+=("$2")
-}
-
-show_heartbeat_status() {
-    local label="$1"
-    echo -e "\n${BOLD}${YELLOW}─── $label ───${NC}"
-    if [[ ! -f "$STATUS/heartbeat_status.sh" ]]; then
-        echo -e "  ${YELLOW}! heartbeat_status.sh not found — skipping${NC}"
-        return 0
-    fi
-    bash "$STATUS/heartbeat_status.sh" || \
-        echo -e "  ${YELLOW}! heartbeat check non-zero — collector may not be deployed yet${NC}"
-    return 0
-}
-
-show_heartbeat_status "HEARTBEAT — PRE-DEPLOY SNAPSHOT"
-
-# ── Account-1: rsync only (default) or full service restart (--restart-infra)
-if [[ "$RESTART_INFRA" == "true" ]]; then
-    # Order matters: the feed must be restarted exactly ONCE and BEFORE account_bot, or
-    # the 15M consumer orphans on a dead feed (the recurring stale-feed gotcha came from
-    # restarting the feed in update_claude1 AND again in setup_data_plane, with account_bot
-    # connecting in between). So: rsync + restart indicators only → data plane does the
-    # single feed restart → account_bot last, onto the now-stable feed.
-    run_step "account-1 — indicators (rsync + restart)" \
-        "$PM/update_claude1.sh" --restart-indicators
-    add_row "  └─ account-1 — indicators  (restarted)" "${STEP_RESULTS[-1]}"
-    # Shared data plane: the SINGLE restart of every feed (15M + feed5m + cex_feed).
-    run_step "account-1 — data plane (feeds: 15M + feed5m + cex_feed)" "$STATUS/setup_data_plane.sh"
-    add_row "  └─ account-1 — feed        (restarted via data plane)" "${STEP_RESULTS[-1]}"
-    # account_bot LAST — connects to the now-stable feed (no orphaning).
-    run_step "account-1 — account_bot (after feeds stable)" \
-        "$PM/update_claude1.sh" --restart-account
-    add_row "  └─ account-1 — account_bot (restarted after feeds)" "${STEP_RESULTS[-1]}"
+# tomllib requires Python 3.11+; prefer the project .venv, fall back to python3.
+if [[ -x "$REPO/.venv/bin/python3" ]]; then
+    PYTHON="$REPO/.venv/bin/python3"
 else
-    run_step "account-1 — rsync (indicators + feed + account_bot)" \
-        "$PM/update_claude1.sh" --skip-restart
-    add_row "  └─ account-1 — indicators  (rsync only — pass --restart-infra to restart)" "RSYNC"
-    add_row "  └─ account-1 — feed        (rsync only — pass --restart-infra to restart)" "RSYNC"
-    add_row "  └─ account-1 — account_bot (rsync only — pass --restart-infra to restart)" "RSYNC"
+    PYTHON="python3"
 fi
 
-# ── Accounts 2–5 ──────────────────────────────────────────────────────────────
-run_step "account-2 — live_bot (Polymarket)"            "$PM/update_claude2.sh"
-run_step "account-2 — accumulation_bot (MEXC sim)"      "$CEX/deploy_accumulation_claude2.sh"
-run_step "account-3 — live_bot (Polymarket)"            "$PM/update_claude3.sh"
-run_step "account-3 — accumulation_bot"                 "$CEX/deploy_accumulation_claude3.sh"
-run_step "account-3 — grid_bot (Binance CEX sim)"       "$CEX/deploy_grid_claude3.sh"
-run_step "account-4 — live_bot (Polymarket)"            "$PM/update_claude4.sh"
-# account-4 — orderbook_bot DISABLED 2026-06-14: structurally unprofitable
-# (−$643 over 9051 trades, 5.4% win rate, fee-dominated). Service stopped + disabled
-# on the host. The acct-4 scalping deploy script is kept in scripts/ for reference;
-# re-enable here and in inventory.toml only after the strategy is recalibrated.
-run_step "account-4 — accumulation_bot (deepdip)"       "$CEX/deploy_accumulation_claude4.sh"
-run_step "account-5 — swing live_bot"                   "$CEX/update_swing.sh"
-run_step "account-6 — grid live_bot (MEXC Futures sim)" "$CEX/deploy_grid_mexc.sh"
-
-show_heartbeat_status "HEARTBEAT — POST-DEPLOY SNAPSHOT"
-
-echo -e "\n${BOLD}${YELLOW}═══ DEPLOY ALL — SUMMARY (13 bots) ═══${NC}"
-for i in "${!STEP_LABELS[@]}"; do
-    case "${STEP_RESULTS[$i]}" in
-        OK)     echo -e "${GREEN}  ✓ ${STEP_LABELS[$i]}${NC}" ;;
-        RSYNC)  echo -e "${YELLOW}  ~ ${STEP_LABELS[$i]}${NC}" ;;
-        FAILED) echo -e "${RED}  ✗ ${STEP_LABELS[$i]}${NC}" ;;
-    esac
-done
-
-if [[ $FAILURES -eq 0 ]]; then
-    echo -e "\n${BOLD}${GREEN}  ALL ACCOUNTS DEPLOYED SUCCESSFULLY${NC}"
-    exit 0
-else
-    echo -e "\n${BOLD}${RED}  $FAILURES ACCOUNT(S) FAILED — check output above${NC}"
-    exit 1
-fi
+exec "$PYTHON" "$REPO/scripts/deploy.py" "$@"
