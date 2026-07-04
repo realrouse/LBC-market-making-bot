@@ -3715,7 +3715,7 @@ class TestCoreShipsWithTheBot(unittest.TestCase):
         "scripts/test_multibot_deploy.sh",
         "tradinebotte-polymarket/scripts/update_standalone.sh",
         "tradinebotte-status/scripts/setup_data_plane.sh",
-        "tradinebotte-cex/scripts/deploy_grid_claude3.sh",
+        "tradinebotte-cex/scripts/deploy_grid_binance.sh",
         "tradinebotte-cex/scripts/deploy_grid_mexc.sh",
         "tradinebotte-cex/scripts/update_swing.sh",
     )

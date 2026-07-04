@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# deploy_grid_claude3.sh — Deploy the Binance CEX grid bot on account-3 (simulation mode).
+# deploy_grid_binance.sh — Generic Binance CEX grid-bot deployer (simulation mode).
+#
+# The target account + strategy come from inventory.toml (deploy_env: TEST_GRID_BINANCE_USER_IDX,
+# TEST_GRID_BINANCE_STRATEGY) and are injected by scripts/deploy.py — no per-account wrapper.
 #
 # Runs live_bot.py via tradinebotte-grid.service with TRADINEBOTTE_DIR=~/tradinebotte-grid.
 # Data (config.json, live.db, live.log, version.stamp) lives in ~/tradinebotte-grid/.
@@ -8,20 +11,13 @@
 # Simulation mode is automatic: no BINANCE_API_KEY/SECRET on the remote →
 # all orders return "sim_..." IDs (no real trades, no real API calls).
 #
-# Default target: TEST_GRID_BINANCE_USER_IDX=2 (account-3, index 2 in TEST_USERS).
-# Override: TEST_GRID_BINANCE_USER_IDX=<n> bash scripts/deploy_grid_claude3.sh
+# Fallback defaults (used only when the env vars are unset): TEST_GRID_BINANCE_USER_IDX=2,
+# strategy grid_BTCUSDT_moderate.json (backtested, BTC bounds 49k–73.5k, capital_start=1500).
 #
-# Default strategy: grid_BTCUSDT_moderate.json (backtested, BTC bounds 49k–73.5k).
-# Override: TEST_GRID_BINANCE_STRATEGY=strategies/grid/<other>.json
-#
-# NOTE: The previous nohup grid_bot ran with capital=2000. No committed config matches
-# that value; grid_BTCUSDT_moderate.json uses capital_start=1500. Confirm with user
-# before changing.
-#
-# Usage:
-#   bash tradinebotte-cex/scripts/deploy_grid_claude3.sh
-#   bash tradinebotte-cex/scripts/deploy_grid_claude3.sh --skip-restart
-#   bash tradinebotte-cex/scripts/deploy_grid_claude3.sh --verify-only
+# Usage (via the orchestrator, or with presets directly):
+#   bash tradinebotte-cex/scripts/deploy_all.sh --only "account-3 — grid"  # [--skip-restart|--verify-only]
+#   TEST_GRID_BINANCE_USER_IDX=2 TEST_GRID_BINANCE_STRATEGY=strategies/grid/grid_BTCUSDT_moderate.json \
+#       bash scripts/deploy_grid_binance.sh
 
 set -uo pipefail
 

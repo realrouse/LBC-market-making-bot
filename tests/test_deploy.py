@@ -105,7 +105,7 @@ class TestRealInventory(unittest.TestCase):
         "tradinebotte-cex/scripts/deploy_accumulation.sh",        # acct-2 accum
         "tradinebotte-polymarket/scripts/update_standalone.sh",   # acct-3 live_bot
         "tradinebotte-cex/scripts/deploy_accumulation.sh",        # acct-3 accum
-        "tradinebotte-cex/scripts/deploy_grid_claude3.sh",        # acct-3 grid (not migrated)
+        "tradinebotte-cex/scripts/deploy_grid_binance.sh",        # acct-3 grid (generic engine)
         "tradinebotte-polymarket/scripts/update_standalone.sh",   # acct-4 live_bot
         "tradinebotte-cex/scripts/deploy_accumulation.sh",        # acct-4 accum
         "tradinebotte-cex/scripts/update_swing.sh",               # acct-5 swing (not migrated)

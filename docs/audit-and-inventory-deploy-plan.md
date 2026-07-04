@@ -167,10 +167,14 @@ match, then de-duplicate).
   engine header comments repointed off the deleted wrappers.
 - Validated: full test suite green + a second fleet-wide `--verify-only` (all 10 ✓, engines
   resolved to the correct accounts via the presets).
-- **Still account-named (out of P2 scope, follow-up P2b):** `deploy_grid_claude3.sh` is a
-  *full* deployer (not a thin wrapper) with acct-3 defaults baked in — rename to a generic
-  `deploy_grid_binance.sh` driven by inventory `deploy_env`. Orphan `update_claude5.sh`
-  (not in the plan) can be removed.
+**Phase 2b — de-account-name the remaining full deployer. ✅ DONE.**
+- `deploy_grid_claude3.sh` → **`deploy_grid_binance.sh`** (generic engine); the acct-3
+  binding (`TEST_GRID_BINANCE_USER_IDX=2`, strategy) moved to inventory `deploy_env`, with
+  the old hardcoded values kept only as unset-fallbacks in the script.
+- Removed the orphan `update_claude5.sh` (a thin preset for acct-5, which now runs swing).
+- After P2b, the only account-named deploy script left is `update_claude1.sh` (the
+  bespoke account-1 infra block) and `deploy_scalping_claude4.sh` (disabled orderbook, kept
+  for reference).
 
 **Phase 3 — converge the other topology consumers (the promised "Phase 5").**
 - `bot_status.sh` LABELS and `generate_status.py` `_ACCOUNT_LABELS` / `_LIVE_BOTS` read from
