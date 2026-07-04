@@ -4,8 +4,9 @@
 # Install once:
 #   git config core.hooksPath .git-hooks
 #
-# Checks staged content against a list of sensitive patterns loaded from
-# ~/.tradinebotte-test.conf (server hostname, usernames) plus static patterns.
+# Checks (1) staged CONTENT against sensitive patterns loaded from
+# ~/.tradinebotte-test.conf (server hostname, usernames) plus static patterns, and
+# (2) staged FILENAMES (new/renamed only) for embedded account identifiers.
 
 set -euo pipefail
 
@@ -44,6 +45,25 @@ for pat in "${PATTERNS[@]}"; do
         FOUND=1
     fi
 done
+
+# ── Filename check: block NEW files whose NAME embeds an account identifier ──────────
+# Content is index-based, but a file NAMED after an account (e.g. deploy_grid_claude3.sh)
+# re-couples the topology to a username and slips past the content scan above. Only
+# ADDED/RENAMED paths are checked (substring match), so edits to the grandfathered
+# account-named scripts (update_claude1.sh, deploy_scalping_claude4.sh) are not blocked.
+if [[ -n "${TEST_USERS[*]:-}" ]]; then
+    NEW_PATHS=$(git diff --cached --name-only --diff-filter=AR -- ':!.git-hooks/')
+    for u in "${TEST_USERS[@]}"; do
+        [[ -z "$NEW_PATHS" ]] && break
+        NAMED=$(printf '%s\n' "$NEW_PATHS" | grep -F "$u" || true)
+        if [[ -n "$NAMED" ]]; then
+            echo "🔴 COMMIT BLOQUÉ — nom de fichier contient un identifiant de compte :"
+            echo "   Compte : $u"
+            printf '%s\n' "$NAMED" | head -5 | sed 's/^/   /'
+            FOUND=1
+        fi
+    done
+fi
 
 if [[ $FOUND -ne 0 ]]; then
     echo ""
