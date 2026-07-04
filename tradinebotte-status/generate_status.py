@@ -594,19 +594,27 @@ def t(key: str, **kw) -> str:
         return s
 
 
-_ACCOUNT_LABELS = [
-    "acct-1 [poly+cex+status]",
-    "acct-2 [poly]",
-    "acct-3 [poly+accum]",
-    "acct-4 [poly+accum]",
-    "acct-5 [swing]",
-    "acct-6 [grid-mexc-sim]",
-]
+# Account labels + the real-money (_LIVE_BOTS) set are DERIVED from inventory.toml (the
+# single source of truth), not hand-maintained here. Fail-soft: if the inventory can't be
+# read/parsed, degrade to plain acct-N labels + no live bots so the 60s status page never
+# crashes over a label. The account COUNT/ORDER stays anchored to the collected users (the
+# min() clamp in main()); inventory only enriches label text + the is_live flag.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import inventory_labels as _inv  # noqa: E402
+    _INV_ROWS = _inv.load_rows()
+except Exception:
+    _INV_ROWS = []
 
-# Bots running with REAL money — all others default to SIM.
-# Key: (acct_short_label, bot_name) — acct_short = first word of _ACCOUNT_LABELS entry.
-# Add an entry here when a bot receives real credentials on the remote.
-_LIVE_BOTS: set[tuple[str, str]] = set()
+if _INV_ROWS:
+    _ACCOUNT_LABELS = _inv.account_labels(_INV_ROWS)
+    # Bots running with REAL money (is_live=true) — all others default to SIM. Keyed
+    # (acct_short, bot_name) to match _mode_badge. Empty today (all sim); auto-tracks
+    # inventory the day a bot goes live.
+    _LIVE_BOTS: set[tuple[str, str]] = _inv.live_bots(_INV_ROWS)
+else:
+    _ACCOUNT_LABELS = [f"acct-{i + 1}" for i in range(12)]   # fail-soft plain labels
+    _LIVE_BOTS = set()
 
 
 def _fmt_pnl(v) -> str:

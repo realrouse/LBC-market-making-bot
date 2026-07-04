@@ -111,15 +111,15 @@ fi
 
 echo -e "\n${BOLD}${YELLOW}─── SERVICES ───${NC}"
 
-# Labels mirror the full account topology (6 accounts).
-declare -a LABELS=(
-    "acct-1 [poly+cex+status]"
-    "acct-2 [poly]"
-    "acct-3 [poly+accum]"
-    "acct-4 [poly+accum]"
-    "acct-5 [swing]"
-    "acct-6 [grid-mexc-sim]"
+# Account labels are DERIVED from inventory.toml (single source of truth) via the shared
+# helper; fall back to plain acct-N if the helper/inventory/python is unavailable.
+_BS_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+_BS_PY="$_BS_REPO/.venv/bin/python3"; [ -x "$_BS_PY" ] || _BS_PY=python3
+mapfile -t LABELS < <(
+    "$_BS_PY" -c "import sys; sys.path.insert(0, '$_BS_REPO/tradinebotte-status'); \
+import inventory_labels as i; print('\n'.join(i.account_labels(i.load_rows())))" 2>/dev/null
 )
+[ "${#LABELS[@]}" -gt 0 ] || LABELS=("acct-1" "acct-2" "acct-3" "acct-4" "acct-5" "acct-6")
 
 for IDX in 0 1 2 3 4 5; do
     USER="${ALL_USERS[$IDX]}"
