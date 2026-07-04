@@ -208,11 +208,15 @@ families × 6 accounts, incl. account-1). Findings + fixes:
   dedup to one step, silently dropping one. `check_inventory` now flags it (the fix is a
   distinct account index per row's `deploy_env`).
 - Regression tests: `TestScaleOut` (test_deploy) + `test_check_inventory.py`.
-- **Recommended next (not done):** have `deploy.py` **auto-inject** the account-index env
-  var from `account_idx` (map deployer→idx-var), so `deploy_env` need not repeat the index —
-  DRY and makes the collision impossible by construction. Deferred: it changes the
-  deploy-targeting path (a wrong index deploys to the wrong account), so it needs its own
-  `--verify-only` re-validation.
+- **✅ DONE — auto-inject the account index.** `deploy.py` derives each deployer's
+  account-index env var from `account_idx` (map `_DEPLOYER_IDX_VAR`, applied by `_row_env()`,
+  which `check_inventory` reuses so its collision guard sees the post-injection env). The
+  explicit indices were dropped from `inventory.toml`, and `update_swing.sh` / `deploy_grid_mexc.sh`
+  migrated to `deployer` form — so `deploy_env` now carries only strategy/feed config, never
+  the index. Adding a family to every account is now index-free and collision-proof by
+  construction (full-matrix test: 24 bots → 24 distinct steps with zero `deploy_env` index).
+  Re-validated: a fleet-wide `--verify-only` resolved every engine to the correct account
+  (incl. the migrated swing→acct-5, grid_mexc→acct-6). An explicit `deploy_env` index still wins.
 - Minor: `bot_status.sh` still loops `for IDX in 0..5` (hardcoded 6 accounts) — fine for the
   6-account (claude) fleet, revisit if account count changes.
 

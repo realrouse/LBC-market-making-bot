@@ -143,6 +143,34 @@ class TestRealInventory(unittest.TestCase):
                             f"deploy script missing: {s.script}")
 
 
+class TestAutoInjectIndex(unittest.TestCase):
+    """deploy.py injects each deployer's account-index env var from account_idx, so inventory
+    rows need not repeat the index — and two accounts can't collide on one engine."""
+
+    def test_index_injected_from_account_idx(self):
+        rows = [{"account_idx": 3, "bot_name": "swing_bot",
+                 "deployer": "tradinebotte-cex/scripts/update_swing.sh"}]   # no deploy_env
+        step = deploy.build_plan(rows, restart_infra=False)[1]
+        self.assertEqual(step.env["TEST_SWING_USER_IDX"], "3")
+
+    def test_explicit_deploy_env_index_wins(self):
+        rows = [{"account_idx": 3, "bot_name": "swing_bot",
+                 "deployer": "tradinebotte-cex/scripts/update_swing.sh",
+                 "deploy_env": {"TEST_SWING_USER_IDX": "9"}}]                # override
+        step = deploy.build_plan(rows, restart_infra=False)[1]
+        self.assertEqual(step.env["TEST_SWING_USER_IDX"], "9")
+
+    def test_unknown_deployer_gets_no_injection(self):
+        rows = [{"account_idx": 3, "bot_name": "x", "deployer": "custom.sh"}]
+        self.assertEqual(deploy.build_plan(rows, restart_infra=False)[1].env, {})
+
+    def test_same_engine_different_accounts_do_not_collide(self):
+        rows = [{"account_idx": i, "bot_name": "swing_bot",
+                 "deployer": "tradinebotte-cex/scripts/update_swing.sh"} for i in (1, 2, 3)]
+        plan = deploy.build_plan(rows, restart_infra=False)
+        self.assertEqual(len(plan) - 1, 3)          # none deduped away
+
+
 class TestScaleOut(unittest.TestCase):
     """Forward-looking: adding a bot of every family on every account (incl. account-1) must
     not silently drop any bot. account-1 trading bots are derived (only the bespoke INFRA

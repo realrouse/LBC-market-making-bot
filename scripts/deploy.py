@@ -50,6 +50,30 @@ STATUS_DIR = "tradinebotte-status/scripts"
 # account, incl. account-1, works without silently dropping it.
 _BESPOKE_SCRIPTS = {"update_claude1.sh", "setup_data_plane.sh", "deploy_status_service.sh"}
 
+# Each generic deployer resolves its target account from its own env var. deploy.py injects
+# it from the row's account_idx, so inventory rows need NOT repeat the index in deploy_env
+# (DRY, and a wrong index → wrong account becomes impossible: the account IS account_idx).
+# An explicit deploy_env value still wins (setdefault), for the rare non-account-idx target.
+_DEPLOYER_IDX_VAR = {
+    "update_standalone.sh": "TEST_STANDALONE_USER_IDX",
+    "deploy_accumulation.sh": "ACCUM_USER_IDX",
+    "deploy_grid_binance.sh": "TEST_GRID_BINANCE_USER_IDX",
+    "update_swing.sh": "TEST_SWING_USER_IDX",
+    "deploy_grid_mexc.sh": "TEST_GRID_MEXC_USER_IDX",
+}
+
+
+def _row_env(row: dict) -> dict[str, str]:
+    """The deploy env for a row: explicit deploy_env + the auto-injected account-index var
+    (derived from account_idx unless deploy_env sets it). Used by both the plan builder and
+    check_inventory's collision guard so they agree on the post-injection env."""
+    env = {str(k): str(v) for k, v in (row.get("deploy_env") or {}).items()}
+    script = row.get("deployer") or row.get("deploy_script") or ""
+    idxvar = _DEPLOYER_IDX_VAR.get(os.path.basename(script))
+    if idxvar and row.get("account_idx") is not None:
+        env.setdefault(idxvar, str(row["account_idx"]))
+    return env
+
 _C = {"y": "\033[1;33m", "g": "\033[0;32m", "r": "\033[0;31m", "b": "\033[1m", "n": "\033[0m"}
 
 
@@ -102,7 +126,7 @@ def build_plan(rows: list[dict], *, restart_infra: bool) -> list[Step]:
             continue
         if os.path.basename(script) in _BESPOKE_SCRIPTS:
             continue                      # already run by the account-1 bespoke block
-        env = {str(k): str(v) for k, v in (row.get("deploy_env") or {}).items()}
+        env = _row_env(row)
         key = (script, tuple(sorted(env.items())))
         if key in seen:
             continue

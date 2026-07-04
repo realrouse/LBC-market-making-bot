@@ -116,8 +116,9 @@ def check_deploy_pipeline(rows: list[dict]) -> list[str]:
             continue                       # run by the account-1 bespoke block
         if target not in plan_scripts:
             problems.append(f"{tag}: deploy target {target} absent from derived plan")
-        env = tuple(sorted((str(k), str(v))
-                           for k, v in (r.get("deploy_env") or {}).items()))
+        # Post-injection env (deploy.py auto-injects the account-index var from account_idx),
+        # so rows sharing an engine but differing only by account are NOT false collisions.
+        env = tuple(sorted(_deploy._row_env(r).items()))
         by_step.setdefault((target, env), set()).add(
             (r.get("account_idx"), r.get("bot_name")))
     for (target, _env), members in by_step.items():
