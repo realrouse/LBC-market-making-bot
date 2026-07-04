@@ -56,40 +56,6 @@ def compute_fee(price, quantity):
     return FEE_RATE * price * quantity
 
 
-# ─── MARKET METADATA ─────────────────────────────────────────────────────────
-# These helpers mirror api_polymarket's interface so live_bot.py can call them
-# without modification. For spot markets, "UP token" = BUY side, "DOWN" = SELL.
-
-def get_market_id(market):
-    """Return the trading symbol as the market identifier."""
-    return market.get("symbol", "")
-
-
-def get_market_question(market):
-    """Return a human-readable market description (falls back to symbol)."""
-    return market.get("question", market.get("symbol", ""))
-
-
-def get_market_end_ts_ms(_market):
-    """Return 0 — spot markets have no scheduled expiry."""
-    return 0.0
-
-
-def get_market_start_ts_ms(_market):
-    """Return 0 — start time is not applicable to spot markets."""
-    return 0.0
-
-
-def get_up_token_id(market):
-    """BUY side maps to the UP direction."""
-    return market.get("symbol", "")
-
-
-def get_down_token_id(market):
-    """SELL side maps to the DOWN direction."""
-    return market.get("symbol", "") + ":SELL"
-
-
 # ─── WEBSOCKET ────────────────────────────────────────────────────────────────
 
 def make_subscribe_msg(symbols):
@@ -189,7 +155,7 @@ async def post_order(session, symbol, price, size_usdc, *,
 
     Args:
         symbol    : trading pair, e.g. "BTCUSDT". Append ":SELL" to force
-                    the SELL side (mirrors get_down_token_id convention).
+                    the SELL side (the ':SELL' suffix convention).
         price     : limit price in USDT
         size_usdc : notional USDT amount (BUY) or proceeds target (SELL)
         api_key   : Binance API key (falls back to BINANCE_API_KEY env var)

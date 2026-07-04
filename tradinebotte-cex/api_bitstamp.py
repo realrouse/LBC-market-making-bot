@@ -96,37 +96,6 @@ def _auth_headers(method: str, path: str, body: str = "") -> dict:
     return headers
 
 
-# ─── MARKET METADATA ─────────────────────────────────────────────────────────
-def get_market_id(market):
-    """Return the trading symbol as the market identifier."""
-    return market.get("symbol", "")
-
-
-def get_market_question(market):
-    """Return a human-readable market description (falls back to symbol)."""
-    return market.get("description", market.get("symbol", ""))
-
-
-def get_market_end_ts_ms(_market):
-    """Return 0 — spot markets have no scheduled expiry."""
-    return 0.0
-
-
-def get_market_start_ts_ms(_market):
-    """Return 0 — start time is not applicable to spot markets."""
-    return 0.0
-
-
-def get_up_token_id(market):
-    """BUY side maps to the UP direction."""
-    return market.get("symbol", "")
-
-
-def get_down_token_id(market):
-    """SELL side maps to the DOWN direction."""
-    return market.get("symbol", "") + ":SELL"
-
-
 # ─── WEBSOCKET ────────────────────────────────────────────────────────────────
 def make_subscribe_msg(symbols):
     """

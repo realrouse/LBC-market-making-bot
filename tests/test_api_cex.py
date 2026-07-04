@@ -4,7 +4,6 @@ Tests for bot/api_binance.py and bot/api_mexc.py.
 Coverage:
   - TestApiContract   : both modules expose the same public interface as api_polymarket
   - TestBinanceComputeFee / TestMexcComputeFee : pure fee arithmetic
-  - TestBinanceMetadata / TestMexcMetadata     : market metadata helpers
   - TestBinanceParseBookUpdate / TestMexcParseBookUpdate : WebSocket message parsing
   - TestBinanceMakeSubscribeMsg / TestMexcMakeSubscribeMsg : subscribe message format
   - TestBinancePostOrderSimulated / TestMexcPostOrderSimulated : dry-run (no network)
@@ -26,22 +25,22 @@ import api_polymarket    as poly
 # ── contract ──────────────────────────────────────────────────────────────────
 
 class TestApiContract(unittest.TestCase):
-    """
-    All three API modules must expose the same public interface so live_bot.py
-    can swap exchanges with a single import change.
-    """
+    """Every connector exposes the common EXCHANGE interface (books / orders / fees /
+    subscribe) so a strategy can swap exchanges with one import. The Polymarket
+    market-metadata accessors (up/down token, market id/question/expiry) are
+    Polymarket-ONLY — spot/futures CEX adapters no longer carry them (they were dead
+    prediction-market stubs; see the not-polymarket-first cleanup)."""
 
     REQUIRED_FUNCTIONS = [
         "compute_fee",
-        "get_market_id",
-        "get_market_question",
-        "get_market_end_ts_ms",
-        "get_market_start_ts_ms",
-        "get_up_token_id",
-        "get_down_token_id",
         "parse_book_update",
         "post_order",
         "make_subscribe_msg",
+    ]
+    # Prediction-market accessors — required on api_polymarket only.
+    POLYMARKET_FUNCTIONS = [
+        "get_market_id", "get_market_question", "get_market_end_ts_ms",
+        "get_market_start_ts_ms", "get_up_token_id", "get_down_token_id",
     ]
 
     def _check_module(self, mod):
@@ -65,6 +64,17 @@ class TestApiContract(unittest.TestCase):
 
     def test_polymarket_has_full_interface(self):
         self._check_module(poly)
+        for name in self.POLYMARKET_FUNCTIONS:
+            self.assertTrue(hasattr(poly, name),
+                            f"api_polymarket missing {name}")
+
+    def test_cex_adapters_lack_polymarket_metadata(self):
+        # Regression for the not-polymarket-first cleanup: CEX adapters must NOT re-grow
+        # the prediction-market accessors that were removed as dead stubs.
+        for mod in (binance, bitstamp, mexc, mexc_futures):
+            for name in self.POLYMARKET_FUNCTIONS:
+                self.assertFalse(hasattr(mod, name),
+                                 f"{mod.__name__} should not carry Polymarket accessor {name}")
 
     def test_fee_rate_is_float(self):
         for mod in (binance, bitstamp, mexc, mexc_futures, poly):
@@ -167,76 +177,6 @@ class TestMexcComputeFee(unittest.TestCase):
 
     def test_fee_rate_is_02_percent(self):
         self.assertAlmostEqual(mexc.FEE_RATE, 0.002)
-
-
-# ── Binance market metadata ───────────────────────────────────────────────────
-
-class TestBinanceMetadata(unittest.TestCase):
-
-    def test_get_market_id(self):
-        self.assertEqual(binance.get_market_id({"symbol": "BTCUSDT"}), "BTCUSDT")
-
-    def test_get_market_id_missing(self):
-        self.assertEqual(binance.get_market_id({}), "")
-
-    def test_get_up_token_id(self):
-        self.assertEqual(binance.get_up_token_id({"symbol": "BTCUSDT"}), "BTCUSDT")
-
-    def test_get_up_token_id_missing(self):
-        self.assertEqual(binance.get_up_token_id({}), "")
-
-    def test_get_down_token_id(self):
-        self.assertEqual(binance.get_down_token_id({"symbol": "BTCUSDT"}), "BTCUSDT:SELL")
-
-    def test_get_down_token_id_missing(self):
-        self.assertEqual(binance.get_down_token_id({}), ":SELL")
-
-    def test_get_market_end_ts_ms_is_zero(self):
-        # spot markets have no expiry
-        self.assertEqual(binance.get_market_end_ts_ms({"symbol": "BTCUSDT"}), 0.0)
-
-    def test_get_market_start_ts_ms_is_zero(self):
-        self.assertEqual(binance.get_market_start_ts_ms({"symbol": "BTCUSDT"}), 0.0)
-
-    def test_get_market_question_from_question(self):
-        self.assertEqual(
-            binance.get_market_question({"question": "BTC up?"}), "BTC up?"
-        )
-
-    def test_get_market_question_falls_back_to_symbol(self):
-        self.assertEqual(
-            binance.get_market_question({"symbol": "BTCUSDT"}), "BTCUSDT"
-        )
-
-
-# ── MEXC market metadata ──────────────────────────────────────────────────────
-
-class TestMexcMetadata(unittest.TestCase):
-
-    def test_get_market_id(self):
-        self.assertEqual(mexc.get_market_id({"symbol": "BTCUSDT"}), "BTCUSDT")
-
-    def test_get_market_id_missing(self):
-        self.assertEqual(mexc.get_market_id({}), "")
-
-    def test_get_up_token_id(self):
-        self.assertEqual(mexc.get_up_token_id({"symbol": "BTCUSDT"}), "BTCUSDT")
-
-    def test_get_down_token_id(self):
-        self.assertEqual(mexc.get_down_token_id({"symbol": "BTCUSDT"}), "BTCUSDT:SELL")
-
-    def test_get_market_end_ts_ms_is_zero(self):
-        self.assertEqual(mexc.get_market_end_ts_ms({"symbol": "BTCUSDT"}), 0.0)
-
-    def test_get_market_start_ts_ms_is_zero(self):
-        self.assertEqual(mexc.get_market_start_ts_ms({"symbol": "BTCUSDT"}), 0.0)
-
-    def test_down_token_has_sell_suffix(self):
-        self.assertTrue(mexc.get_down_token_id({"symbol": "ETHUSDT"}).endswith(":SELL"))
-
-    def test_up_and_down_tokens_differ(self):
-        m = {"symbol": "BTCUSDT"}
-        self.assertNotEqual(mexc.get_up_token_id(m), mexc.get_down_token_id(m))
 
 
 # ── Binance parse_book_update ─────────────────────────────────────────────────
@@ -529,40 +469,6 @@ class TestBitstampComputeFee(unittest.TestCase):
         self.assertAlmostEqual(bitstamp.FEE_RATE, 0.001)
 
 
-# ── Bitstamp market metadata ──────────────────────────────────────────────────
-
-class TestBitstampMetadata(unittest.TestCase):
-
-    def test_get_market_id(self):
-        self.assertEqual(bitstamp.get_market_id({"symbol": "BTCUSD"}), "BTCUSD")
-
-    def test_get_market_id_missing(self):
-        self.assertEqual(bitstamp.get_market_id({}), "")
-
-    def test_get_up_token_id(self):
-        self.assertEqual(bitstamp.get_up_token_id({"symbol": "BTCUSD"}), "BTCUSD")
-
-    def test_get_down_token_id_has_sell_suffix(self):
-        self.assertEqual(bitstamp.get_down_token_id({"symbol": "BTCUSD"}), "BTCUSD:SELL")
-
-    def test_get_market_end_ts_ms_is_zero(self):
-        self.assertEqual(bitstamp.get_market_end_ts_ms({"symbol": "BTCUSD"}), 0.0)
-
-    def test_get_market_start_ts_ms_is_zero(self):
-        self.assertEqual(bitstamp.get_market_start_ts_ms({"symbol": "BTCUSD"}), 0.0)
-
-    def test_get_market_question_uses_description(self):
-        m = {"symbol": "BTCUSD", "description": "BTC/USD spot"}
-        self.assertEqual(bitstamp.get_market_question(m), "BTC/USD spot")
-
-    def test_get_market_question_falls_back_to_symbol(self):
-        self.assertEqual(bitstamp.get_market_question({"symbol": "BTCUSD"}), "BTCUSD")
-
-    def test_up_and_down_tokens_differ(self):
-        m = {"symbol": "BTCUSD"}
-        self.assertNotEqual(bitstamp.get_up_token_id(m), bitstamp.get_down_token_id(m))
-
-
 # ── Bitstamp parse_book_update ────────────────────────────────────────────────
 
 class TestBitstampParseBookUpdate(unittest.TestCase):
@@ -744,43 +650,6 @@ class TestMexcFuturesComputeFee(unittest.TestCase):
 
 
 # ── MEXC Futures metadata ──────────────────────────────────────────────────────
-
-class TestMexcFuturesMetadata(unittest.TestCase):
-
-    def test_get_market_id(self):
-        self.assertEqual(mexc_futures.get_market_id({"symbol": "BTC_USDT"}), "BTC_USDT")
-
-    def test_get_market_id_missing(self):
-        self.assertEqual(mexc_futures.get_market_id({}), "")
-
-    def test_get_up_token_id(self):
-        self.assertEqual(mexc_futures.get_up_token_id({"symbol": "BTC_USDT"}), "BTC_USDT")
-
-    def test_get_down_token_id_has_short_suffix(self):
-        self.assertEqual(mexc_futures.get_down_token_id({"symbol": "BTC_USDT"}),
-                         "BTC_USDT:SHORT")
-
-    def test_up_and_down_tokens_differ(self):
-        m = {"symbol": "BTC_USDT"}
-        self.assertNotEqual(mexc_futures.get_up_token_id(m),
-                            mexc_futures.get_down_token_id(m))
-
-    def test_get_market_end_ts_ms_is_zero(self):
-        self.assertEqual(mexc_futures.get_market_end_ts_ms({}), 0.0)
-
-    def test_get_market_start_ts_ms_is_zero(self):
-        self.assertEqual(mexc_futures.get_market_start_ts_ms({}), 0.0)
-
-    def test_get_market_question_falls_back_to_symbol(self):
-        self.assertEqual(mexc_futures.get_market_question({"symbol": "BTC_USDT"}),
-                         "BTC_USDT")
-
-    def test_get_market_question_custom(self):
-        m = {"symbol": "BTC_USDT", "question": "BTC perp"}
-        self.assertEqual(mexc_futures.get_market_question(m), "BTC perp")
-
-    def test_symbol_uses_underscore_format(self):
-        self.assertIn("_", mexc_futures.DEFAULT_SYMBOL)
 
 
 # ── MEXC Futures parse_book_update ────────────────────────────────────────────

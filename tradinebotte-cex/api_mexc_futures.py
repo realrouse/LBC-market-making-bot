@@ -76,38 +76,6 @@ def compute_fee(price, quantity):
     return FEE_RATE * price * quantity
 
 
-# ── MARKET METADATA ───────────────────────────────────────────────────────────
-
-def get_market_id(market):
-    """Return the trading symbol as the market identifier."""
-    return market.get("symbol", "")
-
-
-def get_market_question(market):
-    """Return a human-readable market description (falls back to symbol)."""
-    return market.get("question", market.get("symbol", ""))
-
-
-def get_market_end_ts_ms(_market):
-    """Return 0 — perpetual futures have no scheduled expiry."""
-    return 0.0
-
-
-def get_market_start_ts_ms(_market):
-    """Return 0 — start time is not applicable to perpetual contracts."""
-    return 0.0
-
-
-def get_up_token_id(market):
-    """Long (buy) direction maps to UP."""
-    return market.get("symbol", "")
-
-
-def get_down_token_id(market):
-    """Short direction maps to DOWN — ":SHORT" suffix mirrors ":SELL" convention."""
-    return market.get("symbol", "") + ":SHORT"
-
-
 # ── AUTH ──────────────────────────────────────────────────────────────────────
 
 def _sign(api_key: str, secret: str, req_time: str, params_str: str) -> str:
@@ -262,7 +230,7 @@ async def post_order(session, symbol, price, size_usdc, *,
 
     Args:
         symbol    : perpetual pair, e.g. "BTC_USDT". Append ":SHORT" to force
-                    open-short side (mirrors get_down_token_id convention).
+                    open-short side (the ':SELL' suffix convention).
         price     : limit price in USDT
         size_usdc : USDT notional — converted to contracts via BTC_USDT_CONTRACT_SIZE
         api_key   : MEXC Futures key (falls back to MEXC_FUTURES_API_KEY env var)

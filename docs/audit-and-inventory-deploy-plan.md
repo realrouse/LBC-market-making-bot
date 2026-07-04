@@ -52,14 +52,18 @@ Confidence is labelled **[verified]** (diff/grep concluded) or **[heuristic]** (
   modules. **Class methods were not swept** and dynamic dispatch is not detected statically.
 
 ### Duplication — the real theme
-- **[verified] `api_*` adapters copy-pasted.** `compute_fee`, `parse_book_update`, and the
-  `get_market_id` shim are **byte-identical** between `api_mexc.py` and `api_binance.py`. This
-  is *not* legitimate per-exchange polymorphism — it is copy-paste that belongs in
-  `api_common.py` (today only 44 lines / 3 helpers; heavily under-used). No `Protocol`/ABC
-  formalises the adapter interface.
-- **[verified] Polymarket concept leaks into CEX.** `get_up_token_id(market)` exists as a shim
-  in CEX adapters (`return market["symbol"]`) — an "up/down token" idea from Polymarket forced
-  into spot CEX. Contradicts the *"no longer polymarket-first"* directive.
+- **[CORRECTED] `api_*` "copy-paste" was OVER-claimed.** An earlier `awk` diff extracted empty
+  strings and reported `compute_fee`/`parse_book_update`/`make_subscribe_msg` as identical
+  mexc-vs-binance. A structural (AST) comparison across all 4 CEX adapters shows they are
+  **4-distinct** — legitimate per-exchange polymorphism (different fee schedules / WS
+  formats), NOT duplication. Only trivial one-liners overlapped.
+- **[verified — DONE] Polymarket concept leaked into CEX → removed.** The prediction-market
+  accessors (`get_up_token_id`, `get_down_token_id`, `get_market_id`, `get_market_question`,
+  `get_market_{start,end}_ts_ms`) were dead stubs in all 4 CEX adapters — called only by
+  `pm_data.py`/`feed.py`, both of which use `api_polymarket`, and required by no CEX strategy
+  (`connectors.validate`). Removed from the CEX adapters (kept on `api_polymarket`); tests +
+  the connector docstring updated; a regression test now asserts CEX adapters never re-grow
+  them. Directly serves the *"no longer polymarket-first"* directive.
 - **[verified — dismissed] `_hb_payload` is NOT duplication.** `tradinetools.build_heartbeat`
   already centralises the envelope (ts/account/bot_name/version/status/mode); each bot's
   `_hb_payload` is the intended `get_extra` callback returning only that bot's metrics.
@@ -85,11 +89,14 @@ Confidence is labelled **[verified]** (diff/grep concluded) or **[heuristic]** (
   (11). The highest-risk trading code is least tested by LOC/test-file ratio:
   `indicators` (1 file / 3457 LOC), `polymarket` (3 / 7854), `cex` (5 / 8354).
 
-### Improvement themes (one narrative: *the inventory-driven migration is half-finished*)
-1. **Deploy** (Part 2 — highest ROI): iterate `inventory.toml`, delete the wrappers.
-2. **Adapters**: formalise an `ExchangeAdapter` Protocol; move identical helpers into
-   `api_common.py`; drop the `get_up_token_id` CEX shim.
-3. **Tests**: add coverage to `indicators` and the CEX/Polymarket bot cores.
+### Improvement themes
+1. **Deploy** (Part 2 — highest ROI): iterate `inventory.toml`, delete the wrappers. ✅ DONE
+   (Phases 1–4 + status/labels convergence).
+2. **Adapters**: ~~move identical helpers into `api_common.py`~~ (moot — they're per-exchange,
+   not duplicated); ✅ **dropped the dead Polymarket accessors from the CEX adapters**. A formal
+   `ExchangeAdapter` Protocol is still optional (`connectors.validate` already gates by method).
+3. **Tests**: add coverage to `indicators` (1 file / 3457 LOC) and the CEX/Polymarket bot cores.
+   ← next.
 4. **Hook**: add a staged-filename check for `claude[1-6]` (after Part 2 removes those files).
 
 ---
