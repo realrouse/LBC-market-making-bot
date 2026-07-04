@@ -192,6 +192,30 @@ match, then de-duplicate).
 - Extend `check_inventory.py` to validate `deployer` exists + is executable, `deploy_env` keys
   are known, and that **no orphan wrapper** remains referenced.
 
+### Scale-out robustness — a bot of every family on every account (verified + hardened)
+Stress-tested the inventory-driven pieces against a synthetic full matrix (4 trading
+families × 6 accounts, incl. account-1). Findings + fixes:
+- ✅ `account_labels` / `_LIVE_BOTS` scale cleanly (labels become e.g. `acct-2
+  [poly+accum+grid+swing]`; live set tracks `is_live`).
+- ✅ All 5 generic deployers are already index-parametrized (`TEST_STANDALONE_USER_IDX`,
+  `ACCUM_USER_IDX`, `TEST_GRID_BINANCE_USER_IDX`, `TEST_SWING_USER_IDX`,
+  `TEST_GRID_MEXC_USER_IDX`), so one engine serves all accounts.
+- **[FIXED] account-1 trading bots were silently dropped** — `deploy.py` skipped *all*
+  idx-0 rows. Now it skips only rows run by the **bespoke infra scripts**
+  (`update_claude1.sh` / `setup_data_plane.sh` / `deploy_status_service.sh`), so a trading
+  bot added to account-1 IS derived. `check_inventory` aligned (was silent about it).
+- **[FIXED] deploy collision guard** — two bots sharing the same `deployer` + `deploy_env`
+  dedup to one step, silently dropping one. `check_inventory` now flags it (the fix is a
+  distinct account index per row's `deploy_env`).
+- Regression tests: `TestScaleOut` (test_deploy) + `test_check_inventory.py`.
+- **Recommended next (not done):** have `deploy.py` **auto-inject** the account-index env
+  var from `account_idx` (map deployer→idx-var), so `deploy_env` need not repeat the index —
+  DRY and makes the collision impossible by construction. Deferred: it changes the
+  deploy-targeting path (a wrong index deploys to the wrong account), so it needs its own
+  `--verify-only` re-validation.
+- Minor: `bot_status.sh` still loops `for IDX in 0..5` (hardcoded 6 accounts) — fine for the
+  6-account (claude) fleet, revisit if account count changes.
+
 ### Constraints the dispatcher MUST preserve (from ops memory)
 - **Sequential, one account at a time** — never parallel SSH/rsync to the same host. Wait for
   each account to finish before the next.

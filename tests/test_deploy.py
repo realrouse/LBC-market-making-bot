@@ -143,5 +143,58 @@ class TestRealInventory(unittest.TestCase):
                             f"deploy script missing: {s.script}")
 
 
+class TestScaleOut(unittest.TestCase):
+    """Forward-looking: adding a bot of every family on every account (incl. account-1) must
+    not silently drop any bot. account-1 trading bots are derived (only the bespoke INFRA
+    scripts are skipped), and every (account, family) yields a distinct step."""
+
+    _FAM = {
+        "live_bot":         ("tradinebotte-polymarket/scripts/update_standalone.sh", "TEST_STANDALONE_USER_IDX"),
+        "grid_bot":         ("tradinebotte-cex/scripts/deploy_grid_binance.sh",      "TEST_GRID_BINANCE_USER_IDX"),
+        "swing_bot":        ("tradinebotte-cex/scripts/update_swing.sh",             "TEST_SWING_USER_IDX"),
+        "accumulation_bot": ("tradinebotte-cex/scripts/deploy_accumulation.sh",      "ACCUM_USER_IDX"),
+    }
+
+    def _matrix(self, n_accounts=6):
+        rows = [{"account_idx": 0, "bot_name": "account_bot", "kind": "bot",
+                 "deploy_script": "tradinebotte-polymarket/scripts/update_claude1.sh"}]
+        for idx in range(n_accounts):
+            for fam, (dep, iv) in self._FAM.items():
+                rows.append({"account_idx": idx, "bot_name": fam, "kind": "bot",
+                             "deployer": dep, "deploy_env": {iv: str(idx)}})
+        return rows
+
+    def test_full_matrix_every_bot_gets_a_distinct_step(self):
+        rows = self._matrix()
+        plan = deploy.build_plan(rows, restart_infra=False)
+        trading = [s for s in plan[1:]]                  # drop the account-1 bespoke step
+        self.assertEqual(len(trading), 6 * len(self._FAM))   # 24, none dropped
+        keys = {(s.script, tuple(sorted(s.env.items()))) for s in trading}
+        self.assertEqual(len(keys), len(trading))        # no collision
+
+    def test_account1_trading_bot_is_derived(self):
+        # A trading bot on account-1 (a non-bespoke deployer) must appear in the plan.
+        rows = [
+            {"account_idx": 0, "bot_name": "account_bot", "kind": "bot",
+             "deploy_script": "tradinebotte-polymarket/scripts/update_claude1.sh"},
+            {"account_idx": 0, "bot_name": "grid_bot", "kind": "bot",
+             "deployer": "tradinebotte-cex/scripts/deploy_grid_binance.sh",
+             "deploy_env": {"TEST_GRID_BINANCE_USER_IDX": "0"}},
+        ]
+        plan = deploy.build_plan(rows, restart_infra=False)
+        self.assertTrue(any(s.script.endswith("deploy_grid_binance.sh") for s in plan),
+                        "account-1 trading bot was dropped from the derived plan")
+
+    def test_bespoke_infra_scripts_are_skipped(self):
+        # Rows deployed by the account-1 bespoke block must NOT be re-derived.
+        rows = [{"account_idx": 0, "bot_name": b, "kind": k,
+                 "deploy_script": f"tradinebotte-{'status' if 'data' in s else 'polymarket'}/scripts/{s}"}
+                for b, k, s in [("indicators", "service", "update_claude1.sh"),
+                                ("feed5m", "service", "setup_data_plane.sh")]]
+        plan = deploy.build_plan(rows, restart_infra=False)
+        derived = [s for s in plan[1:]]                  # after the account-1 step
+        self.assertEqual(derived, [], "bespoke infra scripts should not be derived")
+
+
 if __name__ == "__main__":
     unittest.main()

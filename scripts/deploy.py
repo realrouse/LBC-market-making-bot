@@ -39,10 +39,16 @@ from dataclasses import dataclass, field
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INVENTORY = os.path.join(REPO, "inventory.toml")
 
-# Account-1 (idx 0) is infra with order-critical restart semantics — not naively
+# Account-1 (idx 0) INFRA is order-critical (feeds before account_bot) — not naively
 # derivable, so it stays a hardcoded block mirroring deploy_all.sh.
 PM = "tradinebotte-polymarket/scripts"
 STATUS_DIR = "tradinebotte-status/scripts"
+
+# Scripts already run by the account-1 bespoke block (or deployed independently). Rows
+# whose deploy target is one of these are skipped by the derivation — but a *trading* bot
+# added to account-1 (a different deployer) IS derived, so scaling a family onto every
+# account, incl. account-1, works without silently dropping it.
+_BESPOKE_SCRIPTS = {"update_claude1.sh", "setup_data_plane.sh", "deploy_status_service.sh"}
 
 _C = {"y": "\033[1;33m", "g": "\033[0;32m", "r": "\033[0;31m", "b": "\033[1m", "n": "\033[0m"}
 
@@ -91,12 +97,12 @@ def build_plan(rows: list[dict], *, restart_infra: bool) -> list[Step]:
     # wrongly collapse them.
     seen: set[tuple] = set()
     for row in rows:
-        if row.get("account_idx", 0) == 0:
-            continue                      # account-1 handled above
         script = row.get("deployer") or row.get("deploy_script")
-        env = {str(k): str(v) for k, v in (row.get("deploy_env") or {}).items()}
         if not script:
             continue
+        if os.path.basename(script) in _BESPOKE_SCRIPTS:
+            continue                      # already run by the account-1 bespoke block
+        env = {str(k): str(v) for k, v in (row.get("deploy_env") or {}).items()}
         key = (script, tuple(sorted(env.items())))
         if key in seen:
             continue

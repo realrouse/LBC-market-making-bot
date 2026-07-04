@@ -85,13 +85,15 @@ def check_offline(rows: list[dict]) -> list[str]:
 # ─── Deploy-pipeline check (offline, repo-only) ──────────────────────────────
 
 def check_deploy_pipeline(rows: list[dict]) -> list[str]:
-    """Every deployable bot must be reachable by the plan deploy.py derives from inventory.
+    """Every deployable bot must be reachable by the plan deploy.py derives from inventory,
+    and no two bots may collapse to the same deploy step.
 
-    The plan is now DERIVED from this same file (deploy_all.sh is a thin shim over
-    scripts/deploy.py), so the old inventory<->deploy_all.sh set-compare is obsolete — it
-    would only compare inventory against itself. What still matters: no accounts-2..N
-    'bot' row is silently undeployable (missing both `deployer` and `deploy_script`, or
-    pointing at a target the orchestrator never emits).
+    The plan is DERIVED from this file (deploy_all.sh is a thin shim over scripts/deploy.py),
+    so the old inventory<->deploy_all.sh set-compare is obsolete. What still matters as the
+    inventory scales (a family added on every account): (1) no 'bot' row is silently
+    undeployable, and (2) no two distinct bots share the same deployer+deploy_env — that
+    dedups to ONE step, silently dropping one (the fix is a distinct account index in each
+    row's deploy_env). Rows run by the account-1 bespoke block are exempt from (1).
     """
     problems: list[str] = []
     try:
@@ -101,16 +103,29 @@ def check_deploy_pipeline(rows: list[dict]) -> list[str]:
         return [f"deploy.py not importable for pipeline check: {e}"]
 
     plan_scripts = {s.script for s in _deploy.build_plan(rows, restart_infra=False)}
+    by_step: dict[tuple, set] = {}
     for r in rows:
-        # account-1 (idx 0) is dispatched by deploy.py's bespoke block, not the derivation.
-        if r.get("kind", "bot") != "bot" or r.get("account_idx") == 0:
+        if r.get("kind", "bot") != "bot":
             continue
         target = r.get("deployer") or r.get("deploy_script")
         tag = f"{r.get('bot_name')!r} (idx {r.get('account_idx')})"
         if not target:
             problems.append(f"{tag}: no deployer/deploy_script — undeployable")
-        elif target not in plan_scripts:
+            continue
+        if os.path.basename(target) in _deploy._BESPOKE_SCRIPTS:
+            continue                       # run by the account-1 bespoke block
+        if target not in plan_scripts:
             problems.append(f"{tag}: deploy target {target} absent from derived plan")
+        env = tuple(sorted((str(k), str(v))
+                           for k, v in (r.get("deploy_env") or {}).items()))
+        by_step.setdefault((target, env), set()).add(
+            (r.get("account_idx"), r.get("bot_name")))
+    for (target, _env), members in by_step.items():
+        if len(members) > 1:
+            problems.append(
+                f"deploy collision: {sorted(members)} share {os.path.basename(target)} "
+                f"with identical deploy_env → only one will deploy "
+                f"(give each row a distinct account index in deploy_env)")
     return problems
 
 
