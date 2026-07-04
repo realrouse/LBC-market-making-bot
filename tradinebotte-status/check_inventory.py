@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import subprocess
 import sys
 import tomllib
@@ -39,14 +38,6 @@ import tomllib
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO = os.path.dirname(_HERE)
 DEFAULT_INVENTORY = os.path.join(_REPO, "inventory.toml")
-DEPLOY_ALL = os.path.join(_REPO, "tradinebotte-cex", "scripts", "deploy_all.sh")
-# Scripts excluded from the inventory<->deploy_all set-compare (both directions):
-#   deploy_status_service.sh — in inventory, deployed independently (not via deploy_all)
-#   heartbeat_status.sh      — invoked by deploy_all as a status snapshot, not a bot deploy
-#   setup_data_plane.sh      — installs the shared feeds (feed5m/cex_feed) independently
-_PIPELINE_EXCEPTIONS = {"deploy_status_service.sh", "heartbeat_status.sh",
-                        "setup_data_plane.sh"}
-
 _REQUIRED = ("account_idx", "bot_name", "kind")
 _KINDS = {"bot", "service"}
 
@@ -83,33 +74,43 @@ def check_offline(rows: list[dict]) -> list[str]:
         ds = r.get("deploy_script")
         if ds and not os.path.isfile(os.path.join(_REPO, ds)):
             problems.append(f"{tag}: deploy_script not found in repo: {ds}")
+        dep = r.get("deployer")           # Phase 2: generic engine + deploy_env preset
+        if dep and not os.path.isfile(os.path.join(_REPO, dep)):
+            problems.append(f"{tag}: deployer not found in repo: {dep}")
+        if not isinstance(r.get("deploy_env", {}), dict):
+            problems.append(f"{tag}: deploy_env must be a table")
     return problems
 
 
-# ─── Deploy-pipeline drift (offline, repo-only) ──────────────────────────────
+# ─── Deploy-pipeline check (offline, repo-only) ──────────────────────────────
 
 def check_deploy_pipeline(rows: list[dict]) -> list[str]:
-    """Bidirectional set-compare: inventory deploy_scripts vs scripts deploy_all.sh invokes.
+    """Every deployable bot must be reachable by the plan deploy.py derives from inventory.
 
-    Catches "added a bot to inventory but forgot the pipeline" and the reverse, without
-    parsing deploy_all's orchestration.  Scripts in _PIPELINE_EXCEPTIONS are deployed
-    independently and are not expected in deploy_all.sh.
+    The plan is now DERIVED from this same file (deploy_all.sh is a thin shim over
+    scripts/deploy.py), so the old inventory<->deploy_all.sh set-compare is obsolete — it
+    would only compare inventory against itself. What still matters: no accounts-2..N
+    'bot' row is silently undeployable (missing both `deployer` and `deploy_script`, or
+    pointing at a target the orchestrator never emits).
     """
     problems: list[str] = []
-    if not os.path.isfile(DEPLOY_ALL):
-        return [f"deploy_all.sh not found at {DEPLOY_ALL}"]
-    with open(DEPLOY_ALL, encoding="utf-8") as fh:
-        src = fh.read()
+    try:
+        sys.path.insert(0, os.path.join(_REPO, "scripts"))
+        import deploy as _deploy  # noqa: PLC0415
+    except Exception as e:                                    # pragma: no cover
+        return [f"deploy.py not importable for pipeline check: {e}"]
 
-    inv_scripts = {os.path.basename(r["deploy_script"])
-                   for r in rows if r.get("deploy_script")}
-    # deploy_all invokes scripts as "$PM/foo.sh" / "$CEX/foo.sh" / "$STATUS/foo.sh"
-    invoked = set(re.findall(r'\$(?:PM|CEX|STATUS)/([a-z0-9_]+\.sh)', src))
-
-    for s in sorted(inv_scripts - _PIPELINE_EXCEPTIONS - invoked):
-        problems.append(f"inventory deploy_script not invoked by deploy_all.sh: {s}")
-    for s in sorted(invoked - _PIPELINE_EXCEPTIONS - inv_scripts):
-        problems.append(f"deploy_all.sh invokes a script absent from inventory: {s}")
+    plan_scripts = {s.script for s in _deploy.build_plan(rows, restart_infra=False)}
+    for r in rows:
+        # account-1 (idx 0) is dispatched by deploy.py's bespoke block, not the derivation.
+        if r.get("kind", "bot") != "bot" or r.get("account_idx") == 0:
+            continue
+        target = r.get("deployer") or r.get("deploy_script")
+        tag = f"{r.get('bot_name')!r} (idx {r.get('account_idx')})"
+        if not target:
+            problems.append(f"{tag}: no deployer/deploy_script — undeployable")
+        elif target not in plan_scripts:
+            problems.append(f"{tag}: deploy target {target} absent from derived plan")
     return problems
 
 

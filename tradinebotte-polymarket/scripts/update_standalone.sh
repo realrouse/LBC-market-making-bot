@@ -65,8 +65,8 @@ if [[ ! -f "$CONF" ]]; then
     echo "  cp scripts/test_multibot.conf.example ~/.tradinebotte-test.conf"
     exit 1
 fi
-# Callers (update_claude2.sh etc.) set TEST_STANDALONE_USER_IDX=N in the env
-# before calling this script. Preserve that override before source() overwrites it.
+# The caller (scripts/deploy.py, from inventory.toml deploy_env) sets
+# TEST_STANDALONE_USER_IDX=N in the env. Preserve it before source() overwrites it.
 _SA_IDX_CALLER="${TEST_STANDALONE_USER_IDX:-}"
 # shellcheck source=/dev/null
 source "$CONF"

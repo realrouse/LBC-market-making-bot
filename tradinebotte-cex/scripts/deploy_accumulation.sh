@@ -1,21 +1,17 @@
 #!/usr/bin/env bash
 # deploy_accumulation.sh — Deploy and (re)start the BTC accumulation bot.
 #
-# Parameterized base script — invoke through the account-specific wrappers:
-#   deploy_accumulation_claude3.sh  (standalone account, index 2)
-#   deploy_accumulation_claude4.sh  (scalping account, index 3)
-#
-# Or pass overrides directly:
-#   ACCUM_USER_IDX=2 BOT_STRATEGY=... bash deploy_accumulation.sh
+# Parameterized generic engine. Per-account presets (ACCUM_USER_IDX, BOT_STRATEGY) live in
+# inventory.toml (deploy_env) and are injected by scripts/deploy.py — no per-account wrapper.
 #
 #   accumulation_bot → accumulation_bot.pid / accumulation_bot.log / live_accum.db
 #
 # Reads credentials from ~/.tradinebotte-test.conf
 #
-# Usage:
-#   bash scripts/deploy_accumulation_claude3.sh
-#   bash scripts/deploy_accumulation_claude3.sh --skip-restart
-#   bash scripts/deploy_accumulation_claude3.sh --verify-only
+# Usage (via the orchestrator, or with presets directly):
+#   bash tradinebotte-cex/scripts/deploy_all.sh --only "account-3 — accumulation"
+#   ACCUM_USER_IDX=2 BOT_STRATEGY=strategies/accumulation/btc_accumulation.json \
+#       bash scripts/deploy_accumulation.sh [--skip-restart|--verify-only]
 
 set -uo pipefail
 

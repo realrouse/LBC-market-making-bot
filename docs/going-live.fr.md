@@ -100,8 +100,8 @@ Répéter pour les autres unités si nécessaire
 # Redéployer tous les comptes
 bash tradinebotte-cex/scripts/deploy_all.sh
 
-# Ou cibler un compte directement, par ex. :
-bash tradinebotte-polymarket/scripts/update_claude2.sh
+# Ou cibler un compte/bot directement, par ex. :
+bash tradinebotte-cex/scripts/deploy_all.sh --only account-2
 ```
 
 ---

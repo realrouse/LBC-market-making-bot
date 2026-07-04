@@ -95,11 +95,11 @@ Repeat for other service units if needed
 ## 4. Redeploy to pick up the change
 
 ```bash
-# Redeploy the specific account (replace with the correct script)
+# Redeploy the whole fleet (inventory-driven)
 bash tradinebotte-cex/scripts/deploy_all.sh
 
-# Or target one account directly, e.g.:
-bash tradinebotte-polymarket/scripts/update_claude2.sh
+# Or target one account/bot directly, e.g.:
+bash tradinebotte-cex/scripts/deploy_all.sh --only account-2
 ```
 
 ---

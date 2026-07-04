@@ -56,6 +56,7 @@ class Step:
     label: str
     script: str                       # repo-relative path
     args: list[str] = field(default_factory=list)
+    env: dict[str, str] = field(default_factory=dict)   # deploy_env preset (Phase 2)
     display_only: str | None = None   # if set, a summary-only row (e.g. "RSYNC"), not run
 
 
@@ -82,20 +83,29 @@ def build_plan(rows: list[dict], *, restart_infra: bool) -> list[Step]:
         plan.append(Step("account-1 — rsync (indicators + feed + account_bot)",
                          f"{PM}/update_claude1.sh", ["--skip-restart"]))
 
-    # ── Accounts 2..N: derived from inventory, file order, deduped per script ───────
-    seen: set[str] = set()
+    # ── Accounts 2..N: derived from inventory, file order ───────────────────────────
+    # A row is deployed by `deployer` + `deploy_env` (Phase 2: generic engine + preset)
+    # or, for not-yet-migrated rows, by a standalone `deploy_script`. Dedup on the FULL
+    # (script, env) pair — several rows now share one generic engine (update_standalone.sh)
+    # with different presets (TEST_STANDALONE_USER_IDX), so deduping on script alone would
+    # wrongly collapse them.
+    seen: set[tuple] = set()
     for row in rows:
         if row.get("account_idx", 0) == 0:
             continue                      # account-1 handled above
-        script = row.get("deploy_script")
-        if not script or script in seen:
+        script = row.get("deployer") or row.get("deploy_script")
+        env = {str(k): str(v) for k, v in (row.get("deploy_env") or {}).items()}
+        if not script:
             continue
-        seen.add(script)
+        key = (script, tuple(sorted(env.items())))
+        if key in seen:
+            continue
+        seen.add(key)
         acct = f"account-{row['account_idx'] + 1}"
         bot = row.get("bot_name", "?")
         btype = row.get("bot_type", "")
         label = f"{acct} — {bot}" + (f" ({btype})" if btype else "")
-        plan.append(Step(label, script))
+        plan.append(Step(label, script, env=env))
     return plan
 
 
@@ -112,6 +122,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Inventory-driven deploy orchestrator.")
     ap.add_argument("--restart-infra", action="store_true",
                     help="also restart account-1 feeds/services (disrupts live_bots ~30s)")
+    ap.add_argument("--only", metavar="TOKEN", default=None,
+                    help="only steps whose label contains TOKEN (e.g. account-2, live_bot)")
     ap.add_argument("--list", action="store_true", help="print the derived plan and exit")
     ap.add_argument("--dry-run", action="store_true",
                     help="print each step that would run, without executing")
@@ -127,12 +139,23 @@ def main() -> int:
         return 2
 
     plan = build_plan(rows, restart_infra=args.restart_infra)
+    if args.only:
+        plan = [s for s in plan if args.only.lower() in s.label.lower()]
+        if not plan:
+            print(f"--only {args.only!r} matched no steps", file=sys.stderr)
+            return 2
 
     if args.list:
         print(_c("b", f"Derived deploy plan ({len(plan)} steps) — from inventory.toml:"))
         for i, s in enumerate(plan, 1):
+            envp = " ".join(f"{k}={v}" for k, v in s.env.items())
             extra = " ".join(s.args + forward)
-            print(f"  {i:2}. {s.label:52} {s.script}" + (f"  [{extra}]" if extra else ""))
+            line = f"  {i:2}. {s.label:52} {s.script}"
+            if envp:
+                line += f"  {{{envp}}}"
+            if extra:
+                line += f"  [{extra}]"
+            print(line)
         return 0
 
     run_heartbeat_snapshot("HEARTBEAT — PRE-DEPLOY SNAPSHOT") if not args.dry_run else None
@@ -141,12 +164,14 @@ def main() -> int:
     failures = 0
     for s in plan:
         cmd = ["bash", os.path.join(REPO, s.script), *s.args, *forward]
+        run_env = {**os.environ, **s.env}
         print(_c("y", f"\n▶▶▶ {s.label} ▶▶▶"))
         if args.dry_run:
-            print("  would run:", " ".join(cmd))
+            envp = " ".join(f"{k}={v}" for k, v in s.env.items())
+            print("  would run:", (f"env {envp} " if envp else "") + " ".join(cmd))
             results.append((s.label, "DRY"))
             continue
-        rc = subprocess.run(cmd, cwd=REPO, check=False).returncode
+        rc = subprocess.run(cmd, cwd=REPO, env=run_env, check=False).returncode
         results.append((s.label, "OK" if rc == 0 else "FAILED"))
         if rc != 0:
             failures += 1

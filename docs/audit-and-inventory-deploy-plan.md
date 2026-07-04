@@ -147,21 +147,30 @@ match, then de-duplicate).
 
 ### Phased rollout (each phase independently shippable + testable on the ephemeral account)
 
-**Phase 1 — dispatcher, wrappers still present (lowest risk).**
-- New `scripts/deploy.py` (Python, reuses `check_inventory.load_rows`).
-- For now it just runs each row's existing **`deploy_script`**, **deduped** (e.g. acct-1's three
-  rows all point at `update_claude1.sh` → run once), in a deterministic order.
-- `deploy_all.sh` becomes a thin shim → `python3 scripts/deploy.py "$@"`.
+**Phase 1 — dispatcher, wrappers still present (lowest risk). ✅ DONE.**
+- New `scripts/deploy.py` (Python, reuses the tomllib loader).
+- Runs each row's existing **`deploy_script`**, **deduped**, in a deterministic order.
+- `deploy_all.sh` becomes a thin shim → `scripts/deploy.py "$@"`.
 - Net effect: the hardcoded `run_step` list is **derived from inventory** — the triplicated
-  mapping collapses to one source. No wrapper deleted yet. Fully reversible.
+  mapping collapses to one source. Validated with a fleet-wide `--verify-only` (all 10 ✓).
 
-**Phase 2 — move env presets into inventory, collapse wrappers.**
-- Populate `deployer` + `deploy_env` for every row (copy the env from each wrapper).
-- Dispatcher runs `env <deploy_env> bash <deployer> <forwarded-args>`.
-- Delete the thin wrappers: `update_claude2/3/4.sh`, `deploy_accumulation_claude2/3/4.sh`,
-  `deploy_grid_claude3.sh`, `deploy_scalping_claude4.sh`, (and `update_claude5.sh` if it's a
-  preset). Keeps: the generic engines + `update_claude1.sh` (acct-1 special).
-- Removes the account-named filenames **and** the wrapper duplication in one move.
+**Phase 2 — move env presets into inventory, collapse wrappers. ✅ DONE.**
+- The 6 pure thin exec-preset wrappers (`update_claude2/3/4.sh` →
+  `update_standalone.sh`; `deploy_accumulation_claude2/3/4.sh` → `deploy_accumulation.sh`)
+  moved their presets into inventory `deployer` + `deploy_env` and were **deleted**.
+  deploy.py runs `env <deploy_env> bash <deployer>`; dedup keys on `(script, env)` so the
+  three rows sharing `update_standalone.sh` (idx 1/2/3) stay distinct.
+- `check_inventory.py` updated: the obsolete inventory↔deploy_all.sh drift check (a shim
+  now) is replaced by a check that every accounts-2..N bot is reachable in deploy.py's
+  derived plan; it also validates `deployer` paths + `deploy_env` shape.
+- Added `deploy.py --only <TOKEN>` (single account/bot); docs (going-live, UPDATE) and the
+  engine header comments repointed off the deleted wrappers.
+- Validated: full test suite green + a second fleet-wide `--verify-only` (all 10 ✓, engines
+  resolved to the correct accounts via the presets).
+- **Still account-named (out of P2 scope, follow-up P2b):** `deploy_grid_claude3.sh` is a
+  *full* deployer (not a thin wrapper) with acct-3 defaults baked in — rename to a generic
+  `deploy_grid_binance.sh` driven by inventory `deploy_env`. Orphan `update_claude5.sh`
+  (not in the plan) can be removed.
 
 **Phase 3 — converge the other topology consumers (the promised "Phase 5").**
 - `bot_status.sh` LABELS and `generate_status.py` `_ACCOUNT_LABELS` / `_LIVE_BOTS` read from

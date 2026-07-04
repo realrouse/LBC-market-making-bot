@@ -107,8 +107,8 @@ Trois scripts couvrent les stratégies du sous-service CEX. Chacun copie en rsyn
 # Bot de scalping (OBI Binance)
 bash tradinebotte-cex/scripts/deploy_scalping_claude4.sh
 
-# Bot d'accumulation BTC v1.5
-bash tradinebotte-cex/scripts/deploy_accumulation_claude4.sh
+# Bot d'accumulation BTC v1.5 (preset dans inventory.toml, dispatché par deploy.py)
+bash tradinebotte-cex/scripts/deploy_all.sh --only "account-4 — accumulation"
 
 # Stratégie swing
 bash tradinebotte-cex/scripts/update_swing.sh
