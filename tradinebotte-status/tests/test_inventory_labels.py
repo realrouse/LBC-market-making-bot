@@ -81,7 +81,7 @@ class TestFailSoft(unittest.TestCase):
 
     def test_malformed_file_returns_empty(self):
         p = f"/tmp/_bad_inv_{os.getpid()}.toml"
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8") as f:
             f.write("this is [ not valid toml =")
         try:
             self.assertEqual(il.load_rows(p), [])

@@ -195,7 +195,7 @@ class TestScaleOut(unittest.TestCase):
     def test_full_matrix_every_bot_gets_a_distinct_step(self):
         rows = self._matrix()
         plan = deploy.build_plan(rows, restart_infra=False)
-        trading = [s for s in plan[1:]]                  # drop the account-1 bespoke step
+        trading = list(plan[1:])                  # drop the account-1 bespoke step
         self.assertEqual(len(trading), 6 * len(self._FAM))   # 24, none dropped
         keys = {(s.script, tuple(sorted(s.env.items()))) for s in trading}
         self.assertEqual(len(keys), len(trading))        # no collision
@@ -220,7 +220,7 @@ class TestScaleOut(unittest.TestCase):
                 for b, k, s in [("indicators", "service", "update_claude1.sh"),
                                 ("feed5m", "service", "setup_data_plane.sh")]]
         plan = deploy.build_plan(rows, restart_infra=False)
-        derived = [s for s in plan[1:]]                  # after the account-1 step
+        derived = list(plan[1:])                  # after the account-1 step
         self.assertEqual(derived, [], "bespoke infra scripts should not be derived")
 
 

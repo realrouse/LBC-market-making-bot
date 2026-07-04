@@ -188,7 +188,8 @@ def main() -> int:
             print(line)
         return 0
 
-    run_heartbeat_snapshot("HEARTBEAT — PRE-DEPLOY SNAPSHOT") if not args.dry_run else None
+    if not args.dry_run:
+        run_heartbeat_snapshot("HEARTBEAT — PRE-DEPLOY SNAPSHOT")
 
     results: list[tuple[str, str]] = []
     failures = 0
