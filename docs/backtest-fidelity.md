@@ -76,9 +76,44 @@ fast replay would skip).
 and, as a diagnostic, exposed a concrete half-grid-vs-full-grid discrepancy in the legacy
 backtest.
 
-## 5. Next (proposed, not started)
-- **Phase 2**: swing (+ RSI handling), then dca/swinghold "for free" on the same harness.
+## 5. Phase-2 result (swing) — the drift, isolated to one behavior
+
+`python3 analysis/backtest_engine.py <db> --strategy swing` — 4 support / 4 resistance levels
+(`_DEF_*_OFFSETS` × first-open), `$200`/order, trend filter OFF, `max_positions == #supports`
+so both sides arm the **same level set** (else the engine arms only the top-3 at init — a
+level-set confound; forcing them equal isolates the one behavioral difference below).
+
+| window (90d) | backtest trades / PnL | real engine trades / PnL | Δ |
+|---|---|---|---|
+| range (opens down) | 46 / −$1.50 | **4 / −$17.72** | −42 / −$16.22 |
+| **bullrun (opens up)** | **3 / +$16.96** | **3 / +$16.96** | **0 / $0.00** |
+| bearmarket (opens down) | 7 / −$30.77 | **4 / −$22.33** | −3 / +$8.44 |
+
+- **The bullrun row is the isolation proof: exact match (Δ=0).** When price only rises, every
+  exit is a take-profit, both sides re-arm identically, and the strategies are indistinguishable.
+- **Root cause of the down-window drift — the engine never re-arms a support after a stop-loss.**
+  Live `SwingStrategy` places BUYs at only two sites: `_initialise` (once) and `_on_sell_filled`
+  (**TP** re-arm). `_close_sl` marks the position `closed` and does nothing else. So once a
+  support stops out it is **retired for the rest of the run**. The re-implemented backtest instead
+  `locked`s a level on close and **unlocks it when price recovers above the support** (`h >= sp`)
+  — i.e. it re-arms after a stop-loss. On any window that opens with a dip through the initial
+  SLs, the live bot fires each support once and then goes **fully dormant**, while the backtest
+  keeps cycling.
+- **Direction is path-dependent, not a fixed bias** (unlike grid's structural +48%): the engine
+  loses *more* than the backtest in the range window but *less* in the bearmarket (its dormancy
+  protects capital). So neither "over-" nor "understates" is a general statement for swing — the
+  sign depends on whether post-SL re-entries would have won or lost.
+
+**Actionable flag (deployed swing = acct-5, sim):** the no-re-arm-after-SL behavior means the
+live swing bot can permanently stop trading a level after a single stop-loss — plausibly
+unintended. Worth a product decision: keep (conservative "don't catch a falling knife") or add a
+recovery-based re-arm to match the backtest's assumption. Documented here; not changed.
+
+## 6. Next (proposed, not started)
+- dca/swinghold "for free" on the same harness (same driver, different builder).
+- Swing RSI(4h)/EMA200 gate: feed historical indicators (currently disabled for the comparison).
 - **Phase 3**: retire the re-implemented CEX backtests (or keep as a cross-check) + a CI parity
-  test (replay a fixture through engine and harness, assert equal trades).
+  test — the **bullrun fixture (Δ=0) is the natural assertion**: replay it through engine and
+  harness, assert equal trades/PnL.
 - **Accumulation**: separately, either feed historical gate streams or document it as a
   "mechanical DCA, no gates" upper bound.
