@@ -144,11 +144,21 @@ close-price tick — two harness artifacts that would dominate any real signal, 
 could not be cleanly isolated the way swing's was. Same category as accumulation (§2, 🔴): keep
 `backtest_swing_dca.run_dca` as the DCA model; do not claim engine-parity for it here.
 
-## 8. Next (proposed, not started)
-- Swing RSI(4h)/EMA200 gate: feed historical indicators (currently disabled for the comparison).
-- **Phase 3**: retire the re-implemented CEX backtests (or keep as a cross-check) + a CI parity
-  test — the **swing bullrun fixture (Δ=0) is the natural assertion**: replay it through engine
-  and harness, assert equal trades/PnL. A finer intra-candle replay would extend parity to
-  swinghold's partial-exit path.
+## 8. Phase-3 parity guard (DONE) + what's left
+
+**CI parity test — `tests/test_backtest_engine_parity.py` (implemented).** Pins the Δ=0 property
+with a tiny in-memory no-SL fixture (arm BUY at support 97 → fill on a shallow dip → TP at
+resistance 103, no stop-loss ever): the real `SwingStrategy` driven through the harness and
+`backtest_swing_dca.run_swing` must book the *same* single winning round-trip (equal trades, equal
+PnL to 6 dp). So any future change that breaks the engine↔backtest agreement on the shared path —
+in either the engine's fill/PnL accounting or the backtest — fails CI. No `data/*.db` dependency
+(those aren't in git); the fixture is built in code. Runs under the root `tests/` discovery.
+
+Left (proposed, not started):
+- **Retire or cross-check** the re-implemented CEX backtests now that the engine-driven path is
+  validated for grid/swing (keep them as an independent second opinion, or delete once parity is
+  trusted). Not done — a judgement call for the maintainer.
+- **Swing RSI(4h)/EMA200 gate**: feed historical indicators (currently disabled for the comparison).
+- **Finer intra-candle replay** to extend parity to swinghold's partial-exit path (§6).
 - **Accumulation**: separately, either feed historical gate streams or document it as a
   "mechanical DCA, no gates" upper bound.
