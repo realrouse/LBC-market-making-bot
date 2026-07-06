@@ -74,5 +74,37 @@ class TestSwingHarnessParity(unittest.TestCase):
         self.assertAlmostEqual(e_pnl, b_pnl, places=6)
 
 
+# DCA parity: 4 buy candles on realistic epoch timestamps, each 4h apart so the interval timer
+# fires once per candle; every candle's high (104) clears the +3% TP (103) → same-candle round-trip.
+# A trailing "settle" candle (60s later, under the interval so it fires NO new buy) lets the last
+# buy's TP fill in the engine too — the backtest closes it same-candle, the engine needs one more
+# tick, so without the settle candle the engine would trail by one straggler (a pure end-of-run
+# effect, not drift). Capital ($3000) and slots (5) both stay unbound, so the ONE structural
+# difference — the backtest's capital budget vs the engine's balance-free buying (docs §7) — is not
+# exercised, and the two must agree exactly. Guards the candle-clock injection + close-first ticks.
+_DCA_BASE_MS = 1_700_000_000_000
+_DCA_INTERVAL_MS = 4 * 60 * 60 * 1000
+_DCA_ROWS = [_c(_DCA_BASE_MS + i * _DCA_INTERVAL_MS, 100, 104, 100, 100) for i in range(4)]
+_DCA_ROWS.append(_c(_DCA_BASE_MS + 3 * _DCA_INTERVAL_MS + 60_000, 104, 104, 100, 104))
+
+
+class TestDCAHarnessParity(unittest.TestCase):
+
+    def test_unbound_path_engine_equals_backtest(self):
+        p = bsd.DCAParams()   # 4h / $100 / TP 3% / no SL / max 5 / $3000
+        cfg = types.SimpleNamespace(
+            connector="binance", symbol="BTCUSDT",
+            dca_interval_h=p.interval_h, dca_amount_usdt=p.amount_usdt,
+            max_positions=p.max_positions, tp_pct=p.tp_pct, sl_pct=p.sl_pct, poll_interval=0.0)
+        d = be.DCAStrategy(cfg)
+        asyncio.run(be._drive(d, _DCA_ROWS, ensure_schema=d.ensure_schema,
+                              ticks=be._dca_ticks, clock_module=be.dca_mod))
+        b = bsd.run_dca(_DCA_ROWS, p)
+
+        self.assertGreater(d.dca.total_trades, 0, "fixture should book DCA round-trips")
+        self.assertEqual(d.dca.total_trades, b.n_trades)
+        self.assertAlmostEqual(d.dca.total_pnl, b.realized_pnl, places=6)
+
+
 if __name__ == "__main__":
     unittest.main()

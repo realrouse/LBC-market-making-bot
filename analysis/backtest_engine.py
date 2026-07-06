@@ -8,11 +8,16 @@ self-simulated fill path in sim mode (no API key → orders get "sim_" ids; fill
 from the price stream inside _poll_fills, driven by on_book_update). So a faithful backtest
 is: feed historical prices to the real engine's on_book_update and read its own accounting.
 
-Covers grid + swing + swinghold (all price-triggered, one driver). DCA is NOT driven here — its
-buy cadence is a wall-clock timer and it buys at candle close, so a price-replay harness can't
-compare it faithfully without a candle-clock + close-tick (see docs/backtest-fidelity.md §7).
-Prints the engine-driven result alongside the re-implemented backtest on the SAME grid/levels —
-the delta IS the drift.
+Covers grid + swing + swinghold + dca. Grid/swing/swinghold are price-triggered (low→high ticks).
+DCA is timer-gated: its buy cadence is a wall-clock timer and it buys at candle close, so it's
+driven with a candle-clock injection (_FakeClock) + a close-first tick scheme (see
+docs/backtest-fidelity.md §7). Prints the engine-driven result alongside the re-implemented
+backtest on the SAME grid/levels — the delta IS the drift.
+
+Not covered: accumulation — it's a standalone bot (accumulation_bot.py), NOT a strategy_engine
+with the on_book_update seam, and its entries are gated on macro streams (Fear&Greed, liquidations,
+L/S ratio, RSI-4h, VWAP) pulled live from the indicators service; a price-replay harness can't feed
+those (see docs/backtest-fidelity.md §9).
 
 Scope/caveats (see docs/backtest-fidelity.md):
   * Intra-candle order: each candle is replayed as a low tick then a high tick (buys check
@@ -47,6 +52,8 @@ os.environ.pop("BINANCE_API_SECRET", None)
 from strategy_engines.grid import GridStrategy               # noqa: E402
 from strategy_engines.swing import SwingStrategy             # noqa: E402
 from strategy_engines.swinghold import SwingHoldStrategy     # noqa: E402
+from strategy_engines.dca import DCAStrategy                 # noqa: E402
+import strategy_engines.dca as dca_mod                       # noqa: E402  (candle-clock patch)
 import backtest_grid as bg                                   # noqa: E402
 import backtest_swing_dca as bsd                             # noqa: E402
 
@@ -90,23 +97,60 @@ def _tick(bid: float, ask: float):
     return ts
 
 
-async def _drive(engine, rows: list[tuple], schema_sql: str | None = None,
-                 ensure_schema=None) -> None:
-    """Feed the klines to a real engine via on_book_update (low tick then high tick per
-    candle). Sets up an in-memory state; stops early if the engine halts."""
+# Candle time (seconds) for engines gated on time.time() (DCA's interval timer). _drive sets
+# it per candle; _FakeClock (injected into an engine module) reads it. A fast price replay
+# advances no real wall-clock, so without this DCA would fire one buy then stall forever.
+_CLOCK = [0.0]
+
+
+class _FakeClock:
+    """Stand-in for an engine module's `time`: everything real except .time() → candle clock."""
+    def __init__(self, real):
+        self._real = real
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+    def time(self) -> float:               # noqa: A003
+        return _CLOCK[0]
+
+
+def _lohi_ticks(_o, h, l, _c):
+    """Default: low tick then high tick — limit BUYs fill at the low, TP SELLs at the high."""
+    return [(l, l), (h, h)]
+
+
+def _dca_ticks(_o, h, l, c):
+    """DCA: close tick first (timed market BUY executes at the close, matching run_dca), then
+    low/high for TP/SL detection."""
+    return [(c, c), (l, l), (h, h)]
+
+
+async def _drive(engine, rows: list[tuple], *, schema_sql: str | None = None,
+                 ensure_schema=None, ticks=_lohi_ticks, clock_module=None) -> None:
+    """Feed the klines to a real engine via on_book_update (sub-ticks per candle from `ticks`).
+    In-memory state; stops early if the engine halts. `clock_module`, if given, has its `time`
+    swapped for a candle clock (for wall-clock-gated engines like DCA)."""
     conn = sqlite3.connect(":memory:")
     if schema_sql:
         conn.executescript(schema_sql)
     if ensure_schema:
         ensure_schema(conn)
     state = types.SimpleNamespace(conn=conn, session=MagicMock())
-    with contextlib.redirect_stdout(io.StringIO()):        # hush the connector's sim chatter
-        for row in rows:
-            high, low = row[2], row[3]
-            await engine.on_book_update(state, _tick(bid=low, ask=low), None)
-            await engine.on_book_update(state, _tick(bid=high, ask=high), None)
-            if getattr(getattr(engine, "grid", None), "halted", False):
-                break
+    saved = clock_module.time if clock_module is not None else None
+    if clock_module is not None:
+        clock_module.time = _FakeClock(saved)
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):    # hush the connector's sim chatter
+            for ts_ms, o, high, low, close, _v in rows:
+                _CLOCK[0] = ts_ms / 1000.0
+                for bid, ask in ticks(o, high, low, close):
+                    await engine.on_book_update(state, _tick(bid=bid, ask=ask), None)
+                if getattr(getattr(engine, "grid", None), "halted", False):
+                    break
+    finally:
+        if clock_module is not None:
+            clock_module.time = saved
 
 
 def _run_grid(rows, center, args):
@@ -163,10 +207,27 @@ def _run_swinghold(rows, center, _args):
                   "realized PnL", bt.realized_pnl, s.sh.total_pnl)
 
 
+def _run_dca(rows, _center, _args):
+    p = bsd.DCAParams()                                     # 4h / $100 / TP 3% / no SL / max 5
+    cfg = types.SimpleNamespace(
+        connector="binance", symbol="BTCUSDT",
+        dca_interval_h=p.interval_h, dca_amount_usdt=p.amount_usdt,
+        max_positions=p.max_positions, tp_pct=p.tp_pct, sl_pct=p.sl_pct, poll_interval=0.0)
+    d = DCAStrategy(cfg)
+    # DCA's buy cadence is a wall-clock timer → inject the candle clock; buy executes at close.
+    asyncio.run(_drive(d, rows, ensure_schema=d.ensure_schema,
+                       ticks=_dca_ticks, clock_module=dca_mod))
+    bt = bsd.run_dca(rows, p)
+    desc = (f"every {p.interval_h:g}h  ${p.amount_usdt:g}/buy  TP {p.tp_pct*100:g}%  "
+            f"max {p.max_positions}  (backtest capital ${p.capital:g}; engine has no balance)")
+    return desc, ("trades", bt.n_trades, d.dca.total_trades,
+                  "realized PnL", bt.realized_pnl, d.dca.total_pnl)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Real engine vs re-implemented backtest.")
     ap.add_argument("db")
-    ap.add_argument("--strategy", choices=["grid", "swing", "swinghold"], default="grid")
+    ap.add_argument("--strategy", choices=["grid", "swing", "swinghold", "dca"], default="grid")
     ap.add_argument("--range", type=float, default=15.0, dest="range_pct")
     ap.add_argument("--levels", type=int, default=30)
     ap.add_argument("--size", type=float, default=50.0)
@@ -179,7 +240,7 @@ def main() -> int:
     center = rows[0][1]
 
     runner = {"grid": _run_grid, "swing": _run_swing,
-              "swinghold": _run_swinghold}[args.strategy]
+              "swinghold": _run_swinghold, "dca": _run_dca}[args.strategy]
     desc, (m1, b1, e1, m2, b2, e2) = runner(rows, center, args)
 
     print(f"db       : {os.path.basename(args.db)}  ({len(rows)} candles)")
