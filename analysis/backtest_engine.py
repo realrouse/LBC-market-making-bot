@@ -8,8 +8,11 @@ self-simulated fill path in sim mode (no API key → orders get "sim_" ids; fill
 from the price stream inside _poll_fills, driven by on_book_update). So a faithful backtest
 is: feed historical prices to the real engine's on_book_update and read its own accounting.
 
-Covers grid + swing (dca/swinghold reuse the same driver). Prints the engine-driven result
-alongside the re-implemented backtest on the SAME grid/levels — the delta IS the drift.
+Covers grid + swing + swinghold (all price-triggered, one driver). DCA is NOT driven here — its
+buy cadence is a wall-clock timer and it buys at candle close, so a price-replay harness can't
+compare it faithfully without a candle-clock + close-tick (see docs/backtest-fidelity.md §7).
+Prints the engine-driven result alongside the re-implemented backtest on the SAME grid/levels —
+the delta IS the drift.
 
 Scope/caveats (see docs/backtest-fidelity.md):
   * Intra-candle order: each candle is replayed as a low tick then a high tick (buys check
@@ -43,6 +46,7 @@ os.environ.pop("BINANCE_API_SECRET", None)
 
 from strategy_engines.grid import GridStrategy               # noqa: E402
 from strategy_engines.swing import SwingStrategy             # noqa: E402
+from strategy_engines.swinghold import SwingHoldStrategy     # noqa: E402
 import backtest_grid as bg                                   # noqa: E402
 import backtest_swing_dca as bsd                             # noqa: E402
 
@@ -142,10 +146,27 @@ def _run_swing(rows, center, _args):
                   "realized PnL", bt.realized_pnl, s.sw.total_pnl)
 
 
+def _run_swinghold(rows, center, _args):
+    sup = sorted(round(center * (1 + o), 2) for o in bsd._DEF_SUPPORT_OFFSETS)
+    res = sorted(round(center * (1 + o), 2) for o in bsd._DEF_RESISTANCE_OFFSETS)
+    n = len(sup)                                            # same rationale as _run_swing
+    p = bsd.SwingHoldParams(support_levels=sup, resistance_levels=res, max_positions=n)
+    cfg = {"symbol": "BTCUSDT", "support_levels": sup, "resistance_levels": res,
+           "order_size_usdt": p.order_size_usdt, "max_positions": n,
+           "sell_fraction": p.sell_fraction, "sl_pct": p.sl_pct,
+           "tp_pct_fallback": p.tp_pct_fallback, "poll_interval": 0.0}
+    s = SwingHoldStrategy(types.SimpleNamespace(connector="binance", strategy_cfg=cfg))
+    asyncio.run(_drive(s, rows, ensure_schema=SwingHoldStrategy.ensure_schema))
+    bt = bsd.run_swinghold(rows, p)
+    desc = f"{n} support / {len(res)} resistance  ${p.order_size_usdt}/order  sell_frac={p.sell_fraction}"
+    return desc, ("trades", bt.n_trades, s.sh.total_trades,
+                  "realized PnL", bt.realized_pnl, s.sh.total_pnl)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Real engine vs re-implemented backtest.")
     ap.add_argument("db")
-    ap.add_argument("--strategy", choices=["grid", "swing"], default="grid")
+    ap.add_argument("--strategy", choices=["grid", "swing", "swinghold"], default="grid")
     ap.add_argument("--range", type=float, default=15.0, dest="range_pct")
     ap.add_argument("--levels", type=int, default=30)
     ap.add_argument("--size", type=float, default=50.0)
@@ -157,7 +178,8 @@ def main() -> int:
         return 2
     center = rows[0][1]
 
-    runner = {"grid": _run_grid, "swing": _run_swing}[args.strategy]
+    runner = {"grid": _run_grid, "swing": _run_swing,
+              "swinghold": _run_swinghold}[args.strategy]
     desc, (m1, b1, e1, m2, b2, e2) = runner(rows, center, args)
 
     print(f"db       : {os.path.basename(args.db)}  ({len(rows)} candles)")
