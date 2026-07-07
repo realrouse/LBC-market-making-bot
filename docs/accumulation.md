@@ -1,6 +1,6 @@
 # BTC Accumulation Strategy — Design Document
 
-> Bot: `tradinebotte-cex/accumulation_bot.py` v1.5  
+> Engine: `tradinebotte-cex/strategy_engines/accumulation.py` (`strategy_type="accumulation"`, hosted by `live_bot.py`)  
 > Strategy: `strategies/accumulation/btc_accumulation.json` (config v2.0)  
 > Conviction: long-only BTC spot, bull-run horizon (weeks to months)
 

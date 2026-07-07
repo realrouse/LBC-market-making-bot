@@ -61,6 +61,10 @@ _STRATEGY_REQUIREMENTS: dict[str, list[str]] = {
         "get_open_orders",
         "compute_fee",
     ],
+    # accumulation is a PAPER strategy: _buy/_sell self-account, no exchange orders — so it
+    # needs no connector methods. Listed explicitly (empty) so validate() documents that,
+    # rather than relying on the .get(..., []) default for an unlisted strategy.
+    "accumulation": [],
 }
 
 

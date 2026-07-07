@@ -11,12 +11,14 @@ Usage from live_bot.py:
 from __future__ import annotations
 from typing import Any, Optional
 
+from .accumulation import AccumulationStrategy
 from .dca       import DCAStrategy
 from .grid      import GridStrategy
 from .swing     import SwingStrategy
 from .swinghold import SwingHoldStrategy
 
 _REGISTRY: dict[str, type] = {
+    "accumulation": AccumulationStrategy,
     "dca":       DCAStrategy,
     "grid":      GridStrategy,
     "swing":     SwingStrategy,

@@ -154,6 +154,9 @@ def main() -> int:
                     help="also restart account-1 feeds/services (disrupts live_bots ~30s)")
     ap.add_argument("--only", metavar="TOKEN", default=None,
                     help="only steps whose label contains TOKEN (e.g. account-2, live_bot)")
+    ap.add_argument("--exclude", metavar="TOKEN", default=None,
+                    help="drop steps whose label contains TOKEN (e.g. accumulation); "
+                         "applied after --only")
     ap.add_argument("--list", action="store_true", help="print the derived plan and exit")
     ap.add_argument("--dry-run", action="store_true",
                     help="print each step that would run, without executing")
@@ -173,6 +176,11 @@ def main() -> int:
         plan = [s for s in plan if args.only.lower() in s.label.lower()]
         if not plan:
             print(f"--only {args.only!r} matched no steps", file=sys.stderr)
+            return 2
+    if args.exclude:
+        plan = [s for s in plan if args.exclude.lower() not in s.label.lower()]
+        if not plan:
+            print(f"--exclude {args.exclude!r} dropped every step", file=sys.stderr)
             return 2
 
     if args.list:

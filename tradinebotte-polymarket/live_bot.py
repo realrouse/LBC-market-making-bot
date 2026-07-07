@@ -451,6 +451,12 @@ def make_config(simulate: bool = False, no_log: bool = False,
     connector     = str(strat.get("connector",     CONNECTOR))
     strategy_type = str(strat.get("strategy_type", STRATEGY_TYPE))
 
+    # Accumulation keeps its own DB file (live_accum.db) so the cutover from the former
+    # standalone accumulation_bot preserves deployed holdings/avg_entry/realized (all on the
+    # status page). Every other strategy shares live.db.
+    if strategy_type == "accumulation":
+        db_path = os.path.join(install_dir, "live_accum.db")
+
     # Grid parameters (only used when strategy_type == "grid").
     grid_symbol          = str(strat.get("grid_symbol",          GRID_SYMBOL))
     grid_lower           = float(strat.get("grid_lower",           GRID_LOWER))
@@ -461,6 +467,10 @@ def make_config(simulate: bool = False, no_log: bool = False,
 
     # Strategy overrides from JSON (fall back to module-level defaults).
     capital_start      = float(strat.get("capital_start",      CAPITAL_START))
+    # Accumulation names its capital "capital_usdt" — map it so the reset default / equity base
+    # match the engine's own capital (the engine reads capital_usdt from strategy_cfg).
+    if strategy_type == "accumulation":
+        capital_start = float(strat.get("capital_usdt", capital_start))
     stake              = float(strat.get("stake",               STAKE))
     gas_fee_usd        = float(strat.get("gas_fee_usd",         GAS_FEE_USD))
     signal_threshold   = float(strat.get("signal_threshold",    SIGNAL_THRESHOLD))
@@ -1009,6 +1019,19 @@ _RUN_LOOPS: dict = {
     "cex_feed": (_CEX_CONNECTORS, "cex_consumer", "cex_feed_consumer_loop",
                  lambda state, config, session: (state, config.feed_addr,
                                                  _cex_symbol(config), config.connector)),
+    # accumulation: SUB the indicators service (not the cex_feed). Primary/scalping stream →
+    # on_book_update, gate streams → on_indicator (handled inside indicators_consumer_loop).
+    # The accumulation strategy JSON is self-contained (like the former standalone bot): prefer
+    # its indicators_addr/reg_addr/streams from strategy_cfg, falling back to the config.json-
+    # sourced BotConfig fields. data_source="indicators" itself still comes from config.json.
+    "indicators": (_CEX_CONNECTORS, "cex_consumer", "indicators_consumer_loop",
+                   lambda state, config, session: (
+                       state,
+                       config.strategy_cfg.get("indicators_addr") or config.indicators_addr,
+                       config.strategy_cfg.get("indicators_reg_addr") or config.indicators_reg_addr,
+                       config.strategy_cfg.get("indicators_streams") or config.indicators_streams,
+                       config.strategy_cfg.get("scalping_stream_id", "btc_scalping_spot"),
+                       config.strategy_cfg.get("register_interval_s", 120))),
 }
 # Fallback when no feed data_source matches the connector: the direct WS path.
 _DIRECT_WS = ("pm_data", "ws_loop", lambda state, config, session: (state, session))
@@ -1103,7 +1126,8 @@ async def main() -> None:
     # places real orders only with a private_key; CEX grid/swing are always sim.
     _hb_mode = "live" if (config.strategy_type == "threshold" and config.private_key) else "sim"
     _is_live = _hb_mode == "live"
-    _hb_bot_name = {"grid": "grid_bot", "swing": "swing_bot"}.get(
+    _hb_bot_name = {"grid": "grid_bot", "swing": "swing_bot",
+                    "accumulation": "accumulation_bot"}.get(
         config.strategy_type, "live_bot")
 
     # Apply a pending operator reset BEFORE opening the DB so the wipe is atomic at
@@ -1130,6 +1154,13 @@ async def main() -> None:
                 logger.info("  Algorithm   : %s", config.strategy_type)
                 await state.strategy.restore_from_db(state)
             def _hb_payload() -> dict[str, Any]:
+                # An engine may own its heartbeat shape (accumulation reports holdings/avg_entry/
+                # realized, not the threshold/grid/swing fields cumulative_pnl assumes). When it
+                # provides heartbeat_payload(), that IS the payload — keeps acct-2/3/4's status
+                # page fields identical to the former standalone bot.
+                _strat = getattr(state, "strategy", None)
+                if hasattr(_strat, "heartbeat_payload"):
+                    return _strat.heartbeat_payload()
                 pnl_total, trades_total = cumulative_pnl(state)
                 hb: dict[str, Any] = {
                     "bounds_ok":    state.daily_pnl >= -config.daily_stop_loss,

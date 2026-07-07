@@ -59,7 +59,7 @@ git config core.hooksPath .git-hooks
 ```
 tradinebotte/
 ├── tradinebotte-cex/            # CEX trading bots and strategy engines
-│   ├── accumulation_bot.py      # OBI dip-buy bot (v1.5)
+│   ├── strategy_engines/        # grid, swing, swinghold, dca, accumulation (live_bot-hosted engines)
 │   ├── orderbook_bot.py         # OBI scalping bot (v2.12)
 │   ├── api_binance.py           # Binance spot adapter
 │   ├── api_mexc.py              # MEXC spot adapter
@@ -334,8 +334,8 @@ not just the one you are working on. When you bypass a shared function, re-check
 Checklist for any new or changed data-consumer path / shared hot-path function:
 
 - [ ] **Snapshots persisted?** Route the write through the shared step
-      (`_persist_snapshot` in `botcore.persistence`, `_record_accum_snapshot` in
-      `accumulation_bot.py`) — do not inline a bare `INSERT`. The 2026-06-16 bug above
+      (`_persist_snapshot` in `botcore.persistence`, `_record_snapshot` in
+      `strategy_engines/accumulation.py`) — do not inline a bare `INSERT`. The 2026-06-16 bug above
       is fixed: `cex_feed_consumer_loop` now calls `save_cex_snapshot` (`cex_consumer.py`).
 - [ ] **Data-freshness clock advanced?** Set `last_write_ts` on every persisted row.
       The status page `⚠data` badge depends on it — a bot that records but never updates

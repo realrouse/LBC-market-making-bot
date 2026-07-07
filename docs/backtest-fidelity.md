@@ -197,25 +197,24 @@ Left (proposed, not started):
 - **Swing RSI(4h)/EMA200 gate**: feed historical indicators (currently disabled for the comparison).
 - **Finer intra-candle replay** to extend parity to swinghold's partial-exit path (§6).
 
-## 9. Accumulation — NOT driveable by this harness (architectural, not just missing data)
+## 9. Accumulation — now an engine (architecture unblocked); backtest still gated on stream history
 
-Accumulation is the one CEX strategy the harness structurally cannot drive, for two independent
-reasons — neither fixable by feeding more price data:
+Accumulation *was* the one CEX strategy that couldn't be driven, because it was a standalone bot
+(`accumulation_bot.py`, own `main()`/event loop) with no `on_book_update` seam. That has been
+**refactored away**: it is now `AccumulationStrategy` (`strategy_engines/accumulation.py`,
+`strategy_type="accumulation"`), hosted by `live_bot.py` exactly like grid/swing/dca. The host owns
+transport — `cex_consumer.indicators_consumer_loop` SUBs the indicators service and routes the
+primary/scalping stream → `on_book_update(state, ts)` and the 6 macro-gate streams → the engine's
+optional `on_indicator(state, msg)` hook. The former standalone was retired (deploy converged to the
+own-data-dir `live_bot` pattern, `~/tradinebotte-accum`); the engine port is verified byte-identical
+to the old bot on the same stream input (parity harness → `tests/test_accumulation_engine.py`).
 
-1. **It is not a `strategy_engine`.** `accumulation_bot.py` is a standalone bot with its own
-   `main()`/`_run()`/`while True` event loop and its own DB — it does **not** implement the
-   `async on_book_update(state, ts)` seam every `strategy_engines/*` exposes and the harness drives.
-   There is no method to feed ticks into. (Grid/swing/swinghold/dca all share that seam; accumulation
-   predates/sidesteps it.)
-2. **Its entries are gated on macro streams it pulls live, not on price.** The bot registers
-   indicator streams (Fear&Greed, liquidations, long/short ratio, RSI-4h, VWAP) with the shared
-   indicators service over a ZMQ REP socket (`_register_loop`) and gates every scale-in on them.
-   These gates **are** the strategy (§2, 🔴). A klines replay carries none of them, and unlike
-   swing's trend filter they can't simply be toggled off for an apples-to-apples run without
-   deleting the strategy itself.
+So the **architectural** blocker is gone. What remains is **data**, not structure: `on_indicator`
+still needs *historical* Fear&Greed / liquidations / L/S-ratio / RSI-4h / VWAP streams that a klines
+replay does not carry (the macro gates **are** the strategy — §2, 🔴). Being an engine is *necessary
+but not sufficient* to backtest accumulation faithfully.
 
-Driving it would require *either* refactoring `accumulation_bot` into an `on_book_update` engine
-*and* reconstructing 5+ historical macro streams over a fake indicators service — a project, not a
-harness extension. **Verdict: out of scope by construction.** Keep `scripts/backtest_accumulation.py`
-as the accumulation model, with the standing caveat that it omits the macro-gate stack and so
-overstates activity (§2).
+**Next (unblocked, not done):** feed the engine a recorded/synthesised multi-stream history through
+`on_book_update` + `on_indicator` (the `data/collection_*` captures already hold real gate streams),
+or run an explicit "gates-off" upper-bound. Until then keep `scripts/backtest_accumulation.py` as the
+model, with its standing caveat that it omits the macro-gate stack and so overstates activity (§2).

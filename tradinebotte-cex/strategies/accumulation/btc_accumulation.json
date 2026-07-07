@@ -2,6 +2,9 @@
     "_comment": "BTC long-term accumulation v2.0 — Fear&Greed gate, Liquidations gate, L/S Ratio gate, RSI 4h gate, macro OBI gate, VWAP gate, adaptive cooldown, rebuy trailing+expiry, configurable Earn buffer; capital management tightened (max_inv 0.65, avg_entry guard 1.20, sell_frac 0.10)",
     "_version": "2.0",
 
+    "strategy_type":        "accumulation",
+    "connector":            "binance",
+
     "symbol":               "BTCUSDT",
 
     "capital_usdt":         1000.0,
