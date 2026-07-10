@@ -249,6 +249,36 @@ class TestSwingTrendOk(unittest.TestCase):
         self.s.sw.last_ind_ts = time.time()
         self.assertTrue(self.s._trend_ok(75000.0))
 
+    # ── Ichimoku cloud filter (rsi/ema left None → those bypass, isolating cloud) ──
+
+    def test_ichimoku_enabled_by_default(self):
+        self.assertTrue(self.s._ichimoku_filter)
+
+    def test_price_below_cloud_blocks_entry(self):
+        self.s.sw.last_ichi_bottom = 80000.0
+        self.s.sw.last_ichi_ts     = time.time()
+        self.assertFalse(self.s._trend_ok(75000.0))   # 75000 < cloud_bottom 80000
+
+    def test_price_above_cloud_allows_entry(self):
+        self.s.sw.last_ichi_bottom = 70000.0
+        self.s.sw.last_ichi_ts     = time.time()
+        self.assertTrue(self.s._trend_ok(75000.0))
+
+    def test_no_cloud_data_bypasses_filter(self):
+        self.s.sw.last_ichi_bottom = None            # fail-open when unknown
+        self.assertTrue(self.s._trend_ok(1.0))
+
+    def test_stale_cloud_bypasses_filter(self):
+        self.s.sw.last_ichi_bottom = 99999.0         # would block if fresh
+        self.s.sw.last_ichi_ts     = 0.0             # stale → bypass
+        self.assertTrue(self.s._trend_ok(75000.0))
+
+    def test_ichimoku_disabled_ignores_cloud(self):
+        self.s._ichimoku_filter    = False
+        self.s.sw.last_ichi_bottom = 99999.0
+        self.s.sw.last_ichi_ts     = time.time()
+        self.assertTrue(self.s._trend_ok(75000.0))
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # SwingStrategy — _compute_sl

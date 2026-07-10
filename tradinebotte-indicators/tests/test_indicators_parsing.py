@@ -68,6 +68,43 @@ class TestParseSubscribeRequest(unittest.TestCase):
         self.assertEqual(spec.seed_periods, 50)            # coerced to int
 
 
+class TestIchimokuSpec(unittest.TestCase):
+    """Ichimoku is a multi-line group with fixed 9/26/52/26 periods (no per-spec period)."""
+
+    def test_period_defaults_to_kijun_26(self):
+        spec = ind.IndicatorSpec.from_dict({"type": "ichimoku"})
+        self.assertEqual(spec.type, "ichimoku")
+        self.assertEqual(spec.period, 26)
+
+    def test_requires_ohlcv_source_not_feed(self):
+        # ichimoku needs H/L → must be rejected on the 'feed' source (best_bid only).
+        with self.assertRaises(ValueError):
+            ind.StreamSpec.from_dict({
+                "id": "x", "asset": "BTCUSDT", "source": "feed",
+                "timeframe": "1d", "indicators": [{"type": "ichimoku"}],
+            })
+
+    def test_compute_emits_five_named_lines(self):
+        s = ind.OHLCVSeries()
+        for i in range(80):
+            s.push(100.0 + i, 99.0 + i, 99.5 + i, 5.0)   # rising series
+        out = s.compute_indicators([ind.IndicatorSpec.from_dict({"type": "ichimoku"})])
+        self.assertEqual(
+            set(out),
+            {"ichi_tenkan", "ichi_kijun", "ichi_cloud_top", "ichi_cloud_bottom", "ichi_chikou"},
+        )
+        # Leading cloud reflects prices ≥26 bars old → below current lines in an uptrend.
+        self.assertLess(out["ichi_cloud_top"], out["ichi_kijun"])
+
+    def test_cloud_null_until_78_bars(self):
+        s = ind.OHLCVSeries()
+        for _ in range(60):
+            s.push(100.0, 99.0, 99.5, 5.0)
+        out = s.compute_indicators([ind.IndicatorSpec.from_dict({"type": "ichimoku"})])
+        self.assertIsNone(out["ichi_cloud_top"])
+        self.assertIsNotNone(out["ichi_kijun"])
+
+
 class TestApplyDepthEvent(unittest.TestCase):
 
     def test_insert_and_update_levels(self):

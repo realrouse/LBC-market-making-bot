@@ -79,7 +79,7 @@ import aiohttp, websockets, zmq, zmq.asyncio
 from tradinetools import heartbeat_loop, control_loop
 from tradinetools.zmq import make_pub, make_sub, make_rep, default_ipc_addr, PORT_CEX_FEED
 from tradinetools.math import (atr_last, bollinger_last, vwap_last,
-                                vol_zscore_last, rolling_max_last)
+                                vol_zscore_last, rolling_max_last, ichimoku_last)
 from tradinetools.logging import setup_logger
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────
@@ -290,6 +290,16 @@ class OHLCVSeries:
         result: dict[str, float | None] = {}
         _bb: dict[int, tuple] = {}       # cache per period to avoid triple computation
         for spec in specs:
+            # Ichimoku is a multi-line group (fixed 9/26/52/26 periods) → emit its
+            # own named keys and skip the generic "<abbrev>_<period>" key format.
+            if spec.type == "ichimoku":
+                ichi = ichimoku_last(highs, lows, closes)
+                result["ichi_tenkan"]       = ichi["tenkan"]
+                result["ichi_kijun"]        = ichi["kijun"]
+                result["ichi_cloud_top"]    = ichi["cloud_top"]
+                result["ichi_cloud_bottom"] = ichi["cloud_bottom"]
+                result["ichi_chikou"]       = ichi["chikou"]
+                continue
             key = f"{self._ABBREV[spec.type]}_{spec.period}"
             if spec.type == "rsi":
                 result[key] = compute_rsi(closes, spec.period)
@@ -328,7 +338,7 @@ class OHLCVSeries:
 
 _OHLCV_INDICATOR_TYPES      = frozenset({
     "atr", "bollinger_upper", "bollinger_mid", "bollinger_lower",
-    "vwap", "vol_zscore", "rolling_max",
+    "vwap", "vol_zscore", "rolling_max", "ichimoku",
 })
 _VALID_INDICATOR_TYPES      = frozenset({"rsi", "sma", "ema", "volatility"}) | _OHLCV_INDICATOR_TYPES
 _VALID_SOURCES              = frozenset({
@@ -373,7 +383,10 @@ class IndicatorSpec:
                 f"Unknown indicator type {d.get('type')!r}. "
                 f"Valid: {sorted(_VALID_INDICATOR_TYPES)}"
             )
-        period = int(d.get("period", 0))
+        # Ichimoku uses fixed conventional periods (9/26/52/26) computed inside the
+        # helper; `period` is not meaningful for it, so default to the kijun (26).
+        default_period = 26 if ind_type == "ichimoku" else 0
+        period = int(d.get("period", default_period))
         if period < 2:
             raise ValueError(f"Indicator period must be >= 2, got {period}")
         return cls(type=ind_type, period=period)

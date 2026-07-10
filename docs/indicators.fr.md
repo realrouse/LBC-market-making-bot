@@ -269,6 +269,29 @@ cassures (breakout).
 
 ---
 
+#### ichimoku — Ichimoku Kinko Hyo
+
+**Clés :** `ichi_tenkan`, `ichi_kijun`, `ichi_cloud_top`, `ichi_cloud_bottom`, `ichi_chikou`  
+**Config :** `{"type": "ichimoku"}` — pas de `period` ; périodes conventionnelles fixes 9 / 26 / 52 / 26.  
+**Source requise :** `binance_ws`
+
+Un groupe multi-lignes émettant cinq valeurs (une entrée de config → cinq clés) :
+
+| Clé | Signification |
+| --- | --- |
+| `ichi_tenkan` | Ligne de conversion, **courante** : `(max(high,9) + min(low,9)) / 2` |
+| `ichi_kijun` | Ligne de base, **courante** : `(max(high,26) + min(low,26)) / 2` |
+| `ichi_cloud_top` / `ichi_cloud_bottom` | Les Senkou Span A/B qui **s'appliquent à la barre courante** — les spans leading sont calculés il y a 26 barres (displacement), donc c'est le nuage contre lequel le prix live évolue réellement. `top = max(A,B)`, `bottom = min(A,B)`. **Comparer le prix live à ces valeurs, jamais à un span forming courant.** |
+| `ichi_chikou` | `close[t − 26]` — le prix auquel la lagging span est comparée ; un consommateur détenant le close courant dérive le signal chikou via `sign(close_now − ichi_chikou)`. |
+
+**Historique requis :** le nuage applicable nécessite 52 (Senkou B) + 26 (displacement)
+= **78 barres**. Comme le publisher supprime le message entier d'un stream tant que
+*l'un* de ses indicateurs vaut `None`, mettre `seed_periods >= 78` et de préférence
+faire tourner l'ichimoku dans **son propre stream** pour qu'un nuage en préchauffage
+ne bloque pas les indicateurs plus rapides. Voir `strategies/indicators_ichimoku_btc.json`.
+
+---
+
 ## 4. Sources WebSocket
 
 Ces sources maintiennent une connexion Binance WebSocket persistante et

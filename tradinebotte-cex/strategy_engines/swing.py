@@ -117,6 +117,10 @@ class SwingState:
     last_ema200:       Optional[float]     = None
     last_atr:          Optional[float]     = None
     last_ind_ts:       float               = 0.0
+    # Ichimoku cloud from the daily stream (trend filter). None until first received.
+    last_ichi_top:     Optional[float]     = None
+    last_ichi_bottom:  Optional[float]     = None
+    last_ichi_ts:      float               = 0.0
     # REST poll throttle
     last_poll_ts:      float               = 0.0
 
@@ -184,6 +188,12 @@ class SwingStrategy:
             or default_ipc_addr("tradinebotte-indicators")
         )
         self._indicators_sid  = str(cfg.get("indicators_stream_id",   "btc_4h"))
+        # Ichimoku daily-cloud trend filter: skip new BUYs when price is below the
+        # cloud (bearish structure). Fail-open — inert until a cloud value arrives or
+        # if it goes stale, so a missing btc_1d_ichimoku stream never blocks trading.
+        self._ichimoku_filter = bool(cfg.get("ichimoku_filter_enabled", True))
+        self._ichimoku_sid    = str(cfg.get("ichimoku_stream_id",  "btc_1d_ichimoku"))
+        self._ichi_stale_secs = float(cfg.get("ichi_stale_secs",     172800.0))  # 2 days
         self._poll_interval   = float(cfg.get("poll_interval",          2.0))
 
         self._ind_task: Optional[asyncio.Task] = None
@@ -191,12 +201,13 @@ class SwingStrategy:
         logger.info(
             "SwingStrategy [%s]: %d support + %d resistance levels | "
             "size=$%.0f  max=%d  SL_fallback=%.1f%%  TP_fallback=%.1f%%  "
-            "RSI_filter=%s  EMA200_filter=%s  ATR_SL_mult=%.1f",
+            "RSI_filter=%s  EMA200_filter=%s  Ichimoku_filter=%s  ATR_SL_mult=%.1f",
             symbol,
             len(support), len(resistance),
             size, max_pos, sl_pct * 100, tp_fall * 100,
             f"RSI≤{self._rsi_buy_max:.0f}" if self._trend_filter else "off",
             "on" if self._ema200_filter else "off",
+            f"{self._ichimoku_sid}" if self._ichimoku_filter else "off",
             self._atr_sl_mult,
         )
         for lvl in support:
@@ -241,13 +252,21 @@ class SwingStrategy:
             if age <= self._rsi_stale_secs and self.sw.last_rsi > self._rsi_buy_max:
                 return False
 
+        # Ichimoku cloud filter — skip BUY when price sits below the daily cloud
+        # (below kumo = bearish structure). Fail-open: inert while cloud is unknown
+        # or stale, so a missing/late btc_1d_ichimoku stream never blocks entries.
+        if self._ichimoku_filter and self.sw.last_ichi_bottom is not None:
+            ichi_age = now - self.sw.last_ichi_ts
+            if ichi_age <= self._ichi_stale_secs and 0 < price < self.sw.last_ichi_bottom:
+                return False
+
         return True
 
     # ── Indicators subscription ────────────────────────────────────────────────
 
     def _ensure_indicators_task(self) -> None:
         """Start the ZMQ SUB background task on first call (lazy init)."""
-        if not self._trend_filter:
+        if not (self._trend_filter or self._ichimoku_filter):
             return
         if self._ind_task is None or self._ind_task.done():
             self._ind_task = asyncio.create_task(
@@ -260,14 +279,17 @@ class SwingStrategy:
             import zmq.asyncio as azmq
             from tradinetools.zmq import make_sub
         except ImportError:
-            logger.warning("SwingStrategy: pyzmq not installed — trend filter disabled")
+            logger.warning("SwingStrategy: pyzmq not installed — trend/ichimoku filters disabled")
             self._trend_filter = False
+            self._ichimoku_filter = False
             return
 
         ctx = azmq.Context.instance()
         sub = make_sub(ctx, self._indicators_addr)
-        logger.info("SwingStrategy [%s] indicators SUB → %s",
-                    self.sw.symbol, self._indicators_addr)
+        logger.info("SwingStrategy [%s] indicators SUB → %s  (trend=%s ichimoku=%s)",
+                    self.sw.symbol, self._indicators_addr,
+                    self._indicators_sid if self._trend_filter else "off",
+                    self._ichimoku_sid if self._ichimoku_filter else "off")
         try:
             while True:
                 try:
@@ -276,7 +298,18 @@ class SwingStrategy:
                     logger.warning("SwingStrategy indicators recv error: %s", exc)
                     await asyncio.sleep(5)
                     continue
-                if msg.get("stream_id") != self._indicators_sid:
+                sid = msg.get("stream_id")
+                # Ichimoku daily-cloud stream → cache cloud bounds for the trend gate.
+                if self._ichimoku_filter and sid == self._ichimoku_sid:
+                    ct, cb = msg.get("ichi_cloud_top"), msg.get("ichi_cloud_bottom")
+                    if ct is not None and cb is not None:
+                        self.sw.last_ichi_top    = float(ct)
+                        self.sw.last_ichi_bottom = float(cb)
+                        self.sw.last_ichi_ts     = time.time()
+                        logger.debug("SwingStrategy ichimoku cloud: top=%.0f bottom=%.0f",
+                                     self.sw.last_ichi_top, self.sw.last_ichi_bottom)
+                    continue
+                if sid != self._indicators_sid:
                     continue
                 now = time.time()
                 changed = False

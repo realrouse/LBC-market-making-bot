@@ -93,6 +93,13 @@ DEFAULTS: dict = {
     "rsi4h_stream_id":      "btc_4h",
     "rsi4h_block_high":     70.0,
     "rsi4h_relax_vwap_low": 35.0,
+    # Ichimoku daily-cloud trend gate — blocks scale-in when price is BELOW the cloud
+    # (bearish structure). DEFAULT OFF: this fights the deep-dip accumulation thesis
+    # (cf. rsi4h_relax_vwap_low, which buys MORE when oversold). Wired but opt-in.
+    # Fail-open — inert until a cloud value arrives or if it goes stale.
+    "ichimoku_gate":        False,
+    "ichimoku_stream_id":   "btc_4h_ichimoku",   # 4h cloud (more responsive than daily)
+    "ichi_stale_secs":      172800.0,   # 2 days — fail-open staleness guard, not a freshness need
 }
 
 # ---------------------------------------------------------------------------
@@ -138,6 +145,9 @@ class AccumState:
     liq_short_usd:      float = 0.0
     ls_ratio:           float = 1.0
     rsi_4h:             float = 50.0
+    ichi_cloud_top:     Optional[float] = None
+    ichi_cloud_bottom:  Optional[float] = None
+    ichi_ts:            float = 0.0
     earn: EarnManager | None  = field(default=None, repr=False)
 
     def unrealized_pct(self) -> float:
@@ -520,6 +530,15 @@ class AccumulationStrategy:
             logger.debug("Scale-in blocked — 4h RSI overbought (%.1f)", a.rsi_4h)
             return
 
+        # Ichimoku daily-cloud trend gate (opt-in). Fail-open: only acts when a fresh
+        # cloud bottom is known. Blocks scale-in when price is below the cloud (bearish).
+        if p.get("ichimoku_gate", False) and a.ichi_cloud_bottom is not None:
+            if (time.time() - a.ichi_ts) <= p.get("ichi_stale_secs", 172800.0):
+                if 0 < price < a.ichi_cloud_bottom:
+                    logger.debug("Scale-in blocked — price %.0f below Ichimoku cloud (%.0f)",
+                                 price, a.ichi_cloud_bottom)
+                    return
+
         if p.get("fear_greed_gate", True):
             if a.fear_greed_val > p.get("fear_greed_block_thresh", 80):
                 logger.debug("Scale-in blocked — extreme greed (F&G=%d %s)",
@@ -663,3 +682,9 @@ class AccumulationStrategy:
             rsi = msg.get("rsi_14")
             if rsi is not None:
                 a.rsi_4h = float(rsi)
+        elif sid == p.get("ichimoku_stream_id", "btc_1d_ichimoku"):
+            ct, cb = msg.get("ichi_cloud_top"), msg.get("ichi_cloud_bottom")
+            if ct is not None and cb is not None:
+                a.ichi_cloud_top    = float(ct)
+                a.ichi_cloud_bottom = float(cb)
+                a.ichi_ts           = time.time()

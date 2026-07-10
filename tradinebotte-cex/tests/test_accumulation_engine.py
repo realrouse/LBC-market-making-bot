@@ -127,6 +127,45 @@ class TestGates(unittest.TestCase):
         self.assertFalse(any(t[1].startswith("obi_dip") for t in trades))
 
 
+class TestIchimokuGate(unittest.TestCase):
+    """The opt-in Ichimoku daily-cloud gate. Scale-in ("obi_dip") fires at price 68000
+    in the golden path; a cloud_bottom above it blocks, below it allows. Gate is default
+    OFF and fail-open (no cloud data → never blocks)."""
+
+    _ICHI = "btc_4h_ichimoku"
+
+    def _run(self, cfg_over: dict, ichi_body):
+        gates = dict(_PERMISSIVE_GATES)
+        if ichi_body is not None:
+            gates[self._ICHI] = ichi_body
+        cfg = dict(_CFG, **cfg_over)
+        _eng, _conn, trades = _drive(cfg, _seq(gates))
+        return any(t[1].startswith("obi_dip") for t in trades)
+
+    def test_price_below_cloud_blocks_scale_in(self):
+        # cloud_bottom 72000 > scale-in price 68000 → below cloud → blocked
+        scaled = self._run({"ichimoku_gate": True},
+                           {"ichi_cloud_top": 75000.0, "ichi_cloud_bottom": 72000.0})
+        self.assertFalse(scaled)
+
+    def test_price_above_cloud_allows_scale_in(self):
+        # cloud_bottom 60000 < price 68000 → above cloud → allowed
+        scaled = self._run({"ichimoku_gate": True},
+                           {"ichi_cloud_top": 62000.0, "ichi_cloud_bottom": 60000.0})
+        self.assertTrue(scaled)
+
+    def test_gate_off_ignores_cloud(self):
+        # Default OFF: a blocking cloud is ignored → scale-in proceeds.
+        scaled = self._run({},   # ichimoku_gate defaults False
+                           {"ichi_cloud_top": 75000.0, "ichi_cloud_bottom": 72000.0})
+        self.assertTrue(scaled)
+
+    def test_fail_open_without_cloud_data(self):
+        # Gate ON but no ichimoku stream ever arrives → inert → scale-in proceeds.
+        scaled = self._run({"ichimoku_gate": True}, None)
+        self.assertTrue(scaled)
+
+
 class TestSnapshot(unittest.TestCase):
 
     def _eng(self):

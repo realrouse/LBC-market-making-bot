@@ -38,6 +38,30 @@
         },
 
         {
+            "_comment": "1d Ichimoku cloud — trend filter for the swing bot. Own stream (never co-located on btc_1d) because the publisher suppresses a stream's whole message while any indicator is None, and the cloud needs 78 bars. seed >= 78.",
+            "id":           "btc_1d_ichimoku",
+            "asset":        "BTCUSDT",
+            "source":       "binance_ws",
+            "timeframe":    "1d",
+            "seed_periods": 90,
+            "indicators": [
+                { "type": "ichimoku" }
+            ]
+        },
+
+        {
+            "_comment": "4h Ichimoku cloud — trend filter for the accumulation bot (more responsive than daily). Own stream, seed >= 78 (78 x 4h ~ 13 days of REST seed candles).",
+            "id":           "btc_4h_ichimoku",
+            "asset":        "BTCUSDT",
+            "source":       "binance_ws",
+            "timeframe":    "4h",
+            "seed_periods": 90,
+            "indicators": [
+                { "type": "ichimoku" }
+            ]
+        },
+
+        {
             "_comment": "Binance perpetual funding rate — polled every 15 min",
             "id":              "btc_funding",
             "asset":           "BTCUSDT",

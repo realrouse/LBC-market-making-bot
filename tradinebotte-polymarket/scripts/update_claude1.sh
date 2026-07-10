@@ -230,6 +230,20 @@ if [[ "$RESTART_INDICATORS" == "true" ]]; then
         && echo -e "${GREEN}  ✓ indicators.py synced${NC}" \
         || { echo -e "${RED}  ✗ rsync indicators.py failed${NC}"; exit 1; }
 
+    # Push the indicator-service configs → remote strategies/indicators/ (the --config
+    # path baked into the unit is $_install_dir/strategies/indicators/indicators_all.json).
+    # These configs were previously NOT in any deploy step (silent drift — the deployed
+    # copy could lag the repo indefinitely); pushing them here closes that pipeline gap.
+    echo -e "\n${BOLD}${YELLOW}═══ RSYNC indicators config ═══${NC}"
+    SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
+        rsync -az \
+        --filter='+ **/' --filter='+ *.json' --filter='- *' \
+        -e "ssh $_ssh_opts" \
+        "$LOCAL_REPO/tradinebotte-indicators/strategies/" \
+        "$_c1_user@$_server:$_install_dir/strategies/indicators/" 2>&1 \
+        && echo -e "${GREEN}  ✓ indicators configs synced${NC}" \
+        || { echo -e "${RED}  ✗ rsync indicators configs failed${NC}"; exit 1; }
+
     _restart_service "tradinebotte-indicators" "INDICATORS" "PUB bind|scalping|ERROR"
 fi
 
