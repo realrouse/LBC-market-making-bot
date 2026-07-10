@@ -37,8 +37,12 @@ ap.add_argument("--proxy",   default="dip",         choices=["obi","dip"],
                 help="Scale-in signal proxy: obi=taker-buy EMA, dip=price drop from N-candle high (default: dip)")
 ap.add_argument("--dip-pct",      type=float, default=4.0,  help="Dip proxy: pct drop from recent high to trigger (default 4.0)")
 ap.add_argument("--dip-lookback", type=int,   default=72,   help="Dip proxy: rolling high lookback in candles (default 72)")
-ap.add_argument("--cloud",   default="off",   choices=["off","4h","1d"],
-                help="Ichimoku trend gate on scale-in: skip when price < cloud_bottom (4h or daily cloud)")
+ap.add_argument("--cloud",   default="off",   choices=["off","4h","1d","1w"],
+                help="Ichimoku trend gate on scale-in: skip when price < cloud_bottom (4h/daily/weekly cloud)")
+ap.add_argument("--warmup-days", type=int, default=0,
+                help="Fetch this many extra days BEFORE --start to pre-warm the cloud/proxies "
+                     "(mirrors the live service seeding history); trading still begins at --start. "
+                     "Use >=560 for a weekly cloud (78 weeks), >=80 for daily.")
 args = ap.parse_args()
 
 # ── Load strategy params ───────────────────────────────────────────────────
@@ -102,17 +106,19 @@ def fetch_klines(symbol: str, interval: str, start_ms: int, end_ms: int):
 
 start_ms = ts_ms(args.start)
 end_ms   = ts_ms(args.end) if args.end else int(datetime.now(timezone.utc).timestamp() * 1000)
-raw = fetch_klines(SYMBOL, args.tf, start_ms, end_ms)
+TRADE_START_MS = start_ms                                   # trading begins here…
+fetch_start_ms = start_ms - args.warmup_days * 86_400_000   # …but data (for warmup) starts earlier
+raw = fetch_klines(SYMBOL, args.tf, fetch_start_ms, end_ms)
 
 # ── Ichimoku cloud gate — precompute per-candle last-CLOSED HTF cloud_bottom ──
 # No-lookahead: at candle i the cloud is the value AS OF the last HTF bar closed at
 # or before i's timestamp (mirrors the live service publishing only on candle close).
 # Daily needs 78 days of warm-up → cloud stays None early; only valid on long history.
-def _cloud_bottoms(rawk, tf_ms):
+def _cloud_bottoms(rawk, tf_ms, offset=0):
     bars = []; cur = None
     for k in rawk:
         t = int(k[0]); h = float(k[2]); l = float(k[3]); c = float(k[4])
-        b = (t // tf_ms) * tf_ms
+        b = ((t - offset) // tf_ms) * tf_ms + offset
         if cur is None or b != cur["ts"]:
             if cur is not None: bars.append(cur)
             cur = {"ts": b, "h": h, "l": l, "c": c, "close_ms": b + tf_ms}
@@ -133,8 +139,10 @@ def _cloud_bottoms(rawk, tf_ms):
         out[i] = bot[j] if j >= 0 else None
     return out
 
-_TF_MS = {"4h": 14_400_000, "1d": 86_400_000}
-CLOUD = _cloud_bottoms(raw, _TF_MS[args.cloud]) if args.cloud != "off" else None
+_TF_MS = {"4h": 14_400_000, "1d": 86_400_000, "1w": 604_800_000}
+_WEEK_OFF = 345_600_000    # epoch is a Thursday → shift weekly buckets to Monday (Binance weekly)
+CLOUD = (_cloud_bottoms(raw, _TF_MS[args.cloud], _WEEK_OFF if args.cloud == "1w" else 0)
+         if args.cloud != "off" else None)
 _gate = {"attempts": 0, "blocks": 0, "warm": 0, "above_cloud": 0}
 _cur_cloud = [None]
 
@@ -320,6 +328,11 @@ for _ci, k in enumerate(raw):
     # Spread proxy: (high-low)/close
     spread = (h - l) / c if c > 0 else 0.002
     state.spread_ema += 0.05 * (spread - state.spread_ema)
+
+    # Warmup buffer: keep proxies/cloud advancing but do not trade before --start
+    # (mirrors the live bot booting with pre-seeded indicators, warm from candle 1).
+    if open_t_ms < TRADE_START_MS:
+        continue
 
     # Initial buy
     if not state.initial_done:

@@ -44,7 +44,8 @@ import backtest_swing_dca as bsd                          # noqa: E402
 from backtest_engine import _load_klines, _tick           # noqa: E402
 from tradinetools.math import ichimoku_last               # noqa: E402
 
-_TF = {"4h": 14_400_000, "1d": 86_400_000}
+_TF = {"4h": 14_400_000, "1d": 86_400_000, "1w": 604_800_000}
+_WEEK_OFF = 345_600_000    # epoch is a Thursday; shift weekly buckets to Monday (Binance weekly)
 _REGIME_DBS = [
     ("bull 2024-25", "data/BTCUSDT_1m92d_bullrun20241015-20250115.db"),
     ("bear 2022",    "data/BTCUSDT_1m92d_bearmarket20220501-20220801.db"),
@@ -53,12 +54,13 @@ _REGIME_DBS = [
 
 
 # ─── timeframe aggregation ──────────────────────────────────────────────────
-def aggregate(rows, tf_ms):
-    """1m rows [(ts,o,h,l,c,v)] → HTF bars [{ts(bucket),o,h,l,c,close_ms}] wall-clock aligned."""
+def aggregate(rows, tf_ms, offset=0):
+    """1m rows [(ts,o,h,l,c,v)] → HTF bars [{ts(bucket),o,h,l,c,close_ms}]. `offset` phases the
+    bucket boundary (used to align weekly bars to Monday, matching Binance weekly klines)."""
     bars = []
     cur = None
     for ts, o, h, l, c, _v in rows:
-        b = (ts // tf_ms) * tf_ms
+        b = ((ts - offset) // tf_ms) * tf_ms + offset
         if cur is None or b != cur["ts"]:
             if cur is not None:
                 bars.append(cur)
@@ -190,6 +192,7 @@ def run(rows, center, ichi_mode="off", rsi_ema=False, precomp=None):
     import time
     a4 = precomp["align_4h"]; s4 = precomp["s4"]
     ad = precomp["align_1d"]; sd_ = precomp["s1d"]
+    aw = precomp["align_1w"]; sw_ = precomp["s1w"]
 
     def inject(engine, idx):
         now = time.time()
@@ -213,6 +216,12 @@ def run(rows, center, ichi_mode="off", rsi_ema=False, precomp=None):
                 engine.sw.last_ichi_top = sd_["ichi_top"][j]
                 engine.sw.last_ichi_bottom = sd_["ichi_bottom"][j]
                 engine.sw.last_ichi_ts = now
+        elif ichi_mode == "1w":
+            j = aw[idx]
+            if j >= 0 and sw_["ichi_bottom"][j] is not None:
+                engine.sw.last_ichi_top = sw_["ichi_top"][j]
+                engine.sw.last_ichi_bottom = sw_["ichi_bottom"][j]
+                engine.sw.last_ichi_ts = now
 
     equity = asyncio.run(_drive_swing(s, rows, inject))
     return _metrics(equity, s.sw.total_pnl, s.sw.total_trades)
@@ -220,15 +229,17 @@ def run(rows, center, ichi_mode="off", rsi_ema=False, precomp=None):
 
 def precompute(rows):
     b4 = aggregate(rows, _TF["4h"]); b1 = aggregate(rows, _TF["1d"])
-    s4 = htf_series(b4); s1 = htf_series(b1)
-    return {"s4": s4, "s1d": s1,
+    bw = aggregate(rows, _TF["1w"], _WEEK_OFF)
+    s4 = htf_series(b4); s1 = htf_series(b1); sw = htf_series(bw)
+    return {"s4": s4, "s1d": s1, "s1w": sw,
             "align_4h": align_last_closed(rows, s4["close_ms"], s4),
-            "align_1d": align_last_closed(rows, s1["close_ms"], s1)}
+            "align_1d": align_last_closed(rows, s1["close_ms"], s1),
+            "align_1w": align_last_closed(rows, sw["close_ms"], sw)}
 
 
 # ─── sweep + reporting ──────────────────────────────────────────────────────
-_GRID = [("off",  False), ("4h",  False), ("1d",  False),
-         ("off",  True),  ("4h",  True),  ("1d",  True)]
+_GRID = [("off",  False), ("4h",  False), ("1d",  False), ("1w",  False),
+         ("off",  True),  ("4h",  True),  ("1d",  True),  ("1w",  True)]
 
 
 def sweep_db(db_path, label):

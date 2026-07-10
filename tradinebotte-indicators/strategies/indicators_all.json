@@ -62,6 +62,18 @@
         },
 
         {
+            "_comment": "1w Ichimoku cloud — long-term (macro) trend filter. Publishes only on weekly close; the applicable cloud needs 78 weeks of history so seed >= 78 (~1.5 years of REST seed candles).",
+            "id":           "btc_1w_ichimoku",
+            "asset":        "BTCUSDT",
+            "source":       "binance_ws",
+            "timeframe":    "1w",
+            "seed_periods": 90,
+            "indicators": [
+                { "type": "ichimoku" }
+            ]
+        },
+
+        {
             "_comment": "Binance perpetual funding rate — polled every 15 min",
             "id":              "btc_funding",
             "asset":           "BTCUSDT",
