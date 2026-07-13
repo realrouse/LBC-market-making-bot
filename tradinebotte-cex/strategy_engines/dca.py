@@ -35,6 +35,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from api_common import decimals_for_price, warm_symbol_precision
 from tradinetools.pnl import round_trip_pnl
 
 logger = logging.getLogger(__name__)
@@ -206,11 +207,22 @@ class DCAStrategy:
 
     # ── Place buy ─────────────────────────────────────────────────────────────
 
+    async def warm_precision(self, state: Any) -> None:
+        """Boot hook: prime the connector's precision cache for this symbol so the first
+        order doesn't pay the exchangeInfo fetch and an unreachable exchange surfaces now."""
+        if await warm_symbol_precision(self._api, state.session, self.dca.symbol) is None:
+            logger.warning("DCAStrategy [%s] — boot precision warm failed "
+                           "(orders fail closed until the exchange is reachable)", self.dca.symbol)
+
     async def _place_buy(self, state: Any, price: float) -> None:
         d = self.dca
         qty      = d.amount_usdt / price
-        tp_price = round(price * (1 + d.tp_pct), 2)
-        sl_price = round(price * (1 - d.sl_pct), 2) if d.sl_pct > 0 else None
+        # TP/SL are full-precision: tp_price is both a threshold (best_bid >= tp_price)
+        # and the limit-SELL price (connector rounds it to the exchange tick); sl_price
+        # is a threshold (best_bid <= sl_price). Rounding here to 2dp would floor a
+        # sub-cent pair's levels to 0.00 and break both the comparison and the order.
+        tp_price = price * (1 + d.tp_pct)
+        sl_price = price * (1 - d.sl_pct) if d.sl_pct > 0 else None
 
         oid = await self._api.post_order(
             state.session, d.symbol, price, d.amount_usdt, side="BUY"
@@ -236,10 +248,11 @@ class DCAStrategy:
         d.positions.append(pos)
         d.last_buy_ts = time.time()
 
+        pd = decimals_for_price(price)
         logger.info(
-            "DCAStrategy [%s] BUY $%.0f @ %.2f  qty=%.6f  TP=%.2f  SL=%s  [%s]",
-            d.symbol, d.amount_usdt, price, qty, tp_price,
-            f"{sl_price:.2f}" if sl_price else "off", oid,
+            "DCAStrategy [%s] BUY $%.0f @ %.*f  qty=%.6f  TP=%.*f  SL=%s  [%s]",
+            d.symbol, d.amount_usdt, pd, price, qty, pd, tp_price,
+            f"{sl_price:.{pd}f}" if sl_price else "off", oid,
         )
 
     # ── Fill detection ─────────────────────────────────────────────────────────

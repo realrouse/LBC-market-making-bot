@@ -60,11 +60,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import sqlite3
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from api_common import decimals_for_price, warm_symbol_precision
 from tradinetools.pnl import round_trip_pnl
 
 logger = logging.getLogger(__name__)
@@ -176,6 +178,13 @@ class SwingStrategy:
         from connectors import load as _load_conn
         self._api  = _load_conn(config.connector)
 
+        # Price decimals for the stop-loss trigger, derived from the pair's price scale
+        # (support/resistance levels) so a sub-cent pair's SL isn't rounded to 0.00.
+        # Unlike the grid this needs no exchange tick — the SL is a comparison threshold
+        # and the exit is a MARKET order (quantity only), not a tick-aligned limit price.
+        _min_lvl = min((float(p) for p in (sup_raw + res_raw) if float(p) > 0), default=1.0)
+        self._price_dec = 2 if _min_lvl >= 1 else max(2, int(math.ceil(-math.log10(_min_lvl))) + 2)
+
         self._trend_filter    = bool(cfg.get("trend_filter_enabled",  True))
         self._rsi_buy_max     = float(cfg.get("rsi_buy_max",          52.0))
         self._rsi_stale_secs  = float(cfg.get("rsi_stale_secs",     3600.0))
@@ -230,7 +239,11 @@ class SwingStrategy:
         above = [r.price for r in self.sw.resistance if r.price > entry_price]
         if above:
             return min(above)
-        return round(entry_price * (1.0 + self.sw.tp_pct_fallback), 2)
+        # TP is a limit-SELL price: the connector rounds it to the exchange tick at
+        # placement. Round the stored/logged value to the pair's magnitude (2dp for BTC,
+        # more for sub-cent pairs) so it isn't collapsed to 0.00.
+        tp = entry_price * (1.0 + self.sw.tp_pct_fallback)
+        return round(tp, decimals_for_price(tp))
 
     def _trend_ok(self, price: float = 0.0) -> bool:
         """True when all trend filters permit a new BUY entry.
@@ -417,6 +430,13 @@ class SwingStrategy:
 
     # ── DB restore ─────────────────────────────────────────────────────────────
 
+    async def warm_precision(self, state: Any) -> None:
+        """Boot hook: prime the connector's precision cache for this symbol so the first
+        order doesn't pay the exchangeInfo fetch and an unreachable exchange surfaces now."""
+        if await warm_symbol_precision(self._api, state.session, self.sw.symbol) is None:
+            logger.warning("SwingStrategy [%s] — boot precision warm failed "
+                           "(orders fail closed until the exchange is reachable)", self.sw.symbol)
+
     async def restore_from_db(self, state: Any) -> bool:
         """Reload saved state on restart; reconcile open orders with the exchange.
 
@@ -565,12 +585,13 @@ class SwingStrategy:
 
     def _compute_sl(self, entry_price: float) -> float:
         """ATR-based SL when available, static percentage as fallback."""
+        pd = self._price_dec
         if self.sw.last_atr is not None and self.sw.last_atr > 0:
-            sl = round(entry_price - self.sw.last_atr * self._atr_sl_mult, 2)
-            logger.debug("SwingStrategy SL via ATR: entry=%.2f ATR=%.2f mult=%.1f → SL=%.2f",
-                         entry_price, self.sw.last_atr, self._atr_sl_mult, sl)
+            sl = round(entry_price - self.sw.last_atr * self._atr_sl_mult, pd)
+            logger.debug("SwingStrategy SL via ATR: entry=%.*f ATR=%.*f mult=%.1f → SL=%.*f",
+                         pd, entry_price, pd, self.sw.last_atr, self._atr_sl_mult, pd, sl)
             return sl
-        return round(entry_price * (1.0 - self.sw.sl_pct), 2)
+        return round(entry_price * (1.0 - self.sw.sl_pct), pd)
 
     async def _on_buy_filled(self, state: Any, pos: SwingPosition,
                               fill_price: float) -> None:

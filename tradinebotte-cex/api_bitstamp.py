@@ -28,7 +28,7 @@ import uuid
 from urllib.parse import urlencode
 
 import aiohttp
-from api_common import book_snapshot, parse_levels
+from api_common import book_snapshot, decimals_for_price, fmt_price, fmt_qty, parse_levels
 
 logger = logging.getLogger(__name__)
 
@@ -218,7 +218,11 @@ async def post_order(session, symbol, price, size_usdc, *, side="BUY", **_):
 
     clean    = symbol.lower().split(":")[0]
     endpoint = f"/api/v2/{bs_side}/{clean}/"
-    body_dict = {"amount": f"{quantity:.6f}", "price": f"{price:.2f}"}
+    # Magnitude-based precision (no per-pair fetch): this connector is registered but on
+    # no deployed bot. If it is ever put live, add a get_symbol_precision from Bitstamp's
+    # /api/v2/trading-pairs-info/ (counter_decimals / base_decimals) like the spot connectors.
+    body_dict = {"amount": fmt_qty(quantity, 8),
+                 "price":  fmt_price(price, decimals_for_price(price))}
     body = urlencode(body_dict)
     headers = _auth_headers("POST", endpoint, body)
 

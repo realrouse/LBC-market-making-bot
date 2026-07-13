@@ -1152,6 +1152,12 @@ async def main() -> None:
                 from strategy_engines import load as _load_strat
                 state.strategy = _load_strat(config.strategy_type, config)
                 logger.info("  Algorithm   : %s", config.strategy_type)
+                # Warm the connector's per-symbol precision cache at boot (before restore,
+                # which for the grid also relies on the exchange tick) so the first order
+                # never pays the exchangeInfo round-trip and an unreachable exchange
+                # surfaces here rather than as a fail-closed rejection mid-trade.
+                if hasattr(state.strategy, "warm_precision"):
+                    await state.strategy.warm_precision(state)
                 await state.strategy.restore_from_db(state)
             def _hb_payload() -> dict[str, Any]:
                 # An engine may own its heartbeat shape (accumulation reports holdings/avg_entry/

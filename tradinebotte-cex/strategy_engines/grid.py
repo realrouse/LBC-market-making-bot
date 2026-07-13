@@ -48,6 +48,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import sqlite3
 import time
 from dataclasses import dataclass, field
@@ -58,6 +59,22 @@ from tradinetools.pnl import round_trip_pnl
 logger = logging.getLogger(__name__)
 
 STRATEGY_TYPE = "grid"
+
+
+def _derive_price_decimals(lower: float, upper: float, levels: int) -> int:
+    """Price decimals needed so grid levels stay distinct when the exchange tick is
+    not yet known (sim / before the exchangeInfo fetch in restore_from_db).
+
+    Rounding every level to 2dp collapses a sub-cent pair (LBC 0.001–0.003) to 0.00;
+    this derives enough decimals from grid_step to represent it, floored at 2 (BTC
+    cents) and capped at 8 (float-noise guard). The authoritative exchange precision
+    overrides this in _refresh_precision when a session is available.
+    """
+    step = (upper - lower) / max(1, levels - 1)
+    if step <= 0:
+        return 2
+    d = int(math.ceil(-math.log10(step))) + 2 if step < 1 else 2
+    return max(2, min(8, d))
 
 
 # ─── STATE DATACLASSES ────────────────────────────────────────────────────────
@@ -136,8 +153,13 @@ class GridStrategy:
         if size <= 0:
             raise ValueError(f"grid_order_size_usdt must be > 0, got {size}")
 
+        # Price decimals: provisional value derived from the grid geometry so levels
+        # never collapse (fixes sub-cent pairs like LBC). restore_from_db() refines it
+        # to the exchange's authoritative tick before any order is placed.
+        self._price_dec: int = _derive_price_decimals(lower, upper, n)
+
         step   = (upper - lower) / (n - 1)
-        levels = [GridLevel(price=round(lower + i * step, 2)) for i in range(n)]
+        levels = [GridLevel(price=round(lower + i * step, self._price_dec)) for i in range(n)]
 
         self.grid = GridState(
             symbol=symbol,
@@ -157,9 +179,10 @@ class GridStrategy:
         self._user_ws_connected: bool = False
         self._no_credentials: bool = False  # set True once; stops task re-spawn when no API key
 
+        pd = self._price_dec
         logger.info(
-            "GridStrategy: %s  %.2f–%.2f  %d levels  step=%.2f  size=$%.2f  trail=%s",
-            symbol, lower, upper, n, step, size, self._trail_mode,
+            "GridStrategy: %s  %.*f–%.*f  %d levels  step=%.*f  size=$%.2f  trail=%s",
+            symbol, pd, lower, pd, upper, n, pd, step, size, self._trail_mode,
         )
 
     # ── Public helpers ─────────────────────────────────────────────────────────
@@ -228,6 +251,48 @@ class GridStrategy:
             )
         conn.commit()
 
+    def _pf(self, price: Any) -> str:
+        """Format a price for logs at the pair's precision (BTC 2dp, LBC 6dp) — a flat
+        %.2f logs a sub-cent price as '0.00'. USD/PnL amounts keep %.2f (they are dollars)."""
+        try:
+            return f"{float(price):.{self._price_dec}f}"
+        except (TypeError, ValueError):
+            return str(price)
+
+    async def warm_precision(self, state: Any) -> None:
+        """Boot hook (called by live_bot before restore): refine price precision to the
+        exchange tick and prime the connector's cache. For the grid this is _refresh_precision
+        (it also re-quantizes the still-fresh levels); safe to run before restore reads the DB."""
+        await self._refresh_precision(state)
+
+    async def _refresh_precision(self, state: Any) -> None:
+        """Set self._price_dec to the exchange's authoritative price tick and re-quantize
+        the (idle) levels to it. Uses the connector's get_symbol_precision (public
+        exchangeInfo, works in sim). Falls back to the __init__ config-derived value on
+        failure — non-fatal: grid level math tolerates it, and the connector fails closed
+        at order time. Runs before any level becomes an order, so no drift is introduced.
+        """
+        get_prec = getattr(self._api, "get_symbol_precision", None)
+        prec = None
+        if get_prec is not None:
+            try:
+                prec = await get_prec(state.session, self.grid.symbol)
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                logger.warning("GridStrategy [%s] — precision fetch error: %s",
+                               self.grid.symbol, e)
+        if prec is None:
+            logger.warning("GridStrategy [%s] — using derived price precision %ddp "
+                           "(exchange fetch unavailable)", self.grid.symbol, self._price_dec)
+            return
+        self._price_dec = int(prec[0])
+        n = len(self.grid.levels)
+        lower, step = self.grid.grid_lower, self.grid.grid_step
+        self.grid.levels = [
+            GridLevel(price=round(lower + i * step, self._price_dec)) for i in range(n)
+        ]
+        logger.info("GridStrategy [%s] — price precision %ddp (exchange tick)",
+                    self.grid.symbol, self._price_dec)
+
     async def restore_from_db(self, state: Any) -> bool:
         """Load saved grid state from DB and reconcile fills with the exchange.
 
@@ -236,6 +301,11 @@ class GridStrategy:
         Reconciliation detects orders that filled while the bot was offline and
         immediately places the appropriate counter-orders.
         """
+        # Refine price precision to the exchange's authoritative tick before any level
+        # is turned into an order. Runs first so both the fresh-init and restore paths
+        # (and the level-price → DB-row matching below) use one consistent precision.
+        await self._refresh_precision(state)
+
         conn = state.conn
         row = conn.execute(
             """
@@ -256,13 +326,16 @@ class GridStrategy:
         (saved_lower, saved_upper, saved_step, saved_size,
          total_cycles, total_profit, initialised, halted) = row
 
-        tol = 0.01
+        # Price tolerance = half a tick, so change-detection scales with the pair's
+        # precision (a flat 0.01 is coarser than LBC's entire 0.001–0.003 range and
+        # would never detect a bound change). Size tol stays 0.01 (a USDT amount).
+        tol = 0.5 * (10 ** -self._price_dec)
         bounds_changed = (
             abs(saved_lower - self.grid.grid_lower) > tol or
             abs(saved_upper - self.grid.grid_upper) > tol or
             abs(saved_step  - self.grid.grid_step)  > tol
         )
-        size_changed = abs(saved_size - self.grid.order_size_usdt) > tol
+        size_changed = abs(saved_size - self.grid.order_size_usdt) > 0.01
 
         if size_changed:
             logger.warning(
@@ -287,12 +360,13 @@ class GridStrategy:
             self.grid.grid_upper = saved_upper
             self.grid.grid_step  = saved_step
             self.grid.levels     = [
-                GridLevel(price=round(saved_lower + i * saved_step, 2)) for i in range(n)
+                GridLevel(price=round(saved_lower + i * saved_step, self._price_dec))
+                for i in range(n)
             ]
             logger.info(
                 "GridStrategy [%s] — trail re-center detected: restoring saved bounds "
-                "[%.2f, %.2f]",
-                self.grid.symbol, saved_lower, saved_upper,
+                "[%.*f, %.*f]",
+                self.grid.symbol, self._price_dec, saved_lower, self._price_dec, saved_upper,
             )
 
         self.grid.total_cycles     = total_cycles
@@ -310,7 +384,7 @@ class GridStrategy:
             (self.grid.symbol,),
         ).fetchall()
 
-        saved = {round(r[0], 2): r for r in level_rows}
+        saved = {round(r[0], self._price_dec): r for r in level_rows}
         for lvl in self.grid.levels:
             r = saved.get(lvl.price)
             if r is None:
@@ -539,18 +613,18 @@ class GridStrategy:
             self._user_stream_task = None
         self.grid.halted = True
         logger.warning(
-            "GridStrategy [%s] STOP-LOSS — price=%.2f outside [%.2f, %.2f] "
+            "GridStrategy [%s] STOP-LOSS — price=%s outside [%s, %s] "
             "| %d orders cancelled | PnL=$%+.2f",
-            self.grid.symbol, self.grid.last_price,
-            self.grid.grid_lower, self.grid.grid_upper,
+            self.grid.symbol, self._pf(self.grid.last_price),
+            self._pf(self.grid.grid_lower), self._pf(self.grid.grid_upper),
             cancelled, self.grid.total_profit_usd,
         )
 
     async def _recenter_grid(self, state: Any, price: float) -> None:
         """Cancel all orders and shift grid bounds so price lands at the midpoint."""
         half_range = (self.grid.grid_upper - self.grid.grid_lower) / 2
-        new_lower  = round(price - half_range, 2)
-        new_upper  = round(price + half_range, 2)
+        new_lower  = round(price - half_range, self._price_dec)
+        new_upper  = round(price + half_range, self._price_dec)
         old_lower, old_upper = self.grid.grid_lower, self.grid.grid_upper
 
         cancelled = 0
@@ -571,13 +645,14 @@ class GridStrategy:
         self.grid.grid_lower  = new_lower
         self.grid.grid_upper  = new_upper
         self.grid.grid_step   = step
-        self.grid.levels      = [GridLevel(price=round(new_lower + i * step, 2)) for i in range(n)]
+        self.grid.levels      = [GridLevel(price=round(new_lower + i * step, self._price_dec)) for i in range(n)]
         self.grid.initialised = False
 
         logger.info(
-            "GridStrategy [%s] TRAIL re-center: [%.2f, %.2f] → [%.2f, %.2f] "
+            "GridStrategy [%s] TRAIL re-center: [%s, %s] → [%s, %s] "
             "| %d orders cancelled",
-            self.grid.symbol, old_lower, old_upper, new_lower, new_upper, cancelled,
+            self.grid.symbol, self._pf(old_lower), self._pf(old_upper),
+            self._pf(new_lower), self._pf(new_upper), cancelled,
         )
 
     # ── Initialisation ─────────────────────────────────────────────────────────
@@ -597,7 +672,7 @@ class GridStrategy:
                     lvl.buy_price    = lvl.price
                     lvl.status       = "buy_placed"
                     placed += 1
-                    logger.debug("GridStrategy BUY %.2f → %s", lvl.price, oid)
+                    logger.debug("GridStrategy BUY %s → %s", self._pf(lvl.price), oid)
             elif lvl.price > current:
                 oid = await self._api.post_order(
                     state.session, self.grid.symbol,
@@ -608,13 +683,13 @@ class GridStrategy:
                     lvl.sell_price    = lvl.price
                     lvl.status        = "sell_placed"
                     placed += 1
-                    logger.debug("GridStrategy SELL %.2f → %s", lvl.price, oid)
+                    logger.debug("GridStrategy SELL %s → %s", self._pf(lvl.price), oid)
             # Level at exact current price: skip to avoid crossing the spread
 
         self.grid.initialised = True
         logger.info(
-            "GridStrategy [%s] initialized: price=%.2f | %d/%d levels active",
-            self.grid.symbol, current, placed, len(self.grid.levels),
+            "GridStrategy [%s] initialized: price=%s | %d/%d levels active",
+            self.grid.symbol, self._pf(current), placed, len(self.grid.levels),
         )
 
     # ── Fill detection ─────────────────────────────────────────────────────────
@@ -664,7 +739,7 @@ class GridStrategy:
     async def _on_buy_filled(self, state: Any, lvl: GridLevel) -> None:
         """BUY at lvl.buy_price filled → place SELL at buy_price + grid_step."""
         buy_p  = lvl.buy_price or lvl.price
-        sell_p = round(buy_p + self.grid.grid_step, 2)
+        sell_p = round(buy_p + self.grid.grid_step, self._price_dec)
 
         lvl.buy_order_id = None
         lvl.buy_price    = None
@@ -674,8 +749,8 @@ class GridStrategy:
             # Top of grid: no SELL counter-order, mark idle
             lvl.status = "idle"
             logger.info(
-                "GridStrategy [%s] BUY fill %.2f → top of grid, idle",
-                self.grid.symbol, buy_p,
+                "GridStrategy [%s] BUY fill %s → top of grid, idle",
+                self.grid.symbol, self._pf(buy_p),
             )
             return
 
@@ -689,21 +764,21 @@ class GridStrategy:
             lvl.entry_price   = buy_p   # remember the entry so the SELL can book PnL
             lvl.status        = "sell_placed"
             logger.info(
-                "GridStrategy [%s] BUY fill %.2f → SELL %.2f [%s]",
-                self.grid.symbol, buy_p, sell_p, oid,
+                "GridStrategy [%s] BUY fill %s → SELL %s [%s]",
+                self.grid.symbol, self._pf(buy_p), self._pf(sell_p), oid,
             )
         else:
             lvl.status = "idle"
             logger.error(
-                "GridStrategy [%s] BUY fill %.2f → post_order SELL %.2f failed",
-                self.grid.symbol, buy_p, sell_p,
+                "GridStrategy [%s] BUY fill %s → post_order SELL %s failed",
+                self.grid.symbol, self._pf(buy_p), self._pf(sell_p),
             )
 
     async def _on_sell_filled(self, state: Any, lvl: GridLevel) -> None:
         """SELL at lvl.sell_price filled → account PnL, place BUY at sell_price − grid_step."""
         sell_p   = lvl.sell_price or lvl.price
         buy_p    = lvl.entry_price                      # None for init-placed SELLs
-        new_buy  = round(sell_p - self.grid.grid_step, 2)
+        new_buy  = round(sell_p - self.grid.grid_step, self._price_dec)
 
         # PnL only counted when a full BUY→SELL cycle completes (entry_price set by
         # the preceding BUY fill). SELLs placed at init have no entry → no cycle.
@@ -724,9 +799,9 @@ class GridStrategy:
             # Bottom of grid: no BUY counter-order, mark idle
             lvl.status = "idle"
             logger.info(
-                "GridStrategy [%s] SELL fill %.2f → grid bottom, idle | "
+                "GridStrategy [%s] SELL fill %s → grid bottom, idle | "
                 "total PnL=$%+.2f",
-                self.grid.symbol, sell_p, self.grid.total_profit_usd,
+                self.grid.symbol, self._pf(sell_p), self.grid.total_profit_usd,
             )
             return
 
@@ -739,16 +814,16 @@ class GridStrategy:
             lvl.buy_price    = new_buy
             lvl.status       = "buy_placed"
             logger.info(
-                "GridStrategy [%s] SELL fill %.2f → BUY %.2f [%s] | "
+                "GridStrategy [%s] SELL fill %s → BUY %s [%s] | "
                 "cycle #%d profit=$%+.4f total=$%+.2f",
-                self.grid.symbol, sell_p, new_buy, oid,
+                self.grid.symbol, self._pf(sell_p), self._pf(new_buy), oid,
                 self.grid.total_cycles, profit, self.grid.total_profit_usd,
             )
         else:
             lvl.status = "idle"
             logger.error(
-                "GridStrategy [%s] SELL fill %.2f → post_order BUY %.2f failed",
-                self.grid.symbol, sell_p, new_buy,
+                "GridStrategy [%s] SELL fill %s → post_order BUY %s failed",
+                self.grid.symbol, self._pf(sell_p), self._pf(new_buy),
             )
 
     # ── Main entry point ───────────────────────────────────────────────────────

@@ -28,6 +28,8 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
+from api_common import decimals_for_price
+
 if TYPE_CHECKING:                       # lazy at runtime (see _ensure_earn) — keeps
     from earn_manager import EarnManager  # `import strategy_engines` light for other bots
 
@@ -304,7 +306,7 @@ class AccumulationStrategy:
             "bounds_ok":      a.free_usdt > 0,
             "holdings_btc":   round(a.holdings_btc, 6),
             "free_usdt":      round(a.free_usdt, 2),
-            "avg_entry":      round(a.avg_entry, 2),
+            "avg_entry":      round(a.avg_entry, decimals_for_price(a.avg_entry)),
             "total_realized": round(a.total_realized, 2),
             "pnl_total":      round(a.total_realized, 2),
             "last_write_ts":  a.last_write_ts,
@@ -386,8 +388,9 @@ class AccumulationStrategy:
         conn.commit()
         self._save_state(conn)
 
-        logger.info("BUY  %.6f BTC @ %8.2f  [%-22s]  avg=%8.2f  held=%.6f  free=%7.2f  uPnL=%+.2f%%",
-                    qty_btc, price, reason, a.avg_entry,
+        pd = decimals_for_price(price)
+        logger.info("BUY  %.6f @ %.*f  [%-22s]  avg=%.*f  held=%.6f  free=%7.2f  uPnL=%+.2f%%",
+                    qty_btc, pd, price, reason, pd, a.avg_entry,
                     a.holdings_btc, a.free_usdt, a.unrealized_pct())
         return True
 
@@ -424,8 +427,9 @@ class AccumulationStrategy:
         conn.commit()
         self._save_state(conn)
 
-        logger.info("SELL %.6f BTC @ %8.2f  [%-22s]  realized=%+7.2f  held=%.6f  free=%7.2f",
-                    qty_btc, price, reason, realized, a.holdings_btc, a.free_usdt)
+        logger.info("SELL %.6f @ %.*f  [%-22s]  realized=%+7.2f  held=%.6f  free=%7.2f",
+                    qty_btc, decimals_for_price(price), price, reason, realized,
+                    a.holdings_btc, a.free_usdt)
         return True
 
     # ── Strategy logic ──────────────────────────────────────────────────────────
@@ -461,8 +465,8 @@ class AccumulationStrategy:
                 a.pending_rebuys.append(
                     PendingRebuy(band_pct=band_pct, sell_price=price,
                                  qty_btc=qty, rebuy_price=rebuy, ts_ms=ts_ms))
-                logger.info("  → rebuy %.6f BTC @ %.2f  (spread=%.4f%% → discount=%.3f%%)",
-                            qty, rebuy, a.spread_ema, discount * 100)
+                logger.info("  → rebuy %.6f @ %.*f  (spread=%.4f%% → discount=%.3f%%)",
+                            qty, decimals_for_price(rebuy), rebuy, a.spread_ema, discount * 100)
 
     async def _check_rebuys(self, state: Any, price: float, ts_ms: int) -> None:
         a = self.acc

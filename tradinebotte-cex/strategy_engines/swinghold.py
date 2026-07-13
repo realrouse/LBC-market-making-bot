@@ -62,6 +62,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from api_common import decimals_for_price, warm_symbol_precision
 from tradinetools.pnl import round_trip_pnl
 
 logger = logging.getLogger(__name__)
@@ -315,6 +316,13 @@ class SwingHoldStrategy:
 
     # ── Initialisation ─────────────────────────────────────────────────────────
 
+    async def warm_precision(self, state: Any) -> None:
+        """Boot hook: prime the connector's precision cache for this symbol so the first
+        order doesn't pay the exchangeInfo fetch and an unreachable exchange surfaces now."""
+        if await warm_symbol_precision(self._api, state.session, self.sh.symbol) is None:
+            logger.warning("SwingHoldStrategy [%s] — boot precision warm failed "
+                           "(orders fail closed until the exchange is reachable)", self.sh.symbol)
+
     async def _initialise(self, state: Any, price: float) -> None:
         armed = self._armed_levels()
         slots = self.sh.max_positions - len(self._open_positions())
@@ -349,7 +357,8 @@ class SwingHoldStrategy:
         pos.buy_price = fill_price
         pos.qty_held  = self.sh.order_size_usdt / fill_price
         pos.qty_bought = pos.qty_held
-        pos.sl_price  = round(fill_price * (1 - self.sh.sl_pct), 2) if self.sh.sl_pct > 0 else None
+        pos.sl_price  = (round(fill_price * (1 - self.sh.sl_pct), decimals_for_price(fill_price))
+                         if self.sh.sl_pct > 0 else None)
         pos.res_idx   = 0
         pos.status    = "long"
 
@@ -361,7 +370,9 @@ class SwingHoldStrategy:
         if target is None:
             # No resistance above: use fallback TP on remaining qty
             entry  = pos.buy_price or pos.level_price
-            target = round(entry * (1.0 + self.sh.tp_pct_fallback), 2)
+            # Fallback TP is a limit-SELL price (connector rounds to tick at placement);
+            # round the stored value to the pair's magnitude so it isn't collapsed to 0.00.
+            target = round(entry * (1.0 + self.sh.tp_pct_fallback), decimals_for_price(entry))
 
         sell_qty   = round(pos.qty_held * self.sh.sell_fraction, 8)
         sell_usdt  = sell_qty * target

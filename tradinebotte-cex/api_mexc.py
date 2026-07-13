@@ -28,12 +28,48 @@ import os
 import time
 import uuid
 import aiohttp
-from api_common import book_snapshot, hmac_sign as _sign, parse_levels
+from api_common import (book_snapshot, decimals_of, fmt_price, fmt_qty,
+                        hmac_sign as _sign, parse_levels)
 
 logger = logging.getLogger(__name__)
 
 # ─── ENDPOINTS ────────────────────────────────────────────────────────────────
 BASE_URL      = "https://api.mexc.com"
+
+# Per-symbol (price_decimals, qty_decimals), fetched once from exchangeInfo. MEXC
+# reports price precision as `quotePrecision` and the lot step as `baseSizePrecision`
+# (verified BTCUSDT=2/6dp, ETHUSDT=2/4dp, LBCUSDT=6/3dp). Cache is process-lived; a
+# symbol's tick does not change intraday.
+_SYMBOL_PRECISION: dict = {}
+
+
+async def get_symbol_precision(session, symbol):
+    """Return (price_decimals, qty_decimals) for `symbol` from MEXC exchangeInfo, cached.
+
+    exchangeInfo is a PUBLIC endpoint (works without credentials, i.e. in sim too).
+    Returns None on failure so callers FAIL CLOSED: a real order must never be
+    formatted with a guessed precision (that is exactly the ".2f floors LBC to 0.00"
+    bug). Price precision = quotePrecision; qty step = decimals_of(baseSizePrecision).
+    """
+    sym = str(symbol).split(":", maxsplit=1)[0]
+    cached = _SYMBOL_PRECISION.get(sym)
+    if cached is not None:
+        return cached
+    try:
+        async with session.get(
+            f"{BASE_URL}/api/v3/exchangeInfo",
+            params={"symbol": sym},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            data = await resp.json(content_type=None)
+        s = data["symbols"][0]
+        prec = (int(s["quotePrecision"]), decimals_of(s["baseSizePrecision"]))
+        _SYMBOL_PRECISION[sym] = prec
+        logger.info("MEXC precision [%s]: price=%ddp qty=%ddp", sym, prec[0], prec[1])
+        return prec
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        logger.error("MEXC get_symbol_precision failed [%s]: %s", sym, e)
+        return None
 # MEXC migrated spot public WS to protobuf on wbs-api.mexc.com; the old wbs.mexc.com/ws
 # + JSON depth channels are retired (every subscribe is rejected "Not Subscribed /
 # Blocked!"). Public depth now streams as binary protobuf frames — WS_BINARY tells
@@ -196,17 +232,23 @@ async def post_order(session, symbol, price, size_usdc, *,
         logger.warning("MEXC — order simulated (MEXC_API_KEY/SECRET not set)")
         return f"sim_{uuid.uuid4().hex[:12]}"
 
+    prec = await get_symbol_precision(session, _sym)
+    if prec is None:
+        # Fail closed: never place a real order with a guessed tick/lot precision.
+        logger.error("MEXC — no precision for %s, refusing order (fail-closed)", _sym)
+        return None
+    price_dec, qty_dec = prec
+
     try:
-        # 6 decimal places = MEXC BTC lot size precision (same as Binance, 1e-6 BTC minimum)
-        quantity = round(size_usdc / price, 6)
+        quantity = size_usdc / price          # base-asset amount, floored to lot step below
         params = {
             "symbol":      _sym,
             "side":        _side,
             "type":        "LIMIT",
             # MEXC LIMIT orders default to GTC server-side; timeInForce is not required
             # (unlike Binance where omitting it returns an error).
-            "quantity":    f"{quantity:.6f}",  # string, 6dp per lot size filter
-            "price":       f"{price:.2f}",     # string, 2dp = cent precision in USDT
+            "quantity":    fmt_qty(quantity, qty_dec),   # floored to baseSizePrecision
+            "price":       fmt_price(price, price_dec),   # rounded to quotePrecision tick
             "timestamp":   int(time.time() * 1000),
         }
         params["signature"] = _sign(params, _secret)
@@ -219,14 +261,16 @@ async def post_order(session, symbol, price, size_usdc, *,
         ) as resp:
             data = await resp.json(content_type=None)  # bypass MIME check
             if resp.status != 200:
-                logger.error("MEXC order error %d [%s %s qty=%.6f @ %.2f]: code=%s msg=%s",
-                             resp.status, _side, _sym, quantity, price,
+                logger.error("MEXC order error %d [%s %s qty=%s @ %s]: code=%s msg=%s",
+                             resp.status, _side, _sym,
+                             fmt_qty(quantity, qty_dec), fmt_price(price, price_dec),
                              data.get("code"), data.get("msg", str(data)[:200]))
                 return None
             oid = str(data.get("orderId", ""))
             return oid or None
     except Exception as e:  # pylint: disable=broad-exception-caught
-        logger.error("MEXC post_order error [%s %s @ %.2f]: %s", _side, _sym, price, e)
+        logger.error("MEXC post_order error [%s %s @ %s]: %s",
+                     _side, _sym, fmt_price(price, price_dec), e)
         return None
 
 

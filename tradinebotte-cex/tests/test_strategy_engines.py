@@ -10,17 +10,24 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock
 
 # ── Inject fake connectors module BEFORE importing strategy modules ─────────
-_fake_api = MagicMock()
+# Reuse an already-registered fake "connectors" (another test module may have won the
+# import-order race under `discover`) so this file's per-test reconfiguration (FEE_RATE,
+# post_order return) reaches the object the strategies actually load; else register ours.
+_existing = sys.modules.get("connectors")
+if _existing is not None and hasattr(_existing, "load"):
+    _fake_api = _existing.load.return_value
+else:
+    _fake_api = MagicMock()
+    _connectors_mod = types.ModuleType("connectors")
+    _connectors_mod.load = MagicMock(return_value=_fake_api)
+    sys.modules["connectors"] = _connectors_mod
 _fake_api.compute_fee = MagicMock(return_value=0.0)
 _fake_api.FEE_RATE = 0.0   # engines now compute round-trip PnL via FEE_RATE (round_trip_pnl)
 _fake_api.post_order = AsyncMock(return_value="sim_001")
 _fake_api.get_open_orders = AsyncMock(return_value=[])
 _fake_api.cancel_order = AsyncMock(return_value=None)
 _fake_api.post_market_order = AsyncMock(return_value="sim_mkt_001")
-
-_connectors_mod = types.ModuleType("connectors")
-_connectors_mod.load = MagicMock(return_value=_fake_api)
-sys.modules.setdefault("connectors", _connectors_mod)
+_fake_api.get_symbol_precision = AsyncMock(return_value=(2, 6))  # BTC-scale default; precision tests override per-test
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
