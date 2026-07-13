@@ -1,0 +1,22 @@
+{
+    "_name": "Grid LBC/USDT — MEXC spot (simulation)",
+    "_description": "Sub-cent spot grid on MEXC LBCUSDT, driven by the shared cex_feed (mexc:LBCUSDT). SIMULATION: no MEXC_API_KEY on the remote → post_order returns sim IDs, no real trades. Prices are quoted to 6dp on MEXC (quotePrecision=6); the grid derives/refines its price precision from the exchange tick (get_symbol_precision) so the 0.001–0.003 levels do NOT collapse to 0.00 — this is exactly the per-pair precision path. Capital = grid_levels × grid_order_size_usdt.",
+    "_go_live_notes": "Before any REAL run: (1) recalibrate grid_lower/grid_upper to within MEXC's PERCENT_PRICE_BY_SIDE=0.2 window (±20% of mid ~0.00211 → ~0.00169–0.00253); the 0.001 floor is ~50% below mid and a BUY there is rejected. (2) Re-check MEXC min order notional vs grid_order_size_usdt. (3) Add EnvironmentFile=~/.config/tradinebotte/mexc7.env + TRADINEBOTTE_IPV4_ONLY=1 to the unit as the LAST step.",
+
+    "strategy_type": "grid",
+    "connector":     "mexc",
+
+    "grid_symbol":          "LBCUSDT",
+    "grid_lower":           0.001,
+    "grid_upper":           0.003,
+    "grid_levels":          20,
+    "grid_order_size_usdt": 5.0,
+
+    "capital_start":  100.0,
+    "stake":            5.0,
+    "daily_stop_loss": 25.0,
+
+    "hour_filter": {
+        "enabled": false
+    }
+}

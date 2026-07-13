@@ -24,7 +24,7 @@ Launch:
   bash scripts/start_bot.sh     # starts the bot in the background
 """
 
-import argparse, asyncio, copy, json, logging, logging.handlers, os, queue, sqlite3, sys, time, uuid
+import argparse, asyncio, copy, json, logging, logging.handlers, os, queue, socket, sqlite3, sys, time, uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -1082,6 +1082,15 @@ async def main() -> None:
         snapshot_interval=args.snapshot_interval,
     )
     _setup_logging(config)
+    # IPv4-only egress pin for IP-whitelisted real accounts (e.g. a MEXC key locked to a
+    # single v4 address). Gated by env var so the sim accounts are untouched. Pins the
+    # whole process's DNS to A records — covers aiohttp (order plane) AND the websockets
+    # user-data stream; loopback/ZMQ + Binance/Polymarket all resolve v4, so it is safe
+    # process-wide. Belt-and-suspenders with family=AF_INET on the session connector below.
+    if os.environ.get("TRADINEBOTTE_IPV4_ONLY"):
+        _gai = socket.getaddrinfo
+        socket.getaddrinfo = lambda h, p, f=0, *a, **k: _gai(h, p, socket.AF_INET, *a, **k)
+        logger.info("IPv4-only egress pinned (TRADINEBOTTE_IPV4_ONLY)")
     connector = _load_connector_module(config.connector)
     logger.info("Connector loaded: %s (%s)", config.connector, connector.__name__)
     if config.strategy_type != "threshold":
@@ -1165,8 +1174,9 @@ async def main() -> None:
         state = BotState(conn, config, strategy=ThresholdStrategy(), connector=connector)
         restore_state_from_db(state)
 
+        _fam = socket.AF_INET if os.environ.get("TRADINEBOTTE_IPV4_ONLY") else 0
         async with aiohttp.ClientSession(
-            connector=aiohttp.TCPConnector(limit=10),
+            connector=aiohttp.TCPConnector(limit=10, family=_fam),
             timeout=aiohttp.ClientTimeout(total=30),
         ) as session:
             state.session = session   # available before ws_loop for strategy restore
