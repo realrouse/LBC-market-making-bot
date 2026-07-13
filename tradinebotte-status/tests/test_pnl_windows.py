@@ -2,12 +2,10 @@
 
 Two layers are covered:
 
-  * ``_compute_pnl_windows`` — the remote-side computation that turns the heartbeat
-    *history* in the shared state DB into per-bot window records. It lives embedded in
-    the ``_REMOTE_COLLECT`` string (it runs over SSH on the collector, so it cannot be a
-    normal import); the test extracts that exact source and exercises it against an
-    in-memory heartbeat table, including the reset-to-zero discontinuity that a ZMQ reset
-    produces.
+  * ``_compute_pnl_windows`` — turns the heartbeat *history* in the shared state DB into
+    per-bot window records. It is a normal module-level function (the page is DB-only, no
+    SSH); the test exercises it against an in-memory heartbeat table, including the
+    reset-to-zero discontinuity that a ZMQ reset produces.
   * ``_sum_windows`` / ``_win_spans`` / ``_render_bot_families`` — the pure rendering
     helpers that build the "by bot, not by account" family view and its window spans.
 """
@@ -25,18 +23,13 @@ import generate_status as g  # noqa: E402
 
 
 def _extract_compute_pnl_windows():
-    """Pull the embedded _compute_pnl_windows out of the remote-collect string.
+    """Return the real module-level _compute_pnl_windows.
 
-    The function is defined inside _REMOTE_COLLECT (it executes remotely and reads the
-    shared DB there), so it is not importable. We compile the exact shipped source so the
-    test tracks the real logic rather than a copy.
+    It used to live embedded in the (now-removed) _REMOTE_COLLECT SSH string; the status
+    page is DB-only now, so it is a normal importable function read straight from the
+    shared state DB on the collector host.
     """
-    src = g._REMOTE_COLLECT
-    start = src.index("def _compute_pnl_windows")
-    end = src.index('data["pnl_windows"]', start)
-    ns = {"os": os, "json": json, "sqlite3": sqlite3, "time": time}
-    exec(compile(src[start:end], "<remote>", "exec"), ns)
-    return ns["_compute_pnl_windows"]
+    return g._compute_pnl_windows
 
 
 def _make_db(path, rows):

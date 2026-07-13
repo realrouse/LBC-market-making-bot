@@ -1,10 +1,11 @@
-"""Unit tests for generate_status grid-aggregate rendering.
+"""Unit tests for generate_status grid + accumulation card rendering.
 
-Grid bots keep aggregate state (bounds / cycles / level fills / halted) in grid_state +
-grid_levels rather than a per-trade log, so the Polymarket trade queries return nothing
-for them. These tests lock in that the grid aggregate is surfaced in the account card —
-for a grid at the standard path (account runs only a grid) and at an alternate data dir
-(TRADINEBOTTE_DIR=~/tradinebotte-grid) — and that the halted flag raises a badge.
+The status page is DB-only: the grid and accumulation detail lines are derived straight
+from each bot's heartbeat *payload* (in the shared state DB), not from grid_state /
+live_accum.db over SSH. These tests lock in that a grid bot surfaces its lifetime PnL and
+an accumulation bot surfaces its portfolio, keyed off the bot_id family tag — and that an
+account with neither renders no such line. (The exact grid bounds / cycles / level fills
+and the Polymarket per-trade tables are intentionally gone: they are not in the DB.)
 """
 
 import os
@@ -16,53 +17,63 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import generate_status as g  # noqa: E402
 
 
-def _hb(bot, payload):
-    return {"bot_name": bot, "_label": "acct-3", "flag": "ALIVE", "age_s": 30,
-            "bounds_ok": "ok", "version": "10fa979", "payload": payload}
+def _hb(bot, payload, display=None):
+    return {"bot_name": bot, "_display": display, "_label": "acct-3", "flag": "ALIVE",
+            "age_s": 30, "bounds_ok": "ok", "version": "10fa979", "payload": payload}
 
 
-def _grid(dirname="tradinebotte-grid", halted=0, buy=16, sell=14):
-    return {
-        "dir": dirname,
-        "state": [{"symbol": "BTCUSDT", "grid_lower": 49000.0, "grid_upper": 73500.0,
-                   "grid_step": 844.83, "order_size_usdt": 50.0, "total_cycles": 206,
-                   "total_profit_usd": 124.41, "halted": halted}],
-        "levels": [{"status": "buy_placed", "n": buy}, {"status": "sell_placed", "n": sell}],
-    }
+def _card(label, hb):
+    # accounts_data dicts are now trivial: version + empty services; all detail is in hb.
+    data = {"version": "10fa979", "services": [], "live": None,
+            "grids": [], "accum": None, "error": None}
+    return g._render_account_card(label, data, hb)
 
 
 class TestGridSummary(unittest.TestCase):
 
-    def test_alt_dir_grid_aggregate_rendered(self):
-        hb = [_hb("live_bot", {"capital": 1131.38, "daily_pnl": 27.28}),
-              _hb("grid_bot", {"daily_pnl": 8.4})]
-        data = {"version": "10fa979", "services": [], "live": None,
-                "grids": [_grid()], "accum": None}
-        html = g._render_account_card("acct-3 [poly+grid]", data, hb)
-        self.assertIn("grid", html)
-        self.assertIn("$49.0k–$73.5k", html)   # bounds
-        self.assertIn("14/30 holding", html)    # sell_placed / total
-        self.assertIn("206 cycles", html)
-        self.assertIn("+$124.41", html)         # total_profit_usd via _fmt_pnl
+    def test_grid_pnl_rendered_from_payload(self):
+        hb = [_hb("polymarket-threshold-e100a8", {"capital": 1131.38, "daily_pnl": 27.28}),
+              _hb("binance-grid-btcusdt-df6dd9", {"pnl_total": 140.54, "bounds_ok": True},
+                  display="binance-grid-btcusdt")]
+        html = _card("acct-3 [poly+grid]", hb)
+        self.assertIn("binance-grid-btcusdt", html)
+        self.assertIn("+$140.54", html)          # lifetime grid PnL from payload
 
-    def test_standard_path_grid_also_rendered(self):
-        """An account running only a grid keeps grid_state at the standard ~/tradinebotte path."""
-        data = {"version": "x", "services": [], "live": None,
-                "grids": [_grid(dirname="tradinebotte", buy=9, sell=12)], "accum": None}
-        html = g._render_account_card("acct-6 [grid]", data, [_hb("grid_bot", {"daily_pnl": 0})])
-        self.assertIn("12/21 holding", html)
+    def test_grid_only_account_rendered(self):
+        hb = [_hb("mexc_futures-grid-btc_usdt-d1e533", {"pnl_total": 336.95},
+                  display="mexc_futures-grid-btcusdt")]
+        html = _card("acct-6 [grid]", hb)
+        self.assertIn("mexc_futures-grid-btcusdt", html)
+        self.assertIn("+$336.95", html)
 
-    def test_halted_grid_shows_badge(self):
-        data = {"version": "x", "services": [], "live": None,
-                "grids": [_grid(halted=1)], "accum": None}
-        html = g._render_account_card("acct-3", data, [_hb("grid_bot", {"daily_pnl": 0})])
-        self.assertIn("HALTED", html)
+    def test_grid_without_pnl_renders_no_line(self):
+        # A grid heartbeat that carries no pnl_total yet must not emit a broken line.
+        hb = [_hb("binance-grid-btcusdt-df6dd9", {"bounds_ok": True})]
+        html = _card("acct-3", hb)
+        self.assertNotIn("+$", html)
 
-    def test_no_grids_renders_nothing_extra(self):
-        data = {"version": "x", "services": [], "live": None, "accum": None}  # no 'grids' key
-        html = g._render_account_card("acct-2 [poly]", data, [_hb("live_bot", {"capital": 1, "daily_pnl": 0})])
-        self.assertNotIn("holding", html)
-        self.assertNotIn("HALTED", html)
+    def test_no_grid_renders_nothing_extra(self):
+        hb = [_hb("polymarket-threshold-00b656", {"capital": 1, "daily_pnl": 0})]
+        html = _card("acct-2 [poly]", hb)
+        self.assertNotIn(g.t("grid_label"), html)
+
+
+class TestAccumSummary(unittest.TestCase):
+
+    def test_accum_portfolio_rendered_from_payload(self):
+        hb = [_hb("mexc-accumulation-btcusdt-4a3e3a",
+                  {"holdings_btc": 0.007669, "free_usdt": 500.0, "avg_entry": 65200.93,
+                   "trades_total": 3},
+                  display="mexc-accumulation-btcusdt")]
+        html = _card("acct-2 [poly+accum]", hb)
+        self.assertIn("mexc-accumulation-btcusdt", html)
+        self.assertIn("0.007669", html)          # holdings from payload
+        self.assertIn("3T", html)
+
+    def test_no_accum_renders_no_portfolio_line(self):
+        hb = [_hb("binance-swing-btcusdt-062cc5", {"capital": 1, "daily_pnl": 0})]
+        html = _card("acct-5 [swing]", hb)
+        self.assertNotIn("holdings", html.lower())
 
 
 if __name__ == "__main__":

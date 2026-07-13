@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
 """generate_status.py — Generate a full HTML status page for all tradinebotte accounts.
 
-Collects data via one sequential SSH per account (6 total):
-  - systemd service states + version stamp (all accounts)
-  - live.db trade stats (accounts 1, 2, 3, 4)
-  - live_accum.db accumulation stats (accounts 3, 4)
-  - shared state DB: heartbeats + inventory + deploys (account 1 — the status collector)
+Reads EVERYTHING from the shared state DB (no SSH). The status collector already receives
+one heartbeat per bot per interval and persists the full payload, so every value the page
+needs — liveness, capital/PnL, accumulation portfolio, grid PnL/bounds flag, version — is
+in `/data1/tradinebotte-shared/database/tradinebotte.db`:
+  - heartbeats  : per-bot liveness + payload (the single source of truth)
+  - inventory   : desired-state topology + display names
+  - deploys     : last deploy per bot (expected-vs-actual)
+  - pnl_windows : windowed PnL derived from heartbeat history
 
-No dependency on heartbeat_query.py — reads the shared state DB directly.
+No per-account SSH: the previous design read each bot's live.db/live_accum.db/grid_state
+over SSH at FIXED paths, which broke the moment the single-tree cutover renamed those
+files (live_accum.db → live_accumulation.db, ~/tradinebotte-grid/live.db → live_grid.db)
+and made the collection slow + flag phantom "service down" issues. Sourcing from the DB
+removes that whole fragile layer. The exact grid bounds/cycles and the Polymarket
+per-trade tables are the only detail not in the DB; they are omitted (a follow-up can add
+them to the heartbeat payload if wanted).
 
 Usage:
   python3 tradinebotte-status/generate_status.py > status.html
@@ -15,12 +24,12 @@ Usage:
   python3 tradinebotte-status/generate_status.py --conf ~/.tradinebotte-test.conf
 
 Config: ~/.tradinebotte-test.conf  (same file as bot_status.sh)
-  Required keys: TEST_SERVER, TEST_PORT, TEST_USERS (array), TEST_PASSWORDS (array)
-  Optional key:  TEST_REMOTE_INSTALL_DIR (default ~/tradinebotte)
+  Used only for TEST_USERS (account order + "acct-N" labels); no passwords are needed.
 """
 
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import time
@@ -40,41 +49,28 @@ def _fetch_btc_24h(symbol: str = "BTCUSDT") -> dict:
     except Exception:
         return {}
 
-# ─── Remote data-collection snippet (runs via SSH on each account) ────────────
+# ─── Shared-DB data layer (no SSH — the collector already has everything) ─────
 
-_REMOTE_COLLECT = r"""
-import sqlite3, json, os, subprocess, glob
+SHARED_DB = "/data1/tradinebotte-shared/database/tradinebotte.db"
 
-data = {"version": "?", "services": [], "live": None, "grids": [],
-        "accum": None, "heartbeats": None, "pnl_windows": {}}
-
-try:
-    data["version"] = open(os.path.expanduser("~/tradinebotte/version.stamp")).read().strip()
-except Exception:
-    pass
-
-try:
-    env = {**os.environ, "XDG_RUNTIME_DIR": f"/run/user/{os.getuid()}"}
-    r = subprocess.run(
-        ["systemctl", "--user", "list-units", "tradinebotte-*", "--no-legend", "--plain"],
-        capture_output=True, text=True, env=env, timeout=5,
-    )
-    for line in r.stdout.strip().splitlines():
-        parts = line.split()
-        if len(parts) >= 3:
-            unit = parts[0].replace("tradinebotte-", "").replace(".service", "")
-            if unit.startswith("account-"):
-                unit = "account_bot"
-            data["services"].append({
-                "unit":   unit,
-                "active": parts[2] == "active",
-                "sub":    parts[3] if len(parts) > 3 else "",
-            })
-except Exception:
-    pass
+_HEARTBEAT_SQL = (
+    "SELECT account, bot_name, max(ts) as last_ts, status, bounds_ok, version, payload"
+    " FROM heartbeats GROUP BY account, bot_name ORDER BY account, bot_name"
+)
+_INVENTORY_SQL = (
+    "SELECT account, bot_name, display_name, kind, bot_type, is_live"
+    " FROM inventory WHERE enabled=1 ORDER BY account, bot_name"
+)
+_DEPLOYS_SQL = (
+    "SELECT account, bot_name, max(ts) as last_ts, git_hash, result"
+    " FROM deploys GROUP BY account, bot_name"
+)
 
 
 def _qdb(path, queries):
+    """Run each {key: sql} against a sqlite DB; return {key: [row dicts]}, or None if the
+    DB is absent. A failing query yields [] for that key (a schema drift never crashes the
+    whole page — the section that needs it just renders empty)."""
     path = os.path.expanduser(path)
     if not os.path.exists(path):
         return None
@@ -90,97 +86,16 @@ def _qdb(path, queries):
     return result
 
 
-# live.db: Polymarket bot. PnL/capital now come from the heartbeat payload (the single
-# source of truth shared with the pills + fleet headline); live.db is queried only for
-# the win-rate counts and the recent/open trade tables that payloads don't carry.
-_LIVE_QUERIES = {
-    "totals": (
-        "SELECT count(*) t,"
-        " sum(CASE WHEN outcome='WIN'  THEN 1 ELSE 0 END) w,"
-        " sum(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) l,"
-        " sum(CASE WHEN resolved=0    THEN 1 ELSE 0 END) o"
-        " FROM trades"
-    ),
-    "recent": (
-        "SELECT id, entry_ts_ms/1000 entry_ts, direction,"
-        " outcome result, entry_price, pnl_net pnl, capital_after capital,"
-        " substr(question,1,42) q"
-        " FROM trades WHERE resolved=1 ORDER BY id DESC LIMIT 8"
-    ),
-    "open": (
-        "SELECT id, entry_ts_ms/1000 entry_ts, direction, entry_price,"
-        " substr(question,1,42) q FROM trades WHERE resolved=0"
-    ),
-}
-data["live"] = _qdb("~/tradinebotte/live.db", _LIVE_QUERIES)
-
-# Grid bots keep aggregate state (bounds / cycles / level fills / halted) in grid_state
-# + grid_levels rather than a per-trade log, so the Polymarket trade queries above find
-# nothing for them. Collect that aggregate from every candidate db: the standard path
-# (an account running only a grid) and any alternate data dir
-# (TRADINEBOTTE_DIR=~/tradinebotte-grid). The heartbeat carries only PnL — bounds, level
-# fills, and the halted flag are otherwise absent from the page.
-_GRID_QUERIES = {
-    "state": (
-        "SELECT symbol, grid_lower, grid_upper, grid_step, order_size_usdt,"
-        " total_cycles, total_profit_usd, halted FROM grid_state LIMIT 1"
-    ),
-    "levels": "SELECT status, count(*) n FROM grid_levels GROUP BY status",
-}
-data["grids"] = []
-for _p in [os.path.expanduser("~/tradinebotte/live.db")] + sorted(
-        glob.glob(os.path.expanduser("~/tradinebotte-*/live.db"))):
-    _g = _qdb(_p, _GRID_QUERIES)
-    if _g and _g.get("state"):
-        data["grids"].append({"dir": os.path.basename(os.path.dirname(_p)), **_g})
-
-# live_accum.db: accumulation bot — table accum_trades
-data["accum"] = _qdb("~/tradinebotte/live_accum.db", {
-    "totals": "SELECT count(*) t FROM accum_trades",
-    "portfolio": (
-        "SELECT holdings_after holdings_btc, free_usdt_after free_usdt,"
-        " avg_entry_after avg_entry FROM accum_trades ORDER BY id DESC LIMIT 1"
-    ),
-})
-
-# Heartbeats now live in the shared state DB (read on the collector account, account-1).
-data["heartbeats"] = _qdb("/data1/tradinebotte-shared/database/tradinebotte.db", {
-    "rows": (
-        "SELECT account, bot_name, max(ts) as last_ts,"
-        " status, bounds_ok, version, payload"
-        " FROM heartbeats GROUP BY account, bot_name ORDER BY account, bot_name"
-    ),
-})
-
-# Desired-state inventory + latest deploy per bot (same shared DB, account-1 only).
-data["inventory"] = _qdb("/data1/tradinebotte-shared/database/tradinebotte.db", {
-    "rows": (
-        "SELECT account, bot_name, display_name, kind, bot_type, is_live"
-        " FROM inventory WHERE enabled=1 ORDER BY account, bot_name"
-    ),
-})
-data["deploys"] = _qdb("/data1/tradinebotte-shared/database/tradinebotte.db", {
-    "rows": (
-        "SELECT account, bot_name, max(ts) as last_ts, git_hash, result"
-        " FROM deploys GROUP BY account, bot_name"
-    ),
-})
-
-
-# ── Windowed PnL (daily / weekly / monthly / alltime) ────────────────────────
-# From heartbeat *history* in the shared state DB — the only source that (a) covers
-# every family uniformly (grid_bot keeps no per-trade log) and (b) survives a per-bot
-# live.db reset (the history lives in the shared DB, not the wiped live.db). pnl_total
-# is cumulative "since reset"; a window value is pnl_now - pnl_at(window_start). A ZMQ
-# reset zeroes pnl_total, so when a reset falls inside the window we clamp the baseline
-# to just after it (→ post-reset PnL, consistent with alltime = "since reset") and flag
-# it. daily comes straight from the bot-authoritative daily_pnl (resets UTC midnight).
 def _compute_pnl_windows(shared_path):
-    import time as _t
+    """Windowed PnL (weekly/monthly) from heartbeat *history* in the shared DB — the only
+    source that (a) covers every family uniformly (grid keeps no per-trade log) and (b)
+    survives a per-bot DB reset (history lives in the shared DB). pnl_total is cumulative
+    "since reset"; a window value is pnl_now - pnl_at(window_start), with a reset-to-zero
+    discontinuity (|val|<0.01 after |prev|>1.0) rebasing the window."""
     shared_path = os.path.expanduser(shared_path)
     if not os.path.exists(shared_path):
         return {}
-    now = int(_t.time())
+    now = int(time.time())
     wdb = sqlite3.connect(shared_path)
     wdb.row_factory = sqlite3.Row
     latest = {}
@@ -228,46 +143,30 @@ def _compute_pnl_windows(shared_path):
     return out
 
 
-data["pnl_windows"] = _compute_pnl_windows(
-    "/data1/tradinebotte-shared/database/tradinebotte.db")
+def _build_accounts_from_db(users: list, heartbeats: list) -> list:
+    """One card-data dict per account (aligned with `users`), derived entirely from the
+    shared-DB heartbeats — the replacement for the old per-account SSH `_collect_account`.
 
-print(json.dumps(data))
-"""
-
-# ─── SSH helper ──────────────────────────────────────────────────────────────
-
-def _ssh(user: str, password: str, server: str, port: int, cmd: str) -> tuple[str, int]:
-    env = {**os.environ, "SSHPASS": password}
-    result = subprocess.run(
-        [
-            "/usr/bin/sshpass", "-e",
-            "ssh",
-            "-o", "StrictHostKeyChecking=yes",
-            "-o", "ConnectTimeout=15",
-            "-o", "BatchMode=no",
-            "-o", "PreferredAuthentications=password",
-            "-o", "ServerAliveInterval=10",
-            "-o", "ServerAliveCountMax=3",
-            "-p", str(port),
-            f"{user}@{server}",
-            cmd,
-        ],
-        capture_output=True, text=True, env=env, check=False,
-    )
-    return result.stdout, result.returncode
-
-
-def _collect_account(user: str, password: str, server: str, port: int) -> dict:
-    cmd = f"python3 - <<'__PYEOF__'\n{_REMOTE_COLLECT}\n__PYEOF__"
-    stdout, _ = _ssh(user, password, server, port, cmd)
-    if not stdout.strip():
-        return {"version": "?", "services": [], "live": None, "accum": None,
-                "heartbeats": None, "pnl_windows": {}, "error": "unreachable"}
-    try:
-        return json.loads(stdout.strip())
-    except json.JSONDecodeError:
-        return {"version": "?", "services": [], "live": None, "accum": None,
-                "heartbeats": None, "pnl_windows": {}, "error": "parse_error"}
+    `version` is the account's newest bot payload version. `services` is intentionally
+    empty: heartbeats are the single liveness source (the per-bot section + family view
+    already show it), so the header no longer paints phantom systemd dots (a stopped unit
+    goes STALE/DEAD in its heartbeat). The grid/accumulation detail lines are derived in
+    `_render_account_card` straight from each bot's payload, so nothing else is needed here.
+    """
+    by_acct: dict = {}
+    for h in heartbeats:
+        by_acct.setdefault(h.get("account"), []).append(h)
+    out = []
+    for u in users:
+        rows = by_acct.get(u, [])
+        newest = max(rows, key=lambda r: r.get("last_ts", 0), default=None)
+        ver = "?"
+        if newest:
+            ver = ((newest.get("payload") or {}).get("version")
+                   or newest.get("version") or "?")
+        out.append({"version": ver, "services": [], "live": None,
+                    "grids": [], "accum": None, "error": None})
+    return out
 
 
 # ─── Heartbeat classification ────────────────────────────────────────────────
@@ -1111,55 +1010,53 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
                 f"</details>"
             )
 
-    # Grid bots track aggregate state (bounds / cycles / level fills / halted), not a
-    # per-trade log — surface it from grid_state + grid_levels. Covers both the standard
-    # path (an account running only a grid) and an alternate data dir (~/tradinebotte-grid).
+    # Grid bots: surface the lifetime grid PnL from the heartbeat payload. The exact grid
+    # bounds / cycles / level fills used to be read from grid_state over SSH — they are not
+    # in the shared DB, so they are omitted here (bounds health still shows per-bot in the
+    # section below, and windowed PnL in the family view). Match on the bot_id family tag.
     grid_html = ""
-    for gr in (data.get("grids") or []):
-        st = (gr.get("state") or [{}])[0]
-        if not st:
+    for r in (hb_rows or []):
+        if "grid" not in (r.get("bot_name") or "").lower():
             continue
-        lvls = {row.get("status"): row.get("n", 0) for row in (gr.get("levels") or [])}
-        total_lvls = sum(lvls.values())
-        holding    = lvls.get("sell_placed", 0)        # bought, waiting to sell
-        lo, hi     = st.get("grid_lower"), st.get("grid_upper")
-        bounds = (f"${lo/1000:.1f}k–${hi/1000:.1f}k"
-                  if isinstance(lo, (int, float)) and isinstance(hi, (int, float)) else "—")
-        cycles  = st.get("total_cycles")
-        profit  = st.get("total_profit_usd")
-        sym     = escape(str(st.get("symbol", "")))
-        halted_badge = (f"<span class='badge dead' style='margin-left:5px'>{t('grid_halted')}</span>"
-                        if st.get("halted") else "")
+        p = r.get("payload") or {}
+        profit = p.get("pnl_total")
+        if profit is None:
+            continue
+        disp = escape(r.get("_display") or r.get("bot_name") or "grid")
         profit_cls = "pnl-pos" if (profit or 0) >= 0 else "pnl-neg"
         grid_html += (
             f"<div style='margin-top:4px;font-size:.8em'>"
             f"<span style='color:#8b949e;text-transform:uppercase;letter-spacing:.8px;"
             f"font-size:.85em'>{escape(t('grid_label'))}</span>"
-            f" {sym} · <span style='color:#58a6ff'>{bounds}</span>"
-            f" · {escape(t('grid_holding', h=holding, t=total_lvls))}"
-            f" · {escape(t('grid_cycles', n=cycles if cycles is not None else '?'))}"
+            f" <span style='color:#58a6ff'>{disp}</span>"
             f" · <span class='{profit_cls}'>{_fmt_pnl(profit)}</span>"
-            f"{halted_badge}"
             f"</div>"
         )
 
+    # Accumulation bots: portfolio (holdings / free / avg entry / trade count) straight
+    # from the heartbeat payload — the single source of truth (was read from live_accum.db
+    # over SSH, which broke on the single-tree rename to live_accumulation.db).
     cex_html = ""
-    accum = data.get("accum")
-    if accum:
-        accum_port = (accum.get("portfolio") or [{}])[0]
-        accum_tot  = (accum.get("totals") or [{}])[0]
-        btc  = accum_port.get("holdings_btc")
-        usdt = accum_port.get("free_usdt")
-        avg  = accum_port.get("avg_entry")
-        btc_str  = f"{btc:.6f} BTC" if btc is not None else "—"
-        usdt_str = f" · {t('accum_free', u=f'{usdt:.0f}')}" if usdt is not None else ""
-        avg_str  = f" · {t('accum_avg', a=f'{avg:.0f}')}" if avg is not None else ""
+    for r in (hb_rows or []):
+        if "accumulation" not in (r.get("bot_name") or "").lower():
+            continue
+        p = r.get("payload") or {}
+        hold = p.get("holdings_btc")
+        usdt = p.get("free_usdt")
+        avg  = p.get("avg_entry")
+        tot  = p.get("trades_total")
+        if hold is None and usdt is None:
+            continue
+        disp = escape(r.get("_display") or r.get("bot_name") or "accum")
+        hold_str = f"{hold:.6f}" if isinstance(hold, (int, float)) else "—"
+        usdt_str = f" · {t('accum_free', u=f'{usdt:.0f}')}" if isinstance(usdt, (int, float)) else ""
+        avg_str  = f" · {t('accum_avg', a=f'{avg:g}')}" if isinstance(avg, (int, float)) else ""
+        tot_str  = f" · {tot}T" if tot is not None else ""
         cex_html += (
             f"<div style='margin-top:4px;font-size:.8em'>"
             f"<span style='color:#8b949e;text-transform:uppercase;letter-spacing:.8px;"
-            f"font-size:.85em'>accum_bot</span>"
-            f" — <span style='color:#58a6ff'>{btc_str}</span>{usdt_str}{avg_str}"
-            f" · {accum_tot.get('t', 0)}T"
+            f"font-size:.85em'>{disp}</span>"
+            f" — <span style='color:#58a6ff'>{hold_str}</span>{usdt_str}{avg_str}{tot_str}"
             f"</div>"
         )
 
@@ -1571,38 +1468,27 @@ def main() -> None:
 
     t0 = time.monotonic()
 
-    subprocess.run(
-        ["bash", "-c",
-         f"mkdir -p ~/.ssh && chmod 700 ~/.ssh && "
-         f"ssh-keygen -F '[{server}]:{port}' &>/dev/null || "
-         f"ssh-keyscan -p {port} -H {server} >> ~/.ssh/known_hosts 2>/dev/null"],
-        check=False,
-    )
-
-    # One SSH per account, sequentially
-    accounts_data = []
-    for idx in range(n_accounts):
-        print(f"Collecting account {idx+1}/{n_accounts}…", file=sys.stderr)
-        data = _collect_account(users[idx], passwords[idx], server, port)
-        accounts_data.append(data)
-
-    elapsed = time.monotonic() - t0
-    print(f"Collected in {elapsed:.1f}s", file=sys.stderr)
-
-    # Heartbeat rows come from account-1 (the status collector)
-    hb_data  = accounts_data[0].get("heartbeats") or {}
-    raw_rows = hb_data.get("rows", []) if isinstance(hb_data, dict) else []
+    # Everything comes from the shared state DB — one local read, no SSH per account.
+    hb_blob  = _qdb(SHARED_DB, {"rows": _HEARTBEAT_SQL}) or {}
+    raw_rows = hb_blob.get("rows", [])
+    inv_blob = _qdb(SHARED_DB, {"rows": _INVENTORY_SQL}) or {}
+    dep_blob = _qdb(SHARED_DB, {"rows": _DEPLOYS_SQL}) or {}
+    inventory_rows = inv_blob.get("rows", [])
+    deploy_rows    = dep_blob.get("rows", [])
 
     # Map OS usernames to "acct-N" labels (avoids exposing real usernames in HTML)
     user_to_label = {u: lbl.split()[0] for u, lbl in zip(users, _ACCOUNT_LABELS)}
+    # Fleet rollup counts only inventory accounts. The ephemeral standalone test account
+    # (resolved from TEST_STANDALONE_USER_IDX) is excluded from the rendered cards but its
+    # bots still heartbeat into the shared DB; left unfiltered, their DEAD test rows inflate
+    # the issue count / fleet PnL / family view with problems no card ever shows. Drop any
+    # heartbeat from a non-kept account.
+    _kept_accounts = set(user_to_label)
+    raw_rows = [r for r in raw_rows if r.get("account") in _kept_accounts]
+    # Same guard on deploys (feeds the expected-vs-actual view): a test-account deploy row
+    # must never leak a non-inventory account into the page.
+    deploy_rows = [r for r in deploy_rows if r.get("account") in _kept_accounts]
     heartbeats = _classify_heartbeats(raw_rows, user_to_label)
-
-    # Inventory + latest deploys also come from account-1 (the shared state DB)
-    def _rows(key: str) -> list:
-        blob = accounts_data[0].get(key) or {}
-        return blob.get("rows", []) if isinstance(blob, dict) else []
-    inventory_rows = _rows("inventory")
-    deploy_rows    = _rows("deploys")
 
     # Attach the readable display_name (from inventory) onto each heartbeat row so the
     # account cards show it instead of the raw bot_id; bot_name stays the join key.
@@ -1611,8 +1497,17 @@ def main() -> None:
     for _h in heartbeats:
         _h["_display"] = _disp.get((_h.get("account"), _h.get("bot_name")))
 
-    # Windowed PnL is computed on the collector account (it owns the shared state DB).
-    pnl_windows = accounts_data[0].get("pnl_windows") or {}
+    # Per-account card data, derived from the heartbeats (was: one SSH per account).
+    accounts_data = _build_accounts_from_db(users, heartbeats)
+    # If the shared DB is unreadable there are no heartbeats — surface it as "collector
+    # down" (banner reads accounts[0].error) rather than a falsely-green empty page.
+    if not raw_rows and accounts_data:
+        accounts_data[0]["error"] = "unreachable"
+
+    pnl_windows = _compute_pnl_windows(SHARED_DB)
+
+    elapsed = time.monotonic() - t0
+    print(f"Collected from shared DB in {elapsed:.2f}s", file=sys.stderr)
 
     html = _render_html(
         heartbeats=heartbeats,
