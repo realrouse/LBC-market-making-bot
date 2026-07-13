@@ -1,0 +1,31 @@
+[Unit]
+# Shared 15M Polymarket feed (data plane). Runs on the infra account (acct-1, index 0 in
+# TEST_USERS) alongside the 5M tradinebotte-feed5m.service. One feed = one timeframe.
+# Consumed LOCALLY by acct-1's account_bot over the per-user IPC socket (auto-detected from
+# /run/user/%U/) — NOT a host-wide TCP port, so it does not collide with feed5m's :5557.
+#
+# Installed AS the unit `tradinebotte-feed.service` (account_bot.service Requires= that name);
+# this file is the *source template*. The 15M market tag is BAKED IN here, symmetric with
+# feed5m's baked-in 102892 — this replaces the imperative `sed -i … 102467` injection in
+# setup_data_plane.sh (a wart: the old tradinebotte-feed.user.service was tagless, so the tag
+# lived only in the deployed unit / the sed). A fresh install now reproduces the tag natively.
+Description=tradinebotte — shared 15M Polymarket feed (IPC, → account_bot)
+After=network.target
+Wants=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+WorkingDirectory=%h/tradinebotte
+# TRADINEBOTTE_FEED_ADDR: IPC socket auto-detected from /run/user/%U/ — no override needed.
+Environment=TRADINEBOTTE_MARKET_TAG_ID=102467
+Environment=TRADINEBOTTE_FEED_NAME=feed
+ExecStart=%h/tradinebotte/.venv/bin/python3 %h/tradinebotte/feed.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=default.target

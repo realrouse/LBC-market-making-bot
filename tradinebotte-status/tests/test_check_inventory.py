@@ -57,5 +57,39 @@ class TestDeployPipeline(unittest.TestCase):
         self.assertTrue(any("undeployable" in p for p in ci.check_deploy_pipeline(rows)))
 
 
+class TestNativeCoverage(unittest.TestCase):
+    """The Phase-E native-engine guard: every bot_type maps to a native target, and the
+    depends_on graph is acyclic. The DAG half is inert against the current inventory (no row
+    sets depends_on), so it is exercised here with synthetic graphs — otherwise the recursive
+    cycle detector would ship untested."""
+
+    def test_unknown_bot_type_flagged(self):
+        rows = [{"account_idx": 1, "bot_name": "x", "bot_type": "cex-orderbook"}]  # no native target
+        self.assertTrue(any("no native deploy target" in p for p in ci.check_native_coverage(rows)))
+
+    def test_known_bot_type_ok(self):
+        rows = [{"account_idx": 1, "bot_name": "x", "bot_type": "cex-grid-binance-sim"}]
+        self.assertEqual(ci.check_native_coverage(rows), [])
+
+    def test_depends_on_cycle_detected(self):
+        rows = [
+            {"account_idx": 0, "bot_name": "A", "bot_type": "infra-feed-15m", "depends_on": ["B"]},
+            {"account_idx": 0, "bot_name": "B", "bot_type": "infra-cex-feed", "depends_on": ["A"]},
+        ]
+        self.assertTrue(any("cycle" in p for p in ci.check_native_coverage(rows)))
+
+    def test_depends_on_acyclic_ok(self):
+        rows = [
+            {"account_idx": 0, "bot_name": "feed", "bot_type": "infra-feed-15m"},
+            {"account_idx": 0, "bot_name": "acct", "bot_type": "polymarket-multibot", "depends_on": ["feed"]},
+        ]
+        self.assertEqual(ci.check_native_coverage(rows), [])
+
+    def test_depends_on_unknown_name_flagged(self):
+        rows = [{"account_idx": 0, "bot_name": "acct", "bot_type": "polymarket-multibot",
+                 "depends_on": ["ghost"]}]
+        self.assertTrue(any("not a known bot_name" in p for p in ci.check_native_coverage(rows)))
+
+
 if __name__ == "__main__":
     unittest.main()

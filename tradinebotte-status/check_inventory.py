@@ -140,6 +140,67 @@ def check_deploy_pipeline(rows: list[dict]) -> list[str]:
     return problems
 
 
+# ─── Native-engine coverage + depends_on DAG (Phase E) ───────────────────────
+
+def check_native_coverage(rows: list[dict]) -> list[str]:
+    """Phase-E readiness of the native engine, offline:
+      (1) every bot_type resolves to a native deploy target (deploy_actions.native_target) —
+          an unmapped type means the engine's --native path silently falls back to bash for it,
+          so a new family/service added without a native deployer is surfaced here; and
+      (2) the depends_on graph (when rows populate it) is ACYCLIC — the scheduler's DAG can't
+          resolve a cycle. Both are pure/offline (no SSH)."""
+    problems: list[str] = []
+    try:
+        sys.path.insert(0, os.path.join(_REPO, "scripts"))
+        import deploy_actions as _da  # noqa: PLC0415
+    except Exception as e:                                    # pragma: no cover
+        return [f"deploy_actions.py not importable for native-coverage check: {e}"]
+
+    bash_only = getattr(_da, "_NATIVE_BASH_ONLY", ())
+    for r in rows:
+        if r.get("kind", "bot") not in ("bot", "infra", "service"):
+            continue
+        bt = (r.get("bot_type", "") or "")
+        # A DELIBERATE bash-only bot_type (listed in _NATIVE_BASH_ONLY, e.g. the divergent binance
+        # grid) is intentional, not an accidental gap — don't fail the check on it. Only an
+        # UNMAPPED-and-not-deliberately-bash type is a real coverage gap.
+        if bt.startswith(tuple(bash_only)):
+            continue
+        if _da.native_target(bt) is None:
+            problems.append(f"{r.get('bot_name')!r}: bot_type {bt!r} has no native deploy target "
+                            f"(add a rule to deploy_actions._NATIVE_TARGET_RULES or _NATIVE_BASH_ONLY)")
+
+    # depends_on DAG: bot_name → its dependency bot_names. Cheap DFS cycle detection.
+    graph: dict[str, list[str]] = {}
+    names = {r.get("bot_name", "") for r in rows}
+    for r in rows:
+        dep = r.get("depends_on") or []
+        if isinstance(dep, str):
+            dep = [dep]
+        graph[r.get("bot_name", "")] = list(dep)
+        for d in dep:
+            if d not in names:
+                problems.append(f"{r.get('bot_name')!r}: depends_on {d!r} is not a known bot_name")
+    WHITE, GREY, BLACK = 0, 1, 2
+    color: dict[str, int] = {n: WHITE for n in graph}
+
+    def _visit(n: str, stack: list[str]) -> bool:
+        color[n] = GREY
+        for d in graph.get(n, []):
+            if color.get(d) == GREY:
+                problems.append(f"depends_on cycle: {' → '.join(stack + [n, d])}")
+                return True
+            if color.get(d) == WHITE and _visit(d, stack + [n]):
+                return True
+        color[n] = BLACK
+        return False
+
+    for n in graph:
+        if color[n] == WHITE:
+            _visit(n, [])
+    return problems
+
+
 # ─── Live (sequential SSH) ───────────────────────────────────────────────────
 
 def _conf_array(conf: str, var: str) -> list[str]:
@@ -341,7 +402,7 @@ def main() -> None:
         print(f"FAIL: no [[bot]] entries in {args.inventory}")
         sys.exit(1)
 
-    problems = check_offline(rows) + check_deploy_pipeline(rows)
+    problems = check_offline(rows) + check_deploy_pipeline(rows) + check_native_coverage(rows)
     if args.live:
         problems += check_live(rows, args.conf)
 
