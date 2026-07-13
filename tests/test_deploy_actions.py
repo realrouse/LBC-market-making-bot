@@ -147,6 +147,27 @@ class TestSingleTreeDropin(unittest.TestCase):
         self.assertNotIn("Environment=", s)  # a clear must not write any env
 
 
+class TestMigrateSingleTree(unittest.TestCase):
+    def test_accum_db_rename_and_idempotency(self):
+        # accum legacy live_accum.db → live_accumulation.db, guarded by "copy only if dest absent"
+        h = _FakeHost(stdout="db:copied | botid:copied")
+        ok = da.act_migrate_single_tree(h, "~/tradinebotte-accum", "~/tradinebotte",
+                                        "accumulation", "live_accum.db")
+        s = h.scripts[0]
+        self.assertTrue(ok)
+        self.assertIn("$HOME/tradinebotte-accum/live_accum.db", s)      # src (special legacy name)
+        self.assertIn("$HOME/tradinebotte/live_accumulation.db", s)     # dst (instance-suffixed)
+        self.assertIn("! -e $HOME/tradinebotte/live_accumulation.db", s)  # idempotency guard
+        self.assertIn("bot_id_accumulation", s)                          # bot_id carried (reuse)
+        self.assertIn("-wal", s); self.assertIn("-shm", s)              # WAL carried
+
+    def test_accum_legacy_db_from_spec(self):
+        # the family spec, not a hardcode, supplies the special legacy DB name
+        self.assertEqual(da.FAMILIES["accumulation"]["legacy_db"], "live_accum.db")
+        # grid_binance falls back to the plain live.db (no legacy_db key)
+        self.assertEqual(da.FAMILIES["grid_binance"].get("legacy_db", "live.db"), "live.db")
+
+
 class TestSingleTreeInstanceMatchesBotId(unittest.TestCase):
     def test_family_role_is_the_instance_and_botid_key(self):
         # single-tree uses instance = spec["role"]; live_bot writes bot_id_<strategy_type> and reads

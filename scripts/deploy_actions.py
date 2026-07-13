@@ -101,7 +101,10 @@ FAMILIES: dict[str, dict] = {
     "accumulation": dict(role="accumulation", unit="tradinebotte-accumulation.service",
                          template="tradinebotte-accumulation.service", data_suffix="-accum",
                          connector="mexc", config_mode="write",
-                         data_source="indicators", feed_addr=None),
+                         data_source="indicators", feed_addr=None,
+                         # legacy accum DB is live_accum.db (not live.db) — see live_bot make_config;
+                         # the P4 migration renames it to live_accumulation.db under single-tree.
+                         legacy_db="live_accum.db"),
     "polymarket":   dict(role="threshold", unit="tradinebotte-live.service",
                          template="tradinebotte-live.service", data_suffix="",
                          connector="polymarket", config_mode="merge",
@@ -388,6 +391,34 @@ def act_verify(host: Host, unit: str, log_path: str) -> tuple[bool, str]:
     return (running and clean), out.strip().replace("\n", " ")
 
 
+def act_migrate_single_tree(host: Host, legacy_dir: str, dest_dir: str, role: str,
+                            legacy_db: str) -> bool:
+    """P4 prod cutover: carry a bot's state from its legacy SEPARATE data dir into the shared
+    single-tree dir under the per-instance names — the DB (renamed <legacy_db> → live_<role>.db,
+    with its -wal/-shm so no committed-but-uncheckpointed rows are lost) and bot_id_<role> (so the
+    id is REUSED, not regenerated → no heartbeat/statuspage orphan). COPY, never move: the legacy
+    dir stays intact so revert = clear the drop-in + restart on the old dir. IDEMPOTENT: copy only
+    when the destination is ABSENT, so a re-run is a no-op and never clobbers a now-live DB with the
+    stale legacy one. The caller MUST stop the unit first (a live SQLite/-wal copy can be torn)."""
+    src_db, dst_db = f"{legacy_dir}/{legacy_db}", f"{dest_dir}/live_{role}.db"
+    src_id, dst_id = f"{legacy_dir}/bot_id_{role}", f"{dest_dir}/bot_id_{role}"
+    script = f"""
+    mkdir -p {_rp(dest_dir)}
+    if [ -f {_rp(src_db)} ] && [ ! -e {_rp(dst_db)} ]; then
+        cp -p {_rp(src_db)} {_rp(dst_db)}
+        for ext in -wal -shm; do [ -f {_rp(src_db)}$ext ] && cp -p {_rp(src_db)}$ext {_rp(dst_db)}$ext; done
+        echo "db:copied"
+    elif [ -e {_rp(dst_db)} ]; then echo "db:skipped(dest-exists)"; else echo "db:skipped(no-src)"; fi
+    if [ -f {_rp(src_id)} ] && [ ! -e {_rp(dst_id)} ]; then
+        cp -p {_rp(src_id)} {_rp(dst_id)}; echo "botid:copied"
+    elif [ -e {_rp(dst_id)} ]; then echo "botid:skipped(dest-exists)"; else echo "botid:skipped(no-src)"; fi
+    """
+    r = host.ssh(script)
+    print("   ", r.stdout.strip().replace("\n", " | "))
+    # success = we did not error; a skip (dest exists / no src) is a legitimate idempotent outcome
+    return "db:" in r.stdout and "botid:" in r.stdout
+
+
 def record_deploy(account: str, bot_id: str, ok: bool):
     githash = subprocess.run(["git", "-C", REPO, "rev-parse", "--short", "HEAD"],
                              capture_output=True, text=True).stdout.strip() or "unknown"
@@ -401,9 +432,10 @@ def record_deploy(account: str, bot_id: str, ok: bool):
 
 def deploy_family(host: Host, family: str, *, install_dir: str, strategy: str = "",
                   verify_only: bool = False, test_ports: bool = False,
-                  single_tree: bool = False) -> int:
+                  single_tree: bool = False, migrate: bool = False) -> int:
     spec = FAMILIES[family]
     unit, role, conn = spec["unit"], spec["role"], spec["connector"]
+    assert not migrate or single_tree, "--migrate only makes sense with --single-tree"
     # single-tree (opt-in): every bot's data lives in the ONE ~/tradinebotte, per-instance suffixed
     # (config_<role>.json / live_<role>.db / <role>.log) so cohabiting bots never collide on the fixed
     # names; instance = role (== strategy_type for every family, so it also matches bot_id_<role>).
@@ -416,6 +448,14 @@ def deploy_family(host: Host, family: str, *, install_dir: str, strategy: str = 
         config_name, log_name = "config.json", "live.log"
     label = f"{host.user}/{family}" + ("  [single-tree]" if single_tree else "")
     if not verify_only:
+        if migrate:
+            # P4 cutover: STOP the old unit (consistent DB snapshot), then copy state (DB+bot_id)
+            # from the legacy separate dir into the shared tree BEFORE the deploy restarts it there.
+            legacy_dir = install_dir + spec["data_suffix"]
+            print(_c("y", f"▶ {label}: migrate {legacy_dir} → {data_dir} (stop unit, copy state)"))
+            host.ssh(f"systemctl --user stop {unit}")
+            assert act_migrate_single_tree(host, legacy_dir, data_dir, role,
+                                           spec.get("legacy_db", "live.db")), "migrate failed"
         print(_c("y", f"▶ {label}: sync"))
         assert act_sync(host, install_dir, spec["template"]), "sync failed"
         if spec["config_mode"] == "merge":
@@ -506,6 +546,10 @@ def main() -> int:
                          "~/tradinebotte, per-instance suffixed (config_<role>.json / live_<role>.db / "
                          "<role>.log) via a TRADINEBOTTE_DIR/INSTANCE drop-in; opt-in, so prod native "
                          "deploys are unaffected")
+    ap.add_argument("--migrate", action="store_true",
+                    help="P4 cutover (implies --single-tree): before deploying, stop the unit and COPY "
+                         "the bot's state (DB→live_<role>.db + bot_id_<role>) from its legacy separate "
+                         "data dir into ~/tradinebotte, idempotently. Old dir kept for revert.")
     a = ap.parse_args()
     conf = load_conf()
     if a.idx >= len(conf["users"]):
@@ -531,8 +575,10 @@ def main() -> int:
                             test_ports=test_ports)
     if FAMILIES[a.target]["config_mode"] == "write" and not a.strategy:
         print(f"--strategy is required for family {a.target!r}", file=sys.stderr); return 2
+    single_tree = a.single_tree or a.migrate   # --migrate implies single-tree
     return deploy_family(host, a.target, install_dir=a.dir, strategy=a.strategy,
-                         verify_only=a.verify_only, test_ports=test_ports, single_tree=a.single_tree)
+                         verify_only=a.verify_only, test_ports=test_ports,
+                         single_tree=single_tree, migrate=a.migrate)
 
 
 if __name__ == "__main__":
