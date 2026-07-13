@@ -201,6 +201,43 @@ def check_native_coverage(rows: list[dict]) -> list[str]:
     return problems
 
 
+def check_single_tree_instances(rows: list[dict]) -> list[str]:
+    """Single-tree invariant: on any one account, no two bots may resolve to the same
+    single-tree instance (= the deploy family's role). Under single-tree all of an account's
+    bots share ONE ~/tradinebotte, their files suffixed by that role (config_<role>.json /
+    live_<role>.db / bot_id_<role>); two bots with the same role would collide on all three
+    and silently clobber each other's state. The dangerous latent case is two DIFFERENT grid
+    families on one account: deploy_actions maps both 'grid' and 'grid_binance' to role
+    'grid' (distinct units/legacy dirs but the SAME single-tree instance), so they cohabit
+    safely on separate accounts but NOT together. This makes that a loud FAIL instead of
+    silent data corruption. Infra/service rows are single-instance per account → skipped;
+    unmapped bot_types are check_native_coverage's concern, not this one."""
+    problems: list[str] = []
+    try:
+        sys.path.insert(0, os.path.join(_REPO, "scripts"))
+        import deploy_actions as _da  # noqa: PLC0415
+    except Exception as e:                                    # pragma: no cover
+        return [f"deploy_actions.py not importable for single-tree-instance check: {e}"]
+
+    by_acct: dict = {}   # account_idx -> {role -> [bot_name, ...]}
+    for r in rows:
+        tgt = _da.native_target(r.get("bot_type", "") or "")
+        if not tgt or tgt[0] != "family":
+            continue
+        role = _da.FAMILIES[tgt[1]]["role"]
+        by_acct.setdefault(r.get("account_idx"), {}).setdefault(role, []).append(
+            r.get("bot_name", "?"))
+
+    for idx, roles in sorted(by_acct.items(), key=lambda kv: (kv[0] is None, kv[0])):
+        for role, names in sorted(roles.items()):
+            if len(names) > 1:
+                problems.append(
+                    f"account_idx {idx}: {len(names)} bots resolve to the same single-tree "
+                    f"instance {role!r} ({', '.join(sorted(names))}) — they would collide on "
+                    f"config_{role}.json / live_{role}.db in ~/tradinebotte")
+    return problems
+
+
 # ─── Live (sequential SSH) ───────────────────────────────────────────────────
 
 def _conf_array(conf: str, var: str) -> list[str]:
@@ -402,7 +439,8 @@ def main() -> None:
         print(f"FAIL: no [[bot]] entries in {args.inventory}")
         sys.exit(1)
 
-    problems = check_offline(rows) + check_deploy_pipeline(rows) + check_native_coverage(rows)
+    problems = (check_offline(rows) + check_deploy_pipeline(rows)
+                + check_native_coverage(rows) + check_single_tree_instances(rows))
     if args.live:
         problems += check_live(rows, args.conf)
 

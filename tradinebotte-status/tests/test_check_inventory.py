@@ -91,5 +91,43 @@ class TestNativeCoverage(unittest.TestCase):
         self.assertTrue(any("not a known bot_name" in p for p in ci.check_native_coverage(rows)))
 
 
+class TestSingleTreeInstances(unittest.TestCase):
+
+    def test_distinct_roles_on_one_account_ok(self):
+        # poly(threshold) + accum(accumulation) + binance-grid(grid) all differ → no collision.
+        rows = [
+            {"account_idx": 2, "bot_name": "poly", "kind": "bot", "bot_type": "polymarket-grid"},
+            {"account_idx": 2, "bot_name": "accum", "kind": "bot", "bot_type": "cex-accumulation"},
+            {"account_idx": 2, "bot_name": "grid", "kind": "bot", "bot_type": "cex-grid-binance-sim"},
+        ]
+        self.assertEqual(ci.check_single_tree_instances(rows), [])
+
+    def test_two_grid_families_on_one_account_collide(self):
+        # mexc-grid and binance-grid BOTH resolve to role 'grid' → same single-tree instance.
+        rows = [
+            {"account_idx": 3, "bot_name": "mexc-grid", "kind": "bot", "bot_type": "cex-grid-mexc-sim"},
+            {"account_idx": 3, "bot_name": "binance-grid", "kind": "bot", "bot_type": "cex-grid-binance-sim"},
+        ]
+        probs = ci.check_single_tree_instances(rows)
+        self.assertTrue(any("'grid'" in p and "collide" in p for p in probs), probs)
+
+    def test_same_role_on_different_accounts_ok(self):
+        # Two grids on SEPARATE accounts share the role but not the tree → fine.
+        rows = [
+            {"account_idx": 2, "bot_name": "g1", "kind": "bot", "bot_type": "cex-grid-binance-sim"},
+            {"account_idx": 5, "bot_name": "g2", "kind": "bot", "bot_type": "cex-grid-mexc-sim"},
+        ]
+        self.assertEqual(ci.check_single_tree_instances(rows), [])
+
+    def test_infra_rows_not_grouped(self):
+        # Multiple infra services on one account are single-instance, never a single-tree clash.
+        rows = [
+            {"account_idx": 0, "bot_name": "feed", "kind": "service", "bot_type": "infra-feed-15m"},
+            {"account_idx": 0, "bot_name": "feed5m", "kind": "service", "bot_type": "infra-feed-5m"},
+            {"account_idx": 0, "bot_name": "ind", "kind": "service", "bot_type": "infra-indicators"},
+        ]
+        self.assertEqual(ci.check_single_tree_instances(rows), [])
+
+
 if __name__ == "__main__":
     unittest.main()
