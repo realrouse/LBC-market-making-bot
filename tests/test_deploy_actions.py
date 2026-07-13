@@ -65,10 +65,12 @@ class TestNativeTarget(unittest.TestCase):
         self.assertEqual(da.native_target("polymarket-grid"), ("family", "polymarket"))
         self.assertEqual(da.native_target("polymarket-threshold"), ("family", "polymarket"))
 
-    def test_binance_grid_is_deliberately_bash_only(self):
-        # cex-grid-binance runs a divergent layout (grid.service + ~/tradinebotte-grid); mapping it
-        # to the mexc 'grid' family would clobber the account's poly bot → it must stay bash (None).
-        self.assertIsNone(da.native_target("cex-grid-binance-sim"))
+    def test_binance_grid_maps_to_its_own_family(self):
+        # cex-grid-binance has its own native family (grid.service + ~/tradinebotte-grid, connector
+        # binance) — matched BEFORE the generic cex-grid rule (startswith), so it never falls through
+        # to the mexc 'grid' family (which would clobber the account's poly bot on live.service).
+        self.assertEqual(da.native_target("cex-grid-binance-sim"), ("family", "grid_binance"))
+        self.assertEqual(da.native_target("cex-grid-mexc-sim"), ("family", "grid"))
 
     def test_infra(self):
         self.assertEqual(da.native_target("infra-cex-feed"), ("infra", "cexfeed"))
@@ -150,8 +152,10 @@ class TestSingleTreeInstanceMatchesBotId(unittest.TestCase):
         # single-tree uses instance = spec["role"]; live_bot writes bot_id_<strategy_type> and reads
         # config_<TRADINEBOTTE_INSTANCE>.json — these only stay coherent because role == strategy_type
         # for every family. Guard that the roles are exactly the four strategy_type values.
+        # grid_binance also role="grid" (a binance grid bot's strategy_type is "grid") — coherent,
+        # and collision-free because no account runs both grid families (verified in inventory).
         self.assertEqual({f: s["role"] for f, s in da.FAMILIES.items()},
-                         {"grid": "grid", "swing": "swing",
+                         {"grid": "grid", "grid_binance": "grid", "swing": "swing",
                           "accumulation": "accumulation", "polymarket": "threshold"})
 
 

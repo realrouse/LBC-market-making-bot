@@ -85,6 +85,15 @@ FAMILIES: dict[str, dict] = {
                          template="tradinebotte-live.service", data_suffix="",
                          connector="mexc", config_mode="write",
                          data_source="cex_feed", feed_addr="tcp://127.0.0.1:5563"),
+    # Binance grid: its OWN unit (tradinebotte-grid.service) + legacy data dir ~/tradinebotte-grid,
+    # so it cohabits with the account's poly (live.service) + accum (accumulation.service) without
+    # clobbering them. role="grid" (== strategy_type) keeps the single-tree instance + bot_id_<role>
+    # coherent — safe because no account runs BOTH mexc-grid and binance-grid (verified in inventory),
+    # so config_grid.json / live_grid.db never collide across the two grid families in one tree.
+    "grid_binance": dict(role="grid", unit="tradinebotte-grid.service",
+                         template="tradinebotte-grid.service", data_suffix="-grid",
+                         connector="binance", config_mode="write",
+                         data_source="cex_feed", feed_addr="tcp://127.0.0.1:5563"),
     "swing":        dict(role="swing", unit="tradinebotte-live.service",
                          template="tradinebotte-live.service", data_suffix="",
                          connector="binance", config_mode="write",
@@ -160,25 +169,16 @@ _NATIVE_TARGET_RULES: list[tuple[str, tuple[str, str]]] = [
     ("polymarket-multibot", ("infra", "account")),   # account_bot — before the generic polymarket rule
     ("polymarket",         ("family", "polymarket")),
     ("cex-accumulation",   ("family", "accumulation")),
+    ("cex-grid-binance",   ("family", "grid_binance")),   # before cex-grid (startswith) — own unit/dir
     ("cex-grid",           ("family", "grid")),
     ("cex-swing",          ("family", "swing")),
 ]
-
-
-# bot_types that deliberately have NO native deployer yet → stay bash stragglers. The binance grid
-# runs a DIVERGENT layout (tradinebotte-grid.service + data dir ~/tradinebotte-grid, connector
-# binance) that FAMILIES["grid"] (mexc / tradinebotte-live.service / ~/tradinebotte) does NOT match —
-# deploying it as "grid" would clobber the account's poly bot (same live.service + config.json). Until
-# a proper grid_binance FAMILIES spec exists, map it to None so the engine leaves it on bash.
-_NATIVE_BASH_ONLY = ("cex-grid-binance",)
 
 
 def native_target(bot_type: str) -> tuple[str, str] | None:
     """(kind, target) for an inventory bot_type, or None if no native deployer covers it yet.
     kind='family' → deploy_family(target); kind='infra' → deploy_infra(target)."""
     bt = (bot_type or "").strip().lower()
-    if bt.startswith(_NATIVE_BASH_ONLY):
-        return None
     for prefix, kt in _NATIVE_TARGET_RULES:
         if bt.startswith(prefix):
             return kt
