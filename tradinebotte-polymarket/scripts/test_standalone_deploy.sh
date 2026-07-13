@@ -94,6 +94,20 @@ deploy_code() {
         "$LOCAL_REPO/" "$SA_USER@$SERVER:$SRC_DIR/" 2>&1
 }
 
+# Purge the test account's rows from the shared state DB. During a run the bots PUSH
+# heartbeats to the PROD status collector, and after teardown those rows would linger as
+# DEAD and inflate every consumer's issue count (the status page, bot_status.sh). Runs
+# LOCALLY on the deployer (has /data1); the helper REFUSES any inventory/prod account, so a
+# clobbered TEST_STANDALONE_USER_IDX cannot nuke a live bot's history. Idempotent — safe to
+# call at both start (clears a prior crashed run) and teardown.
+purge_test_db_rows() {
+    local helper="$LOCAL_REPO/tradinebotte-status/purge_account_state.py"
+    [ -f "$helper" ] || return 0
+    # Run under the `claudes` group (setgid shared dir + group-writable WAL) — same rule
+    # the status collector follows so shared-DB writes keep the right group/perms.
+    sg claudes -c "umask 002; python3 '$helper' --account '$SA_USER'" 2>&1 | sed 's/^/  /' || true
+}
+
 # ─── Pre-flight ─────────────────────────────────────────────────────────────────
 section "PRE-FLIGHT"
 
@@ -133,6 +147,7 @@ run "
     rm -rf \"\${HOME}/tmp/tradinebotte-standalone-test\"
     exit 0
 " && ok "$SA_USER: cleaned up" || warn "$SA_USER: partial cleanup"
+purge_test_db_rows   # clear any residue left by a prior crashed run
 
 # ─── Phase 2: Deploy ───────────────────────────────────────────────────────────
 if [[ "$SKIP_DEPLOY" == "false" ]]; then
@@ -218,6 +233,8 @@ run "
     exit 0
 "
 ok "$SA_USER: bot stopped + test dirs removed"
+purge_test_db_rows   # remove this run's heartbeat/deploy rows from the shared state DB
+ok "$SA_USER: shared-DB rows purged"
 
 # ─── Final report ──────────────────────────────────────────────────────────────
 ELAPSED=$(( $(date +%s) - START_TS ))

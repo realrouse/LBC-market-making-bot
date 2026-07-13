@@ -664,14 +664,16 @@ for idx in "${DEPLOY_IDXS[@]}"; do
         && info "${ALL_USERS[$idx]}: install + test dirs deleted" || true
 done
 
-# Best-effort: purge this account's heartbeats from the shared state DB so it does
-# not linger as DEAD on the status page (runs on the deployer host; needs sg claudes).
-_SHARED_DB="${TRADINEBOTTE_DB:-/data1/tradinebotte-shared/database/tradinebotte.db}"
-if command -v sqlite3 >/dev/null 2>&1 && [[ -f "$_SHARED_DB" ]]; then
+# Purge this account's rows from the shared state DB so it does not linger as DEAD on the
+# status page / bot_status.sh. Uses the shared, guarded helper (purges heartbeats AND
+# deploys, and REFUSES any inventory/prod account — so a clobbered idx can't wipe a live
+# bot's history). runs under `claudes` (setgid dir + group-writable WAL). See
+# tradinebotte-status/purge_account_state.py.
+_PURGE_HELPER="$LOCAL_REPO/tradinebotte-status/purge_account_state.py"
+if [[ -f "$_PURGE_HELPER" ]]; then
     for idx in "$FEED_IDX" "${ACCOUNT_IDXS[@]}"; do
-        sg claudes -c "sqlite3 '$_SHARED_DB' \"DELETE FROM heartbeats WHERE account='${ALL_USERS[$idx]}';\"" 2>/dev/null || true
+        sg claudes -c "umask 002; python3 '$_PURGE_HELPER' --account '${ALL_USERS[$idx]}'" 2>&1 | sed 's/^/  /' || true
     done
-    info "shared-DB heartbeats purged for the test account"
 fi
 
 # Verify the account is clean.
