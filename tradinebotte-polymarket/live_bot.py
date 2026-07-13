@@ -372,12 +372,13 @@ class BotConfig:
             self.install_dir = os.path.expanduser(
                 os.environ.get("TRADINEBOTTE_DIR", "~/tradinebotte")
             )
+        _cfg, _db, _log = instance_paths(self.install_dir)   # TRADINEBOTTE_INSTANCE-aware (single-tree)
         if not self.db_path:
-            self.db_path = os.path.join(self.install_dir, "live.db")
+            self.db_path = _db
         if not self.log_path:
-            self.log_path = os.path.join(self.install_dir, "live.log")
+            self.log_path = _log
         if not self.config_path:
-            self.config_path = os.path.join(self.install_dir, "config.json")
+            self.config_path = _cfg
         if not self.webstatus_path:
             self.webstatus_path = os.path.expanduser("~/public_html/tradinebot_status.html")
         if self.no_snapshots:
@@ -385,6 +386,23 @@ class BotConfig:
 
 
 # ─── CONFIGURATION HELPERS ───────────────────────────────────────────────────
+
+def instance_paths(install_dir: str) -> tuple[str, str, str]:
+    """(config_path, db_path, log_path) under install_dir.
+
+    With TRADINEBOTTE_INSTANCE set (the single-tree layout — several bots share ~/tradinebotte),
+    the files are per-instance suffixed (config_<inst>.json / live_<inst>.db / <inst>.log) so two
+    bots in one dir never collide on the fixed names. Unset → the legacy config.json / live.db /
+    live.log, so a not-yet-migrated bot is byte-for-byte unchanged (this ships inert)."""
+    inst = os.environ.get("TRADINEBOTTE_INSTANCE", "").strip()
+    if inst:
+        return (os.path.join(install_dir, f"config_{inst}.json"),
+                os.path.join(install_dir, f"live_{inst}.db"),
+                os.path.join(install_dir, f"{inst}.log"))
+    return (os.path.join(install_dir, "config.json"),
+            os.path.join(install_dir, "live.db"),
+            os.path.join(install_dir, "live.log"))
+
 
 def load_config(config_path: str) -> dict[str, Any]:
     """Load config.json from the given path. Returns {} if the file is absent."""
@@ -433,9 +451,7 @@ def make_config(simulate: bool = False, no_log: bool = False,
     install_dir = os.path.expanduser(
         os.environ.get("TRADINEBOTTE_DIR", "~/tradinebotte")
     )
-    db_path     = os.path.join(install_dir, "live.db")
-    log_path    = os.path.join(install_dir, "live.log")
-    config_path = os.path.join(install_dir, "config.json")
+    config_path, db_path, log_path = instance_paths(install_dir)   # TRADINEBOTTE_INSTANCE-aware
 
     cfg   = load_config(config_path)
     strat_path = cfg.get("strategy",
@@ -453,8 +469,10 @@ def make_config(simulate: bool = False, no_log: bool = False,
 
     # Accumulation keeps its own DB file (live_accum.db) so the cutover from the former
     # standalone accumulation_bot preserves deployed holdings/avg_entry/realized (all on the
-    # status page). Every other strategy shares live.db.
-    if strategy_type == "accumulation":
+    # status page). Every other strategy shares live.db. LEGACY layout only — under the single-tree
+    # layout (TRADINEBOTTE_INSTANCE set) instance_paths() already gave a per-instance live_<inst>.db,
+    # so accumulation gets live_accumulation.db and needs no special case.
+    if strategy_type == "accumulation" and not os.environ.get("TRADINEBOTTE_INSTANCE", "").strip():
         db_path = os.path.join(install_dir, "live_accum.db")
 
     # Grid parameters (only used when strategy_type == "grid").
