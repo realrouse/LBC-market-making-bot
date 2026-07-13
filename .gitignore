@@ -59,3 +59,7 @@ scripts/test_multibot.conf
 .coverage
 notes/audit170526.md
 tradinetools.egg-info/
+
+# backtest / analysis databases + generated reports (runtime artifacts, never source)
+data/
+reports/
