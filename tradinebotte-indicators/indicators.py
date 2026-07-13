@@ -76,7 +76,7 @@ from typing import Any, NamedTuple
 
 import aiohttp, websockets, zmq, zmq.asyncio
 
-from tradinetools import heartbeat_loop, control_loop
+from tradinetools import heartbeat_loop, control_loop, resolve_bot_id
 from tradinetools.zmq import make_pub, make_sub, make_rep, default_ipc_addr, PORT_CEX_FEED
 from tradinetools.math import (atr_last, bollinger_last, vwap_last,
                                 vol_zscore_last, rolling_max_last, ichimoku_last)
@@ -121,6 +121,7 @@ _DERIBIT_DVOL_URL         = "https://www.deribit.com/api/v2/public/get_volatilit
 _FEAR_GREED_URL           = "https://api.alternative.me/fng/"
 _WS_RECV_TIMEOUT_S        = 120   # force reconnect if no WS message in this many seconds
 _INSTALL_DIR = os.environ.get("TRADINEBOTTE_DIR", os.path.dirname(os.path.abspath(__file__)))
+_BOT_ID = resolve_bot_id(_INSTALL_DIR, "indicators", "infra", "indicators")  # fleet join key
 
 
 def _shift_addr(addr: str) -> str:
@@ -2039,11 +2040,11 @@ async def run(feed_addr: str, ind_addr: str, reg_addr: str,
     ))
 
     tasks.append(asyncio.create_task(
-        heartbeat_loop("indicators", _INSTALL_DIR, lambda: {"last_pub_ts": _last_pub_ts}),
+        heartbeat_loop(_BOT_ID, _INSTALL_DIR, lambda: {"last_pub_ts": _last_pub_ts}),
         name="heartbeat",
     ))
     # Infra service: control surface for ping/status only (no destructive commands).
-    tasks.append(asyncio.create_task(control_loop("indicators"), name="control"))
+    tasks.append(asyncio.create_task(control_loop(_BOT_ID), name="control"))
 
     try:
         await asyncio.gather(*tasks)

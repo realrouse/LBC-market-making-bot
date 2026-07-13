@@ -31,6 +31,11 @@ class TestAccountLabels(unittest.TestCase):
         self.assertEqual(labels[1], "acct-2 [poly+accum]")
 
     def test_real_inventory_labels(self):
+        # Snapshot of the live inventory.toml labels. bot_names are now generated bot_ids
+        # (mexc-grid-lbcusdt-…), so the tag comes from the keyword scan, not an exact _TAG
+        # match. The ephemeral clean-install test account (no inventory rows → empty) is
+        # excluded from the page by active_account_idxs, leaving a numbering gap; the index
+        # after it is a real-money account.
         labels = il.account_labels(il.load_rows())
         self.assertEqual(labels, [
             "acct-1 [poly+cex+status]",
@@ -39,6 +44,8 @@ class TestAccountLabels(unittest.TestCase):
             "acct-4 [poly+accum]",
             "acct-5 [swing]",
             "acct-6 [grid]",
+            "acct-7",
+            "acct-8 [accum+grid]",
         ])
 
     def test_account_with_no_tagged_bots_has_no_bracket(self):

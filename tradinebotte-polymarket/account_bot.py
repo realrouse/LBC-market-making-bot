@@ -34,7 +34,7 @@ import argparse, asyncio, fcntl, hashlib, logging, os, subprocess, sys, time
 import zmq, zmq.asyncio
 from tradinetools import (
     heartbeat_loop, control_loop, Command, health_server,
-    write_reset_marker, consume_reset_marker,
+    write_reset_marker, consume_reset_marker, resolve_bot_id,
 )
 from tradinetools.logging import setup_logger
 from tradinetools.zmq import make_req, make_sub, default_ipc_addr
@@ -385,8 +385,10 @@ async def main() -> None:
     # bot (real Polymarket private_key) must never honour a reset marker.
     _hb_mode = "live" if config.private_key else "sim"
     _is_live = _hb_mode == "live"
+    # Fleet join key: generated unique bot_id (heartbeat + control socket + reset marker).
+    _bot_id = resolve_bot_id(config.install_dir, "account", "polymarket", "multibot")
     if not _is_live:
-        _reset_cap = consume_reset_marker(config.install_dir, "account_bot", config.db_path)
+        _reset_cap = consume_reset_marker(config.install_dir, _bot_id, config.db_path)
         if _reset_cap is not None:
             config.capital_start = _reset_cap
             logger.warning("RESET applied — fresh state, starting capital=$%.2f", _reset_cap)
@@ -430,12 +432,12 @@ async def main() -> None:
             if config.enable_snapshots:
                 state.last_write_ts = time.time()
             _hb_task = asyncio.create_task(
-                heartbeat_loop("account_bot", config.install_dir, _hb_payload, mode=_hb_mode)
+                heartbeat_loop(_bot_id, config.install_dir, _hb_payload, mode=_hb_mode)
             )
             # Opt-in HTTP /health (no-op unless TRADINEBOTTE_HEALTH_PORT is set);
             # reuses _hb_payload so the pulled view matches the pushed heartbeat.
             _health_task = asyncio.create_task(
-                health_server("account_bot", config.install_dir, _hb_payload, mode=_hb_mode)
+                health_server(_bot_id, config.install_dir, _hb_payload, mode=_hb_mode)
             )
 
             def _reset_handler(cmd_args: dict) -> dict:
@@ -444,7 +446,7 @@ async def main() -> None:
                 cap = float(cmd_args.get("capital", config.capital_start))
                 if cap <= 0:
                     raise ValueError("capital must be > 0")
-                write_reset_marker(config.install_dir, "account_bot", cap)
+                write_reset_marker(config.install_dir, _bot_id, cap)
                 logger.warning("RESET requested via control plane — capital=$%.2f, "
                                "exiting for systemd restart", cap)
                 asyncio.get_running_loop().call_later(0.5, os._exit, 1)
@@ -452,7 +454,7 @@ async def main() -> None:
 
             _ctl_task = asyncio.create_task(
                 control_loop(
-                    "account_bot",
+                    _bot_id,
                     {"reset": Command(_reset_handler, destructive=True,
                                       help="wipe state + restart with given --capital (sim only)")},
                     mode=_hb_mode, is_live=_is_live,

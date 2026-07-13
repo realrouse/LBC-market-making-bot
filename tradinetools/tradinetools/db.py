@@ -23,6 +23,7 @@ from here instead of keeping its own _DB_SCHEMA copy (Phase 2).
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import time
@@ -59,6 +60,7 @@ SCHEMA_INVENTORY = """
 CREATE TABLE IF NOT EXISTS inventory (
     account       TEXT NOT NULL,
     bot_name      TEXT NOT NULL,
+    display_name  TEXT,
     kind          TEXT NOT NULL DEFAULT 'bot',
     bot_type      TEXT,
     service_unit  TEXT,
@@ -66,11 +68,19 @@ CREATE TABLE IF NOT EXISTS inventory (
     port          INTEGER,
     is_live       INTEGER,
     deploy_script TEXT,
+    depends_on    TEXT,
     enabled       INTEGER NOT NULL DEFAULT 1,
     updated_ts    INTEGER NOT NULL,
     PRIMARY KEY (account, bot_name)
 );
 """
+
+# Columns added after the table first shipped. CREATE TABLE IF NOT EXISTS never alters an
+# existing table, so migrate explicitly + idempotently (ignore "duplicate column").
+_INVENTORY_ADD_COLUMNS = (
+    ("display_name", "TEXT"),   # readable label for the status page (bot_name is the unique id)
+    ("depends_on",   "TEXT"),   # JSON list of bot_names this bot needs up (deploy order + monitoring root-cause)
+)
 
 # deploys: append-only journal.  One row per (bot, deploy step).
 #   mode    'rsync' | 'restart' | 'full'   (how the step ran)
@@ -94,8 +104,8 @@ CREATE INDEX IF NOT EXISTS idx_deploys_ts          ON deploys(ts);
 SCHEMA = SCHEMA_HEARTBEATS + SCHEMA_INVENTORY + SCHEMA_DEPLOYS
 
 INVENTORY_COLUMNS = (
-    "account", "bot_name", "kind", "bot_type", "service_unit",
-    "install_dir", "port", "is_live", "deploy_script", "enabled", "updated_ts",
+    "account", "bot_name", "display_name", "kind", "bot_type", "service_unit",
+    "install_dir", "port", "is_live", "deploy_script", "depends_on", "enabled", "updated_ts",
 )
 
 
@@ -118,6 +128,14 @@ def open_db(db_path: str) -> sqlite3.Connection:
         db = sqlite3.connect(db_path, check_same_thread=False)
         db.execute("PRAGMA journal_mode=WAL")
         db.executescript(SCHEMA)
+        # Idempotent column migrations for tables that predate a column (CREATE IF NOT
+        # EXISTS won't add it). "duplicate column name" = already migrated → ignore.
+        for _col, _type in _INVENTORY_ADD_COLUMNS:
+            try:
+                db.execute(f"ALTER TABLE inventory ADD COLUMN {_col} {_type}")
+            except sqlite3.OperationalError as _e:
+                if "duplicate column" not in str(_e).lower():
+                    raise
         db.commit()
         try:
             os.chmod(db_path, 0o660)
@@ -141,19 +159,25 @@ def upsert_inventory(db: sqlite3.Connection, rows: Iterable[dict[str, Any]]) -> 
     for r in rows:
         db.execute(
             "INSERT INTO inventory"
-            " (account, bot_name, kind, bot_type, service_unit, install_dir,"
-            "  port, is_live, deploy_script, enabled, updated_ts)"
-            " VALUES (:account, :bot_name, :kind, :bot_type, :service_unit, :install_dir,"
-            "         :port, :is_live, :deploy_script, :enabled, :updated_ts)"
+            " (account, bot_name, display_name, kind, bot_type, service_unit, install_dir,"
+            "  port, is_live, deploy_script, depends_on, enabled, updated_ts)"
+            " VALUES (:account, :bot_name, :display_name, :kind, :bot_type, :service_unit,"
+            "         :install_dir, :port, :is_live, :deploy_script, :depends_on, :enabled,"
+            "         :updated_ts)"
             " ON CONFLICT(account, bot_name) DO UPDATE SET"
-            "   kind=excluded.kind, bot_type=excluded.bot_type,"
-            "   service_unit=excluded.service_unit, install_dir=excluded.install_dir,"
-            "   port=excluded.port, is_live=excluded.is_live,"
-            "   deploy_script=excluded.deploy_script, enabled=excluded.enabled,"
+            "   display_name=excluded.display_name, kind=excluded.kind,"
+            "   bot_type=excluded.bot_type, service_unit=excluded.service_unit,"
+            "   install_dir=excluded.install_dir, port=excluded.port,"
+            "   is_live=excluded.is_live, deploy_script=excluded.deploy_script,"
+            "   depends_on=excluded.depends_on, enabled=excluded.enabled,"
             "   updated_ts=excluded.updated_ts",
             {
                 "account":       r["account"],
                 "bot_name":      r["bot_name"],
+                "display_name":  r.get("display_name"),
+                "depends_on":    (json.dumps(r["depends_on"])
+                                  if isinstance(r.get("depends_on"), (list, dict))
+                                  else r.get("depends_on")),
                 "kind":          r.get("kind", "bot"),
                 "bot_type":      r.get("bot_type"),
                 "service_unit":  r.get("service_unit"),

@@ -31,11 +31,13 @@ import zmq
 import zmq.asyncio
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from tradinetools import heartbeat_loop, control_loop  # noqa: E402
+from tradinetools import heartbeat_loop, control_loop, resolve_bot_id  # noqa: E402
 from tradinetools.zmq import make_pub, PORT_CEX_FEED     # noqa: E402
 from tradinetools.logging import setup_logger            # noqa: E402
 
 _INSTALL_DIR = os.environ.get("TRADINEBOTTE_DIR", os.getcwd())
+# Fleet join key: generated unique bot_id (readable prefix + suffix), persisted per-role.
+_BOT_ID = resolve_bot_id(_INSTALL_DIR, "cexfeed", "infra", "cexfeed")
 FEED_ADDR = os.environ.get("TRADINEBOTTE_CEX_FEED_ADDR", f"tcp://127.0.0.1:{PORT_CEX_FEED}")
 # "binance:BTCUSDT,mexc:BTCUSDT,mexc_futures:BTC_USDT" — one symbol per (exchange).
 # Every external CEX data source is fetched once here and fanned out; bots never open
@@ -44,7 +46,7 @@ FEED_ADDR = os.environ.get("TRADINEBOTTE_CEX_FEED_ADDR", f"tcp://127.0.0.1:{PORT
 # mexc = MEXC spot (protobuf WS, binary frames — see api_mexc.WS_BINARY),
 # mexc_futures = MEXC perp (JSON WS).
 _FEEDS_ENV = os.environ.get(
-    "TRADINEBOTTE_CEX_FEEDS", "binance:BTCUSDT,mexc:BTCUSDT,mexc_futures:BTC_USDT")
+    "TRADINEBOTTE_CEX_FEEDS", "binance:BTCUSDT,mexc:BTCUSDT,mexc:LBCUSDT,mexc_futures:BTC_USDT")
 FEEDS = [tuple(s.split(":", 1)) for s in _FEEDS_ENV.split(",") if ":" in s]
 
 logger = setup_logger("cex_feed", os.path.join(_INSTALL_DIR, "cex_feed.log"))
@@ -128,10 +130,10 @@ async def main() -> None:
     logger.info("cex_feed PUB on %s — feeds: %s", FEED_ADDR, FEEDS)
     tasks = [asyncio.create_task(_exchange_task(pub, c, s)) for c, s in FEEDS]
     tasks.append(asyncio.create_task(
-        heartbeat_loop("cex_feed", _INSTALL_DIR,
+        heartbeat_loop(_BOT_ID, _INSTALL_DIR,
                        lambda: {"exchanges": list(_last_pub.keys()),
                                 "last_pub_ts": max(_last_pub.values(), default=0.0)})))
-    tasks.append(asyncio.create_task(control_loop("cex_feed")))
+    tasks.append(asyncio.create_task(control_loop(_BOT_ID)))
     try:
         await asyncio.gather(*tasks)
     finally:

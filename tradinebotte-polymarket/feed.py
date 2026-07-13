@@ -30,7 +30,7 @@ import aiohttp, websockets, zmq, zmq.asyncio
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import api_polymarket as api
-from tradinetools import heartbeat_loop, control_loop
+from tradinetools import heartbeat_loop, control_loop, resolve_bot_id
 from tradinetools.zmq import make_pub, default_ipc_addr
 from tradinetools.logging import setup_logger
 from tradinetools.schemas import MarketMessage, PingMessage
@@ -312,14 +312,18 @@ async def main() -> None:
     # Heartbeat name is per-instance so several feeds on one account (e.g. a 15M
     # and a 5M feed) don't collide on the (account, bot_name) heartbeat key.
     _hb_name = os.environ.get("TRADINEBOTTE_FEED_NAME", "feed")
+    # Fleet join key: generated unique bot_id, keyed per-role (feed vs feed5m) so the two
+    # feeds on one account never collide on the id, heartbeat key OR control socket.
+    _dir = os.path.dirname(os.path.abspath(__file__))
+    _bot_id = resolve_bot_id(_dir, _hb_name, "infra", _hb_name)
     _hb_task = asyncio.create_task(
-        heartbeat_loop(_hb_name, os.path.dirname(os.path.abspath(__file__)),
+        heartbeat_loop(_bot_id, _dir,
                        lambda: {"ws_connected": _ws_connected,
                                 "last_book_ts": _last_book_ts,
                                 "msgs_total": _msgs_total})
     )
     # Infra service: control surface for ping/status only (no destructive commands).
-    _ctl_task = asyncio.create_task(control_loop("feed"))
+    _ctl_task = asyncio.create_task(control_loop(_bot_id))
     try:
         while True:   # session lifecycle: recreate the aiohttp session after a persistent
                       # get_markets error streak — the likely-degraded resource behind a

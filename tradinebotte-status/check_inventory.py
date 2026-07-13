@@ -79,6 +79,16 @@ def check_offline(rows: list[dict]) -> list[str]:
             problems.append(f"{tag}: deployer not found in repo: {dep}")
         if not isinstance(r.get("deploy_env", {}), dict):
             problems.append(f"{tag}: deploy_env must be a table")
+    # Global bot_name uniqueness: the join key is a generated-unique bot_id, so no two rows
+    # (ANY account) may share a bot_name — a collision means two bots writing the same
+    # heartbeat/deploy/control key. (status_collector etc. are also inherently unique.)
+    _seen_name: dict[str, int] = {}
+    for r in rows:
+        _seen_name[r.get("bot_name", "")] = _seen_name.get(r.get("bot_name", ""), 0) + 1
+    for name, cnt in _seen_name.items():
+        if name and cnt > 1:
+            problems.append(f"bot_name {name!r} appears {cnt}× — the bot_id join key must be "
+                            f"globally unique across the fleet")
     return problems
 
 

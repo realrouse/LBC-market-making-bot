@@ -155,7 +155,7 @@ data["heartbeats"] = _qdb("/data1/tradinebotte-shared/database/tradinebotte.db",
 # Desired-state inventory + latest deploy per bot (same shared DB, account-1 only).
 data["inventory"] = _qdb("/data1/tradinebotte-shared/database/tradinebotte.db", {
     "rows": (
-        "SELECT account, bot_name, kind, bot_type, is_live"
+        "SELECT account, bot_name, display_name, kind, bot_type, is_live"
         " FROM inventory WHERE enabled=1 ORDER BY account, bot_name"
     ),
 })
@@ -951,7 +951,7 @@ def _render_bot_section(hb_rows: list, now: int) -> str:
             f"<div class='bot-row tt'>"
             f"<span class='badge {flag}' style='font-size:.62em'>{_flag_label(r['flag'])}</span>"
             f"{mode_cell}"
-            f"<span class='bot-name'>{escape(bot)}</span>"
+            f"<span class='bot-name'>{escape(r.get('_display') or bot)}</span>"
             f"{km_html}"
             f"<div class='tip tip-up'>{tip_content}</div>"
             f"</div>"
@@ -1203,6 +1203,7 @@ def _render_expected_actual(inventory: list, deploys: list, heartbeats: list,
     body = []
     for inv in sorted(inventory, key=lambda r: (r.get("account", ""), r.get("bot_name", ""))):
         acct, bot = inv.get("account", ""), inv.get("bot_name", "")
+        bot_disp = inv.get("display_name") or bot   # readable label; bot_name stays the join key
         label = user_to_label.get(acct, acct)
         hb = hb_by.get((acct, bot))
 
@@ -1239,7 +1240,7 @@ def _render_expected_actual(inventory: list, deploys: list, heartbeats: list,
             dep_cell = f"<span style='color:{_C_MUTE}'>—</span>"
 
         body.append(
-            f"<tr><td>{escape(label)}</td><td>{escape(bot)}</td>"
+            f"<tr><td>{escape(label)}</td><td>{escape(bot_disp)}</td>"
             f"<td style='color:{_C_MUTE}'>{escape(inv.get('kind','') or '')}</td>"
             f"<td>{mode_cell}</td>"
             f"<td style='color:{fcol};font-weight:600'>{escape(flag_disp)}</td>"
@@ -1550,6 +1551,19 @@ def main() -> None:
     users     = conf["users"]
     passwords = conf["passwords"]
 
+    # Render only accounts that host a bot in inventory. A TEST_USERS entry with no
+    # inventory row (the ephemeral clean-install test account) must not appear as an empty
+    # card on the production page. Filter users/passwords/labels in lockstep so the
+    # renderer's positional alignment holds; acct-N stays = idx+1 (heartbeats/live_bots
+    # are keyed by it), so an excluded index just leaves a numbering gap (no acct-7).
+    global _ACCOUNT_LABELS
+    _keep = [i for i in (_inv.active_account_idxs(_INV_ROWS) if _INV_ROWS else [])
+             if i < len(users) and i < len(passwords) and i < len(_ACCOUNT_LABELS)]
+    if _keep:
+        users           = [users[i] for i in _keep]
+        passwords       = [passwords[i] for i in _keep]
+        _ACCOUNT_LABELS = [_ACCOUNT_LABELS[i] for i in _keep]
+
     n_accounts = min(len(users), len(passwords), len(_ACCOUNT_LABELS))
     if n_accounts == 0:
         print("No accounts found in config", file=sys.stderr)
@@ -1589,6 +1603,13 @@ def main() -> None:
         return blob.get("rows", []) if isinstance(blob, dict) else []
     inventory_rows = _rows("inventory")
     deploy_rows    = _rows("deploys")
+
+    # Attach the readable display_name (from inventory) onto each heartbeat row so the
+    # account cards show it instead of the raw bot_id; bot_name stays the join key.
+    _disp = {(r.get("account"), r.get("bot_name")): r.get("display_name")
+             for r in inventory_rows if r.get("display_name")}
+    for _h in heartbeats:
+        _h["_display"] = _disp.get((_h.get("account"), _h.get("bot_name")))
 
     # Windowed PnL is computed on the collector account (it owns the shared state DB).
     pnl_windows = accounts_data[0].get("pnl_windows") or {}

@@ -74,7 +74,7 @@ from pm_data import (
 import bot_utils
 from tradinetools import (
     heartbeat_loop, control_loop, Command, health_server,
-    write_reset_marker, consume_reset_marker,
+    write_reset_marker, consume_reset_marker, resolve_bot_id,
 )
 from tradinetools.zmq import PORT_FEED, PORT_INDICATORS, PORT_IND_REG, default_ipc_addr
 
@@ -1126,9 +1126,13 @@ async def main() -> None:
     # places real orders only with a private_key; CEX grid/swing are always sim.
     _hb_mode = "live" if (config.strategy_type == "threshold" and config.private_key) else "sim"
     _is_live = _hb_mode == "live"
-    _hb_bot_name = {"grid": "grid_bot", "swing": "swing_bot",
-                    "accumulation": "accumulation_bot"}.get(
-        config.strategy_type, "live_bot")
+    # Fleet join key: a stable, globally-unique bot id (readable prefix + generated
+    # suffix), read from <install_dir>/bot_id_<role> or generated on first creation. The
+    # deploy writes this file before starting the bot; this call is the read/safety-net.
+    _pair = (config.grid_symbol if config.strategy_type == "grid"
+             else config.strategy_cfg.get("symbol", "")) or ""
+    _hb_bot_name = resolve_bot_id(config.install_dir, config.strategy_type,
+                                  config.connector, config.strategy_type, _pair)
 
     # Apply a pending operator reset BEFORE opening the DB so the wipe is atomic at
     # cold start. Sim-only: a live bot must never honour a reset marker.

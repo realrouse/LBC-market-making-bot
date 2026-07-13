@@ -7,6 +7,7 @@ import logging
 import os
 import shutil
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -49,6 +50,45 @@ def read_version_stamp(install_dir: str | None = None) -> str:
             continue
 
     return "unknown"
+
+
+def resolve_bot_id(data_dir: str | None, role: str, *prefix_parts: Any) -> str:
+    """Return this bot's stable, globally-unique id — the fleet join key (heartbeat /
+    inventory / deploy journal / control socket).
+
+    Read from ``<data_dir>/bot_id_<role>``; if absent, generate ``<prefix>-<6hex>`` and
+    persist it, so the id is STABLE across restarts and only (re)generated for a genuinely
+    new bot. ``prefix`` is the non-empty ``prefix_parts`` lowercased and joined with '-'
+    (e.g. connector-strategy-symbol → ``mexc-grid-lbcusdt``). ``role`` keys the filename so
+    several services sharing one data_dir (the infra account) never collide. The random
+    suffix guarantees uniqueness: two bots may share a readable prefix yet never an id.
+
+    The deploy is normally the generator (it writes the file BEFORE starting the bot so the
+    heartbeat, inventory and deploy journal all agree); this in-process read-or-generate is
+    the safety net for hand-runs.
+    """
+    role = (str(role or "bot").strip().lower().replace("/", "_")) or "bot"
+    path = None
+    if data_dir:
+        path = os.path.join(os.path.expanduser(data_dir), f"bot_id_{role}")
+        try:
+            with open(path, encoding="utf-8") as f:
+                bid = f.read().strip()
+            if bid:
+                return bid
+        except OSError:
+            pass
+    prefix = "-".join(str(p).strip().lower() for p in prefix_parts
+                      if p is not None and str(p).strip())
+    bid = f"{prefix}-{uuid.uuid4().hex[:6]}" if prefix else f"bot-{uuid.uuid4().hex[:12]}"
+    if path:
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(bid + "\n")
+        except OSError:
+            pass
+    return bid
 
 
 def build_heartbeat(
