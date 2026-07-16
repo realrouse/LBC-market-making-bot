@@ -161,6 +161,48 @@ class AccumState:
         return self.p["capital_usdt"] * self.p["max_invested_pct"]
 
 
+# ── Live maker-buy reconciliation (PURE — no I/O, exhaustively unit-tested) ──────────
+# The money-critical path: given the current resting-bid record and a fresh get_order()
+# result, decide what changed. Kept pure + deterministic because shadow mode can NEVER
+# exercise it (a resting maker bid may not fill for days), so correctness rests on tests,
+# not on a live dry-run. Caller (the async wrapper) applies the deltas + issues any cancel.
+def reconcile_pending_buy(pending: dict, order: "dict | None", *, now_ts: float,
+                          price: float, stale_pct: float, max_age_s: float) -> tuple:
+    """(new_pending, holdings_delta, quote_delta, action).
+
+    pending : {order_id, price, orig_qty, executed_qty_seen, quote_spent_seen, placed_ts}
+    order   : api_mexc.get_order() dict {status, executed_qty, cummulative_quote_qty, …}
+              or None (API error — assume NOTHING, retry next tick).
+    Returns:
+      new_pending    — updated record, or None when the order is done (filled/canceled/gone)
+      holdings_delta — base qty NEWLY filled since last seen (≥0; delta, never cumulative)
+      quote_delta    — USDT NEWLY spent since last seen (≥0; delta) — credited independently
+                       of holdings so multi-partial fills don't drift the cost basis
+      action         — 'noop'|'hold'|'partial'|'filled'|'cancel'|'canceled'
+                       ('cancel' = still NEW but stale → caller should cancel_order)
+    """
+    if order is None:
+        return pending, 0.0, 0.0, "noop"        # API error: change nothing, retry
+    dqty   = max(0.0, order["executed_qty"] - pending["executed_qty_seen"])
+    dquote = max(0.0, order["cummulative_quote_qty"] - pending["quote_spent_seen"])
+    if dqty > 0 or dquote > 0:                   # advance the seen counters (both, per advisor)
+        pending = {**pending,
+                   "executed_qty_seen": order["executed_qty"],
+                   "quote_spent_seen":  order["cummulative_quote_qty"]}
+    status = order["status"]
+    if status == "FILLED":
+        return None, dqty, dquote, "filled"
+    if status in ("CANCELED", "EXPIRED", "REJECTED"):
+        return None, dqty, dquote, "canceled"
+    if status == "PARTIALLY_FILLED":
+        return pending, dqty, dquote, "partial"
+    # NEW (resting): stale if price rose away from our bid, or the bid is too old → cancel & re-bid
+    age = now_ts - pending["placed_ts"]
+    if price > pending["price"] * (1.0 + stale_pct) or age > max_age_s:
+        return pending, dqty, dquote, "cancel"
+    return pending, dqty, dquote, "hold"
+
+
 class AccumulationStrategy:
     """BTC long-term accumulation: OBI dip-buying + partial profit ladder + macro gates.
 

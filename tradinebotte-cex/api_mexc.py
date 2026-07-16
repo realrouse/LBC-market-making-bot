@@ -315,6 +315,51 @@ async def get_order_status(session, symbol, order_id, *,
         return None
 
 
+async def get_order(session, symbol, order_id, *, api_key=None, api_secret=None):
+    """Full order detail for FILL reconciliation (GET /api/v3/order). Returns:
+        {"status": str, "orig_qty": float, "executed_qty": float,
+         "cummulative_quote_qty": float, "avg_price": float | None, "side": str}
+    or None on error / simulation / a sim_ id. `avg_price` = cummulative_quote_qty /
+    executed_qty (None until any fill). Unlike get_order_status (status string only), this
+    carries the filled base amount + quote spent needed to credit REAL holdings/cost."""
+    _key    = api_key    or os.environ.get("MEXC_API_KEY", "")
+    _secret = api_secret or os.environ.get("MEXC_API_SECRET", "")
+    if not _key or not _secret:
+        return None
+    if str(order_id).startswith("sim_"):
+        return None
+    try:
+        params = {
+            "symbol":    str(symbol).split(":", maxsplit=1)[0],
+            "orderId":   int(order_id),
+            "timestamp": int(time.time() * 1000),
+        }
+        params["signature"] = _sign(params, _secret)
+        async with session.get(
+            f"{BASE_URL}/api/v3/order",
+            params=params,
+            headers={"X-MEXC-APIKEY": _key},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            data = await resp.json(content_type=None)
+            if resp.status != 200:
+                logger.warning("MEXC get_order error %d : %.300s", resp.status, data)
+                return None
+            exq = float(data.get("executedQty", 0) or 0)
+            cqq = float(data.get("cummulativeQuoteQty", 0) or 0)
+            return {
+                "status":                str(data.get("status", "")),
+                "orig_qty":              float(data.get("origQty", 0) or 0),
+                "executed_qty":          exq,
+                "cummulative_quote_qty": cqq,
+                "avg_price":             (cqq / exq if exq > 0 else None),
+                "side":                  str(data.get("side", "")),
+            }
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        logger.error("MEXC get_order error : %s", e)
+        return None
+
+
 async def cancel_order(session, symbol, order_id, *,
                        api_key=None, api_secret=None):
     """
@@ -398,6 +443,63 @@ async def get_open_orders(session, symbol, *, api_key=None, api_secret=None):
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("MEXC get_open_orders error : %s", e)
         return None   # error sentinel — not [] (sim/no-orders)
+
+
+# ─── ACCOUNT ─────────────────────────────────────────────────────────────────
+
+async def get_account(session, *, api_key=None, api_secret=None):
+    """Signed GET /api/v3/account — spot account balances + trading permissions.
+
+    Returns:
+        {"can_trade": bool, "permissions": [str, ...],
+         "balances": {ASSET: {"free": float, "locked": float}, ...}}
+    or **None** on error / in simulation mode (no credentials).
+
+    ⚠ None means UNKNOWN, never "zero balance": this endpoint needs the API key's
+    *account-read* scope, which is a DIFFERENT permission from order placement/read —
+    a key can post_order yet still get HTTP 400 code=700007 "No permission to access
+    the endpoint" here. Callers must treat None as "can't tell" and fall back to their
+    own internally-tracked balance, not assume an empty wallet.
+    """
+    _key    = api_key    or os.environ.get("MEXC_API_KEY", "")
+    _secret = api_secret or os.environ.get("MEXC_API_SECRET", "")
+    if not _key or not _secret:
+        return None
+    try:
+        params = {"timestamp": int(time.time() * 1000), "recvWindow": 5000}
+        params["signature"] = _sign(params, _secret)
+        async with session.get(
+            f"{BASE_URL}/api/v3/account",
+            params=params,
+            headers={"X-MEXC-APIKEY": _key},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            data = await resp.json(content_type=None)
+            if resp.status != 200:
+                logger.warning("MEXC get_account error %d: code=%s msg=%s", resp.status,
+                               data.get("code"), data.get("msg", str(data)[:200]))
+                return None
+            balances = {
+                b["asset"]: {"free": float(b.get("free", 0.0)),
+                             "locked": float(b.get("locked", 0.0))}
+                for b in data.get("balances", []) if isinstance(b, dict) and b.get("asset")
+            }
+            return {"can_trade":   bool(data.get("canTrade", False)),
+                    "permissions": data.get("permissions", []),
+                    "balances":    balances}
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        logger.error("MEXC get_account error: %s", e)
+        return None
+
+
+async def get_balance(session, asset, *, api_key=None, api_secret=None):
+    """Free (available) balance for one asset, e.g. get_balance(session, "USDT") → float.
+    Returns None when the account is unreadable (sim / missing scope / error) — None is
+    UNKNOWN, not 0.0, so a caller never mistakes an unreadable key for an empty wallet."""
+    acct = await get_account(session, api_key=api_key, api_secret=api_secret)
+    if acct is None:
+        return None
+    return acct["balances"].get(str(asset).upper(), {}).get("free", 0.0)
 
 
 # ─── USER DATA STREAM ─────────────────────────────────────────────────────────
