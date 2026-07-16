@@ -3649,9 +3649,28 @@ class TestDataPathCoverage(unittest.TestCase):
     (pm_data = Polymarket, cex_consumer = CEX); this inspects both: every function that
     drives a strategy from book updates (calls on_book_update) MUST also reach a snapshot-
     persistence call. A future consumer that forgets persistence fails here, at test time —
-    the runtime ⚠data monitor is only the second line of defence."""
+    the runtime ⚠data monitor is only the second line of defence.
 
-    _PERSIST = {"_persist_snapshot", "save_snapshot", "save_cex_snapshot"}
+    Two recording shapes both satisfy the invariant:
+      - LOOP-recorded: cex_feed_consumer_loop (grid/swing) + pm_data (threshold) call a
+        persist step in the loop, because those engines don't self-record.
+      - ENGINE-recorded: the accumulation engine's on_book_update records its own
+        accum_snapshots (via _record_snapshot) and advances the freshness clock, so its
+        loop (indicators_consumer_loop) correctly does NOT re-record — re-recording it in
+        the loop would double-write to the wrong-shaped table. Such loops are listed in
+        _ENGINE_RECORDED and their engine is separately verified to actually record by
+        test_delegated_loops_engine_actually_records, so this is a CHECKED carve-out, not a
+        blanket skip (remove the engine's recording → that test fails)."""
+
+    _PERSIST = {"_persist_snapshot", "save_snapshot", "save_cex_snapshot", "_record_snapshot"}
+
+    # Consumer loops whose snapshot recording lives in the STRATEGY ENGINE they drive rather
+    # than in the loop. Value = (engine module, the record call the engine's on_book_update
+    # MUST make). Keyed on the loop function name: a rename drops the carve-out and the loop
+    # is flagged again (fail-closed), and the paired engine is positively verified below.
+    _ENGINE_RECORDED = {
+        "indicators_consumer_loop": ("strategy_engines.accumulation", "_record_snapshot"),
+    }
 
     @staticmethod
     def _consumer_modules():
@@ -3682,13 +3701,43 @@ class TestDataPathCoverage(unittest.TestCase):
                             called.add(fn.attr)
                         elif isinstance(fn, ast.Name):
                             called.add(fn.id)
-                if "on_book_update" in called and not (called & self._PERSIST):
+                if ("on_book_update" in called and not (called & self._PERSIST)
+                        and node.name not in self._ENGINE_RECORDED):
                     offenders.append(f"{mod.__name__}.{node.name}")
         self.assertEqual(
             offenders, [],
             "function(s) drive a strategy (on_book_update) but never persist a snapshot — "
             f"the 2026-06-16 silent-recording bug shape: {offenders}. "
-            "Route the write through _persist_snapshot.")
+            "Route the write through _persist_snapshot (or, if the engine self-records, add "
+            "the loop to _ENGINE_RECORDED with its engine's record call).")
+
+    def test_delegated_loops_engine_actually_records(self):
+        # Keeps the _ENGINE_RECORDED carve-out honest: each delegated loop's engine
+        # on_book_update MUST actually call its record step — else the accumulation data
+        # path records nothing and the carve-out would hide the 2026-06-16 bug shape.
+        import ast
+        import importlib
+        import inspect
+        for loop_name, (engine_mod, record_call) in self._ENGINE_RECORDED.items():
+            mod = importlib.import_module(engine_mod)
+            tree = ast.parse(inspect.getsource(mod))
+            records = False
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) \
+                        and node.name == "on_book_update":
+                    for sub in ast.walk(node):
+                        if isinstance(sub, ast.Call):
+                            fn = sub.func
+                            name = fn.attr if isinstance(fn, ast.Attribute) \
+                                else getattr(fn, "id", None)
+                            if name == record_call:
+                                records = True
+            self.assertTrue(
+                records,
+                f"{loop_name} delegates snapshot recording to {engine_mod}, but its "
+                f"on_book_update no longer calls {record_call}() — the data path records "
+                f"nothing (2026-06-16 bug shape). Restore the record call or move recording "
+                f"into the loop.")
 
     def test_guard_is_wired_to_the_real_consumers(self):
         # Sanity: the guard actually has something to check (catches a future refactor
