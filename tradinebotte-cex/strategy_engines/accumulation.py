@@ -102,6 +102,15 @@ DEFAULTS: dict = {
     "ichimoku_gate":        False,
     "ichimoku_stream_id":   "btc_4h_ichimoku",   # 4h cloud (more responsive than daily)
     "ichi_stale_secs":      172800.0,   # 2 days — fail-open staleness guard, not a freshness need
+
+    # ── Live maker execution (Option B) — OFF by default so every existing accum bot stays
+    # pure paper. When live_execution=true the engine places REAL maker BUY orders (buy-only:
+    # profit-band sells + rebuys are skipped) and reconciles holdings from actual fills.
+    "live_execution":       False,
+    "shadow":               False,   # live_execution + shadow → log intended orders, place NOTHING
+    "maker_bid_offset_pct":  0.5,     # rest the bid this % below mid (maker, no cross; buys the dip)
+    "rebid_stale_pct":       2.0,     # cancel & re-bid if price rises this % above our resting bid
+    "rebid_max_age_s":       3600,    # …or if the bid has rested longer than this
 }
 
 # ---------------------------------------------------------------------------
@@ -136,6 +145,9 @@ class AccumState:
     snap_counter:       int   = 0
     last_write_ts:      float = 0.0
     total_realized:     float = 0.0
+    # live maker execution: the ONE resting bid in flight, or None (buy-only, Option B).
+    # {order_id, price, orig_qty, executed_qty_seen, quote_spent_seen, placed_ts}
+    pending_buy:        Optional[dict] = None
     peak_holdings_btc:  float = 0.0
     vwap_dip_score:     float = 0.0
     vwap_dip_zone:      str   = "neutral"
@@ -229,6 +241,23 @@ class AccumulationStrategy:
             cfg.get("scale_in_max_mult", 3.0), cfg.get("profit_bands_pct"),
             "enabled" if cfg.get("earn_enabled", True) else "disabled")
 
+        # ── Live maker execution (Option B, opt-in) ──────────────────────────────
+        self.symbol   = cfg["symbol"]
+        self.live     = bool(cfg.get("live_execution", False))
+        self.shadow   = bool(cfg.get("shadow", False))
+        self._api     = None
+        self._adopted = False
+        if self.live:
+            try:
+                from connectors import load as _load_conn  # noqa: PLC0415  pylint: disable=import-outside-toplevel
+                self._api = _load_conn(getattr(config, "connector", cfg.get("connector", "mexc")))
+                logger.warning("AccumulationStrategy LIVE execution ENABLED [%s %s]%s — buy-only, "
+                               "real maker BUY orders (sells disabled)", cfg.get("connector", "mexc"),
+                               self.symbol, "  [SHADOW: places nothing]" if self.shadow else "")
+            except Exception as e:  # pylint: disable=broad-exception-caught  # fail-safe → paper
+                logger.error("LIVE execution requested but connector load failed — staying PAPER: %s", e)
+                self.live = False
+
     # ── Schema ────────────────────────────────────────────────────────────────
 
     def ensure_schema(self, conn: sqlite3.Connection) -> None:
@@ -271,6 +300,13 @@ class AccumulationStrategy:
                 pending_rebuys_json TEXT,
                 active_bands_json   TEXT
             )""")
+        # Live maker execution only: the single resting bid in flight (id=1) or empty.
+        # A separate table so paper bots never touch it (they simply never write a row).
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS accum_pending_order (
+                id              INTEGER PRIMARY KEY,
+                pending_buy_json TEXT
+            )""")
         conn.commit()
 
     # ── State persistence ──────────────────────────────────────────────────────
@@ -292,6 +328,12 @@ class AccumulationStrategy:
             (int(time.time() * 1000), a.holdings_btc, a.avg_entry,
              a.free_usdt, a.total_realized, a.peak_holdings_btc,
              a.last_buy_ts, rebuys_json, bands_json))
+        conn.commit()
+
+    def _save_pending(self, conn: sqlite3.Connection) -> None:
+        """Persist the single resting bid (live only) so a restart resumes/reconciles it."""
+        conn.execute("INSERT OR REPLACE INTO accum_pending_order (id, pending_buy_json) VALUES (1,?)",
+                     (json.dumps(self.acc.pending_buy) if self.acc.pending_buy else None,))
         conn.commit()
 
     def _restore_state(self, conn: sqlite3.Connection) -> bool:
@@ -319,6 +361,14 @@ class AccumulationStrategy:
                 a.pending_rebuys.append(PendingRebuy(**r))
         if bands_json:
             a.active_bands = set(json.loads(bands_json))
+        try:
+            prow = conn.execute(
+                "SELECT pending_buy_json FROM accum_pending_order WHERE id=1").fetchone()
+            if prow and prow[0]:
+                a.pending_buy = json.loads(prow[0])
+                logger.info("Restored resting bid: %s", a.pending_buy)
+        except sqlite3.OperationalError:
+            pass
         logger.info("Restored: %.6f BTC @ avg %.2f  free=%.2f  realized=%+.2f  rebuys=%d  bands=%s",
                     holdings, avg, free, realized,
                     len(a.pending_rebuys), sorted(a.active_bands))
@@ -387,10 +437,118 @@ class AccumulationStrategy:
         pct     = max(min_d, min(max_d, a.spread_ema * mult))
         return pct / 100.0
 
-    # ── Trade execution (paper) ─────────────────────────────────────────────────
+    # ── Trade execution ─────────────────────────────────────────────────────────
 
     async def _buy(self, state: Any, price: float, usdt_amount: float,
                    reason: str, ts_ms: int) -> bool:
+        """Dispatch a buy decision: LIVE (place a real maker bid, credit on fill) or PAPER
+        (instant self-accounted fill). Call sites are unchanged; only the effect differs."""
+        if self.live:
+            return await self._place_live_buy(state, price, usdt_amount, reason, ts_ms)
+        return await self._buy_paper(state, price, usdt_amount, reason, ts_ms)
+
+    # ── Live maker execution (Option B — buy-only) ───────────────────────────────
+
+    async def _place_live_buy(self, state: Any, price: float, usdt_amount: float,
+                              reason: str, ts_ms: int) -> bool:
+        """Place ONE resting maker bid below mid (0-cross, no impact). Holdings are NOT
+        credited here — only on fill, in _reconcile_live_buy. One bid at a time caps the
+        committed budget at a single clip. Shadow → log intent, place nothing, keep paper
+        accounting so the strategy trajectory still runs for validation."""
+        a = self.acc
+        if not self._adopted:
+            return False                              # no placement until startup adoption ran
+        if a.pending_buy is not None:
+            return False                              # one resting bid at a time
+        if usdt_amount > a.free_usdt + a.p.get("buy_dust_tolerance_usdt", 0.01):
+            logger.info("live BUY skipped — need %.2f USDT, budget %.2f", usdt_amount, a.free_usdt)
+            return False
+        offset = a.p.get("maker_bid_offset_pct", 0.5) / 100.0
+        bid    = price * (1.0 - offset)
+        pd     = decimals_for_price(bid)
+        if self.shadow:
+            logger.info("SHADOW would place maker BUY %.2f USDT @ %.*f (mid %.*f) [%s] — placing nothing",
+                        usdt_amount, pd, bid, pd, price, reason)
+            return await self._buy_paper(state, bid, usdt_amount, reason + "|shadow", ts_ms)
+        oid = await self._api.post_order(state.session, self.symbol, bid, usdt_amount, side="BUY")
+        if not oid or str(oid).startswith("sim_"):
+            logger.error("live BUY placement failed (oid=%s) — key/precision/permission? Not tracking.", oid)
+            return False
+        a.pending_buy = {"order_id": str(oid), "price": bid, "orig_qty": usdt_amount / bid,
+                         "executed_qty_seen": 0.0, "quote_spent_seen": 0.0, "placed_ts": time.time()}
+        self._save_pending(state.conn)
+        logger.info("LIVE maker BUY placed id=%s  %.2f USDT @ %.*f  [%s]", oid, usdt_amount, pd, bid, reason)
+        return True
+
+    def _credit_fill(self, state: Any, dqty: float, dquote: float, ts_ms: int) -> None:
+        """Apply a REAL fill delta to holdings/free/avg_entry from actual filled base + quote
+        spent (not an assumed price), and record the accum_trades row + freshness clock."""
+        a = self.acc
+        fill_price = dquote / dqty if dqty > 0 else 0.0
+        if a.holdings_btc > 0 and a.avg_entry > 0:
+            tot = a.holdings_btc + dqty
+            a.avg_entry = (a.holdings_btc * a.avg_entry + dqty * fill_price) / tot
+        else:
+            a.avg_entry = fill_price
+        a.holdings_btc += dqty
+        a.free_usdt    -= dquote                      # real quote spent (maker fee ≈ 0)
+        a.peak_holdings_btc = max(a.peak_holdings_btc, a.holdings_btc)
+        state.conn.execute("""
+            INSERT INTO accum_trades
+                (ts_ms, side, reason, price, qty_btc, usdt_value, fee_usdt,
+                 avg_entry_after, holdings_after, free_usdt_after)
+            VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (ts_ms, "buy", "live-fill", fill_price, dqty, dquote, 0.0,
+             a.avg_entry, a.holdings_btc, a.free_usdt))
+        a.last_write_ts = time.time()
+        self._save_state(state.conn)
+        pd = decimals_for_price(fill_price)
+        logger.info("LIVE FILL +%.4f @ %.*f  spent=%.2f  held=%.4f  free=%.2f  avg=%.*f",
+                    dqty, pd, fill_price, dquote, a.holdings_btc, a.free_usdt, pd, a.avg_entry)
+
+    async def _reconcile_live_buy(self, state: Any, price: float, ts_ms: int) -> None:
+        """Poll the resting bid, credit any new fill, and cancel it if it has gone stale.
+        Pure decision in reconcile_pending_buy(); this only does the I/O + applies deltas."""
+        a = self.acc
+        if not a.pending_buy:
+            return
+        oid = a.pending_buy["order_id"]
+        order = await self._api.get_order(state.session, self.symbol, oid)
+        new_pending, dqty, dquote, action = reconcile_pending_buy(
+            a.pending_buy, order, now_ts=time.time(), price=price,
+            stale_pct=a.p.get("rebid_stale_pct", 2.0) / 100.0,
+            max_age_s=a.p.get("rebid_max_age_s", 3600))
+        if dqty > 0:
+            self._credit_fill(state, dqty, dquote, ts_ms)
+        if action == "cancel":
+            # NEW but stale — cancel; next tick sees CANCELED and clears it (catching any last fill).
+            logger.info("resting bid %s stale (mid %.6f vs bid %.6f) — canceling to re-bid",
+                        oid, price, a.pending_buy["price"])
+            await self._api.cancel_order(state.session, self.symbol, oid)
+        a.pending_buy = new_pending
+        self._save_pending(state.conn)
+
+    async def _adopt_open_orders(self, state: Any) -> None:
+        """Startup, BEFORE any placement: reconcile a persisted resting bid, and cancel any
+        untracked orphan (crash-after-place). Buy-only → an orphan bid is benign (worst case
+        it filled = more LBC), so we just clean the book and let the strategy re-bid fresh."""
+        oo = await self._api.get_open_orders(state.session, self.symbol)
+        if oo is None:
+            logger.warning("adopt: get_open_orders error — deferring (no placement until it succeeds)")
+            return
+        tracked = self.acc.pending_buy["order_id"] if self.acc.pending_buy else None
+        if tracked and tracked not in {o["order_id"] for o in oo}:
+            # our tracked bid is gone from the book → it filled/canceled while we were down
+            await self._reconcile_live_buy(state, self.acc.last_price or 0.0, int(time.time() * 1000))
+        for o in oo:
+            if o["order_id"] != tracked:
+                logger.warning("adopt: canceling orphan %s (%s qty=%.2f @ %.6f)",
+                               o["order_id"], o.get("side"), o.get("qty", 0), o.get("price", 0))
+                await self._api.cancel_order(state.session, self.symbol, o["order_id"])
+        self._adopted = True
+
+    async def _buy_paper(self, state: Any, price: float, usdt_amount: float,
+                         reason: str, ts_ms: int) -> bool:
         a        = self.acc
         conn     = state.conn
         p        = a.p
@@ -668,6 +826,13 @@ class AccumulationStrategy:
 
         price = float(mid)
 
+        # LIVE: reconcile the resting bid every tick (credit fills, cancel-if-stale). Adopt
+        # open orders ONCE before any placement so a crash-orphaned bid can't breach the cap.
+        if self.live:
+            if not self._adopted:
+                await self._adopt_open_orders(state)
+            await self._reconcile_live_buy(state, price, ts_ms)
+
         if not a.initial_done:
             if a.p.get("vwap_gate_initial", False):
                 if a.p.get("vwap_gate", True) and a.vwap_dip_score < 0.0:
@@ -678,8 +843,11 @@ class AccumulationStrategy:
                 a.initial_done = True
             return
 
-        await self._check_profit_bands(state, price, ts_ms)
-        await self._check_rebuys(state, price, ts_ms)
+        # Buy-only when live: skip the profit-band SELLS + rebuys (illiquid book — we never
+        # sell the stake; see the LBC design). Paper bots keep the full sell/rebuy ladder.
+        if not self.live:
+            await self._check_profit_bands(state, price, ts_ms)
+            await self._check_rebuys(state, price, ts_ms)
 
         thresh = a.p["obi_entry_thresh"]
         if a.obi_ema < -thresh:

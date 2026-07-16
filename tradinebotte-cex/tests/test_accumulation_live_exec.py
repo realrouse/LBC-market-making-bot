@@ -8,12 +8,15 @@ cost-basis drift, full fill, cancel/expire, staleness (price + age), and the API
 """
 
 import os
+import sqlite3
 import sys
+import types
 import unittest
+from unittest.mock import AsyncMock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from strategy_engines.accumulation import reconcile_pending_buy  # noqa: E402
+from strategy_engines.accumulation import reconcile_pending_buy, AccumulationStrategy  # noqa: E402
 
 
 def _pending(order_id="1", price=0.0025, orig_qty=4000.0,
@@ -116,6 +119,93 @@ class TestReconcilePendingBuy(unittest.TestCase):
             _pending(price=0.0025, placed_ts=0.0), _order("NEW"),
             now_ts=100.0, price=0.0025 * 1.01, stale_pct=0.02, max_age_s=3600.0)
         self.assertEqual(act, "hold")
+
+
+def _live_engine(**over):
+    cfg = {"symbol": "LBCUSDT", "capital_usdt": 100.0, "initial_stake_usdt": 10.0,
+           "maker_bid_offset_pct": 0.5, "earn_enabled": False}
+    cfg.update(over)
+    # build PAPER (no connector load in __init__), then flip to live + inject a fake connector
+    eng = AccumulationStrategy(types.SimpleNamespace(connector="mexc", strategy_cfg=cfg))
+    eng.live = True
+    eng.shadow = bool(over.get("shadow", False))
+    eng._adopted = True
+    eng._api = types.SimpleNamespace(
+        post_order=AsyncMock(return_value="oid1"),
+        get_order=AsyncMock(return_value={"status": "NEW", "executed_qty": 0.0,
+                                          "cummulative_quote_qty": 0.0}),
+        get_open_orders=AsyncMock(return_value=[]),
+        cancel_order=AsyncMock(return_value=True))
+    conn = sqlite3.connect(":memory:")
+    eng.ensure_schema(conn)
+    state = types.SimpleNamespace(conn=conn, session=None, strategy=eng, last_book_ts=0.0)
+    return eng, state
+
+
+class TestLiveWiring(unittest.IsolatedAsyncioTestCase):
+    """The async glue around the pure state machine: placement, fill crediting from REAL
+    amounts, the one-bid budget guard, shadow (places nothing), and orphan adoption."""
+
+    async def test_place_sets_pending_without_crediting(self):
+        eng, state = _live_engine()
+        ok = await eng._place_live_buy(state, 0.0025, 10.0, "initial", 1)
+        self.assertTrue(ok)
+        eng._api.post_order.assert_awaited_once()
+        self.assertIsNotNone(eng.acc.pending_buy)
+        self.assertEqual(eng.acc.holdings_btc, 0.0)      # not credited until it fills
+        self.assertEqual(eng.acc.free_usdt, 100.0)
+
+    async def test_fill_credits_real_filled_amounts(self):
+        eng, state = _live_engine()
+        await eng._place_live_buy(state, 0.0025, 10.0, "initial", 1)
+        eng._api.get_order = AsyncMock(return_value={
+            "status": "FILLED", "executed_qty": 3980.0, "cummulative_quote_qty": 10.0})
+        await eng._reconcile_live_buy(state, 0.0025, 2)
+        self.assertAlmostEqual(eng.acc.holdings_btc, 3980.0)
+        self.assertAlmostEqual(eng.acc.free_usdt, 90.0)          # real quote spent, not the bid math
+        self.assertAlmostEqual(eng.acc.avg_entry, 10.0 / 3980.0)
+        self.assertIsNone(eng.acc.pending_buy)
+        row = state.conn.execute("SELECT side, qty_btc, usdt_value FROM accum_trades").fetchone()
+        self.assertEqual(row[0], "buy")
+        self.assertAlmostEqual(row[1], 3980.0)
+
+    async def test_one_bid_guard_blocks_second_placement(self):
+        eng, state = _live_engine()
+        self.assertTrue(await eng._place_live_buy(state, 0.0025, 10.0, "initial", 1))
+        self.assertFalse(await eng._place_live_buy(state, 0.0025, 5.0, "scale-in", 2))
+        eng._api.post_order.assert_awaited_once()                # only one order ever placed
+
+    async def test_no_placement_before_adoption(self):
+        eng, state = _live_engine()
+        eng._adopted = False
+        self.assertFalse(await eng._place_live_buy(state, 0.0025, 10.0, "initial", 1))
+        eng._api.post_order.assert_not_awaited()
+
+    async def test_shadow_places_nothing_but_papers(self):
+        eng, state = _live_engine(shadow=True)
+        ok = await eng._place_live_buy(state, 0.0025, 10.0, "initial", 1)
+        self.assertTrue(ok)
+        eng._api.post_order.assert_not_awaited()                 # NOTHING placed
+        self.assertIsNone(eng.acc.pending_buy)
+        self.assertGreater(eng.acc.holdings_btc, 0.0)            # paper trajectory still runs
+
+    async def test_adopt_cancels_orphan(self):
+        eng, state = _live_engine()
+        eng._adopted = False
+        eng._api.get_open_orders = AsyncMock(return_value=[
+            {"order_id": "orphan9", "side": "BUY", "qty": 100.0, "price": 0.002}])
+        await eng._adopt_open_orders(state)
+        eng._api.cancel_order.assert_awaited_once()
+        self.assertEqual(eng._api.cancel_order.await_args.args[2], "orphan9")
+        self.assertTrue(eng._adopted)
+
+    async def test_stale_bid_is_canceled_on_reconcile(self):
+        eng, state = _live_engine()
+        await eng._place_live_buy(state, 0.0025, 10.0, "initial", 1)
+        eng._api.get_order = AsyncMock(return_value={
+            "status": "NEW", "executed_qty": 0.0, "cummulative_quote_qty": 0.0})
+        await eng._reconcile_live_buy(state, 0.0025 * 1.05, 2)   # price ran 5% above the bid
+        eng._api.cancel_order.assert_awaited_once()
 
 
 if __name__ == "__main__":
