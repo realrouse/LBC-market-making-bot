@@ -9,12 +9,19 @@
     "symbol":               "LBCUSDT",
 
     "capital_usdt":         100.0,
-    "initial_stake_usdt":   50.0,
-    "scale_in_usdt":        10.0,
+    "initial_stake_usdt":   10.0,
+    "scale_in_usdt":        5.0,
     "scale_in_dip_factor":  0.5,
-    "scale_in_max_mult":    3.0,
-    "max_invested_pct":     0.65,
+    "scale_in_max_mult":    2.0,
+    "max_invested_pct":     1.00,
     "max_avg_entry_mult":   1.20,
+
+    "_live_note": "REAL-money buy-only accumulation (Option B). live_execution routes buys to real MEXC maker bids; shadow=true logs intended orders and places NOTHING (validation). Clips are tiny ($10 initial / $5 dip-adds) vs the thin book. To go real: set shadow=false AND add EnvironmentFile=~/.config/tradinebotte/mexc7.env + TRADINEBOTTE_IPV4_ONLY=1 to the unit. Buy-only: profit-band sells + rebuys are skipped when live_execution=true.",
+    "live_execution":       true,
+    "shadow":               true,
+    "maker_bid_offset_pct": 0.5,
+    "rebid_stale_pct":      2.0,
+    "rebid_max_age_s":      3600,
 
     "obi_levels":           10,
     "obi_ema_alpha":        0.05,
