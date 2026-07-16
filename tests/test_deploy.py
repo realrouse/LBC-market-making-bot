@@ -98,19 +98,30 @@ class TestRealInventory(unittest.TestCase):
     """Regression guard: the shipped inventory.toml must reproduce the historical deploy
     order (the sequence deploy_all.sh used to hardcode)."""
 
-    # Post-Phase-2: generic engines + presets. update_standalone / deploy_accumulation
-    # each appear 3× (one per account), distinguished by deploy_env.
-    _EXPECTED_2_6 = [
-        "tradinebotte-polymarket/scripts/update_standalone.sh",   # acct-2 live_bot
-        "tradinebotte-cex/scripts/deploy_accumulation.sh",        # acct-2 accum
-        "tradinebotte-polymarket/scripts/update_standalone.sh",   # acct-3 live_bot
-        "tradinebotte-cex/scripts/deploy_accumulation.sh",        # acct-3 accum
-        "tradinebotte-cex/scripts/deploy_grid_binance.sh",        # acct-3 grid (generic engine)
-        "tradinebotte-polymarket/scripts/update_standalone.sh",   # acct-4 live_bot
-        "tradinebotte-cex/scripts/deploy_accumulation.sh",        # acct-4 accum
-        "tradinebotte-cex/scripts/update_swing.sh",               # acct-5 swing (not migrated)
-        "tradinebotte-cex/scripts/deploy_grid_mexc.sh",           # acct-6 grid (not migrated)
+    # Post single-tree reconciliation: accumulation (×4) + binance-grid deploy NATIVELY
+    # (deployer=deploy_actions.py → a python step, signature = its family); the un-migrated
+    # primaries (poly/swing/mexc-grid) stay on their bash deployers. Each signature is
+    # (script-basename, native-family-or-None) so the guard captures which engine AND, for
+    # native steps, which family — deploy_actions.py alone would not distinguish accum vs grid.
+    _STD = "update_standalone.sh"
+    _EXPECTED_2_N = [
+        (_STD, None),                 # acct-2 poly
+        ("deploy_actions.py", "accumulation"),   # acct-2 accum (native)
+        (_STD, None),                 # acct-3 poly
+        ("deploy_actions.py", "accumulation"),   # acct-3 accum (native)
+        ("deploy_actions.py", "grid_binance"),   # acct-3 binance-grid (native) — distinct step
+        (_STD, None),                 # acct-4 poly
+        ("deploy_actions.py", "accumulation"),   # acct-4 accum (native)
+        ("update_swing.sh", None),    # acct-5 swing (bash, not migrated)
+        ("deploy_grid_mexc.sh", None),           # acct-6 mexc-grid (bash, not migrated)
+        ("deploy_grid_mexc.sh", None),           # acct-8/idx-7 mexc-grid LBC (bash)
+        ("deploy_actions.py", "accumulation"),   # acct-8/idx-7 accum LBC (native)
     ]
+
+    @staticmethod
+    def _sig(step):
+        fam = step.args[0] if step.interpreter == "python" else None
+        return (os.path.basename(step.script), fam)
 
     def test_load_rows_real_inventory(self):
         rows = deploy.load_rows(deploy.INVENTORY)
@@ -123,8 +134,20 @@ class TestRealInventory(unittest.TestCase):
     def test_derived_plan_matches_historical_order(self):
         rows = deploy.load_rows(deploy.INVENTORY)
         plan = deploy.build_plan(rows, restart_infra=False)
-        derived = [s.script for s in plan[1:]]          # drop the account-1 step
-        self.assertEqual(derived, self._EXPECTED_2_6)
+        derived = [self._sig(s) for s in plan[1:]]      # drop the account-1 step
+        self.assertEqual(derived, self._EXPECTED_2_N)
+
+    def test_migrated_families_deploy_natively(self):
+        # The 5 migrated bots (accum ×4 + binance-grid) must be python/native steps; the
+        # primaries must stay bash — the reconciliation's core invariant.
+        rows = deploy.load_rows(deploy.INVENTORY)
+        plan = deploy.build_plan(rows, restart_infra=False)
+        native = [s for s in plan if s.interpreter == "python"]
+        self.assertEqual(len(native), 5)
+        self.assertTrue(all(s.script.endswith("deploy_actions.py") for s in native))
+        self.assertEqual(sorted(s.args[0] for s in native),
+                         ["accumulation", "accumulation", "accumulation", "accumulation",
+                          "grid_binance"])
 
     def test_standalone_presets_have_distinct_indices(self):
         # The 3 update_standalone rows must carry TEST_STANDALONE_USER_IDX 1/2/3 (dedup
@@ -174,31 +197,37 @@ class TestAutoInjectIndex(unittest.TestCase):
 class TestScaleOut(unittest.TestCase):
     """Forward-looking: adding a bot of every family on every account (incl. account-1) must
     not silently drop any bot. account-1 trading bots are derived (only the bespoke INFRA
-    scripts are skipped), and every (account, family) yields a distinct step."""
+    scripts are skipped), and every (account, family) yields a distinct step — across BOTH bash
+    preset engines AND native (deploy_actions.py) family steps, since the dedup key spans both."""
 
-    _FAM = {
-        "live_bot":         ("tradinebotte-polymarket/scripts/update_standalone.sh", "TEST_STANDALONE_USER_IDX"),
-        "grid_bot":         ("tradinebotte-cex/scripts/deploy_grid_binance.sh",      "TEST_GRID_BINANCE_USER_IDX"),
-        "swing_bot":        ("tradinebotte-cex/scripts/update_swing.sh",             "TEST_SWING_USER_IDX"),
-        "accumulation_bot": ("tradinebotte-cex/scripts/deploy_accumulation.sh",      "ACCUM_USER_IDX"),
+    # bash engines (distinct account preset per account) …
+    _BASH = {
+        "live_bot":  ("tradinebotte-polymarket/scripts/update_standalone.sh", "TEST_STANDALONE_USER_IDX"),
+        "swing_bot": ("tradinebotte-cex/scripts/update_swing.sh",             "TEST_SWING_USER_IDX"),
+        "grid_bot":  ("tradinebotte-cex/scripts/deploy_grid_mexc.sh",         "TEST_GRID_MEXC_USER_IDX"),
     }
+    _NATIVE = "scripts/deploy_actions.py"
 
     def _matrix(self, n_accounts=6):
         rows = [{"account_idx": 0, "bot_name": "account_bot", "kind": "bot",
                  "deploy_script": "tradinebotte-polymarket/scripts/update_claude1.sh"}]
         for idx in range(n_accounts):
-            for fam, (dep, iv) in self._FAM.items():
+            for fam, (dep, iv) in self._BASH.items():
                 rows.append({"account_idx": idx, "bot_name": fam, "kind": "bot",
                              "deployer": dep, "deploy_env": {iv: str(idx)}})
+            # … plus one NATIVE family (accumulation) per account: --idx makes each distinct.
+            rows.append({"account_idx": idx, "bot_name": "accum_bot", "kind": "bot",
+                         "bot_type": "cex-accumulation", "deployer": self._NATIVE,
+                         "single_tree": True, "strategy": f"strategies/accumulation/a{idx}.json"})
         return rows
 
     def test_full_matrix_every_bot_gets_a_distinct_step(self):
         rows = self._matrix()
         plan = deploy.build_plan(rows, restart_infra=False)
         trading = list(plan[1:])                  # drop the account-1 bespoke step
-        self.assertEqual(len(trading), 6 * len(self._FAM))   # 24, none dropped
-        keys = {(s.script, tuple(sorted(s.env.items()))) for s in trading}
-        self.assertEqual(len(keys), len(trading))        # no collision
+        self.assertEqual(len(trading), 6 * (len(self._BASH) + 1))   # 24, none dropped
+        keys = {deploy._step_key(s) for s in trading}
+        self.assertEqual(len(keys), len(trading))        # no collision (bash + native)
 
     def test_account1_trading_bot_is_derived(self):
         # A trading bot on account-1 (a non-bespoke deployer) must appear in the plan.
@@ -206,11 +235,11 @@ class TestScaleOut(unittest.TestCase):
             {"account_idx": 0, "bot_name": "account_bot", "kind": "bot",
              "deploy_script": "tradinebotte-polymarket/scripts/update_claude1.sh"},
             {"account_idx": 0, "bot_name": "grid_bot", "kind": "bot",
-             "deployer": "tradinebotte-cex/scripts/deploy_grid_binance.sh",
-             "deploy_env": {"TEST_GRID_BINANCE_USER_IDX": "0"}},
+             "deployer": "tradinebotte-cex/scripts/deploy_grid_mexc.sh",
+             "deploy_env": {"TEST_GRID_MEXC_USER_IDX": "0"}},
         ]
         plan = deploy.build_plan(rows, restart_infra=False)
-        self.assertTrue(any(s.script.endswith("deploy_grid_binance.sh") for s in plan),
+        self.assertTrue(any(s.script.endswith("deploy_grid_mexc.sh") for s in plan),
                         "account-1 trading bot was dropped from the derived plan")
 
     def test_bespoke_infra_scripts_are_skipped(self):
@@ -222,6 +251,70 @@ class TestScaleOut(unittest.TestCase):
         plan = deploy.build_plan(rows, restart_infra=False)
         derived = list(plan[1:])                  # after the account-1 step
         self.assertEqual(derived, [], "bespoke infra scripts should not be derived")
+
+
+class TestNativeDispatch(unittest.TestCase):
+    """Single-tree reconciliation: a row whose `deployer` is scripts/deploy_actions.py deploys
+    through the native declarative engine (a python step) instead of a bash script. Family is
+    derived from bot_type; the strategy from the row's `strategy` field; account_idx supplies
+    --idx. The dedup key includes args, so two native rows on ONE account (the idx-2 accumulation
+    + binance-grid case) are NOT collapsed."""
+
+    _DA = "scripts/deploy_actions.py"
+
+    def _accum(self, idx, strat="strategies/accumulation/x.json"):
+        return {"account_idx": idx, "bot_name": f"accum-{idx}", "kind": "bot",
+                "bot_type": "cex-accumulation", "deployer": self._DA,
+                "strategy": strat, "single_tree": True}
+
+    def _grid_binance(self, idx, strat="strategies/grid/g.json"):
+        return {"account_idx": idx, "bot_name": f"grid-{idx}", "kind": "bot",
+                "bot_type": "cex-grid-binance-sim", "deployer": self._DA,
+                "strategy": strat, "single_tree": True}
+
+    def test_native_row_is_a_python_step(self):
+        step = deploy.build_plan([self._accum(1)], restart_infra=False)[1]
+        self.assertEqual(step.interpreter, "python")
+        self.assertTrue(step.script.endswith("deploy_actions.py"))
+        self.assertEqual(step.env, {})
+
+    def test_native_argv_family_idx_strategy_singletree(self):
+        step = deploy.build_plan([self._accum(3, "strategies/accumulation/deep.json")],
+                                 restart_infra=False)[1]
+        self.assertEqual(step.args, ["accumulation", "--idx", "3",
+                                     "--strategy", "strategies/accumulation/deep.json",
+                                     "--single-tree"])
+
+    def test_grid_binance_resolves_to_its_own_family(self):
+        step = deploy.build_plan([self._grid_binance(2)], restart_infra=False)[1]
+        self.assertEqual(step.args[0], "grid_binance")
+
+    def test_single_tree_flag_absent_when_not_set(self):
+        row = self._accum(1); row["single_tree"] = False
+        step = deploy.build_plan([row], restart_infra=False)[1]
+        self.assertNotIn("--single-tree", step.args)
+
+    def test_two_native_rows_same_account_not_deduped(self):
+        # THE pinning case: idx-2 runs BOTH accumulation and binance-grid via deploy_actions.py.
+        # (script, env) — or (script, env, idx) — would collapse them; (…, args) keeps them apart.
+        rows = [self._accum(2), self._grid_binance(2)]
+        plan = deploy.build_plan(rows, restart_infra=False)
+        native = [s for s in plan if s.interpreter == "python"]
+        self.assertEqual(len(native), 2, "accumulation + binance-grid on idx-2 were collapsed")
+        self.assertEqual({s.args[0] for s in native}, {"accumulation", "grid_binance"})
+
+    def test_native_rows_differ_by_strategy_not_deduped(self):
+        rows = [self._accum(1, "strategies/accumulation/a.json"),
+                self._accum(1, "strategies/accumulation/b.json")]  # same idx, diff strategy
+        plan = deploy.build_plan(rows, restart_infra=False)
+        self.assertEqual(len([s for s in plan if s.interpreter == "python"]), 2)
+
+    def test_bash_rows_unaffected_still_bash(self):
+        rows = [{"account_idx": 1, "bot_name": "swing", "kind": "bot",
+                 "deployer": "tradinebotte-cex/scripts/update_swing.sh"}]
+        step = deploy.build_plan(rows, restart_infra=False)[1]
+        self.assertEqual(step.interpreter, "bash")
+        self.assertEqual(step.args, [])
 
 
 if __name__ == "__main__":

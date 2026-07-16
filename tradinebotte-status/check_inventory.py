@@ -113,30 +113,33 @@ def check_deploy_pipeline(rows: list[dict]) -> list[str]:
         return [f"deploy.py not importable for pipeline check: {e}"]
 
     plan_scripts = {s.script for s in _deploy.build_plan(rows, restart_infra=False)}
-    by_step: dict[tuple, set] = {}
+    by_step: dict[tuple, list] = {}
     for r in rows:
         if r.get("kind", "bot") != "bot":
             continue
-        target = r.get("deployer") or r.get("deploy_script")
         tag = f"{r.get('bot_name')!r} (idx {r.get('account_idx')})"
-        if not target:
-            problems.append(f"{tag}: no deployer/deploy_script — undeployable")
-            continue
-        if os.path.basename(target) in _deploy._BESPOKE_SCRIPTS:
-            continue                       # run by the account-1 bespoke block
-        if target not in plan_scripts:
-            problems.append(f"{tag}: deploy target {target} absent from derived plan")
-        # Post-injection env (deploy.py auto-injects the account-index var from account_idx),
-        # so rows sharing an engine but differing only by account are NOT false collisions.
-        env = tuple(sorted(_deploy._row_env(r).items()))
-        by_step.setdefault((target, env), set()).add(
-            (r.get("account_idx"), r.get("bot_name")))
-    for (target, _env), members in by_step.items():
+        step = _deploy._row_step(r)          # the SAME per-row step build_plan derives
+        if step is None:
+            # None = no deployer/deploy_script (undeployable) OR run by the account-1 bespoke block
+            target = r.get("deployer") or r.get("deploy_script")
+            if not target:
+                problems.append(f"{tag}: no deployer/deploy_script — undeployable")
+            continue                         # bespoke → run by the account-1 block, skip
+        if step.script not in plan_scripts:
+            problems.append(f"{tag}: deploy target {step.script} absent from derived plan")
+        # Collision = two DISTINCT bots collapsing to ONE plan step. Key on the FULL step identity
+        # (_step_key: interpreter+script+env+args) — the exact rule build_plan dedups on — so two
+        # native rows on one account differing only by family/strategy are NOT a false collision,
+        # and a genuine same-engine/same-preset clash still surfaces.
+        by_step.setdefault(_deploy._step_key(step), []).append(
+            (r.get("account_idx"), r.get("bot_name"), step.script))
+    for _key, members in by_step.items():
         if len(members) > 1:
+            script = os.path.basename(members[0][2])
+            who = sorted((idx, name) for idx, name, _ in members)
             problems.append(
-                f"deploy collision: {sorted(members)} share {os.path.basename(target)} "
-                f"with identical deploy_env → only one will deploy "
-                f"(give each row a distinct account index in deploy_env)")
+                f"deploy collision: {who} share {script} with identical args/env → only one will "
+                f"deploy (give each row a distinct account index in deploy_env, or strategy)")
     return problems
 
 
@@ -169,6 +172,15 @@ def check_native_coverage(rows: list[dict]) -> list[str]:
         if _da.native_target(bt) is None:
             problems.append(f"{r.get('bot_name')!r}: bot_type {bt!r} has no native deploy target "
                             f"(add a rule to deploy_actions._NATIVE_TARGET_RULES or _NATIVE_BASH_ONLY)")
+        # A row that opts into native dispatch (deployer=deploy_actions.py) for a WRITE family must
+        # carry a `strategy` — deploy_actions rejects an empty --strategy for write families, so an
+        # unset strategy would fail the deploy at runtime. Caught offline here.
+        if os.path.basename(r.get("deployer", "") or "") == "deploy_actions.py":
+            tgt = _da.native_target(bt)
+            if tgt and tgt[0] == "family" and _da.FAMILIES[tgt[1]]["config_mode"] == "write" \
+                    and not r.get("strategy"):
+                problems.append(f"{r.get('bot_name')!r}: native write family {tgt[1]!r} needs a "
+                                f"non-empty `strategy` field (deploy_actions --strategy is required)")
 
     # depends_on DAG: bot_name → its dependency bot_names. Cheap DFS cycle detection.
     graph: dict[str, list[str]] = {}

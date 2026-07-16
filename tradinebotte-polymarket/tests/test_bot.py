@@ -3713,9 +3713,9 @@ class TestCoreShipsWithTheBot(unittest.TestCase):
     _BOT_DEPLOY_SCRIPTS = (
         "scripts/install.sh",
         "scripts/test_multibot_deploy.sh",
+        "scripts/deploy_actions.py",      # native deployer (accum/grid_binance single-tree) — ships botcore via _BASE_SYNC
         "tradinebotte-polymarket/scripts/update_standalone.sh",
         "tradinebotte-status/scripts/setup_data_plane.sh",
-        "tradinebotte-cex/scripts/deploy_grid_binance.sh",
         "tradinebotte-cex/scripts/deploy_grid_mexc.sh",
         "tradinebotte-cex/scripts/update_swing.sh",
     )

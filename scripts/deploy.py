@@ -54,10 +54,10 @@ _BESPOKE_SCRIPTS = {"update_claude1.sh", "setup_data_plane.sh", "deploy_status_s
 # it from the row's account_idx, so inventory rows need NOT repeat the index in deploy_env
 # (DRY, and a wrong index → wrong account becomes impossible: the account IS account_idx).
 # An explicit deploy_env value still wins (setdefault), for the rare non-account-idx target.
+# NB: accumulation + binance-grid are NOT here — they deploy natively (deployer=deploy_actions.py),
+# which takes --idx from account_idx directly, so they need no bash account-index env var.
 _DEPLOYER_IDX_VAR = {
     "update_standalone.sh": "TEST_STANDALONE_USER_IDX",
-    "deploy_accumulation.sh": "ACCUM_USER_IDX",
-    "deploy_grid_binance.sh": "TEST_GRID_BINANCE_USER_IDX",
     "update_swing.sh": "TEST_SWING_USER_IDX",
     "deploy_grid_mexc.sh": "TEST_GRID_MEXC_USER_IDX",
 }
@@ -87,7 +87,72 @@ class Step:
     script: str                       # repo-relative path
     args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)   # deploy_env preset (Phase 2)
+    interpreter: str = "bash"         # "bash" (deploy scripts) | "python" (native deploy_actions.py)
     display_only: str | None = None   # if set, a summary-only row (e.g. "RSYNC"), not run
+
+
+# ── Native (single-tree) dispatch ────────────────────────────────────────────
+# A row deploys through the native declarative engine (scripts/deploy_actions.py) instead of
+# a bash deployer iff its `deployer` IS deploy_actions.py AND its bot_type resolves to a native
+# family target. This is EXPLICIT (keyed on the deployer path, not derived from bot_type) so the
+# un-migrated primaries (poly/swing/mexc-grid), which have native family targets too, stay on
+# their bash deployers until they are individually migrated.
+_NATIVE_DEPLOYER = "deploy_actions.py"
+_DEPLOY_ACTIONS = None
+
+
+def _native_family(row: dict) -> str | None:
+    """The native deploy family for a row that opts into native dispatch, else None.
+    Opt-in = deployer basename is deploy_actions.py; family = deploy_actions.native_target(bot_type)
+    when it resolves to a ('family', fam) target (infra is single-instance, never a family row)."""
+    dep = row.get("deployer") or ""
+    if os.path.basename(dep) != _NATIVE_DEPLOYER:
+        return None
+    global _DEPLOY_ACTIONS
+    if _DEPLOY_ACTIONS is None:
+        # lazy so deploy.py stays importable without deploy_actions on the path (mirrors
+        # check_inventory's lazy import); deploy_actions is in this same scripts/ dir.
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import deploy_actions as _da  # noqa: PLC0415
+        _DEPLOY_ACTIONS = _da
+    tgt = _DEPLOY_ACTIONS.native_target(row.get("bot_type", "") or "")
+    return tgt[1] if tgt and tgt[0] == "family" else None
+
+
+def _row_step(row: dict) -> Step | None:
+    """The derived deploy Step for one inventory row (accounts 2..N), or None if the row has no
+    deployer/deploy_script or is run by the account-1 bespoke block. The SINGLE source of the
+    per-row step so build_plan and check_inventory's collision guard cannot drift."""
+    script = row.get("deployer") or row.get("deploy_script")
+    if not script:
+        return None
+    if os.path.basename(script) in _BESPOKE_SCRIPTS:
+        return None                       # already run by the account-1 bespoke block
+    acct = f"account-{row['account_idx'] + 1}"
+    bot = row.get("bot_name", "?")
+    btype = row.get("bot_type", "")
+    label = f"{acct} — {bot}" + (f" ({btype})" if btype else "")
+    fam = _native_family(row)
+    if fam:
+        # native single-tree deploy: python3 deploy_actions.py <fam> --idx N --strategy S
+        # [--single-tree]. account_idx supplies --idx (no per-account env var); the strategy is
+        # the row's `strategy` field. The argv (family + idx + strategy) is what makes two native
+        # rows on ONE account distinct (e.g. idx-2 accumulation vs grid_binance) — see _step_key.
+        args = [fam, "--idx", str(row["account_idx"]),
+                "--strategy", str(row.get("strategy", ""))]
+        if row.get("single_tree"):
+            args.append("--single-tree")
+        return Step(label, script, args=args, env={}, interpreter="python")
+    return Step(label, script, env=_row_env(row))
+
+
+def _step_key(step: Step) -> tuple:
+    """Dedup identity of a step. Includes `args` (not just script+env) so two native rows sharing
+    deploy_actions.py + an account index but differing on family/strategy are NOT collapsed —
+    the case idx-2 accumulation + binance-grid, which (script, env) or (script, env, idx) would
+    silently merge into one step, dropping a bot. Additive for bash rows (args=[])."""
+    return (step.interpreter, step.script,
+            tuple(sorted(step.env.items())), tuple(step.args))
 
 
 def load_rows(path: str) -> list[dict]:
@@ -114,28 +179,23 @@ def build_plan(rows: list[dict], *, restart_infra: bool) -> list[Step]:
                          f"{PM}/update_claude1.sh", ["--skip-restart"]))
 
     # ── Accounts 2..N: derived from inventory, file order ───────────────────────────
-    # A row is deployed by `deployer` + `deploy_env` (Phase 2: generic engine + preset)
-    # or, for not-yet-migrated rows, by a standalone `deploy_script`. Dedup on the FULL
-    # (script, env) pair — several rows now share one generic engine (update_standalone.sh)
-    # with different presets (TEST_STANDALONE_USER_IDX), so deduping on script alone would
-    # wrongly collapse them.
+    # A row is deployed by `deployer` + `deploy_env` (Phase 2: generic engine + preset), by the
+    # native single-tree engine (deployer=deploy_actions.py → a python step), or, for
+    # not-yet-migrated rows, by a standalone `deploy_script`. Dedup on the full step identity
+    # (_step_key: interpreter+script+env+args) — several rows share one generic engine
+    # (update_standalone.sh) with different presets, and two native rows can share deploy_actions.py
+    # with the same account index but different family/strategy, so deduping on script alone (or
+    # script+env) would wrongly collapse them.
     seen: set[tuple] = set()
     for row in rows:
-        script = row.get("deployer") or row.get("deploy_script")
-        if not script:
+        step = _row_step(row)
+        if step is None:
             continue
-        if os.path.basename(script) in _BESPOKE_SCRIPTS:
-            continue                      # already run by the account-1 bespoke block
-        env = _row_env(row)
-        key = (script, tuple(sorted(env.items())))
+        key = _step_key(step)
         if key in seen:
             continue
         seen.add(key)
-        acct = f"account-{row['account_idx'] + 1}"
-        bot = row.get("bot_name", "?")
-        btype = row.get("bot_type", "")
-        label = f"{acct} — {bot}" + (f" ({btype})" if btype else "")
-        plan.append(Step(label, script, env=env))
+        plan.append(step)
     return plan
 
 
@@ -188,7 +248,8 @@ def main() -> int:
         for i, s in enumerate(plan, 1):
             envp = " ".join(f"{k}={v}" for k, v in s.env.items())
             extra = " ".join(s.args + forward)
-            line = f"  {i:2}. {s.label:52} {s.script}"
+            tag = "py " if s.interpreter == "python" else ""
+            line = f"  {i:2}. {s.label:52} {tag}{s.script}"
             if envp:
                 line += f"  {{{envp}}}"
             if extra:
@@ -202,7 +263,12 @@ def main() -> int:
     results: list[tuple[str, str]] = []
     failures = 0
     for s in plan:
-        cmd = ["bash", os.path.join(REPO, s.script), *s.args, *forward]
+        # native steps run under the SAME interpreter driving deploy.py (sys.executable — the
+        # project .venv the shim picked, ≥3.11), bash steps under bash. Forwarded flags
+        # (--verify-only/--skip-restart) are accepted by both the bash deployers and
+        # deploy_actions.py (which grew --skip-restart for exactly this uniform forwarding).
+        launcher = [sys.executable] if s.interpreter == "python" else ["bash"]
+        cmd = [*launcher, os.path.join(REPO, s.script), *s.args, *forward]
         run_env = {**os.environ, **s.env}
         print(_c("y", f"\n▶▶▶ {s.label} ▶▶▶"))
         if args.dry_run:

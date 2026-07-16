@@ -312,8 +312,8 @@ if should_run 6; then
     # Files that will NOT come back from any current rsync script:
     # - api_binance.py, api_bitstamp.py, api_mexc.py: not sent by update_standalone.sh
     #   (comes from tradinebotte-cex/, only sent by update_swing.sh to account-5,
-    #    and by deploy_accumulation/scalping to accounts 3-4 — BUT those scripts
-    #    also send the running bots, so we keep api_binance on accounts 3+4)
+    #    and by the native accumulation deploy (deploy_actions.py) to accounts 3-4 — BUT
+    #    that path also sends the running bots, so we keep api_binance on accounts 3+4)
     # - scalping_bot.py, scalping_math.py: not running on any account
     # - earn_manager.py: needed on accounts 3+4 (imported by accumulation/orderbook)
 
@@ -342,7 +342,7 @@ if should_run 6; then
     ok "${USER}: done"
 
     # account-2: scalping_bot + scalping_math + api_bitstamp/mexc only
-    # (api_binance.py comes back via deploy_accumulation rsync — leave it)
+    # (api_binance.py comes back via the native accumulation deploy rsync — leave it)
     # (earn_manager.py is imported by accumulation_bot — leave it)
     USER="${TEST_USERS[2]}"; PASS="${TEST_PASSWORDS[2]}"
     info "[${USER}] removing unused scalping+bitstamp/mexc files..."
@@ -390,7 +390,7 @@ if should_run 6; then
     echo "  To prevent: add to update_standalone.sh _rsync():"
     echo "    --exclude='account_bot.py' --exclude='feed.py'"
     echo ""
-    echo "  Files that return on accounts 3-4 via deploy_accumulation/scalping:"
+    echo "  Files that return on accounts 3-4 via the native accumulation deploy:"
     echo "    api_binance.py  (needed by connectors — acceptable)"
     echo "    api_bitstamp.py, api_mexc.py (add --exclude to CEX deploy scripts)"
 fi
@@ -401,4 +401,4 @@ echo ""
 echo "  Remaining manual actions:"
 echo "  1. Phase 1 root commands above (disable + remove system services)"
 echo "  2. Add rsync excludes to update_standalone.sh for account_bot.py, feed.py"
-echo "  3. Add rsync excludes to deploy_accumulation.sh for api_bitstamp.py, api_mexc.py"
+echo "  3. Add rsync excludes to deploy_actions.py _BASE_SYNC for api_bitstamp.py, api_mexc.py"

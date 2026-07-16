@@ -2,9 +2,10 @@
 """deploy_actions.py — Phase B of the deploy-engine refactor (docs/deploy-engine-design.md).
 
 The native action library: small, idempotent, typed steps that a bot deploys through,
-driven by DECLARATIVE inventory fields instead of a ~300-line per-family bash script. This
-module ships the actions + a native **grid** deployer (the pilot family), functionally
-equivalent to deploy_grid_mexc.sh / deploy_grid_binance.sh but with the design's improvements:
+driven by DECLARATIVE inventory fields instead of a ~300-line per-family bash script. It is
+now the pipeline's deployer for the single-tree families (accumulation + binance grid — the
+old deploy_accumulation.sh / deploy_grid_binance.sh were retired), and parallels the remaining
+bash deploy_grid_mexc.sh, with the design's improvements:
 
   * verify via the service's systemd **MainPID** (no `pgrep -f` self-match),
   * `record_deploy` under the generated **bot_id** (no hardcoded name → no journal drift),
@@ -432,7 +433,8 @@ def record_deploy(account: str, bot_id: str, ok: bool):
 
 def deploy_family(host: Host, family: str, *, install_dir: str, strategy: str = "",
                   verify_only: bool = False, test_ports: bool = False,
-                  single_tree: bool = False, migrate: bool = False) -> int:
+                  single_tree: bool = False, migrate: bool = False,
+                  skip_restart: bool = False) -> int:
     spec = FAMILIES[family]
     unit, role, conn = spec["unit"], spec["role"], spec["connector"]
     assert not migrate or single_tree, "--migrate only makes sense with --single-tree"
@@ -475,9 +477,14 @@ def deploy_family(host: Host, family: str, *, install_dir: str, strategy: str = 
             # write the TRADINEBOTTE_DIR/INSTANCE drop-in BEFORE restart so live_bot picks up the tree
             print(_c("y", f"▶ {label}: single-tree drop-in (instance={instance})"))
             assert act_single_tree_dropin(host, unit, instance), "single-tree drop-in failed"
-        print(_c("y", f"▶ {label}: restart"))
-        assert act_service_restart(host, install_dir, unit, spec["template"]), "restart failed"
-        host.ssh("sleep 6")  # let it boot + generate bot_id
+        if skip_restart:
+            # code/config refreshed but the bot is left running as-is (pipeline --skip-restart:
+            # rsync-only, no disruption). Any drop-in written above takes effect on the next restart.
+            print(_c("y", f"▶ {label}: skip-restart (code/config synced, unit NOT restarted)"))
+        else:
+            print(_c("y", f"▶ {label}: restart"))
+            assert act_service_restart(host, install_dir, unit, spec["template"]), "restart failed"
+            host.ssh("sleep 6")  # let it boot + generate bot_id
     bot_id = act_read_bot_id(host, data_dir, role) or f"{conn}-{family}-unknown"
     ok, detail = act_verify(host, unit, f"{data_dir}/{log_name}")
     mark = _c("g", "✓") if ok else _c("r", "✗")
@@ -503,7 +510,8 @@ def act_sync_infra(host: Host, install_dir: str, spec: dict) -> bool:
 
 
 def deploy_infra(host: Host, service: str, *, install_dir: str = "~/tradinebotte",
-                 verify_only: bool = False, test_ports: bool = False) -> int:
+                 verify_only: bool = False, test_ports: bool = False,
+                 skip_restart: bool = False) -> int:
     spec = INFRA[service]
     unit = spec["unit"].replace("{account}", host.user)   # account_bot unit is per-user
     data_dir = spec["data_dir"]
@@ -518,9 +526,12 @@ def deploy_infra(host: Host, service: str, *, install_dir: str = "~/tradinebotte
         if test_ports:
             print(_c("y", f"▶ {label}: test-ports {env or '(IPC — none)'}"))
         assert act_test_ports_dropin(host, unit, env), "test-ports drop-in failed"
-        print(_c("y", f"▶ {label}: restart"))
-        assert act_service_restart(host, install_dir, unit, spec["template"]), "restart failed"
-        host.ssh("sleep 6")
+        if skip_restart:
+            print(_c("y", f"▶ {label}: skip-restart (code synced, unit NOT restarted)"))
+        else:
+            print(_c("y", f"▶ {label}: restart"))
+            assert act_service_restart(host, install_dir, unit, spec["template"]), "restart failed"
+            host.ssh("sleep 6")
     bot_id = spec.get("bot_name") or (act_read_bot_id(host, data_dir, spec["role"]) if spec["role"] else "") \
         or f"infra-{service}-unknown"
     ok, detail = act_verify(host, unit, f"{data_dir}/{spec['log']}")
@@ -538,6 +549,10 @@ def main() -> int:
     ap.add_argument("--strategy", default="", help="strategy JSON (write families; ignored for polymarket merge)")
     ap.add_argument("--dir", default="~/tradinebotte", help="install (code) dir")
     ap.add_argument("--verify-only", action="store_true")
+    ap.add_argument("--skip-restart", action="store_true",
+                    help="sync code/config (+ drop-ins) but do NOT restart the unit — the bot keeps "
+                         "running as-is (parity with the bash deployers' --skip-restart, so the "
+                         "pipeline can forward it uniformly to native steps)")
     ap.add_argument("--test-ports", action="store_true",
                     help="offset every TCP bind by +10 for a self-contained test-account stack "
                          "(auto-on for the test-account idx; refused elsewhere)")
@@ -572,13 +587,14 @@ def main() -> int:
             print("--single-tree applies to families only (infra is single-instance)", file=sys.stderr)
             return 2
         return deploy_infra(host, a.target, install_dir=a.dir, verify_only=a.verify_only,
-                            test_ports=test_ports)
+                            test_ports=test_ports, skip_restart=a.skip_restart)
     if FAMILIES[a.target]["config_mode"] == "write" and not a.strategy:
         print(f"--strategy is required for family {a.target!r}", file=sys.stderr); return 2
     single_tree = a.single_tree or a.migrate   # --migrate implies single-tree
     return deploy_family(host, a.target, install_dir=a.dir, strategy=a.strategy,
                          verify_only=a.verify_only, test_ports=test_ports,
-                         single_tree=single_tree, migrate=a.migrate)
+                         single_tree=single_tree, migrate=a.migrate,
+                         skip_restart=a.skip_restart)
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import check_inventory as ci  # noqa: E402
 
-_GRID = "tradinebotte-cex/scripts/deploy_grid_binance.sh"
+_GRID = "tradinebotte-cex/scripts/deploy_grid_mexc.sh"
 
 
 class TestDeployPipeline(unittest.TestCase):
@@ -21,9 +21,9 @@ class TestDeployPipeline(unittest.TestCase):
     def test_collision_when_two_bots_share_deployer_and_env(self):
         rows = [
             {"account_idx": 1, "bot_name": "grid_bot", "kind": "bot",
-             "deployer": _GRID, "deploy_env": {"TEST_GRID_BINANCE_USER_IDX": "1"}},
+             "deployer": _GRID, "deploy_env": {"TEST_GRID_MEXC_USER_IDX": "1"}},
             {"account_idx": 2, "bot_name": "grid_bot", "kind": "bot",
-             "deployer": _GRID, "deploy_env": {"TEST_GRID_BINANCE_USER_IDX": "1"}},  # same idx!
+             "deployer": _GRID, "deploy_env": {"TEST_GRID_MEXC_USER_IDX": "1"}},  # same idx!
         ]
         probs = ci.check_deploy_pipeline(rows)
         self.assertTrue(any("collision" in p for p in probs), probs)
@@ -31,9 +31,9 @@ class TestDeployPipeline(unittest.TestCase):
     def test_distinct_indices_do_not_collide(self):
         rows = [
             {"account_idx": 1, "bot_name": "grid_bot", "kind": "bot",
-             "deployer": _GRID, "deploy_env": {"TEST_GRID_BINANCE_USER_IDX": "1"}},
+             "deployer": _GRID, "deploy_env": {"TEST_GRID_MEXC_USER_IDX": "1"}},
             {"account_idx": 2, "bot_name": "grid_bot", "kind": "bot",
-             "deployer": _GRID, "deploy_env": {"TEST_GRID_BINANCE_USER_IDX": "2"}},
+             "deployer": _GRID, "deploy_env": {"TEST_GRID_MEXC_USER_IDX": "2"}},
         ]
         self.assertEqual([p for p in ci.check_deploy_pipeline(rows) if "collision" in p], [])
 
@@ -42,7 +42,7 @@ class TestDeployPipeline(unittest.TestCase):
             {"account_idx": 0, "bot_name": "account_bot", "kind": "bot",
              "deploy_script": "tradinebotte-polymarket/scripts/update_claude1.sh"},
             {"account_idx": 0, "bot_name": "grid_bot", "kind": "bot",
-             "deployer": _GRID, "deploy_env": {"TEST_GRID_BINANCE_USER_IDX": "0"}},
+             "deployer": _GRID, "deploy_env": {"TEST_GRID_MEXC_USER_IDX": "0"}},
         ]
         # The trading bot must NOT be flagged undeployable/absent (it's in the derived plan).
         self.assertEqual(ci.check_deploy_pipeline(rows), [])

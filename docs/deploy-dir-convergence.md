@@ -146,3 +146,101 @@ Net after convergence: `native_target`/`FAMILIES` derive `data_suffix` + `servic
    Full uniformity moves them to `~/tradinebotte-<role>` — cleaner but migrates *every* bot's data, not just
    the two divergent ones. Alternative: keep an empty suffix legal for one primary-per-account (less
    migration, mild residual asymmetry). Recommend full uniformity if we're paying for the migration anyway.
+
+## 6. Reconciliation addendum (2026-07-13) — wire the pipeline + inventory to single-tree
+
+> Status: **IMPLEMENTED + validated 2026-07-13** (working tree on `dev`, uncommitted pending the
+> dev→main release). Written after the P4 prod cutover + a ~2h soak; reviewed with the advisor,
+> user go-ahead given. Closes the "interim footgun". Acceptance results in §6.5.
+
+### 6.1 Why now — the interim footgun
+The P4 cutover moved 5 bots (accumulation idx1/2/3/7 + binance-grid idx2) onto single-tree **purely via a
+systemd `.d/single-tree.conf` drop-in** that only `deploy_actions.py --single-tree` writes. But the standard
+pipeline is unaware: `inventory.toml` still says `install_dir = ~/tradinebotte-accum|-grid` with **bash**
+deployers, and `deploy.py` still runs them. So the user's **"bot upgrades" trigger (`deploy_all.sh`)** against
+these 5 writes `~/tradinebotte-accum/config.json`, which the drop-in-overridden unit **ignores** (it reads
+`config_<role>.json` in `~/tradinebotte`) → **silent config no-op**. Non-destructive (the drop-in protects the
+data dir) but a real foot-gun. Soak re-verified healthy 2026-07-13 22:2x: all 5 fresh heartbeats (<120s),
+bot_ids reused, holdings continuous (grid pnl 140.54 exact, LBC accum 26894.8).
+
+### 6.2 Scope — the 5 migrated bots only (Option B, mixed layout)
+Reconcile **only** the bots already on single-tree. The un-migrated primaries (poly `update_standalone.sh`,
+swing `update_swing.sh`, mexc-grid `deploy_grid_mexc.sh`) + acct-1 infra **stay on their bash paths** — their
+legacy layout is still correct for them. Full-native for every family is explicitly **out of this release**: it
+would drag in poly's merge-config landmine (§ "TWO P4 migration landmines" in [[project_convergence_p2_pickup]])
+for no gain here.
+
+### 6.3 Design
+1. **`deploy.py` native dispatch.** A row dispatches natively **iff `deployer == scripts/deploy_actions.py`**
+   (explicit, greppable — *not* derived from bot_type, which would sweep in the primaries). Family comes from
+   `deploy_actions.native_target(bot_type)` (must resolve to `("family", fam)`). The step becomes a **python**
+   command: `python3 scripts/deploy_actions.py <fam> --idx <account_idx> --strategy <strategy>` `[--single-tree]`
+   (`--single-tree` added when the row has `single_tree = true`). Bash rows are unchanged. `Step` grows an
+   `interpreter` (`"bash"` default | `"python"`); the executor picks `bash`/`python3` accordingly.
+2. **Dedup collision fix — THE sharp edge.** Pinning case: **idx-2/account-3 runs BOTH the accum row AND the
+   binance-grid row.** After repatch both have `deployer = deploy_actions.py` and `account_idx = 2`, so keying
+   the dedup on `(script, env)` — or even `(script, env, idx)` — **collapses them into one step and silently
+   drops one.** They only become distinct on the **full argv** (`family` = `accumulation` vs `grid_binance`,
+   plus `--strategy`). Fix: the dedup key = `(script, env, tuple(args))`. Bash rows keep `args=[]`, so this is
+   purely additive (no regression on the poly/swing dedup). **Extract ONE `_plan_key(row)` (or dedup off the
+   `build_plan` steps `check_inventory` already imports)** so `build_plan` and
+   `check_inventory.check_deploy_pipeline` cannot drift — a divergent second copy makes the collision guard
+   useless.
+3. **`--skip-restart` on `deploy_actions.py`.** `deploy.py` forwards `--verify-only`/`--skip-restart` via
+   `*forward`; `deploy_actions.py` uses strict `parse_args()` and today has no `--skip-restart` → it would
+   **hard-error the native step**. Add `--skip-restart` (uniform flags with the bash deployers). `--verify-only`
+   already works (it requires `--strategy`, which native rows always supply).
+4. **Inventory repatch (5 rows).** `install_dir` → `~/tradinebotte`; add `single_tree = true`; `deployer` →
+   `scripts/deploy_actions.py`; replace the strategy env var (`BOT_STRATEGY` / `TEST_GRID_BINANCE_STRATEGY`) with
+   a uniform **`strategy = "..."`** field; **`service_unit` unchanged** (accumulation/grid units stay — only the
+   DIR converges); fix the now-wrong "own data dir" comments.
+5. **Delete the dead bash deployers.** `deploy_grid_binance.sh` **and** `deploy_accumulation.sh` — after repatch
+   NO row uses either (both families are fully native). [[feedback_eliminate_dont_maintain]] covers both;
+   grid_binance was only singled out earlier for its extra wiring. Scrub the stale `cleanup_server.sh` comment
+   mentions. `check_no_legacy_refs.sh` is orthogonal (it guards the old `heartbeat.db` read-path only) — deleting
+   these scripts does not touch it.
+6. **Coupled tests.** `tests/test_deploy.py` (`_EXPECTED_2_6` → native steps; `TestScaleOut._FAM` +
+   `test_account1_trading_bot_is_derived` swap off `deploy_grid_binance.sh`);
+   `tradinebotte-status/tests/test_check_inventory.py` (`_GRID` synthetic constant swap);
+   `tradinebotte-polymarket/tests/test_bot.py` (`_BOT_DEPLOY_SCRIPTS`: drop `deploy_grid_binance.sh`, **add
+   `scripts/deploy_actions.py`** — the native path must ship `botcore/`, which it does via `_BASE_SYNC`).
+
+### 6.4 Sequencing (mechanism-first, mirrors the P1-inert pattern)
+- **A.** Land `deploy.py` native dispatch + the `(script,env,args)` dedup key + `deploy_actions --skip-restart`,
+  with the shared `_plan_key`. **Inert** — no inventory row triggers it yet — plus unit tests. Independently
+  testable.
+- **B.** Repatch the 5 inventory rows → native dispatch goes live for exactly them.
+- **C.** Delete the dead scripts + update the coupled tests + scrub comments.
+
+### 6.5 Acceptance (enumerated — the prior phases' standard, not "tests pass")
+1. **`deploy_all.sh --list` on the real inventory** = the cheap dedup acceptance: **5 distinct native steps**,
+   with **idx2 showing accum AND grid as separate steps**, none collapsed.
+2. Unit tests asserting the **derived native argv** for each of the 5 rows.
+3. **test-account e2e THROUGH `deploy.py`** (not the direct `deploy_actions.py` CLI — the *dispatch* path is what's
+   new; the CLI path is already proven by P2–P4).
+4. **First prod touch = `deploy_all.sh --verify-only`**, never a blind full run. (A plain `--single-tree` re-run
+   on the already-migrated tree is idempotent-safe — DB/bot_id already moved, write-mode config regenerates — but
+   prove it via `--verify-only` first.)
+5. `check_inventory.py` offline green; full suite green.
+
+### 6.5b Acceptance results (2026-07-13)
+1. ✅ `deploy_all.sh --list`: **5 native `py` steps**, idx-2/account-3 shows accum (#5) AND
+   grid_binance (#6) as separate steps — the dedup-collision fix proven on the real inventory.
+2. ✅ New unit tests: `TestNativeDispatch` (7, incl. the idx-2 accum+grid pinning case) +
+   `TestRealInventory.test_derived_plan_matches_historical_order` / `test_migrated_families_deploy_natively`.
+3. ✅ **test-account e2e THROUGH `deploy.py`**: dispatched `native accumulation deploy → the test account
+   [test-ports +10]`, verified `active errors=0`; enumerated layout = config_accumulation.json +
+   live_accumulation.db + bot_id_accumulation + accumulation.log present, **ZERO** plain
+   config.json/live.db/live.log, and **`/proc/<pid>/fd` holds ONLY live_accumulation.db**
+   (categorical isolation). `--verify-only` forwarded cleanly through the native step (no argparse
+   error). Test account wiped + its 8 heartbeats/2 deploys purged from the shared DB.
+4. ✅ `check_inventory.py` offline green (17 rows); deploy/deploy_actions/check_inventory test
+   suites green. Two PRE-EXISTING, orthogonal full-suite failures (NOT introduced here): stale
+   venv `tradinetools` copy (env, refreshed locally) and `cex_consumer.indicators_consumer_loop`
+   snapshot AST check (a separate real finding).
+5. Prod not yet touched — first prod touch stays `deploy_all.sh --verify-only`, user-triggered.
+
+### 6.6 NOT in this change — retire the old dirs (still blocked)
+`rm -rf ~/tradinebotte-accum|-grid` is **DESTRUCTIVE and the sole revert path.** Soak is only ~2h (cutover was
+20:10–20:32 today); it needs a **day+** soak **and explicit user OK**. Deferred, unchanged from
+[[project_convergence_p2_pickup]].
