@@ -101,15 +101,17 @@ DEFAULT_SYMBOL = "BTCUSDT"
 # `isMaker=True commission=0 USDT` in myTrades. This is the rate that matters — the live
 # bot posts resting maker orders precisely so it pays nothing.
 #
-# TAKER = 0.04%, read by the account owner from their MEXC account page. Note the account's
-# effective rate is what gets charged and it is NOT what the API advertises: exchangeInfo
-# reports takerCommission=0.0005 (0.05%), but that is the SYMBOL DEFAULT and is blind to the
-# account's VIP tier / MX deduction (the 20% MX discount is what turns 0.05% into 0.04%).
-# We cannot confirm it programmatically — /api/v3/account AND /api/v3/tradeFee both return
-# 700007 (key lacks permission), so there is no API path to commissionRates. If the MX
-# deduction ever lapses this reverts to 0.0005, so treat 0.0004 as the current tier, not a
-# constant of nature. Only paper sims depend on it; real orders are maker-only.
-FEE_RATE       = 0.0004   # taker, 0.04% (account tier w/ MX deduction; 0.0005 without)
+# TAKER = 0.04% EFFECTIVE, and the two sources that look contradictory are both right:
+#   /api/v3/tradeFee?symbol=LBCUSDT -> takerCommission 0.0005   (the account's BASE tier)
+#   the MEXC account page           -> 0.0400%                  (EFFECTIVE, after MX)
+# 0.0005 x 0.8 = 0.0004: the 20% MX deduction is applied at settlement and is NOT reflected
+# in the API's advertised rate. So the API can confirm the base tier but can never confirm
+# what we are actually charged. If the MX deduction lapses (no MX held / toggled off) this
+# reverts to 0.0005 — treat 0.0004 as the current tier, not a constant of nature.
+# (/api/v3/account exposes no commission fields at all on MEXC, unlike Binance: they come
+# back None. tradeFee is the account-level endpoint, and needs the "view account details"
+# key permission.) Only paper sims depend on this; real orders are maker-only.
+FEE_RATE       = 0.0004   # taker, 0.04% effective (base 0.0005 x 0.8 MX deduction)
 MAKER_FEE_RATE = 0.0      # verified 0 on a real trade
 
 
