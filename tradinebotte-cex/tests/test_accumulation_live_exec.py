@@ -1003,5 +1003,63 @@ class TestRebuyObligationLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(eng.acc.holdings_btc, 5300.0)   # 4000 + 1300 rebought
 
 
+class TestDurableTradePush(unittest.TestCase):
+    """The heartbeat mode signal + the durable bot_trades push (fill + periodic gap-fill)."""
+
+    def setUp(self):
+        import strategy_engines.accumulation as _mod
+        self._mod = _mod
+        self._orig_push = _mod._push_trade
+        self.pushed = []
+        _mod._push_trade = lambda p: self.pushed.append(p)
+
+    def tearDown(self):
+        self._mod._push_trade = self._orig_push
+
+    def test_heartbeat_mode_reflects_runtime(self):
+        eng, _ = _live_engine()
+        self.assertEqual(eng.heartbeat_payload()["mode"], "live")
+        eng.shadow = True
+        self.assertEqual(eng.heartbeat_payload()["mode"], "shadow")
+        eng.live = False
+        self.assertEqual(eng.heartbeat_payload()["mode"], "sim")
+
+    def test_record_trade_pushes_only_when_live(self):
+        eng, state = _live_engine()
+        eng._bot_id, eng._account = "mexc-accumulation-lbcusdt-955a99", "acct-a"
+        eng._record_accum_trade(state.conn, ts_ms=1, side="buy", reason="live-fill",
+                                price=0.0024, qty=886.95, quote=2.11, fee=0.0, order_id="C02__X")
+        self.assertEqual(len(self.pushed), 1)
+        self.assertEqual(self.pushed[0]["order_id"], "C02__X")
+        self.assertEqual(self.pushed[0]["bot_name"], "mexc-accumulation-lbcusdt-955a99")
+        # paper (not live) records locally but never pushes to the real-money log
+        self.pushed.clear()
+        eng.live = False
+        eng._record_accum_trade(state.conn, ts_ms=2, side="sell", reason="r",
+                                price=0.0026, qty=100, quote=0.26, fee=0.0)
+        self.assertEqual(self.pushed, [])
+
+    def test_resync_throttled_and_live_gated(self):
+        eng, state = _live_engine(trade_resync_every_s=120)
+        eng._bot_id, eng._account = "b", "acct-a"
+        for ts in (1, 2):
+            state.conn.execute(
+                "INSERT INTO accum_trades(ts_ms,side,reason,price,qty_btc,usdt_value,"
+                "fee_usdt,avg_entry_after,holdings_after,free_usdt_after) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (ts, "buy", "live-fill", 0.0024, 886.95, 2.11, 0.0, 0.0024, 886.95, 90))
+        state.conn.commit()
+        eng._resync_trades(state)
+        self.assertEqual(len(self.pushed), 2)          # both recent trades re-pushed
+        eng._resync_trades(state)                       # within throttle window
+        self.assertEqual(len(self.pushed), 2)          # nothing new
+        # not live → no re-push
+        self.pushed.clear()
+        eng.live = False
+        eng._last_trade_resync_ts = 0.0
+        eng._resync_trades(state)
+        self.assertEqual(self.pushed, [])
+
+
 if __name__ == "__main__":
     unittest.main()

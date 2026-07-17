@@ -467,6 +467,7 @@ class AccumulationStrategy:
         self._retry_after = 0.0
         self._last_drift_ts = 0.0
         self._drift_ok      = None    # None = never checked (vs True = checked and clean)
+        self._last_trade_resync_ts = 0.0   # throttle for the durable bot_trades gap-filler
         self._oversell_warn_ts = 0.0
         self._sell_fail_streak = 0
         self._sell_retry_after = 0.0
@@ -1073,6 +1074,35 @@ class AccumulationStrategy:
                            "real=%.6f) — deposit, or an uncredited fill?",
                            real - a.holdings_btc, a.holdings_btc, real)
 
+    def _resync_trades(self, state: Any) -> None:
+        """Throttled gap-filler for the durable bot_trades log: re-push recent LOCAL trades so
+        a fill whose live push dropped (collector blip / full queue) still lands. Idempotent
+        downstream (store_trade INSERT OR IGNORE dedupes), best-effort, never blocks trading.
+        LIVE only. Re-pushed rows carry no order_id — accum_trades doesn't persist it — so the
+        push-on-fill (which does) normally wins the race and this only backfills true gaps."""
+        if not self.live:
+            return
+        every = self.acc.p.get("trade_resync_every_s", 120)
+        now = time.time()
+        if now - self._last_trade_resync_ts < every:
+            return
+        self._last_trade_resync_ts = now
+        try:
+            rows = state.conn.execute(
+                "SELECT ts_ms, side, reason, price, qty_btc, usdt_value, fee_usdt,"
+                " avg_entry_after, holdings_after, free_usdt_after FROM accum_trades"
+                " ORDER BY ts_ms DESC LIMIT ?",
+                (self.acc.p.get("trade_resync_limit", 50),)).fetchall()
+        except sqlite3.Error:
+            return
+        for r in rows:
+            _push_trade({
+                "account": self._account, "bot_name": self._bot_id,
+                "ts_ms": r[0], "side": r[1], "reason": r[2], "price": r[3],
+                "qty": r[4], "quote": r[5], "fee": r[6], "maker": True,
+                "avg_entry_after": r[7], "holdings_after": r[8], "free_after": r[9],
+            })
+
     async def _adopt_open_orders(self, state: Any) -> None:
         """Startup, BEFORE any placement: reconcile the persisted resting bid AND adopt the
         persisted sell ladder, then cancel only genuine orphans.
@@ -1395,6 +1425,7 @@ class AccumulationStrategy:
             # taking its fill delta would lose real coins.
             await self._reconcile_live_sells(state, ts_ms)
             await self._check_drift(state)
+            self._resync_trades(state)
 
         if not a.initial_done:
             if a.p.get("vwap_gate_initial", False):
