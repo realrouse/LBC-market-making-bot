@@ -36,7 +36,7 @@
     "rebuy_discount_max_pct": 10.0,
     "rebuy_spread_mult":    3.0,
 
-    "fee_spot":             0.0005,
+    "fee_spot":             0.0004,
     "maker_fee_spot":       0.0,
     "use_limit_orders":     true,
 
