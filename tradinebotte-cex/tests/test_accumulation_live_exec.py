@@ -814,6 +814,70 @@ class TestRebuyObligationLifecycle(unittest.IsolatedAsyncioTestCase):
         await eng._reconcile_live_buy(state, 0.0025, 3)
         self.assertEqual(len(eng.acc.pending_rebuys), 1)
 
+    async def test_discharges_the_obligation_the_bid_was_placed_for(self):
+        """A band can owe several rebuys at once — the live bot owed two on band 5 (a
+        1260-coin sell and an 882-coin re-arm). Matching on band discharges whichever is
+        first: bid for the SECOND (because the first was unaffordable) and the FIRST gets
+        marked bought. That leaves a phantom obligation gating the band forever, and claims
+        a rebuy that never happened."""
+        eng, state = _ladder_engine()
+        eng.acc.free_usdt = 2.5                    # only enough for the smaller obligation
+        big   = PendingRebuy(band_pct=5.0, sell_price=0.0026, qty_btc=1260.0,
+                             rebuy_price=0.0026, ts_ms=1, rid="aaa")
+        small = PendingRebuy(band_pct=5.0, sell_price=0.0026, qty_btc=800.0,
+                             rebuy_price=0.0026, ts_ms=1, rid="bbb")
+        eng.acc.pending_rebuys.extend([big, small])
+        await eng._check_rebuys(state, 0.0025, 2)  # big needs $3.15 > budget → skipped
+        self.assertEqual(eng.acc.pending_buy["rebuy_rid"], "bbb")
+        eng._api.get_order = AsyncMock(return_value={
+            "status": "FILLED", "executed_qty": 804.0, "cummulative_quote_qty": 2.0})
+        await eng._reconcile_live_buy(state, 0.0025, 3)
+        self.assertEqual([r.rid for r in eng.acc.pending_rebuys], ["aaa"])   # NOT ["bbb"]
+
+    async def test_band_stays_gated_while_it_still_owes_another_rebuy(self):
+        eng, state = _ladder_engine()
+        eng.acc.pending_rebuys.extend([
+            PendingRebuy(band_pct=5.0, sell_price=0.0026, qty_btc=1260.0,
+                         rebuy_price=0.0026, ts_ms=1, rid="aaa"),
+            PendingRebuy(band_pct=5.0, sell_price=0.0026, qty_btc=800.0,
+                         rebuy_price=0.0026, ts_ms=1, rid="bbb")])
+        await eng._check_rebuys(state, 0.0025, 2)
+        eng._api.get_order = AsyncMock(return_value={
+            "status": "FILLED", "executed_qty": 1266.0, "cummulative_quote_qty": 3.15})
+        await eng._reconcile_live_buy(state, 0.0025, 3)
+        self.assertEqual(len(eng.acc.pending_rebuys), 1)          # one discharged
+        self.assertIn(5.0, {rb.band_pct for rb in eng.acc.pending_rebuys})  # still owed
+
+    def test_restore_backfills_rids_on_state_written_before_they_existed(self):
+        eng, state = _ladder_engine()
+        # simulate legacy persisted state: obligations with no rid
+        state.conn.execute(
+            "INSERT OR REPLACE INTO accum_state (id, ts_ms, holdings_btc, avg_entry, "
+            "free_usdt, total_realized, peak_holdings_btc, last_buy_ts, "
+            "pending_rebuys_json, active_bands_json) VALUES (1,1,100.0,0.0025,10.0,0.0,"
+            "100.0,0,'[{\"band_pct\": 5.0, \"sell_price\": 0.0026, \"qty_btc\": 1260.0, "
+            "\"rebuy_price\": 0.0025, \"ts_ms\": 1, \"low_seen\": -1.0}]','[]')")
+        state.conn.commit()
+        eng2, _ = _ladder_engine()
+        eng2.acc.pending_rebuys.clear()
+        eng2._restore_state(state.conn)
+        self.assertEqual(len(eng2.acc.pending_rebuys), 1)
+        self.assertTrue(eng2.acc.pending_rebuys[0].rid)            # backfilled, not empty
+
+    async def test_legacy_in_flight_bid_without_a_rid_still_discharges(self):
+        # the bid resting at deploy time was placed before rids existed
+        eng, state = _ladder_engine()
+        eng.acc.pending_rebuys.append(
+            PendingRebuy(band_pct=5.0, sell_price=0.0026, qty_btc=1260.0,
+                         rebuy_price=0.0026, ts_ms=1, rid="aaa"))
+        eng.acc.pending_buy = {"order_id": "old1", "price": 0.0025, "orig_qty": 1266.0,
+                               "executed_qty_seen": 0.0, "quote_spent_seen": 0.0,
+                               "reason": "rebuy+5.0%", "placed_ts": 0.0}   # no rebuy_rid
+        eng._api.get_order = AsyncMock(return_value={
+            "status": "FILLED", "executed_qty": 1266.0, "cummulative_quote_qty": 3.15})
+        await eng._reconcile_live_buy(state, 0.0025, 3)
+        self.assertEqual(eng.acc.pending_rebuys, [])               # legacy fallback matched
+
     async def test_rebuy_obligation_discharged_when_its_bid_fills(self):
         eng, state = _ladder_engine()
         eng.acc.pending_rebuys.append(

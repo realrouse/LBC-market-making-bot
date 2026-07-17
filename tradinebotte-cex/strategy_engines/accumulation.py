@@ -25,6 +25,7 @@ import json
 import logging
 import sqlite3
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -136,6 +137,11 @@ class PendingRebuy:
     rebuy_price: float
     ts_ms:       int   = 0
     low_seen:    float = -1.0
+    # Stable identity. A band can owe SEVERAL rebuys at once (each sell fill mints one, and
+    # a partial fills in pieces), so band_pct alone does not identify an obligation: matching
+    # on it discharges whichever happens to be first, which is not necessarily the one the
+    # bid was placed for. Defaulted so records persisted before this field restore cleanly.
+    rid:         str   = ""
 
 
 @dataclass
@@ -486,7 +492,8 @@ class AccumulationStrategy:
         rebuys_json = json.dumps([
             {"band_pct": r.band_pct, "sell_price": r.sell_price,
              "qty_btc":  r.qty_btc,  "rebuy_price": r.rebuy_price,
-             "ts_ms":    r.ts_ms,    "low_seen":    r.low_seen}
+             "ts_ms":    r.ts_ms,    "low_seen":    r.low_seen,
+             "rid":      r.rid}
             for r in a.pending_rebuys
         ])
         bands_json = json.dumps(sorted(a.active_bands))
@@ -534,7 +541,10 @@ class AccumulationStrategy:
         a.initial_done      = True
         if rebuys_json:
             for r in json.loads(rebuys_json):
-                a.pending_rebuys.append(PendingRebuy(**r))
+                rb = PendingRebuy(**r)
+                if not rb.rid:                 # upgrade state persisted before rids existed
+                    rb.rid = uuid.uuid4().hex[:8]
+                a.pending_rebuys.append(rb)
         if bands_json:
             a.active_bands = set(json.loads(bands_json))
         try:
@@ -626,17 +636,17 @@ class AccumulationStrategy:
     # ── Trade execution ─────────────────────────────────────────────────────────
 
     async def _buy(self, state: Any, price: float, usdt_amount: float,
-                   reason: str, ts_ms: int) -> bool:
+                   reason: str, ts_ms: int, rid: str = "") -> bool:
         """Dispatch a buy decision: LIVE (place a real maker bid, credit on fill) or PAPER
         (instant self-accounted fill). Call sites are unchanged; only the effect differs."""
         if self.live:
-            return await self._place_live_buy(state, price, usdt_amount, reason, ts_ms)
+            return await self._place_live_buy(state, price, usdt_amount, reason, ts_ms, rid)
         return await self._buy_paper(state, price, usdt_amount, reason, ts_ms)
 
     # ── Live maker execution (Option B — buy-only) ───────────────────────────────
 
     async def _place_live_buy(self, state: Any, price: float, usdt_amount: float,
-                              reason: str, ts_ms: int) -> bool:
+                              reason: str, ts_ms: int, rid: str = "") -> bool:
         """Place ONE resting maker bid below mid (0-cross, no impact). Holdings are NOT
         credited here — only on fill, in _reconcile_live_buy. One bid at a time caps the
         committed budget at a single clip. Shadow → log intent, place nothing, keep paper
@@ -672,7 +682,7 @@ class AccumulationStrategy:
                          "executed_qty_seen": 0.0, "quote_spent_seen": 0.0,
                          # `reason` links a rebuy bid back to its obligation, which is
                          # discharged on FILL (in _credit_fill) — never on placement.
-                         "reason": reason, "placed_ts": time.time()}
+                         "reason": reason, "rebuy_rid": rid, "placed_ts": time.time()}
         self._save_pending(state.conn)
         logger.info("LIVE maker BUY placed id=%s  %.2f USDT @ %.*f  [%s]", oid, usdt_amount, pd, bid, reason)
         return True
@@ -698,14 +708,27 @@ class AccumulationStrategy:
         # placement (as the paper instant-fill path can) would drop the obligation whenever
         # the bid is later cancelled unfilled — we would have sold coins and quietly
         # abandoned the plan to buy them back cheaper, which is the whole ratchet.
-        reason = (a.pending_buy or {}).get("reason", "")
+        pb     = a.pending_buy or {}
+        reason = pb.get("reason", "")
         if reason.startswith("rebuy+"):
-            for rb in list(a.pending_rebuys):
-                if f"rebuy+{rb.band_pct:.1f}%" == reason:
-                    a.pending_rebuys.remove(rb)
-                    a.active_bands.discard(rb.band_pct)
-                    logger.info("  rebuy obligation +%.1f%% discharged on fill", rb.band_pct)
-                    break
+            rid = pb.get("rebuy_rid") or ""
+            # Discharge the obligation this bid was actually placed FOR. Matching on band
+            # would pick the first of several same-band obligations — so a bid raised for
+            # the second (because the first was unaffordable) would discharge the first,
+            # leaving a phantom that gates the band forever and marking a rebuy done that
+            # never happened. Fall back to band-matching only for bids placed before rids
+            # existed, which are in flight at deploy time.
+            match = next((r for r in a.pending_rebuys if rid and r.rid == rid), None)
+            if match is None and not rid:
+                match = next((r for r in a.pending_rebuys
+                              if f"rebuy+{r.band_pct:.1f}%" == reason), None)
+            if match is not None:
+                a.pending_rebuys.remove(match)
+                if not any(r.band_pct == match.band_pct for r in a.pending_rebuys):
+                    a.active_bands.discard(match.band_pct)   # band re-arms only when it
+                    # owes nothing at all — several obligations can share one band
+                logger.info("  rebuy obligation +%.1f%% (%.4f coins) discharged on fill%s",
+                            match.band_pct, match.qty_btc, "" if rid else " [legacy match]")
         state.conn.execute("""
             INSERT INTO accum_trades
                 (ts_ms, side, reason, price, qty_btc, usdt_value, fee_usdt,
@@ -767,7 +790,8 @@ class AccumulationStrategy:
         band     = rec.get("band_pct", 0.0)
         a.pending_rebuys.append(
             PendingRebuy(band_pct=band, sell_price=fill_price, qty_btc=dqty,
-                         rebuy_price=fill_price * (1.0 - discount), ts_ms=ts_ms))
+                         rebuy_price=fill_price * (1.0 - discount), ts_ms=ts_ms,
+                         rid=uuid.uuid4().hex[:8]))
         state.conn.execute("""
             INSERT INTO accum_trades
                 (ts_ms, side, reason, price, qty_btc, usdt_value, fee_usdt,
@@ -1137,7 +1161,8 @@ class AccumulationStrategy:
             usdt_needed = rb.qty_btc * price
             if usdt_needed > a.free_usdt:
                 continue
-            placed = await self._buy(state, price, usdt_needed, f"rebuy+{rb.band_pct:.1f}%", ts_ms)
+            placed = await self._buy(state, price, usdt_needed,
+                                     f"rebuy+{rb.band_pct:.1f}%", ts_ms, rb.rid)
             if placed and not self.live:
                 a.active_bands.discard(rb.band_pct)   # paper fills instantly → done
                 filled.append(rb)
