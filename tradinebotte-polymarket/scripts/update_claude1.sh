@@ -2,9 +2,12 @@
 # shellcheck disable=SC1090  # source "$CONF" path is determined at runtime
 # update_claude1.sh — Push a code update to the BTC 15M Polymarket account and verify services.
 #
-# This account runs three systemd user services (NOT a standalone live_bot):
+# This account is the fleet's data plane (NOT a standalone live_bot) — five systemd user services:
 #   tradinebotte-indicators        — shared indicator pipeline
-#   tradinebotte-feed              — shared WebSocket ZeroMQ broadcaster
+#   tradinebotte-feed              — shared Polymarket WebSocket ZeroMQ broadcaster
+#   tradinebotte-feed5m            — the 5-minute-window feed variant (same feed.py)
+#   tradinebotte-cexfeed           — shared CEX book broadcaster (cex_feed.py, port 5563);
+#                                    DATA SOURCE for the real-money LBC accumulation bot
 #   tradinebotte-account-<user>    — account_bot subscribing to the feed
 #
 # Targets TEST_USERS[0] (15M Polymarket collector, tag=102467).
@@ -16,8 +19,14 @@
 #   bash scripts/update_claude1.sh --verify-only      # check status of all 3 services
 #   bash scripts/update_claude1.sh --restart-indicators  # rsync + restart tradinebotte-indicators
 #   bash scripts/update_claude1.sh --restart-feed        # rsync + restart tradinebotte-feed
+#   bash scripts/update_claude1.sh --restart-feed5m      # rsync + restart tradinebotte-feed5m
+#   bash scripts/update_claude1.sh --restart-cexfeed     # rsync + restart tradinebotte-cexfeed (LBC bot's data source)
 #   bash scripts/update_claude1.sh --restart-account     # rsync + restart tradinebotte-account-<user>
-#   bash scripts/update_claude1.sh --restart-indicators --restart-feed --restart-account  # restart all three services
+#   bash scripts/update_claude1.sh --restart-all-infra   # rsync + restart ALL FIVE infra services
+#
+# NOTE: the restart flags are the ONLY way version.stamp advances on this account — it is
+# written immediately before each restart, so a rsync-only run leaves it (correctly) showing
+# the still-running commit. Restart a service to bring both its code AND its stamp current.
 
 set -uo pipefail
 
@@ -27,6 +36,8 @@ source "$LOCAL_REPO_C1/tradinebotte-status/scripts/record_deploy.sh"
 
 RESTART_INDICATORS=false
 RESTART_FEED=false
+RESTART_FEED5M=false
+RESTART_CEXFEED=false
 RESTART_ACCOUNT=false
 FORWARD_ARGS=()
 
@@ -34,15 +45,24 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --restart-indicators) RESTART_INDICATORS=true ;;
         --restart-feed)       RESTART_FEED=true ;;
+        --restart-feed5m)     RESTART_FEED5M=true ;;
+        --restart-cexfeed)    RESTART_CEXFEED=true ;;
         --restart-account)    RESTART_ACCOUNT=true ;;
+        --restart-all-infra)  RESTART_INDICATORS=true; RESTART_FEED=true
+                              RESTART_FEED5M=true; RESTART_CEXFEED=true; RESTART_ACCOUNT=true ;;
         *) FORWARD_ARGS+=("$1") ;;
     esac
     shift
 done
 
+# Any restart flag set → we are restarting infra services on this account.
+_ANY_RESTART=$([[ "$RESTART_INDICATORS" == "true" || "$RESTART_FEED" == "true" \
+    || "$RESTART_FEED5M" == "true" || "$RESTART_CEXFEED" == "true" \
+    || "$RESTART_ACCOUNT" == "true" ]] && echo true || echo false)
+
 # --restart-* flags imply --skip-restart (don't touch live_bot)
 # unless the caller explicitly passed --skip-restart themselves.
-if [[ "$RESTART_INDICATORS" == "true" || "$RESTART_FEED" == "true" || "$RESTART_ACCOUNT" == "true" ]]; then
+if [[ "$_ANY_RESTART" == "true" ]]; then
     # Only add --skip-restart if it wasn't already in FORWARD_ARGS
     if ! printf '%s\n' "${FORWARD_ARGS[@]}" | grep -q -- '--skip-restart\|--verify-only'; then
         FORWARD_ARGS+=(--skip-restart)
@@ -122,8 +142,7 @@ TBNT_SKIP_JOURNAL=1 TEST_STANDALONE_USER_IDX=0 bash "$(dirname "$0")/update_stan
 UPDATE_EXIT=$?
 
 # Abort on rsync failure only; the verify false-negative is expected and ignored.
-if [[ "$UPDATE_EXIT" -ne 0 ]] && \
-   [[ "$RESTART_INDICATORS" == "false" && "$RESTART_FEED" == "false" && "$RESTART_ACCOUNT" == "false" ]]; then
+if [[ "$UPDATE_EXIT" -ne 0 ]] && [[ "$_ANY_RESTART" == "false" ]]; then
     exit "$UPDATE_EXIT"
 fi
 
@@ -164,7 +183,7 @@ _restart_service() {
 }
 
 # ─── Shared tradinetools rsync+install (runs once for all requested restarts) ──
-if [[ "$RESTART_INDICATORS" == "true" || "$RESTART_FEED" == "true" || "$RESTART_ACCOUNT" == "true" ]]; then
+if [[ "$_ANY_RESTART" == "true" ]]; then
     RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; NC='\033[0m'
     LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
     CONF="${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
@@ -274,6 +293,63 @@ if [[ "$RESTART_FEED" == "true" ]]; then
     _restart_service "tradinebotte-feed.service" "FEED" "connected|bind|ERROR"
 fi
 
+# ─── Restart tradinebotte-feed5m if requested ──────────────────────────────────
+# feed5m runs the SAME feed.py as tradinebotte-feed (different unit/args, 5-minute
+# window), so it ships the same source file; it just needs its own restart.
+if [[ "$RESTART_FEED5M" == "true" ]]; then
+    RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; NC='\033[0m'
+    LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+    CONF="${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
+    source "$CONF"
+    _c1_user="${TEST_USERS[0]}"
+    _c1_pass="${TEST_PASSWORDS[0]}"
+    _server="${TEST_SERVER:?}"
+    _port="${TEST_PORT:-22}"
+    _install_dir="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
+    _ssh_opts="-p $_port -o StrictHostKeyChecking=yes -o PreferredAuthentications=password"
+
+    echo -e "\n${BOLD}${YELLOW}═══ RSYNC feed5m ═══${NC}"
+
+    SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
+        rsync -az \
+        -e "ssh $_ssh_opts" \
+        "$LOCAL_REPO/tradinebotte-polymarket/feed.py" \
+        "$_c1_user@$_server:$_install_dir/feed.py" 2>&1 \
+        && echo -e "${GREEN}  ✓ feed.py synced${NC}" \
+        || { echo -e "${RED}  ✗ rsync feed.py failed${NC}"; exit 1; }
+
+    _restart_service "tradinebotte-feed5m.service" "FEED5M" "connected|bind|ERROR"
+fi
+
+# ─── Restart tradinebotte-cexfeed if requested ─────────────────────────────────
+# cexfeed is the shared CEX book broadcaster (cex_feed.py, port 5563). It is the DATA
+# SOURCE for the real-money LBC accumulation bot ([[project_lbc_realmoney_bot]]), so a
+# restart briefly interrupts its ticks — verify LBCUSDT books flow again afterwards.
+if [[ "$RESTART_CEXFEED" == "true" ]]; then
+    RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; NC='\033[0m'
+    LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+    CONF="${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
+    source "$CONF"
+    _c1_user="${TEST_USERS[0]}"
+    _c1_pass="${TEST_PASSWORDS[0]}"
+    _server="${TEST_SERVER:?}"
+    _port="${TEST_PORT:-22}"
+    _install_dir="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
+    _ssh_opts="-p $_port -o StrictHostKeyChecking=yes -o PreferredAuthentications=password"
+
+    echo -e "\n${BOLD}${YELLOW}═══ RSYNC cexfeed ═══${NC}"
+
+    SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
+        rsync -az \
+        -e "ssh $_ssh_opts" \
+        "$LOCAL_REPO/tradinebotte-cex/cex_feed.py" \
+        "$_c1_user@$_server:$_install_dir/cex_feed.py" 2>&1 \
+        && echo -e "${GREEN}  ✓ cex_feed.py synced${NC}" \
+        || { echo -e "${RED}  ✗ rsync cex_feed.py failed${NC}"; exit 1; }
+
+    _restart_service "tradinebotte-cexfeed.service" "CEXFEED" "PUB on|connected|ERROR"
+fi
+
 # ─── Restart tradinebotte-account-tradinebotte if requested ───────────────────
 if [[ "$RESTART_ACCOUNT" == "true" ]]; then
     RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; NC='\033[0m'
@@ -310,14 +386,14 @@ _C1_CONF="${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
 # shellcheck disable=SC1090
 source "$_C1_CONF"
 _c1_acct="${TEST_USERS[0]}"
-_c1_mode=$([[ "$RESTART_INDICATORS" == "true" || "$RESTART_FEED" == "true" || "$RESTART_ACCOUNT" == "true" ]] && echo restart || echo rsync)
+_c1_mode=$([[ "$_ANY_RESTART" == "true" ]] && echo restart || echo rsync)
 _c1_result=$([[ "${UPDATE_EXIT:-0}" -eq 0 ]] && echo OK || echo FAILED)
 for _b in indicators feed account_bot; do
     tbnt_record_deploy "$_c1_acct" "$_b" "$_c1_result" "$_c1_mode"
 done
 
 # ─── Final verify: always run after any service restart ───────────────────────
-if [[ "$RESTART_INDICATORS" == "true" || "$RESTART_FEED" == "true" || "$RESTART_ACCOUNT" == "true" ]]; then
+if [[ "$_ANY_RESTART" == "true" ]]; then
     sleep 5
     _verify_claude1_multiservice
     exit $?
