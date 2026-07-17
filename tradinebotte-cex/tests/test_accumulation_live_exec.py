@@ -199,6 +199,47 @@ class TestLiveWiring(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(eng._api.cancel_order.await_args.args[2], "orphan9")
         self.assertTrue(eng._adopted)
 
+    async def test_canceled_initial_bid_is_rebid_not_consumed(self):
+        """The live bug that idled the real bot with the full budget: `initial_done` was
+        set on PLACEMENT. A resting bid canceled unfilled then left the engine believing
+        the initial buy had happened while holding nothing, so only the dip-gated
+        scale-in path could ever buy. The initial must survive an unfilled cancel."""
+        eng, state = _live_engine()
+        ts = types.SimpleNamespace(mid=0.0025, obi_ema=0.0, spread_bps=10.0,
+                                   ts_ms=1_000_000)
+        await eng.on_book_update(state, ts)
+        self.assertIsNotNone(eng.acc.pending_buy)
+        self.assertFalse(eng.acc.initial_done)          # placed != owned
+        eng._api.post_order.reset_mock()
+
+        # the bid is canceled unfilled (stale) — nothing was ever bought. Reconcile runs
+        # before the initial branch, so the same tick clears it and re-bids.
+        eng._api.get_order = AsyncMock(return_value={
+            "status": "CANCELED", "executed_qty": 0.0, "cummulative_quote_qty": 0.0})
+        await eng.on_book_update(state, ts)
+        self.assertEqual(eng.acc.holdings_btc, 0.0)     # never owned anything
+        self.assertFalse(eng.acc.initial_done)          # opportunity NOT consumed
+        eng._api.post_order.assert_awaited_once()       # re-bid instead of idling
+        self.assertIsNotNone(eng.acc.pending_buy)
+
+    async def test_initial_done_only_after_real_fill(self):
+        eng, state = _live_engine()
+        ts = types.SimpleNamespace(mid=0.0025, obi_ema=0.0, spread_bps=10.0, ts_ms=1_000_000)
+        await eng.on_book_update(state, ts)
+        self.assertFalse(eng.acc.initial_done)
+        eng._api.get_order = AsyncMock(return_value={
+            "status": "FILLED", "executed_qty": 4000.0, "cummulative_quote_qty": 10.0})
+        await eng.on_book_update(state, ts)
+        self.assertTrue(eng.acc.initial_done)           # a real fill completes it
+        self.assertAlmostEqual(eng.acc.holdings_btc, 4000.0)
+
+    async def test_pending_bid_does_not_spam_orders_while_resting(self):
+        eng, state = _live_engine()
+        ts = types.SimpleNamespace(mid=0.0025, obi_ema=0.0, spread_bps=10.0, ts_ms=1_000_000)
+        for _ in range(5):
+            await eng.on_book_update(state, ts)
+        eng._api.post_order.assert_awaited_once()       # one bid, not five
+
     async def test_stale_bid_is_canceled_on_reconcile(self):
         eng, state = _live_engine()
         await eng._place_live_buy(state, 0.0025, 10.0, "initial", 1)

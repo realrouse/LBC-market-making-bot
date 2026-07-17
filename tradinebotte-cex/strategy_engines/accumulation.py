@@ -493,6 +493,10 @@ class AccumulationStrategy:
         a.holdings_btc += dqty
         a.free_usdt    -= dquote                      # real quote spent (maker fee ≈ 0)
         a.peak_holdings_btc = max(a.peak_holdings_btc, a.holdings_btc)
+        # A real fill means we now own the tranche — this, not the placement, is what
+        # completes the initial buy (see the live note in on_book_update).
+        a.initial_done = True
+        a.last_buy_ts  = ts_ms
         state.conn.execute("""
             INSERT INTO accum_trades
                 (ts_ms, side, reason, price, qty_btc, usdt_value, fee_usdt,
@@ -840,7 +844,14 @@ class AccumulationStrategy:
             init_usdt = min(a.p["initial_stake_usdt"], a.free_usdt)
             if await self._buy(state, price, init_usdt, "initial", ts_ms):
                 a.last_buy_ts = ts_ms
-                a.initial_done = True
+                # PAPER fills instantly, so placing == owning. LIVE only *places* a resting
+                # bid: mark the initial done on the real FILL (in _credit_fill), never here.
+                # Otherwise a bid that is canceled unfilled (stale) consumes the initial
+                # opportunity while holding nothing, and only the dip-gated scale-in path
+                # can ever buy again — the bot idles with the full budget. Until it fills,
+                # the one-bid guard makes this a no-op, so re-bidding costs nothing.
+                if not self.live:
+                    a.initial_done = True
             return
 
         # Buy-only when live: skip the profit-band SELLS + rebuys (illiquid book — we never

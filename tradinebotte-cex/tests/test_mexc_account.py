@@ -138,5 +138,76 @@ class TestGetOrder(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await api_mexc.get_order(sess, "LBCUSDT", 999, api_key="k", api_secret="s"))
 
 
+class _RecordingSession:
+    """Captures the verb/url/kwargs of one request so we can assert on framing."""
+
+    def __init__(self, status=200, payload=None):
+        self._resp = _FakeResp(status, payload if payload is not None else {})
+        self.calls = []
+
+    def _rec(self, verb):
+        def go(url, **kw):
+            self.calls.append((verb, url, kw))
+            return self._resp
+        return go
+
+    def __getattr__(self, name):
+        if name in ("get", "post", "put", "delete"):
+            return self._rec(name)
+        raise AttributeError(name)
+
+
+class TestWriteFraming(unittest.IsolatedAsyncioTestCase):
+    """Regression guards for the two bugs that broke the first REAL MEXC order.
+
+    Both were invisible for the life of the project because every MEXC bot was
+    simulated — post_order never reached the live endpoint until 2026-07-17.
+    """
+
+    async def test_post_order_sends_content_type_json(self):
+        # MEXC 400s a POST without Content-Type: application/json (code 700013),
+        # even though every param is in the query string and the body is empty.
+        sess = _RecordingSession(200, {"orderId": "C01__abc"})
+        api_mexc._SYMBOL_PRECISION["LBCUSDT"] = (6, 3)
+        oid = await api_mexc.post_order(sess, "LBCUSDT", 0.0025, 10.0,
+                                        api_key="k", api_secret="s", side="BUY")
+        self.assertEqual(oid, "C01__abc")
+        verb, _url, kw = sess.calls[-1]
+        self.assertEqual(verb, "post")
+        self.assertEqual(kw["headers"].get("Content-Type"), "application/json")
+
+    async def test_get_order_does_not_send_content_type(self):
+        # GETs must NOT carry it — only writes are gated.
+        sess = _RecordingSession(200, {"status": "NEW", "origQty": "1", "executedQty": "0",
+                                       "cummulativeQuoteQty": "0", "side": "BUY"})
+        await api_mexc.get_order(sess, "LBCUSDT", "C01__abc", api_key="k", api_secret="s")
+        _verb, _url, kw = sess.calls[-1]
+        self.assertNotIn("Content-Type", kw["headers"])
+
+    async def test_string_order_id_survives_to_the_wire(self):
+        # MEXC order ids are opaque strings ("C01__…"). int() raised, the broad except
+        # swallowed it, and every cancel/poll silently became a no-op.
+        sess = _RecordingSession(200, {"status": "CANCELED"})
+        ok = await api_mexc.cancel_order(sess, "LBCUSDT", "C01__4465xyz",
+                                         api_key="k", api_secret="s")
+        self.assertTrue(ok)
+        _verb, _url, kw = sess.calls[-1]
+        self.assertEqual(kw["params"]["orderId"], "C01__4465xyz")
+
+    async def test_cancel_of_string_id_is_not_swallowed_into_false(self):
+        sess = _RecordingSession(200, {"status": "CANCELED"})
+        self.assertTrue(await api_mexc.cancel_order(sess, "LBCUSDT", "C01__zzz",
+                                                    api_key="k", api_secret="s"))
+
+    async def test_get_order_accepts_string_id(self):
+        sess = _RecordingSession(200, {"status": "FILLED", "origQty": "4000",
+                                       "executedQty": "4000", "cummulativeQuoteQty": "10.0",
+                                       "side": "BUY"})
+        got = await api_mexc.get_order(sess, "LBCUSDT", "C01__str", api_key="k", api_secret="s")
+        self.assertIsNotNone(got)
+        _verb, _url, kw = sess.calls[-1]
+        self.assertEqual(kw["params"]["orderId"], "C01__str")
+
+
 if __name__ == "__main__":
     unittest.main()

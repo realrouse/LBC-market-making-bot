@@ -36,6 +36,20 @@ logger = logging.getLogger(__name__)
 # ─── ENDPOINTS ────────────────────────────────────────────────────────────────
 BASE_URL      = "https://api.mexc.com"
 
+
+def _write_headers(key):
+    """Auth headers for a MEXC *write* (POST/PUT/DELETE) call.
+
+    MEXC rejects a POST without `Content-Type: application/json` — `700013 Invalid
+    content Type` — even though every parameter travels in the QUERY STRING and the
+    body is empty. `application/x-www-form-urlencoded`, which is what the query-string
+    framing would suggest, is rejected identically (both probed against /order/test).
+    GETs must NOT carry it. This is why the first real MEXC order ever placed failed:
+    until now every MEXC bot was simulated, so post_order never hit the live endpoint.
+    """
+    return {"X-MEXC-APIKEY": key, "Content-Type": "application/json"}
+
+
 # Per-symbol (price_decimals, qty_decimals), fetched once from exchangeInfo. MEXC
 # reports price precision as `quotePrecision` and the lot step as `baseSizePrecision`
 # (verified BTCUSDT=2/6dp, ETHUSDT=2/4dp, LBCUSDT=6/3dp). Cache is process-lived; a
@@ -256,7 +270,7 @@ async def post_order(session, symbol, price, size_usdc, *,
         async with session.post(
             f"{BASE_URL}/api/v3/order",
             params=params,
-            headers={"X-MEXC-APIKEY": _key},
+            headers=_write_headers(_key),
             timeout=aiohttp.ClientTimeout(total=10),
         ) as resp:
             data = await resp.json(content_type=None)  # bypass MIME check
@@ -295,7 +309,10 @@ async def get_order_status(session, symbol, order_id, *,
     try:
         params = {
             "symbol":    str(symbol).split(":", maxsplit=1)[0],
-            "orderId":   int(order_id),
+            # MEXC order ids are opaque STRINGS (e.g. "C01__4465…"), not Binance ints:
+            # int() would raise, get swallowed by the broad except, and silently turn
+            # every cancel/poll into a no-op. Verified: the API resolves a string id.
+            "orderId":   str(order_id),
             "timestamp": int(time.time() * 1000),
         }
         params["signature"] = _sign(params, _secret)
@@ -331,7 +348,10 @@ async def get_order(session, symbol, order_id, *, api_key=None, api_secret=None)
     try:
         params = {
             "symbol":    str(symbol).split(":", maxsplit=1)[0],
-            "orderId":   int(order_id),
+            # MEXC order ids are opaque STRINGS (e.g. "C01__4465…"), not Binance ints:
+            # int() would raise, get swallowed by the broad except, and silently turn
+            # every cancel/poll into a no-op. Verified: the API resolves a string id.
+            "orderId":   str(order_id),
             "timestamp": int(time.time() * 1000),
         }
         params["signature"] = _sign(params, _secret)
@@ -379,14 +399,17 @@ async def cancel_order(session, symbol, order_id, *,
     try:
         params = {
             "symbol":    str(symbol).split(":", maxsplit=1)[0],
-            "orderId":   int(order_id),
+            # MEXC order ids are opaque STRINGS (e.g. "C01__4465…"), not Binance ints:
+            # int() would raise, get swallowed by the broad except, and silently turn
+            # every cancel/poll into a no-op. Verified: the API resolves a string id.
+            "orderId":   str(order_id),
             "timestamp": int(time.time() * 1000),
         }
         params["signature"] = _sign(params, _secret)
         async with session.delete(
             f"{BASE_URL}/api/v3/order",
             params=params,
-            headers={"X-MEXC-APIKEY": _key},
+            headers=_write_headers(_key),
             timeout=aiohttp.ClientTimeout(total=10),
         ) as resp:
             data = await resp.json(content_type=None)
@@ -516,7 +539,7 @@ async def get_listen_key(session, *, api_key=None, api_secret=None):  # pylint: 
     try:
         async with session.post(
             f"{BASE_URL}/api/v3/userDataStream",
-            headers={"X-MEXC-APIKEY": key},
+            headers=_write_headers(key),
             timeout=aiohttp.ClientTimeout(total=10),
         ) as resp:
             if resp.status != 200:
@@ -541,7 +564,7 @@ async def keepalive_listen_key(session, listen_key, *, api_key=None, api_secret=
         async with session.put(
             f"{BASE_URL}/api/v3/userDataStream",
             params={"listenKey": listen_key},
-            headers={"X-MEXC-APIKEY": key},
+            headers=_write_headers(key),
             timeout=aiohttp.ClientTimeout(total=10),
         ) as resp:
             return resp.status == 200
