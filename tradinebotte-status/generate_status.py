@@ -65,6 +65,12 @@ _DEPLOYS_SQL = (
     "SELECT account, bot_name, max(ts) as last_ts, git_hash, result"
     " FROM deploys GROUP BY account, bot_name"
 )
+# Durable per-fill log (real-money bots push here). Newest first; the renderer caps how many
+# rows it shows. Only live bots ever push, so every row belongs on the real-money page.
+_TRADES_SQL = (
+    "SELECT account, bot_name, ts_ms, side, reason, price, qty, quote, fee, order_id,"
+    " maker, avg_entry_after, holdings_after, free_after FROM bot_trades ORDER BY ts_ms DESC"
+)
 
 
 def _qdb(path, queries):
@@ -441,6 +447,25 @@ body.win-monthly .pw-monthly,body.win-alltime .pw-alltime{display:inline}
 .footer{margin-top:28px;font-size:.72em;color:#484f58;border-top:1px solid #21262d;
          padding-top:10px}
 .no-data{color:#484f58;font-style:italic;font-size:.82em;padding:4px 0}
+
+/* ── Real-money (live) page ───────────────────────────── */
+.nav-link{font-size:.62em;font-weight:600;color:#d29922;text-decoration:none;
+          border:1px solid #d29922;border-radius:6px;padding:2px 8px;margin-right:10px;
+          vertical-align:middle}
+.nav-link:hover{background:#d29922;color:#0d1117}
+.live-panel{margin:14px 0 26px;padding:14px 16px;border:1px solid #30363d;border-radius:10px;
+            background:#0d1117}
+.live-panel h3{margin:0 0 10px;font-size:1.02em}
+.dim{color:#8b949e;font-size:.82em;font-weight:400}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.82em;color:#8b949e;
+      max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;
+      vertical-align:bottom}
+.badge.live-b{background:#238636;color:#fff;border-radius:5px;padding:1px 7px;font-size:.9em}
+table.trades{width:100%;border-collapse:collapse;margin-top:10px;font-size:.82em}
+table.trades th{text-align:left;color:#8b949e;font-weight:600;border-bottom:1px solid #21262d;
+                padding:5px 8px;white-space:nowrap}
+table.trades td{padding:5px 8px;border-bottom:1px solid #161b22;white-space:nowrap}
+table.trades tr:hover td{background:#161b22}
 """
 
 # ─── i18n ────────────────────────────────────────────────────────────────────
@@ -1196,6 +1221,92 @@ def _render_banners(accounts: list, heartbeats: list) -> str:
     return "".join(banners)
 
 
+def _load_trades(shared_path: str, keys: set | None = None) -> dict:
+    """Per-fill trade log from the shared DB, grouped by (account, bot_name), newest first.
+    `keys` (a set of (account, bot_name)) filters to specific bots; None keeps all."""
+    blob = _qdb(shared_path, {"rows": _TRADES_SQL}) or {}
+    out: dict = {}
+    for r in blob.get("rows", []):
+        k = (r.get("account"), r.get("bot_name"))
+        if keys is not None and k not in keys:
+            continue
+        out.setdefault(k, []).append(r)
+    return out
+
+
+_TRADE_ROW_CAP = 100   # most recent fills shown per bot (full history stays in bot_trades)
+
+
+def _render_live_trades(live_heartbeats: list, trades_by_bot: dict) -> str:
+    """The real-money page's rich section: per live bot, a stats strip (holdings, avg entry,
+    realized PnL, fill/volume/fee tallies from the durable trade log) + a full per-trade table
+    (order IDs included — the live page shows full detail). Reuses _fmt_pnl / _fmt_ts."""
+    panels = []
+    for hb in live_heartbeats:
+        acct, bot = hb.get("account"), hb.get("bot_name")
+        pl = hb.get("payload") or {}
+        name = escape(hb.get("_display") or bot or "?")
+        trades = trades_by_bot.get((acct, bot), [])
+
+        buys  = [x for x in trades if x.get("side") == "buy"]
+        sells = [x for x in trades if x.get("side") == "sell"]
+        bought_qty = sum(float(x.get("qty") or 0) for x in buys)
+        sold_qty   = sum(float(x.get("qty") or 0) for x in sells)
+        fees_total = sum(float(x.get("fee") or 0) for x in trades)
+
+        def _stat(lbl, val):
+            return (f"<div class='sb-item'><div class='lbl'>{escape(lbl)}</div>"
+                    f"<div class='val'>{val}</div></div>")
+
+        stats = (
+            "<div class='summary-bar'>"
+            + _stat(t("lt_mode"), f"<span class='badge live-b'>{escape(str(pl.get('mode', '?')).upper())}</span>")
+            + _stat(t("lt_holdings"), f"{float(pl.get('holdings_btc') or 0):.4f}")
+            + _stat(t("lt_avg_entry"), f"{float(pl.get('avg_entry') or 0):.6f}")
+            + _stat(t("lt_free"), f"${float(pl.get('free_usdt') or 0):.2f}")
+            + _stat(t("lt_realized"), _fmt_pnl(pl.get("pnl_total")))
+            + _stat(t("lt_fills"), f"{len(trades)} <span class='dim'>({len(buys)}B/{len(sells)}S)</span>")
+            + _stat(t("lt_bought"), f"{bought_qty:.2f}")
+            + _stat(t("lt_sold"), f"{sold_qty:.2f}")
+            + _stat(t("lt_fees"), f"${fees_total:.4f}")
+            + "</div>"
+        )
+
+        if trades:
+            head = (f"<tr><th>{escape(t('tt_time'))}</th><th>{escape(t('tt_side'))}</th>"
+                    f"<th>{escape(t('tt_reason'))}</th><th>{escape(t('tt_price'))}</th>"
+                    f"<th>{escape(t('tt_qty'))}</th><th>{escape(t('tt_quote'))}</th>"
+                    f"<th>{escape(t('tt_fee'))}</th><th>{escape(t('tt_order'))}</th></tr>")
+            body = []
+            for x in trades[:_TRADE_ROW_CAP]:
+                side = x.get("side") or ""
+                side_cls = "pnl-pos" if side == "sell" else "pnl-neg"
+                oid = x.get("order_id") or "—"
+                body.append(
+                    f"<tr><td>{_fmt_ts((x.get('ts_ms') or 0) / 1000)}</td>"
+                    f"<td class='{side_cls}'>{escape(side)}</td>"
+                    f"<td>{escape(str(x.get('reason') or ''))}</td>"
+                    f"<td>{float(x.get('price') or 0):.6f}</td>"
+                    f"<td>{float(x.get('qty') or 0):.2f}</td>"
+                    f"<td>${float(x.get('quote') or 0):.4f}</td>"
+                    f"<td>${float(x.get('fee') or 0):.4f}</td>"
+                    f"<td class='mono' title='{escape(str(oid))}'>{escape(str(oid))}</td></tr>")
+            cap_note = ("" if len(trades) <= _TRADE_ROW_CAP else
+                        f"<div class='dim'>{escape(t('lt_capped', n=_TRADE_ROW_CAP, total=len(trades)))}</div>")
+            table = (f"<table class='trades'>{head}{''.join(body)}</table>{cap_note}")
+        else:
+            table = f"<div class='dim'>{escape(t('lt_no_trades'))}</div>"
+
+        panels.append(
+            f"<div class='live-panel'><h3>{name} "
+            f"<span class='dim'>{escape(acct or '')}</span></h3>{stats}{table}</div>"
+        )
+
+    if not panels:
+        return f"<div class='dim'>{escape(t('lt_none'))}</div>"
+    return "".join(panels)
+
+
 def _render_html(
     heartbeats: list,
     accounts: list,
@@ -1205,7 +1316,15 @@ def _render_html(
     deploys: list | None = None,
     user_to_label: dict | None = None,
     pnl_windows: dict | None = None,
+    scope: str = "overview",
+    trades_by_bot: dict | None = None,
+    nav_href: str = "",
+    audit_heartbeats: list | None = None,
 ) -> str:
+    # The expected-vs-actual audit is fleet-wide: it must see EVERY bot's heartbeat, not the
+    # scope-filtered subset, or a live bot (filtered off the overview) would falsely read as
+    # "expected but silent". Falls back to the page's own heartbeats when not supplied.
+    audit_heartbeats = audit_heartbeats if audit_heartbeats is not None else heartbeats
     pnl_windows = pnl_windows or {}
     global _CUR_LANG
     _saved_lang = _CUR_LANG
@@ -1279,7 +1398,13 @@ def _render_html(
         for L in langs) + "</span>")
     for lang in langs:
         _CUR_LANG = lang
-        titles[lang] = t("title")
+        _scope_label = t("scope_live") if scope == "live" else t("scope_sim")
+        titles[lang] = f"{t('title')} — {_scope_label}"
+        # Cross-link to the other page, labelled with the OTHER scope (translated per-language).
+        nav_html = ""
+        if nav_href:
+            _other = t("scope_sim") if scope == "live" else t("scope_live")
+            nav_html = f"<a class='nav-link' href='{escape(nav_href)}'>{escape(_other)} →</a>"
 
         status_text = (t("status_collector_down") if collector_down
                        else t("status_nominal") if total_issues == 0
@@ -1332,12 +1457,24 @@ def _render_html(
             f"</div>"
         )
 
-        families_html = _render_bot_families(heartbeats, pnl_windows, now)
-        cards_html = "".join(_render_account_card(label, data, _acct_hb(label))
-                             for label, data in zip(_ACCOUNT_LABELS, accounts))
         banners_html = _render_banners(accounts, heartbeats)
-        expected_html = _render_expected_actual(
-            inventory or [], deploys or [], heartbeats, user_to_label or {})
+
+        # Real-money page: the rich per-trade section IS the body — the family roll-up,
+        # expected-vs-actual and per-account cards are the overview page's job, so they are
+        # skipped here (and skipping them sidesteps the account-card positional alignment).
+        if scope == "live":
+            mid_html = (f"<h2>{escape(t('h_live_trades'))}</h2>"
+                        + _render_live_trades(heartbeats, trades_by_bot or {}))
+        else:
+            families_html = _render_bot_families(heartbeats, pnl_windows, now)
+            cards_html = "".join(_render_account_card(label, data, _acct_hb(label))
+                                 for label, data in zip(_ACCOUNT_LABELS, accounts))
+            expected_html = _render_expected_actual(
+                inventory or [], deploys or [], audit_heartbeats, user_to_label or {})
+            mid_html = (f"<h2>{escape(t('h_bots_family'))}</h2>{families_html}"
+                        f"{expected_html}"
+                        f"<h2>{escape(t('h_accounts'))}</h2>"
+                        f"<div class='accounts'>{cards_html}</div>")
 
         # The refresh countdown number is a live span JS updates; inject it as the {n} of
         # the (already-translated) "refresh in {n}s" phrase, so word order stays correct.
@@ -1350,14 +1487,12 @@ def _render_html(
 
         body_inner = (
             f"<h1><span class='dot {dot_cls}'></span>"
-            f" {escape('tradinebotte')} — {escape(status_text)}"
-            f"<span class='h1-right'>{btc_price_html}"
+            f" {escape('tradinebotte')} · {escape(_scope_label)} — {escape(status_text)}"
+            f"<span class='h1-right'>{nav_html}{btc_price_html}"
             f"<span style='font-size:.6em;color:#8b949e;font-weight:400'>{ts_str}</span>"
             f"{lang_sel}</span></h1>"
             f"{banners_html}{win_toggle}{summary_bar}"
-            f"<h2>{escape(t('h_bots_family'))}</h2>{families_html}"
-            f"{expected_html}"
-            f"<h2>{escape(t('h_accounts'))}</h2><div class='accounts'>{cards_html}</div>"
+            f"{mid_html}"
             f"{footer}"
         )
         langboxes.append(f"<div class='langbox i18-{lang}'>{body_inner}</div>")
@@ -1431,6 +1566,14 @@ def main() -> None:
         help=("Default UI language (the language shown before the visitor picks another; "
               "the page always ships every language and a switcher). "
               "Default: $TRADINEBOTTE_STATUS_LANG or en."),
+    )
+    parser.add_argument(
+        "--scope",
+        choices=("overview", "live", "both"),
+        default="both",
+        help=("Which page(s) to emit: 'overview' = simulation bots + infra + fleet health "
+              "(the current URL); 'live' = real-money bots only, with per-trade detail "
+              "(written next to --out as *-live.html); 'both' (default) writes both."),
     )
     args = parser.parse_args()
 
@@ -1509,24 +1652,53 @@ def main() -> None:
     elapsed = time.monotonic() - t0
     print(f"Collected from shared DB in {elapsed:.2f}s", file=sys.stderr)
 
-    html = _render_html(
-        heartbeats=heartbeats,
-        accounts=accounts_data,
-        generated_at=datetime.now(tz=timezone.utc),
-        collection_s=elapsed,
-        inventory=inventory_rows,
-        deploys=deploy_rows,
-        user_to_label=user_to_label,
-        pnl_windows=pnl_windows,
-    )
+    # Split key = inventory.is_live: real-money bots to the live page, everything else
+    # (sim bots + infra) to the overview page. Trades come from the durable bot_trades log.
+    live_keys   = {(r.get("account"), r.get("bot_name"))
+                   for r in inventory_rows if r.get("is_live") == 1}
+    live_hb     = [h for h in heartbeats if (h.get("account"), h.get("bot_name")) in live_keys]
+    overview_hb = [h for h in heartbeats if (h.get("account"), h.get("bot_name")) not in live_keys]
+    trades_by_bot = _load_trades(SHARED_DB, live_keys)
+    _now = datetime.now(tz=timezone.utc)
 
-    if args.out:
-        os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
-        with open(args.out, "w", encoding="utf-8") as f:
+    def _render(scope_name, hb_subset, nav_href):
+        return _render_html(
+            heartbeats=hb_subset,
+            accounts=accounts_data,
+            generated_at=_now,
+            collection_s=elapsed,
+            inventory=inventory_rows,
+            deploys=deploy_rows,
+            user_to_label=user_to_label,
+            pnl_windows=pnl_windows,
+            scope=scope_name,
+            trades_by_bot=trades_by_bot,
+            nav_href=nav_href,
+            audit_heartbeats=heartbeats,
+        )
+
+    def _live_path(p):   # …/x.html → …/x-live.html
+        base, ext = os.path.splitext(p)
+        return f"{base}-live{ext or '.html'}"
+
+    if not args.out:
+        # stdout: single page (default the overview; 'live' if explicitly asked).
+        _sc = "live" if args.scope == "live" else "overview"
+        print(_render(_sc, live_hb if _sc == "live" else overview_hb, ""))
+        return
+
+    ov_path, lv_path = args.out, _live_path(args.out)
+    ov_base, lv_base = os.path.basename(ov_path), os.path.basename(lv_path)
+    outputs = []
+    if args.scope in ("overview", "both"):
+        outputs.append((ov_path, _render("overview", overview_hb, lv_base)))
+    if args.scope in ("live", "both"):
+        outputs.append((lv_path, _render("live", live_hb, ov_base)))
+    for path, html in outputs:
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
             f.write(html)
-        print(f"Written to {args.out}", file=sys.stderr)
-    else:
-        print(html)
+        print(f"Written to {path}", file=sys.stderr)
 
 
 if __name__ == "__main__":

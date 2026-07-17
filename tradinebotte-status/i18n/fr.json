@@ -133,5 +133,29 @@
 
   "age": "âge {a}",
   "bounds": "bornes {b}",
-  "empty": "—"
+  "empty": "—",
+
+  "scope_sim": "simulation",
+  "scope_live": "argent réel",
+  "h_live_trades": "Bots en argent réel — transactions & PnL",
+  "lt_mode": "Mode",
+  "lt_holdings": "Avoirs",
+  "lt_avg_entry": "Prix moyen",
+  "lt_free": "Libre",
+  "lt_realized": "PnL réalisé",
+  "lt_fills": "Exéc.",
+  "lt_bought": "Acheté",
+  "lt_sold": "Vendu",
+  "lt_fees": "Frais",
+  "lt_capped": "affichage des {n} plus récentes sur {total}",
+  "lt_no_trades": "aucune transaction enregistrée",
+  "lt_none": "aucun bot en argent réel",
+  "tt_time": "Heure",
+  "tt_side": "Sens",
+  "tt_reason": "Raison",
+  "tt_price": "Prix",
+  "tt_qty": "Qté",
+  "tt_quote": "Montant",
+  "tt_fee": "Frais",
+  "tt_order": "ID ordre"
 }

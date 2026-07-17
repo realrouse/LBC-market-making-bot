@@ -133,5 +133,29 @@
 
   "age": "age {a}",
   "bounds": "bounds {b}",
-  "empty": "—"
+  "empty": "—",
+
+  "scope_sim": "simulation",
+  "scope_live": "real money",
+  "h_live_trades": "Real-money bots — trades & PnL",
+  "lt_mode": "Mode",
+  "lt_holdings": "Holdings",
+  "lt_avg_entry": "Avg entry",
+  "lt_free": "Free",
+  "lt_realized": "Realized PnL",
+  "lt_fills": "Fills",
+  "lt_bought": "Bought",
+  "lt_sold": "Sold",
+  "lt_fees": "Fees",
+  "lt_capped": "showing {n} most recent of {total}",
+  "lt_no_trades": "no trades recorded yet",
+  "lt_none": "no real-money bots",
+  "tt_time": "Time",
+  "tt_side": "Side",
+  "tt_reason": "Reason",
+  "tt_price": "Price",
+  "tt_qty": "Qty",
+  "tt_quote": "Quote",
+  "tt_fee": "Fee",
+  "tt_order": "Order ID"
 }
