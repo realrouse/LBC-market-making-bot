@@ -334,9 +334,11 @@ class TestPlanSellLadder(unittest.TestCase):
         self.assertLessEqual(sum(p["qty"] for p in plan), 4000.0 * 0.60 + 1e-9)
 
     def test_floor_caps_the_ladder_when_holdings_already_low(self):
-        # already sold down near the floor: only the remainder may be laddered
-        plan = self._plan(holdings=1800.0, peak_holdings=4000.0)   # floor = 1600
-        self.assertAlmostEqual(sum(p["qty"] for p in plan), 200.0)
+        # already sold down toward the floor: only the remainder may be laddered.
+        # (Sized to clear min notional — a 200-coin remainder would be $0.52 of dust and
+        # is correctly not planned at all; see test_dust_bands_are_not_planned.)
+        plan = self._plan(holdings=2200.0, peak_holdings=4000.0)   # floor = 1600
+        self.assertAlmostEqual(sum(p["qty"] for p in plan), 600.0)
 
     def test_at_floor_plans_nothing(self):
         self.assertEqual(self._plan(holdings=1600.0, peak_holdings=4000.0), [])
@@ -359,6 +361,22 @@ class TestPlanSellLadder(unittest.TestCase):
         plan = plan_sell_ladder(holdings=4000.0, avg_entry=0.0025, peak_holdings=4000.0,
                                 best_ask=0.0024, price=0.0024, params=p, gate_open=True)
         self.assertEqual(plan, [])
+
+    def test_dust_bands_are_not_planned(self):
+        """Live bug: after a fill re-sized the ladder the tail band came to $0.99 — one cent
+        under MEXC's 1 USDT minimum — so the exchange rejected it (30002) on every tick. A
+        band we cannot place must never be planned."""
+        # 500 coins @ ~0.0026 => the +10% slice is worth well under 1 USDT
+        plan = self._plan(holdings=500.0, peak_holdings=500.0)
+        for p in plan:
+            self.assertGreaterEqual(p["qty"] * p["price"], 1.0)
+
+    def test_the_exact_live_dust_case_is_skipped(self):
+        p = {**self._P, "sell_min_notional_usdt": 1.1}
+        plan = plan_sell_ladder(holdings=2941.74, avg_entry=0.00238, peak_holdings=4202.48,
+                                best_ask=0.002605, price=0.002605, params=p, gate_open=True)
+        # +5% = 882.52 @ 0.002605 = $2.30 (fine); +10% would be 378.2 @ 0.002618 = $0.99
+        self.assertEqual([b["band_pct"] for b in plan], [5.0])
 
     def test_gate_closed_plans_nothing(self):
         self.assertEqual(self._plan(gate_open=False), [])
@@ -536,6 +554,31 @@ class TestLadderWiring(unittest.IsolatedAsyncioTestCase):
         sellable = eng.acc.holdings_btc - floor
         resting  = sum(r["orig_qty"] for r in eng.acc.open_sells.values())
         self.assertLessEqual(resting, sellable + 1e-6)
+
+    async def test_sell_rejection_backs_off_and_does_not_block_buys(self):
+        """The buy path had a breaker; sells did not, and a rejected sell hammered MEXC at
+        book rate with an IP-whitelisted key. A sell rejection must also not stop buying."""
+        eng, state = _ladder_engine()
+        eng._api.post_order = AsyncMock(return_value=None)      # exchange rejects the sell
+        for _ in range(5):
+            await eng._place_live_sell(state, {"band_pct": 5.0, "price": 0.0026,
+                                               "qty": 1000.0}, 1)
+        self.assertEqual(eng._api.post_order.await_count, 1)     # 1 attempt, then backoff
+        self.assertGreater(eng._sell_retry_after, time.time())
+        self.assertEqual(eng._retry_after, 0.0)                  # buy path unaffected
+
+    async def test_sell_backoff_clears_after_a_success(self):
+        eng, state = _ladder_engine()
+        eng._api.post_order = AsyncMock(return_value=None)
+        await eng._place_live_sell(state, {"band_pct": 5.0, "price": 0.0026, "qty": 1000.0}, 1)
+        self.assertEqual(eng._sell_fail_streak, 1)
+        eng._sell_retry_after = 0.0
+        eng._api.post_order = AsyncMock(return_value="s9")
+        eng._api.get_order = AsyncMock(return_value={
+            "status": "NEW", "executed_qty": 0.0, "cummulative_quote_qty": 0.0})
+        self.assertTrue(await eng._place_live_sell(state, {"band_pct": 5.0, "price": 0.0026,
+                                                           "qty": 1000.0}, 1))
+        self.assertEqual(eng._sell_fail_streak, 0)
 
     async def test_halted_engine_places_nothing(self):
         eng, state = _ladder_engine()

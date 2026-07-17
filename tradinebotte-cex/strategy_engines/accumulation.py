@@ -116,6 +116,7 @@ DEFAULTS: dict = {
     "sell_ceiling_price":    0.0,     # 0 = none; no NEW sells at/above this price (let it run)
     "sell_rearm_tol_pct":    0.5,     # re-price a resting sell only past this drift (hysteresis)
     "sell_resize_tol_pct":   10.0,    # …and re-SIZE it past this qty drift (looser: partials nibble)
+    "sell_min_notional_usdt": 1.1,    # skip dust bands (MEXC rejects < 1 USDT, code 30002)
     "sell_breakout_gate":    False,   # block NEW sells while ripping away from basis
     "sell_breakout_pct":     25.0,    # …meaning price > avg_entry * (1 + this%)
     "drift_check_every_s":   300,     # how often to reconcile books vs the real balance
@@ -304,6 +305,13 @@ def plan_sell_ladder(*, holdings: float, avg_entry: float, peak_holdings: float,
         qty = min(holdings * float(step["fraction"]), sellable - allocated)
         if qty <= 0:
             continue
+        # Don't plan dust. The exchange rejects anything under its min notional (MEXC:
+        # 1 USDT, code 30002), and a planned-but-unplaceable band is worse than no band —
+        # it retries forever. Seen live: after a fill re-sized the ladder, the tail band
+        # came to $0.99 and every tick re-attempted it. The margin absorbs the gap between
+        # planning and placement (lot-step flooring, price drift).
+        if qty * px < params.get("sell_min_notional_usdt", 1.1):
+            continue
         plan.append({"band_pct": band_pct, "price": px, "qty": qty})
         allocated += qty
     return plan
@@ -387,6 +395,8 @@ class AccumulationStrategy:
         self._last_drift_ts = 0.0
         self._drift_ok      = None    # None = never checked (vs True = checked and clean)
         self._oversell_warn_ts = 0.0
+        self._sell_fail_streak = 0
+        self._sell_retry_after = 0.0
         if self.live:
             try:
                 from connectors import load as _load_conn  # noqa: PLC0415  pylint: disable=import-outside-toplevel
@@ -853,12 +863,27 @@ class AccumulationStrategy:
                              "resize.", plan["band_pct"], resting, plan["qty"],
                              max(0.0, a.holdings_btc - floor))
             return False
+        if time.time() < self._sell_retry_after:
+            return False                              # backing off after placement failures
         oid = await self._api.post_order(
             state.session, self.symbol, plan["price"], quantity=plan["qty"],
             side="SELL", order_type="LIMIT_MAKER")
         if not oid or str(oid).startswith("sim_"):
-            logger.error("ladder: SELL +%.1f%% placement failed (oid=%s)", plan["band_pct"], oid)
+            # Same hazard as the buy path, which already had this: a rejected sell leaves no
+            # tracked order, so the next tick retries at book rate against an IP-whitelisted
+            # key. Seen live at ~2s intervals on a sub-min-notional band. Sells needed their
+            # own breaker — a dust rejection must not also block buying.
+            self._sell_fail_streak += 1
+            backoff = min(_PLACE_BACKOFF_BASE_S * 2 ** (self._sell_fail_streak - 1),
+                          _PLACE_BACKOFF_MAX_S)
+            self._sell_retry_after = time.time() + backoff
+            logger.error("ladder: SELL +%.1f%% placement failed (oid=%s, qty=%.4f @ %.*f "
+                         "= %.2f USDT). Retry #%d backing off %.0fs.",
+                         plan["band_pct"], oid, plan["qty"], pd, plan["price"],
+                         plan["qty"] * plan["price"], self._sell_fail_streak, backoff)
             return False
+        self._sell_fail_streak = 0
+        self._sell_retry_after = 0.0
         # LIMIT_MAKER returns an id even when it auto-cancels for crossing — confirm it rests.
         view = await self._api.get_order(state.session, self.symbol, str(oid))
         if view is not None and view.get("status") in ("CANCELED", "EXPIRED", "REJECTED"):
