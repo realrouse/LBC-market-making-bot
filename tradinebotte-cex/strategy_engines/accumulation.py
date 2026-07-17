@@ -111,6 +111,14 @@ DEFAULTS: dict = {
     "maker_bid_offset_pct":  0.5,     # rest the bid this % below mid (maker, no cross; buys the dip)
     "rebid_stale_pct":       2.0,     # cancel & re-bid if price rises this % above our resting bid
     "rebid_max_age_s":       3600,    # …or if the bid has rested longer than this
+    # ── Live resting SELL ladder (the ratchet). Empty = buy-only, the default. ──
+    "sell_ladder":           [],      # [{band_pct, fraction}] off avg_entry, e.g. 30% @ +5%
+    "sell_ceiling_price":    0.0,     # 0 = none; no NEW sells at/above this price (let it run)
+    "sell_rearm_tol_pct":    0.5,     # re-price a resting sell only past this drift (hysteresis)
+    "sell_breakout_gate":    False,   # block NEW sells while ripping away from basis
+    "sell_breakout_pct":     25.0,    # …meaning price > avg_entry * (1 + this%)
+    "drift_check_every_s":   300,     # how often to reconcile books vs the real balance
+    "drift_tolerance":       0.01,    # base-asset units of slack before halting
 }
 
 # ---------------------------------------------------------------------------
@@ -148,6 +156,12 @@ class AccumState:
     # live maker execution: the ONE resting bid in flight, or None (buy-only, Option B).
     # {order_id, price, orig_qty, executed_qty_seen, quote_spent_seen, placed_ts}
     pending_buy:        Optional[dict] = None
+    # The resting SELL ladder: order_id -> record (same shape + band_pct). Separate from
+    # pending_buy because the lifecycles genuinely differ — bids are one-at-a-time and
+    # staleness-driven, sells are a declarative ladder re-armed against avg_entry.
+    open_sells:         dict  = field(default_factory=dict)
+    # Tripped when internal books over-claim vs the exchange: blocks ALL placement.
+    halted:             bool  = False
     peak_holdings_btc:  float = 0.0
     vwap_dip_score:     float = 0.0
     vwap_dip_zone:      str   = "neutral"
@@ -184,27 +198,32 @@ _PLACE_BACKOFF_BASE_S = 2.0
 _PLACE_BACKOFF_MAX_S  = 300.0
 
 
-def reconcile_pending_buy(pending: dict, order: "dict | None", *, now_ts: float,
-                          price: float, stale_pct: float, max_age_s: float) -> tuple:
-    """(new_pending, holdings_delta, quote_delta, action).
+def reconcile_order(tracked: dict, order: "dict | None") -> tuple:
+    """(new_tracked, qty_delta, quote_delta, action) — side-agnostic fill accounting.
 
-    pending : {order_id, price, orig_qty, executed_qty_seen, quote_spent_seen, placed_ts}
-    order   : api_mexc.get_order() dict {status, executed_qty, cummulative_quote_qty, …}
+    The money-critical primitive, shared by BUY bids and the resting SELL ladder: given a
+    tracked order record and a fresh exchange view of it, report what NEWLY filled.
+
+    tracked : {order_id, price, orig_qty, executed_qty_seen, quote_spent_seen, placed_ts, …}
+    order   : {status, executed_qty, cummulative_quote_qty} from get_order()/get_open_orders(),
               or None (API error — assume NOTHING, retry next tick).
     Returns:
-      new_pending    — updated record, or None when the order is done (filled/canceled/gone)
-      holdings_delta — base qty NEWLY filled since last seen (≥0; delta, never cumulative)
-      quote_delta    — USDT NEWLY spent since last seen (≥0; delta) — credited independently
-                       of holdings so multi-partial fills don't drift the cost basis
-      action         — 'noop'|'hold'|'partial'|'filled'|'cancel'|'canceled'
-                       ('cancel' = still NEW but stale → caller should cancel_order)
+      new_tracked  — updated record, or None once the order is done (filled/canceled/gone)
+      qty_delta    — base qty NEWLY filled since last seen (≥0; a DELTA, never cumulative)
+      quote_delta  — quote NEWLY moved since last seen (≥0; a DELTA), tracked independently
+                     of qty so multi-partial fills at different prices don't drift the basis
+      action       — 'noop'|'hold'|'partial'|'filled'|'canceled'
+
+    Deliberately knows nothing about staleness or side: those are policy, decided by
+    bid_is_stale() / plan_sell_ladder(). Crediting must happen before any re-arm, or a fill
+    landing between ticks is lost when its order is cancelled.
     """
     if order is None:
-        return pending, 0.0, 0.0, "noop"        # API error: change nothing, retry
-    dqty   = max(0.0, order["executed_qty"] - pending["executed_qty_seen"])
-    dquote = max(0.0, order["cummulative_quote_qty"] - pending["quote_spent_seen"])
-    if dqty > 0 or dquote > 0:                   # advance the seen counters (both, per advisor)
-        pending = {**pending,
+        return tracked, 0.0, 0.0, "noop"        # API error: change nothing, retry
+    dqty   = max(0.0, order["executed_qty"] - tracked["executed_qty_seen"])
+    dquote = max(0.0, order["cummulative_quote_qty"] - tracked["quote_spent_seen"])
+    if dqty > 0 or dquote > 0:                   # advance the seen counters (both)
+        tracked = {**tracked,
                    "executed_qty_seen": order["executed_qty"],
                    "quote_spent_seen":  order["cummulative_quote_qty"]}
     status = order["status"]
@@ -213,12 +232,103 @@ def reconcile_pending_buy(pending: dict, order: "dict | None", *, now_ts: float,
     if status in ("CANCELED", "EXPIRED", "REJECTED"):
         return None, dqty, dquote, "canceled"
     if status == "PARTIALLY_FILLED":
-        return pending, dqty, dquote, "partial"
-    # NEW (resting): stale if price rose away from our bid, or the bid is too old → cancel & re-bid
-    age = now_ts - pending["placed_ts"]
-    if price > pending["price"] * (1.0 + stale_pct) or age > max_age_s:
-        return pending, dqty, dquote, "cancel"
-    return pending, dqty, dquote, "hold"
+        return tracked, dqty, dquote, "partial"
+    return tracked, dqty, dquote, "hold"
+
+
+def bid_is_stale(tracked: dict, *, now_ts: float, price: float,
+                 stale_pct: float, max_age_s: float) -> bool:
+    """Should a resting BUY bid be cancelled and re-placed? True when the market has run
+    away above it, or it has rested too long. Buy-side policy only — sells are re-armed
+    declaratively by plan_sell_ladder(), not by staleness."""
+    return (price > tracked["price"] * (1.0 + stale_pct)
+            or (now_ts - tracked["placed_ts"]) > max_age_s)
+
+
+def reconcile_pending_buy(pending: dict, order: "dict | None", *, now_ts: float,
+                          price: float, stale_pct: float, max_age_s: float) -> tuple:
+    """Buy-side composition of reconcile_order() + bid_is_stale().
+
+    Same contract as reconcile_order, plus one extra action: 'cancel' = still resting but
+    stale, so the caller should cancel_order() and re-bid.
+    """
+    tracked, dqty, dquote, action = reconcile_order(pending, order)
+    if action == "hold" and bid_is_stale(tracked, now_ts=now_ts, price=price,
+                                         stale_pct=stale_pct, max_age_s=max_age_s):
+        return tracked, dqty, dquote, "cancel"
+    return tracked, dqty, dquote, action
+
+
+def plan_sell_ladder(*, holdings: float, avg_entry: float, peak_holdings: float,
+                     best_ask: float, price: float, params: dict,
+                     gate_open: bool = True) -> list:
+    """The DESIRED resting sell ladder, as pure policy: [{band_pct, price, qty}, …].
+
+    Anchored to avg_entry (the WHOLE position's cost basis), never to individual tranches.
+    Per-tranche anchoring sells the cheapest coins first — a dip-bought tranche's +5% fills
+    on any bounce while an expensive tranche's never does — which ratchets the cost basis
+    UP over time. Anchoring here means we only ever sell when the whole book is genuinely
+    up N%, so every fill is profitable against real basis.
+
+    Guarantees, in order:
+      • floor      — never plan below peak_holdings * min_holdings_pct (the ratchet: a core
+                     position that is never sold, whatever the ladder does)
+      • ceiling    — no NEW sells at/above sell_ceiling_price: past it the breakout thesis
+                     wins and we stop trimming the stake
+      • maker      — clamp each price to >= best_ask so the order always rests instead of
+                     crossing. If avg_entry*(1+band) is already below the market we are past
+                     the band, so rest at the ask rather than sell into the bid
+      • gate       — gate_open=False blocks NEW placements only; callers must NOT cancel
+                     already-resting sells on the gate (a sell resting above market is
+                     already trimming into strength — pulling it is backwards)
+      • never oversell — the ladder totals <= sellable, so Σ resting qty can't exceed what
+                     we own above the floor even if every band fills at once
+    """
+    if holdings <= 0 or avg_entry <= 0 or best_ask <= 0 or not gate_open:
+        return []
+    ceiling = params.get("sell_ceiling_price", 0.0)
+    if ceiling > 0 and price >= ceiling:
+        return []
+    floor_btc = peak_holdings * params.get("min_holdings_pct", 0.0)
+    sellable  = max(0.0, holdings - floor_btc)
+    if sellable <= 0:
+        return []
+    plan, allocated = [], 0.0
+    for step in params.get("sell_ladder", []):
+        band_pct = float(step["band_pct"])
+        target   = avg_entry * (1.0 + band_pct / 100.0)
+        px       = max(target, best_ask)          # never cross → always maker
+        if ceiling > 0 and px >= ceiling:
+            continue
+        qty = min(holdings * float(step["fraction"]), sellable - allocated)
+        if qty <= 0:
+            continue
+        plan.append({"band_pct": band_pct, "price": px, "qty": qty})
+        allocated += qty
+    return plan
+
+
+def diff_sell_ladder(desired: list, tracked: list, *, tol_pct: float) -> tuple:
+    """(to_cancel, to_place) — declarative re-arm of the resting ladder.
+
+    Matches by band_pct and only replaces an order whose price has drifted more than
+    tol_pct (hysteresis). Without it, every buy nudges avg_entry, re-prices every band and
+    churns the whole ladder — burning rate limit and losing queue position for nothing.
+
+    tracked entries are order records carrying band_pct + price. Any tracked band absent
+    from `desired` is cancelled (floor/ceiling reached, or holdings fell).
+    """
+    by_band = {t["band_pct"]: t for t in tracked}
+    to_cancel, to_place = [], []
+    for d in desired:
+        t = by_band.pop(d["band_pct"], None)
+        if t is None:
+            to_place.append(d)
+        elif abs(d["price"] - t["price"]) > t["price"] * tol_pct:
+            to_cancel.append(t)                   # re-price: cancel now, place once it clears
+            to_place.append(d)
+    to_cancel.extend(by_band.values())            # tracked bands no longer wanted
+    return to_cancel, to_place
 
 
 class AccumulationStrategy:
@@ -260,6 +370,7 @@ class AccumulationStrategy:
         # bug. Back off exponentially instead of hammering our way to a ban.
         self._fail_streak = 0
         self._retry_after = 0.0
+        self._last_drift_ts = 0.0
         if self.live:
             try:
                 from connectors import load as _load_conn  # noqa: PLC0415  pylint: disable=import-outside-toplevel
@@ -320,6 +431,16 @@ class AccumulationStrategy:
                 id              INTEGER PRIMARY KEY,
                 pending_buy_json TEXT
             )""")
+        # The resting SELL ladder, persisted as one JSON blob (id=1) so it is written
+        # atomically. It MUST survive restart: adoption matches live open orders against
+        # this to credit fills that landed while we were down, and to tell our own resting
+        # sells apart from genuine orphans. Losing it would cancel a valid ladder on every
+        # restart — churning the book and missing the wicks the ladder exists to catch.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS accum_open_sells (
+                id              INTEGER PRIMARY KEY,
+                open_sells_json TEXT
+            )""")
         conn.commit()
 
     # ── State persistence ──────────────────────────────────────────────────────
@@ -347,6 +468,12 @@ class AccumulationStrategy:
         """Persist the single resting bid (live only) so a restart resumes/reconciles it."""
         conn.execute("INSERT OR REPLACE INTO accum_pending_order (id, pending_buy_json) VALUES (1,?)",
                      (json.dumps(self.acc.pending_buy) if self.acc.pending_buy else None,))
+        conn.commit()
+
+    def _save_sells(self, conn: sqlite3.Connection) -> None:
+        """Persist the resting sell ladder (live only) so a restart can adopt it."""
+        conn.execute("INSERT OR REPLACE INTO accum_open_sells (id, open_sells_json) VALUES (1,?)",
+                     (json.dumps(list(self.acc.open_sells.values())),))
         conn.commit()
 
     def _restore_state(self, conn: sqlite3.Connection) -> bool:
@@ -380,6 +507,16 @@ class AccumulationStrategy:
             if prow and prow[0]:
                 a.pending_buy = json.loads(prow[0])
                 logger.info("Restored resting bid: %s", a.pending_buy)
+        except sqlite3.OperationalError:
+            pass
+        try:
+            srow = conn.execute(
+                "SELECT open_sells_json FROM accum_open_sells WHERE id=1").fetchone()
+            if srow and srow[0]:
+                a.open_sells = {s["order_id"]: s for s in json.loads(srow[0])}
+                if a.open_sells:
+                    logger.info("Restored %d resting sell(s): %s", len(a.open_sells),
+                                [(s["band_pct"], s["price"]) for s in a.open_sells.values()])
         except sqlite3.OperationalError:
             pass
         logger.info("Restored: %.6f BTC @ avg %.2f  free=%.2f  realized=%+.2f  rebuys=%d  bands=%s",
@@ -496,7 +633,10 @@ class AccumulationStrategy:
         self._fail_streak = 0
         self._retry_after = 0.0
         a.pending_buy = {"order_id": str(oid), "price": bid, "orig_qty": usdt_amount / bid,
-                         "executed_qty_seen": 0.0, "quote_spent_seen": 0.0, "placed_ts": time.time()}
+                         "executed_qty_seen": 0.0, "quote_spent_seen": 0.0,
+                         # `reason` links a rebuy bid back to its obligation, which is
+                         # discharged on FILL (in _credit_fill) — never on placement.
+                         "reason": reason, "placed_ts": time.time()}
         self._save_pending(state.conn)
         logger.info("LIVE maker BUY placed id=%s  %.2f USDT @ %.*f  [%s]", oid, usdt_amount, pd, bid, reason)
         return True
@@ -518,6 +658,18 @@ class AccumulationStrategy:
         # completes the initial buy (see the live note in on_book_update).
         a.initial_done = True
         a.last_buy_ts  = ts_ms
+        # Discharge a rebuy obligation only once its bid actually FILLS. Removing it at
+        # placement (as the paper instant-fill path can) would drop the obligation whenever
+        # the bid is later cancelled unfilled — we would have sold coins and quietly
+        # abandoned the plan to buy them back cheaper, which is the whole ratchet.
+        reason = (a.pending_buy or {}).get("reason", "")
+        if reason.startswith("rebuy+"):
+            for rb in list(a.pending_rebuys):
+                if f"rebuy+{rb.band_pct:.1f}%" == reason:
+                    a.pending_rebuys.remove(rb)
+                    a.active_bands.discard(rb.band_pct)
+                    logger.info("  rebuy obligation +%.1f%% discharged on fill", rb.band_pct)
+                    break
         state.conn.execute("""
             INSERT INTO accum_trades
                 (ts_ms, side, reason, price, qty_btc, usdt_value, fee_usdt,
@@ -553,20 +705,207 @@ class AccumulationStrategy:
         a.pending_buy = new_pending
         self._save_pending(state.conn)
 
+    # ── Live resting SELL ladder (the ratchet) ──────────────────────────────────
+
+    def _credit_sell_fill(self, state: Any, rec: dict, dqty: float, dquote: float,
+                          ts_ms: int) -> None:
+        """Apply a REAL sell-fill delta: holdings down, USDT up, and EXTEND the rebuy
+        obligation by exactly this delta at this fill's price.
+
+        The rebuy obligation is minted per FILL DELTA, not per placed order: a resting sell
+        fills in pieces over time, and minting the whole slice up-front (as the paper
+        instant-fill path does) would leave an obligation to rebuy coins we never sold if
+        the remainder is cancelled."""
+        a = self.acc
+        fill_price = dquote / dqty if dqty > 0 else 0.0
+        realized   = dquote - dqty * (a.avg_entry or fill_price)
+        a.holdings_btc   -= dqty
+        a.free_usdt      += dquote                    # maker → fee 0, proceeds are exact
+        a.total_realized += realized
+        if a.holdings_btc <= 1e-12:
+            a.avg_entry = 0.0                         # flat: no basis to carry
+        # Coin-positive by construction: rebuy MORE than we sold, at a discount to the
+        # actual fill price. This is the engine of the ratchet — the sell only exists to
+        # fund a cheaper rebuy.
+        discount = self._rebuy_discount()
+        band     = rec.get("band_pct", 0.0)
+        a.pending_rebuys.append(
+            PendingRebuy(band_pct=band, sell_price=fill_price, qty_btc=dqty,
+                         rebuy_price=fill_price * (1.0 - discount), ts_ms=ts_ms))
+        state.conn.execute("""
+            INSERT INTO accum_trades
+                (ts_ms, side, reason, price, qty_btc, usdt_value, fee_usdt,
+                 avg_entry_after, holdings_after, free_usdt_after)
+            VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (ts_ms, "sell", f"ladder+{band:.1f}%", fill_price, dqty, dquote, 0.0,
+             a.avg_entry, a.holdings_btc, a.free_usdt))
+        a.last_write_ts = time.time()
+        self._save_state(state.conn)
+        pd = decimals_for_price(fill_price)
+        logger.info("LIVE SELL FILL -%.4f @ %.*f  got=%.2f  realized=%+.2f  held=%.4f  "
+                    "free=%.2f  → rebuy %.4f @ %.*f (-%.1f%%)",
+                    dqty, pd, fill_price, dquote, realized, a.holdings_btc, a.free_usdt,
+                    dqty, pd, fill_price * (1.0 - discount), discount * 100)
+
+    async def _reconcile_live_sells(self, state: Any, ts_ms: int) -> None:
+        """Credit fills on every resting sell. Runs BEFORE any re-arm: cancelling an order
+        without first crediting a fill that landed since the last tick loses real coins.
+
+        One get_open_orders() call covers every still-open order (including partial-fill
+        progress); orders that vanished from the book need a get_order each to learn their
+        final state — normally none."""
+        a = self.acc
+        if not a.open_sells:
+            return
+        oo = await self._api.get_open_orders(state.session, self.symbol)
+        if oo is None:
+            return                                    # transient error: assume nothing
+        live = {o["order_id"]: o for o in oo}
+        for oid, rec in list(a.open_sells.items()):
+            view = live.get(oid)
+            if view is None:                          # gone from the book → settle it
+                view = await self._api.get_order(state.session, self.symbol, oid)
+            new_rec, dqty, dquote, action = reconcile_order(rec, view)
+            if dqty > 0:
+                self._credit_sell_fill(state, rec, dqty, dquote, ts_ms)
+            if new_rec is None:
+                a.open_sells.pop(oid, None)
+            else:
+                a.open_sells[oid] = new_rec
+        self._save_sells(state.conn)
+
+    def _breakout_gate_open(self, price: float) -> bool:
+        """False while price is breaking out — blocks NEW sells only, never cancels resting
+        ones. Deliberately the dumbest thing that works: the floor and ceiling are the real
+        guardrails, and a clever gate that fights the re-arm logic just churns the book."""
+        a = self.acc
+        if not a.p.get("sell_breakout_gate", False):
+            return True
+        ref = a.avg_entry
+        thresh = a.p.get("sell_breakout_pct", 25.0) / 100.0
+        if ref > 0 and price > ref * (1.0 + thresh):
+            return False                              # ripping away from basis → let it run
+        return True
+
+    async def _rearm_sell_ladder(self, state: Any, price: float, best_ask: float,
+                                 ts_ms: int) -> None:
+        """Reconcile the resting ladder toward the plan: cancel what no longer belongs,
+        place what is missing. Declarative — the plan is a pure function of state, so this
+        is idempotent and self-correcting."""
+        a = self.acc
+        if a.halted or not a.p.get("sell_ladder"):
+            return
+        desired = plan_sell_ladder(
+            holdings=a.holdings_btc, avg_entry=a.avg_entry,
+            peak_holdings=a.peak_holdings_btc, best_ask=best_ask, price=price,
+            params=a.p, gate_open=self._breakout_gate_open(price))
+        to_cancel, to_place = diff_sell_ladder(
+            desired, list(a.open_sells.values()),
+            tol_pct=a.p.get("sell_rearm_tol_pct", 0.5) / 100.0)
+        for rec in to_cancel:
+            logger.info("ladder: canceling +%.1f%% sell %s @ %.6f (re-arm)",
+                        rec["band_pct"], rec["order_id"], rec["price"])
+            await self._api.cancel_order(state.session, self.symbol, rec["order_id"])
+            a.open_sells.pop(rec["order_id"], None)
+        for d in to_place:
+            await self._place_live_sell(state, d, ts_ms)
+        if to_cancel or to_place:
+            self._save_sells(state.conn)
+
+    async def _place_live_sell(self, state: Any, plan: dict, ts_ms: int) -> bool:
+        """Place ONE resting post-only sell. Holdings are NOT debited here — only on fill."""
+        a = self.acc
+        if not self._adopted or a.halted:
+            return False
+        pd = decimals_for_price(plan["price"])
+        if self.shadow:
+            logger.info("SHADOW would place maker SELL %.4f @ %.*f [+%.1f%%] — placing nothing",
+                        plan["qty"], pd, plan["price"], plan["band_pct"])
+            return False
+        # Hard invariant: we can only ever sell coins we actually hold above the floor.
+        resting = sum(r["orig_qty"] - r["executed_qty_seen"] for r in a.open_sells.values())
+        floor   = a.peak_holdings_btc * a.p.get("min_holdings_pct", 0.0)
+        if resting + plan["qty"] > max(0.0, a.holdings_btc - floor) + 1e-9:
+            logger.error("ladder: REFUSED +%.1f%% — would oversell (resting=%.4f + %.4f > "
+                         "sellable=%.4f)", plan["band_pct"], resting, plan["qty"],
+                         max(0.0, a.holdings_btc - floor))
+            return False
+        oid = await self._api.post_order(
+            state.session, self.symbol, plan["price"], quantity=plan["qty"],
+            side="SELL", order_type="LIMIT_MAKER")
+        if not oid or str(oid).startswith("sim_"):
+            logger.error("ladder: SELL +%.1f%% placement failed (oid=%s)", plan["band_pct"], oid)
+            return False
+        # LIMIT_MAKER returns an id even when it auto-cancels for crossing — confirm it rests.
+        view = await self._api.get_order(state.session, self.symbol, str(oid))
+        if view is not None and view.get("status") in ("CANCELED", "EXPIRED", "REJECTED"):
+            logger.info("ladder: +%.1f%% sell @ %.*f auto-canceled (post-only would cross) — "
+                        "re-planning next tick", plan["band_pct"], pd, plan["price"])
+            return False                              # market moved, not an error → no backoff
+        a.open_sells[str(oid)] = {
+            "order_id": str(oid), "band_pct": plan["band_pct"], "price": plan["price"],
+            "orig_qty": plan["qty"], "executed_qty_seen": 0.0, "quote_spent_seen": 0.0,
+            "placed_ts": time.time()}
+        logger.info("LADDER maker SELL placed id=%s  %.4f @ %.*f  [+%.1f%%]",
+                    oid, plan["qty"], pd, plan["price"], plan["band_pct"])
+        return True
+
+    async def _check_drift(self, state: Any) -> None:
+        """Halt if our books over-claim what the exchange says we own.
+
+        Compares internal holdings against free + LOCKED: a resting sell moves coins from
+        free to locked, so a free-only check would 'drift' by exactly the resting quantity
+        the moment the ladder goes up. Asymmetric on purpose — only over-claiming is a
+        safety problem (it can oversell). Extra coins in the account (a deposit) are
+        harmless and must not halt the bot."""
+        a = self.acc
+        every = a.p.get("drift_check_every_s", 300)
+        now   = time.time()
+        if now - self._last_drift_ts < every:
+            return
+        self._last_drift_ts = now
+        acct = await self._api.get_account(state.session)
+        if not acct:
+            return                                    # unknown ≠ mismatch
+        base = self.symbol.replace("USDT", "")
+        bal  = acct["balances"].get(base)
+        if not bal:
+            return
+        real = bal["free"] + bal["locked"]
+        if a.holdings_btc > real + a.p.get("drift_tolerance", 0.01):
+            a.halted = True
+            logger.error("HALT — books over-claim the exchange: internal=%.6f > real=%.6f "
+                         "(free=%.6f + locked=%.6f). No further orders until resolved.",
+                         a.holdings_btc, real, bal["free"], bal["locked"])
+
     async def _adopt_open_orders(self, state: Any) -> None:
-        """Startup, BEFORE any placement: reconcile a persisted resting bid, and cancel any
-        untracked orphan (crash-after-place). Buy-only → an orphan bid is benign (worst case
-        it filled = more LBC), so we just clean the book and let the strategy re-bid fresh."""
+        """Startup, BEFORE any placement: reconcile the persisted resting bid AND adopt the
+        persisted sell ladder, then cancel only genuine orphans.
+
+        Resting sells MUST be adopted, not cancelled: they are the ladder, and dropping them
+        on every restart would churn the book and miss exactly the wicks they exist to
+        catch. An untracked order is still an orphan (crash-after-place) and gets cleaned."""
         oo = await self._api.get_open_orders(state.session, self.symbol)
         if oo is None:
             logger.warning("adopt: get_open_orders error — deferring (no placement until it succeeds)")
             return
-        tracked = self.acc.pending_buy["order_id"] if self.acc.pending_buy else None
-        if tracked and tracked not in {o["order_id"] for o in oo}:
+        a = self.acc
+        live_ids = {o["order_id"] for o in oo}
+        tracked_buy = a.pending_buy["order_id"] if a.pending_buy else None
+        if tracked_buy and tracked_buy not in live_ids:
             # our tracked bid is gone from the book → it filled/canceled while we were down
-            await self._reconcile_live_buy(state, self.acc.last_price or 0.0, int(time.time() * 1000))
+            await self._reconcile_live_buy(state, a.last_price or 0.0, int(time.time() * 1000))
+        if a.open_sells:
+            # credit anything that filled while we were down, and drop what no longer rests
+            await self._reconcile_live_sells(state, int(time.time() * 1000))
+            adopted = [oid for oid in a.open_sells if oid in live_ids]
+            if adopted:
+                logger.info("adopt: keeping %d resting ladder sell(s): %s", len(adopted),
+                            [(a.open_sells[o]["band_pct"], a.open_sells[o]["price"])
+                             for o in adopted])
+        known = set(a.open_sells) | ({tracked_buy} if tracked_buy else set())
         for o in oo:
-            if o["order_id"] != tracked:
+            if o["order_id"] not in known:
                 logger.warning("adopt: canceling orphan %s (%s qty=%.2f @ %.6f)",
                                o["order_id"], o.get("side"), o.get("qty", 0), o.get("price", 0))
                 await self._api.cancel_order(state.session, self.symbol, o["order_id"])
@@ -720,9 +1059,13 @@ class AccumulationStrategy:
             usdt_needed = rb.qty_btc * price
             if usdt_needed > a.free_usdt:
                 continue
-            if await self._buy(state, price, usdt_needed, f"rebuy+{rb.band_pct:.1f}%", ts_ms):
-                a.active_bands.discard(rb.band_pct)
+            placed = await self._buy(state, price, usdt_needed, f"rebuy+{rb.band_pct:.1f}%", ts_ms)
+            if placed and not self.live:
+                a.active_bands.discard(rb.band_pct)   # paper fills instantly → done
                 filled.append(rb)
+            elif placed:
+                break   # live: the bid only RESTS. The obligation is discharged in
+                        # _credit_fill when it fills; one bid in flight, so stop here.
 
         for rb in expired + filled:
             a.pending_rebuys.remove(rb)
@@ -857,6 +1200,10 @@ class AccumulationStrategy:
             if not self._adopted:
                 await self._adopt_open_orders(state)
             await self._reconcile_live_buy(state, price, ts_ms)
+            # Credit sell fills BEFORE any re-arm: cancelling a resting sell without first
+            # taking its fill delta would lose real coins.
+            await self._reconcile_live_sells(state, ts_ms)
+            await self._check_drift(state)
 
         if not a.initial_done:
             if a.p.get("vwap_gate_initial", False):
@@ -875,9 +1222,16 @@ class AccumulationStrategy:
                     a.initial_done = True
             return
 
-        # Buy-only when live: skip the profit-band SELLS + rebuys (illiquid book — we never
-        # sell the stake; see the LBC design). Paper bots keep the full sell/rebuy ladder.
-        if not self.live:
+        if self.live:
+            # RESTING ladder instead of the paper path's reactive band checks: a limit order
+            # sitting on the book catches a wick that a polling bot sleeps through, and on a
+            # book this thin the wicks are the opportunity. best_ask is derived from mid +
+            # half the spread (the tick carries no book side); an approximation is safe
+            # because LIMIT_MAKER refuses to cross, so a bad estimate just re-plans.
+            half_spread = float(spread_bps or 0.0) / 20_000.0
+            await self._rearm_sell_ladder(state, price, price * (1.0 + half_spread), ts_ms)
+            await self._check_rebuys(state, price, ts_ms)
+        else:
             await self._check_profit_bands(state, price, ts_ms)
             await self._check_rebuys(state, price, ts_ms)
 

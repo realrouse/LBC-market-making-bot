@@ -23,15 +23,28 @@
     "rebid_stale_pct":      2.0,
     "rebid_max_age_s":      3600,
 
+    "_ladder_note": "Ratchet ladder: resting post-only SELLs at +5%/+10% ABOVE AVG_ENTRY (not per-tranche — per-tranche anchoring sells the cheapest coins first and ratchets the cost basis up). 30%+30% of holdings, floored at 40% of peak (min_holdings_pct) so a core position is never sold. Each sell FILL mints a rebuy obligation 3% under the fill price, so every round trip returns MORE coins than it sold — that is the ratchet. Ceiling 0.02: above it we stop trimming and let the breakout run. Sells are LIMIT_MAKER (post-only): MEXC auto-cancels rather than let us cross, so a fill is always 0-fee maker.",
+    "sell_ladder": [
+        { "band_pct":  5.0, "fraction": 0.30 },
+        { "band_pct": 10.0, "fraction": 0.30 }
+    ],
+    "sell_ceiling_price":   0.02,
+    "sell_rearm_tol_pct":   0.5,
+    "sell_breakout_gate":   true,
+    "sell_breakout_pct":    25.0,
+    "drift_check_every_s":  300,
+    "drift_tolerance":      0.01,
+
     "obi_levels":           10,
     "obi_ema_alpha":        0.05,
     "obi_entry_thresh":     0.50,
     "obi_confirm_n":        20,
     "min_scale_interval_s": 3600,
 
+    "_paper_bands_note": "profit_bands_pct/sell_fraction drive the PAPER reactive path only; live uses sell_ladder above. min_holdings_pct is shared and load-bearing for both: it is the ratchet floor. 0.40 = the ladder's 30%+30% can sell at most 60% of peak holdings, and the last 40% is never sold by any path.",
     "profit_bands_pct":     [5.0, 10.0, 20.0, 30.0, 50.0],
     "sell_fraction":        0.10,
-    "min_holdings_pct":     0.50,
+    "min_holdings_pct":     0.40,
     "rebuy_discount_min_pct": 3.0,
     "rebuy_discount_max_pct": 10.0,
     "rebuy_spread_mult":    3.0,

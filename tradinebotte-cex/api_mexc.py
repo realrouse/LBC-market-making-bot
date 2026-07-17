@@ -236,11 +236,23 @@ async def get_markets(session, symbol=DEFAULT_SYMBOL, **_):
 
 # ─── ORDER PLACEMENT ──────────────────────────────────────────────────────────
 
-async def post_order(session, symbol, price, size_usdc, *,
+async def post_order(session, symbol, price, size_usdc=None, *,
                      api_key=None, api_secret=None, side="BUY",
+                     quantity=None, order_type="LIMIT",
                      private_key=None, install_dir=None):  # pylint: disable=unused-argument
     """
     Submit a LIMIT order to MEXC spot.
+
+    `quantity` (base asset) and `size_usdc` (quote notional) are alternatives: pass
+    quantity to size an order in COINS (a sell of a known holding), size_usdc to size it
+    in USDT (a buy of a known budget). Passing quantity avoids the notional round-trip
+    `(qty*price)/price`, which is why sells use it.
+
+    `order_type="LIMIT_MAKER"` is post-only: the exchange guarantees the order never
+    crosses. ⚠ MEXC does NOT reject a crossing LIMIT_MAKER at the API — it ACCEPTS it
+    (HTTP 200 + orderId) and immediately auto-cancels it (verified live: status=CANCELED,
+    executedQty=0). So a returned order id does NOT prove the order is resting; the
+    caller must confirm with get_order before treating it as live.
 
     Args:
         symbol    : trading pair, e.g. "BTCUSDT". Append ":SELL" to force
@@ -272,11 +284,15 @@ async def post_order(session, symbol, price, size_usdc, *,
     price_dec, qty_dec = prec
 
     try:
-        quantity = size_usdc / price          # base-asset amount, floored to lot step below
+        if quantity is None:
+            if size_usdc is None:
+                logger.error("MEXC — post_order needs quantity or size_usdc")
+                return None
+            quantity = size_usdc / price      # base-asset amount, floored to lot step below
         params = {
             "symbol":      _sym,
             "side":        _side,
-            "type":        "LIMIT",
+            "type":        order_type,
             # MEXC LIMIT orders default to GTC server-side; timeInForce is not required
             # (unlike Binance where omitting it returns an error).
             "quantity":    fmt_qty(quantity, qty_dec),   # floored to baseSizePrecision
@@ -477,11 +493,16 @@ async def get_open_orders(session, symbol, *, api_key=None, api_secret=None):
                 return None   # error sentinel — not [] (sim/no-orders)
             return [
                 {
-                    "order_id": str(o.get("orderId", "")),
-                    "side":     str(o.get("side", "")),
-                    "price":    float(o.get("price", 0)),
-                    "qty":      float(o.get("origQty", 0)),
-                    "status":   str(o.get("status", "")),
+                    "order_id":     str(o.get("orderId", "")),
+                    "side":         str(o.get("side", "")),
+                    "price":        float(o.get("price", 0)),
+                    "qty":          float(o.get("origQty", 0)),
+                    "status":       str(o.get("status", "")),
+                    # Fill progress, so ONE openOrders call per tick can credit partial
+                    # fills on resting orders — instead of a get_order per tracked order.
+                    "executed_qty":          float(o.get("executedQty", 0) or 0),
+                    "cummulative_quote_qty": float(o.get("cummulativeQuoteQty",
+                                                         o.get("cumulativeQuoteQty", 0)) or 0),
                 }
                 for o in data
             ]
