@@ -370,8 +370,9 @@ class TestPlanSellLadder(unittest.TestCase):
 
 class TestDiffSellLadder(unittest.TestCase):
 
-    def _t(self, band, price):
-        return {"order_id": f"o{band}", "band_pct": band, "price": price}
+    def _t(self, band, price, qty=1200.0):
+        return {"order_id": f"o{band}", "band_pct": band, "price": price,
+                "orig_qty": qty, "executed_qty_seen": 0.0}
 
     def test_places_missing_bands(self):
         desired = [{"band_pct": 5.0, "price": 0.0026, "qty": 1200.0}]
@@ -389,6 +390,27 @@ class TestDiffSellLadder(unittest.TestCase):
         cancel, place = diff_sell_ladder(desired, [self._t(5.0, 0.0026)], tol_pct=0.005)
         self.assertEqual(len(cancel), 1)
         self.assertEqual(len(place), 1)
+
+    def test_resizes_an_order_left_oversized_by_a_sibling_fill(self):
+        """The live bug: after the +5% band filled, holdings dropped, but the surviving
+        +10% order still claimed the ENTIRE sellable amount at its original size. The plan
+        then wanted a +5% that could not fit, and the oversell invariant refused it on every
+        book tick. Price alone matches here — only the qty check sees it."""
+        tracked = [{"order_id": "s2", "band_pct": 10.0, "price": 0.002618,
+                    "orig_qty": 1260.744, "executed_qty_seen": 0.0}]
+        desired = [{"band_pct": 5.0, "price": 0.002595, "qty": 882.52},
+                   {"band_pct": 10.0, "price": 0.002618, "qty": 378.23}]  # same price, 1/3 size
+        cancel, place = diff_sell_ladder(desired, tracked, tol_pct=0.005, qty_tol_pct=0.10)
+        self.assertEqual([c["order_id"] for c in cancel], ["s2"])   # resized, not left stale
+        self.assertEqual(len(place), 2)                             # room for +5% again
+
+    def test_small_partial_fill_does_not_churn_the_ladder(self):
+        # qty tolerance is looser than price on purpose: partials nibble constantly.
+        tracked = [{"order_id": "s1", "band_pct": 5.0, "price": 0.0026,
+                    "orig_qty": 1200.0, "executed_qty_seen": 30.0}]   # 2.5% filled
+        desired = [{"band_pct": 5.0, "price": 0.0026, "qty": 1170.0}]
+        cancel, place = diff_sell_ladder(desired, tracked, tol_pct=0.005, qty_tol_pct=0.10)
+        self.assertEqual((cancel, place), ([], []))
 
     def test_cancels_bands_no_longer_wanted(self):
         cancel, place = diff_sell_ladder([], [self._t(5.0, 0.0026), self._t(10.0, 0.00275)],
@@ -490,6 +512,30 @@ class TestLadderWiring(unittest.IsolatedAsyncioTestCase):
         await eng.on_book_update(state, self._tick(0.0024))
         eng._api.post_order.assert_not_awaited()
         self.assertEqual(eng.acc.open_sells, {})
+
+    async def test_ladder_reconverges_after_a_band_fills(self):
+        """End-to-end of the live bug: fill the +5%, then re-arm must resize the stranded
+        +10% and re-place both — never loop refusing an impossible order."""
+        eng, state = _ladder_engine()
+        eng._api.post_order = AsyncMock(side_effect=["s1", "s2"])
+        await eng.on_book_update(state, self._tick(0.0024))
+        # +5% fills entirely; +10% still rests, now over-sized for the new holdings
+        eng._api.get_open_orders = AsyncMock(return_value=[
+            {"order_id": "s2", "side": "SELL", "price": 0.00275, "qty": 1200.0,
+             "status": "NEW", "executed_qty": 0.0, "cummulative_quote_qty": 0.0}])
+        eng._api.get_order = AsyncMock(return_value={
+            "status": "FILLED", "executed_qty": 1200.0, "cummulative_quote_qty": 3.15})
+        await eng._reconcile_live_sells(state, 2_000_000)
+        self.assertAlmostEqual(eng.acc.holdings_btc, 2800.0)
+        eng._api.post_order = AsyncMock(side_effect=["s3", "s4"])
+        eng._api.cancel_order = AsyncMock(return_value=True)
+        await eng._rearm_sell_ladder(state, 0.0024, 0.0024, 2_000_001)
+        eng._api.cancel_order.assert_awaited()          # the stranded +10% is resized
+        # and the ladder never exceeds what we may sell
+        floor    = 4000.0 * 0.40
+        sellable = eng.acc.holdings_btc - floor
+        resting  = sum(r["orig_qty"] for r in eng.acc.open_sells.values())
+        self.assertLessEqual(resting, sellable + 1e-6)
 
     async def test_halted_engine_places_nothing(self):
         eng, state = _ladder_engine()

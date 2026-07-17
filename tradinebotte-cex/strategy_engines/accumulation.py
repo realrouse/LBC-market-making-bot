@@ -115,6 +115,7 @@ DEFAULTS: dict = {
     "sell_ladder":           [],      # [{band_pct, fraction}] off avg_entry, e.g. 30% @ +5%
     "sell_ceiling_price":    0.0,     # 0 = none; no NEW sells at/above this price (let it run)
     "sell_rearm_tol_pct":    0.5,     # re-price a resting sell only past this drift (hysteresis)
+    "sell_resize_tol_pct":   10.0,    # …and re-SIZE it past this qty drift (looser: partials nibble)
     "sell_breakout_gate":    False,   # block NEW sells while ripping away from basis
     "sell_breakout_pct":     25.0,    # …meaning price > avg_entry * (1 + this%)
     "drift_check_every_s":   300,     # how often to reconcile books vs the real balance
@@ -308,15 +309,25 @@ def plan_sell_ladder(*, holdings: float, avg_entry: float, peak_holdings: float,
     return plan
 
 
-def diff_sell_ladder(desired: list, tracked: list, *, tol_pct: float) -> tuple:
+def diff_sell_ladder(desired: list, tracked: list, *, tol_pct: float,
+                     qty_tol_pct: float = 0.10) -> tuple:
     """(to_cancel, to_place) — declarative re-arm of the resting ladder.
 
-    Matches by band_pct and only replaces an order whose price has drifted more than
-    tol_pct (hysteresis). Without it, every buy nudges avg_entry, re-prices every band and
-    churns the whole ladder — burning rate limit and losing queue position for nothing.
+    Matches by band_pct and replaces an order whose price has drifted past tol_pct OR whose
+    size has drifted past qty_tol_pct. Both hysteresis bands matter:
+      • price — without it, every buy nudges avg_entry, re-prices every band and churns the
+        whole ladder, burning rate limit and queue position for nothing.
+      • QTY — a resting order is sized from the holdings of the moment it was placed. When a
+        sibling band fills, holdings drop and that order is left over-sized, still claiming
+        coins the new plan wants to spread across the ladder. Observed live: after the +5%
+        band filled, the surviving +10% order still held the ENTIRE sellable amount, so
+        every re-arm asked for a +5% that could not fit and the oversell invariant refused
+        it on every tick. Comparing price alone never sees this.
+    qty_tol is deliberately looser than price tol: partial fills nibble the size constantly
+    and re-arming on each one would churn for no benefit.
 
-    tracked entries are order records carrying band_pct + price. Any tracked band absent
-    from `desired` is cancelled (floor/ceiling reached, or holdings fell).
+    tracked entries are order records carrying band_pct + price + orig_qty. Any tracked band
+    absent from `desired` is cancelled (floor/ceiling reached, or holdings fell).
     """
     by_band = {t["band_pct"]: t for t in tracked}
     to_cancel, to_place = [], []
@@ -324,8 +335,11 @@ def diff_sell_ladder(desired: list, tracked: list, *, tol_pct: float) -> tuple:
         t = by_band.pop(d["band_pct"], None)
         if t is None:
             to_place.append(d)
-        elif abs(d["price"] - t["price"]) > t["price"] * tol_pct:
-            to_cancel.append(t)                   # re-price: cancel now, place once it clears
+            continue
+        remaining = t["orig_qty"] - t.get("executed_qty_seen", 0.0)
+        if (abs(d["price"] - t["price"]) > t["price"] * tol_pct
+                or abs(d["qty"] - remaining) > max(remaining, d["qty"]) * qty_tol_pct):
+            to_cancel.append(t)                   # re-price/re-size: cancel, then re-place
             to_place.append(d)
     to_cancel.extend(by_band.values())            # tracked bands no longer wanted
     return to_cancel, to_place
@@ -372,6 +386,7 @@ class AccumulationStrategy:
         self._retry_after = 0.0
         self._last_drift_ts = 0.0
         self._drift_ok      = None    # None = never checked (vs True = checked and clean)
+        self._oversell_warn_ts = 0.0
         if self.live:
             try:
                 from connectors import load as _load_conn  # noqa: PLC0415  pylint: disable=import-outside-toplevel
@@ -802,7 +817,8 @@ class AccumulationStrategy:
             params=a.p, gate_open=self._breakout_gate_open(price))
         to_cancel, to_place = diff_sell_ladder(
             desired, list(a.open_sells.values()),
-            tol_pct=a.p.get("sell_rearm_tol_pct", 0.5) / 100.0)
+            tol_pct=a.p.get("sell_rearm_tol_pct", 0.5) / 100.0,
+            qty_tol_pct=a.p.get("sell_resize_tol_pct", 10.0) / 100.0)
         for rec in to_cancel:
             logger.info("ladder: canceling +%.1f%% sell %s @ %.6f (re-arm)",
                         rec["band_pct"], rec["order_id"], rec["price"])
@@ -827,9 +843,15 @@ class AccumulationStrategy:
         resting = sum(r["orig_qty"] - r["executed_qty_seen"] for r in a.open_sells.values())
         floor   = a.peak_holdings_btc * a.p.get("min_holdings_pct", 0.0)
         if resting + plan["qty"] > max(0.0, a.holdings_btc - floor) + 1e-9:
-            logger.error("ladder: REFUSED +%.1f%% — would oversell (resting=%.4f + %.4f > "
-                         "sellable=%.4f)", plan["band_pct"], resting, plan["qty"],
-                         max(0.0, a.holdings_btc - floor))
+            # Throttled: this fires per book tick, and a planner/reality mismatch would
+            # otherwise bury the log at ~2s intervals (it did — see the qty-drift bug in
+            # diff_sell_ladder). The refusal itself is the invariant doing its job.
+            if time.time() - self._oversell_warn_ts > 60:
+                self._oversell_warn_ts = time.time()
+                logger.error("ladder: REFUSED +%.1f%% — would oversell (resting=%.4f + %.4f > "
+                             "sellable=%.4f). Plan disagrees with the book; re-arm should "
+                             "resize.", plan["band_pct"], resting, plan["qty"],
+                             max(0.0, a.holdings_btc - floor))
             return False
         oid = await self._api.post_order(
             state.session, self.symbol, plan["price"], quantity=plan["qty"],
