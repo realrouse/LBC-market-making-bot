@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 import time
 import uuid
@@ -30,6 +31,14 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
 from api_common import decimals_for_price
+
+try:
+    # Durable per-fill push to the shared bot_trades log (powers the real-money status page).
+    # Guarded so importing the engine never hard-depends on tradinetools (e.g. unit tests).
+    from tradinetools import push_trade as _push_trade
+except ImportError:  # pragma: no cover
+    def _push_trade(*_a, **_k):  # type: ignore
+        return None
 
 if TYPE_CHECKING:                       # lazy at runtime (see _ensure_earn) — keeps
     from earn_manager import EarnManager  # `import strategy_engines` light for other bots
@@ -442,6 +451,11 @@ class AccumulationStrategy:
         self.symbol   = cfg["symbol"]
         self.live     = bool(cfg.get("live_execution", False))
         self.shadow   = bool(cfg.get("shadow", False))
+        # Identity for the durable bot_trades push (must match the heartbeat/inventory join
+        # keys). bot_id is threaded in by the host (live_bot sets config.bot_id before load);
+        # account resolves the same way build_heartbeat does (env, then USER).
+        self._bot_id  = getattr(config, "bot_id", "") or ""
+        self._account = os.environ.get("TRADINEBOTTE_ACCOUNT") or os.environ.get("USER", "unknown")
         self._api     = None
         self._adopted = False
         # Placement circuit breaker. A rejected order leaves no pending bid, so the next
@@ -636,6 +650,11 @@ class AccumulationStrategy:
         render unchanged. pnl_total aliases total_realized (unified cumulative-PnL field)."""
         a = self.acc
         return {
+            # ACTUAL runtime mode (post connector-load): self.live is cleared by the fail-safe
+            # if the connector/key is missing, so a keyless "live_execution" bot correctly reports
+            # "sim" here. Merged last by build_heartbeat, so this OVERRIDES the host's default —
+            # the split key the real-money status page trusts. shadow = live path, places nothing.
+            "mode":           "shadow" if (self.live and self.shadow) else ("live" if self.live else "sim"),
             "bounds_ok":      a.free_usdt > 0,
             "holdings_btc":   round(a.holdings_btc, 6),
             "free_usdt":      round(a.free_usdt, 2),
@@ -644,6 +663,41 @@ class AccumulationStrategy:
             "pnl_total":      round(a.total_realized, 2),
             "last_write_ts":  a.last_write_ts,
         }
+
+    def _record_accum_trade(self, conn: Any, *, ts_ms: int, side: str, reason: str,
+                            price: float, qty: float, quote: float, fee: float,
+                            order_id: Optional[str] = None,
+                            maker: Optional[bool] = None) -> None:
+        """Write one fill to the local accum_trades ledger, and — only when LIVE — also push it
+        to the shared bot_trades log (durable; powers the real-money status page). The push is
+        fire-and-forget + idempotent (collector dedupes on account+bot+ts+side+price+qty), so a
+        drop or redelivery is harmless. Callers keep their own commit/_save_state — the live and
+        paper paths differ — so this does neither."""
+        a = self.acc
+        conn.execute(
+            "INSERT INTO accum_trades"
+            " (ts_ms, side, reason, price, qty_btc, usdt_value, fee_usdt,"
+            "  avg_entry_after, holdings_after, free_usdt_after)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (ts_ms, side, reason, price, qty, quote, fee,
+             a.avg_entry, a.holdings_btc, a.free_usdt))
+        if self.live:
+            _push_trade({
+                "account":         self._account,
+                "bot_name":        self._bot_id,
+                "ts_ms":           ts_ms,
+                "side":            side,
+                "reason":          reason,
+                "price":           price,
+                "qty":             qty,
+                "quote":           quote,
+                "fee":             fee,
+                "order_id":        order_id,
+                "maker":           True if maker is None else maker,
+                "avg_entry_after": a.avg_entry,
+                "holdings_after":  a.holdings_btc,
+                "free_after":      a.free_usdt,
+            })
 
     # ── Adaptive helpers ────────────────────────────────────────────────────────
 
@@ -774,13 +828,10 @@ class AccumulationStrategy:
                     # owes nothing at all — several obligations can share one band
                 logger.info("  rebuy obligation +%.1f%% (%.4f coins) discharged on fill%s",
                             match.band_pct, match.qty_btc, "" if rid else " [legacy match]")
-        state.conn.execute("""
-            INSERT INTO accum_trades
-                (ts_ms, side, reason, price, qty_btc, usdt_value, fee_usdt,
-                 avg_entry_after, holdings_after, free_usdt_after)
-            VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (ts_ms, "buy", "live-fill", fill_price, dqty, dquote, 0.0,
-             a.avg_entry, a.holdings_btc, a.free_usdt))
+        self._record_accum_trade(
+            state.conn, ts_ms=ts_ms, side="buy", reason="live-fill", price=fill_price,
+            qty=dqty, quote=dquote, fee=0.0, maker=True,
+            order_id=(a.pending_buy or {}).get("order_id"))
         a.last_write_ts = time.time()
         self._save_state(state.conn)
         pd = decimals_for_price(fill_price)
@@ -837,13 +888,10 @@ class AccumulationStrategy:
             PendingRebuy(band_pct=band, sell_price=fill_price, qty_btc=dqty,
                          rebuy_price=fill_price * (1.0 - discount), ts_ms=ts_ms,
                          rid=uuid.uuid4().hex[:8]))
-        state.conn.execute("""
-            INSERT INTO accum_trades
-                (ts_ms, side, reason, price, qty_btc, usdt_value, fee_usdt,
-                 avg_entry_after, holdings_after, free_usdt_after)
-            VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (ts_ms, "sell", f"ladder+{band:.1f}%", fill_price, dqty, dquote, 0.0,
-             a.avg_entry, a.holdings_btc, a.free_usdt))
+        self._record_accum_trade(
+            state.conn, ts_ms=ts_ms, side="sell", reason=f"ladder+{band:.1f}%",
+            price=fill_price, qty=dqty, quote=dquote, fee=0.0, maker=True,
+            order_id=rec.get("order_id"))
         a.last_write_ts = time.time()
         self._save_state(state.conn)
         pd = decimals_for_price(fill_price)
@@ -1089,13 +1137,9 @@ class AccumulationStrategy:
         if a.earn is not None:
             await a.earn.park_idle(a.free_usdt, keep_liquid=earn_keep)
 
-        conn.execute("""
-            INSERT INTO accum_trades
-                (ts_ms, side, reason, price, qty_btc, usdt_value, fee_usdt,
-                 avg_entry_after, holdings_after, free_usdt_after)
-            VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (ts_ms, "buy", reason, price, qty_btc, usdt_amount, fee,
-             a.avg_entry, a.holdings_btc, a.free_usdt))
+        self._record_accum_trade(
+            conn, ts_ms=ts_ms, side="buy", reason=reason, price=price,
+            qty=qty_btc, quote=usdt_amount, fee=fee)
         conn.commit()
         self._save_state(conn)
 
@@ -1128,13 +1172,9 @@ class AccumulationStrategy:
         if a.earn is not None:
             await a.earn.park_idle(a.free_usdt, keep_liquid=earn_keep)
 
-        conn.execute("""
-            INSERT INTO accum_trades
-                (ts_ms, side, reason, price, qty_btc, usdt_value, fee_usdt,
-                 avg_entry_after, holdings_after, free_usdt_after)
-            VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (ts_ms, "sell", reason, price, qty_btc, usdt_val, fee,
-             a.avg_entry, a.holdings_btc, a.free_usdt))
+        self._record_accum_trade(
+            conn, ts_ms=ts_ms, side="sell", reason=reason, price=price,
+            qty=qty_btc, quote=usdt_val, fee=fee)
         conn.commit()
         self._save_state(conn)
 

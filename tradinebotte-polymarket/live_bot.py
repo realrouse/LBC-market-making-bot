@@ -243,6 +243,10 @@ class BotConfig:
     db_path:      str = ""
     log_path:     str = ""
     config_path:  str = ""
+    # Fleet join key (generated bot_id). Set by main() from resolve_bot_id before the
+    # strategy engine is loaded, so an engine can tag durable records (bot_trades) with the
+    # same identity the heartbeat/inventory use. Empty in a bare BotConfig() (tests).
+    bot_id:       str = ""
 
     # Strategy
     capital_start:      float = CAPITAL_START
@@ -1149,9 +1153,21 @@ async def main() -> None:
         logger.info("  POLY_PRIVATE_KEY not set — orders SIMULATED")
     logger.info("=" * 65)
 
-    # Self-reported mode (decided from config, never runtime order ids): threshold
-    # places real orders only with a private_key; CEX grid/swing are always sim.
-    _hb_mode = "live" if (config.strategy_type == "threshold" and config.private_key) else "sim"
+    # Self-reported mode (decided from config, never runtime order ids): threshold places
+    # real orders only with a private_key; accumulation manages its own real-vs-sim via
+    # live_execution/shadow in its strategy JSON; CEX grid/swing are always sim.
+    #   This is the CONSERVATIVE config-INTENT signal, computed before the engine loads so the
+    #   reset guard (below) protects a real-money bot. The accumulation engine additionally
+    #   reports its ACTUAL post-connector-load mode via heartbeat_payload["mode"], which
+    #   overrides this for the status page — a mismatch (declared live, reports sim) is the
+    #   intended alarm that a keyed bot fell back to paper.
+    _scfg = config.strategy_cfg or {}
+    if config.strategy_type == "threshold":
+        _hb_mode = "live" if config.private_key else "sim"
+    elif config.strategy_type == "accumulation" and _scfg.get("live_execution") and not _scfg.get("shadow"):
+        _hb_mode = "live"
+    else:
+        _hb_mode = "sim"
     _is_live = _hb_mode == "live"
     # Fleet join key: a stable, globally-unique bot id (readable prefix + generated
     # suffix), read from <install_dir>/bot_id_<role> or generated on first creation. The
@@ -1160,6 +1176,9 @@ async def main() -> None:
              else config.strategy_cfg.get("symbol", "")) or ""
     _hb_bot_name = resolve_bot_id(config.install_dir, config.strategy_type,
                                   config.connector, config.strategy_type, _pair)
+    # Thread the resolved bot_id into config so a strategy engine loaded below can tag durable
+    # records (bot_trades) with the same identity the heartbeat/inventory use.
+    config.bot_id = _hb_bot_name
 
     # Apply a pending operator reset BEFORE opening the DB so the wipe is atomic at
     # cold start. Sim-only: a live bot must never honour a reset marker.
