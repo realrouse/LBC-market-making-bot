@@ -263,7 +263,7 @@ def reconcile_pending_buy(pending: dict, order: "dict | None", *, now_ts: float,
 
 def plan_sell_ladder(*, holdings: float, avg_entry: float, peak_holdings: float,
                      best_ask: float, price: float, params: dict,
-                     gate_open: bool = True) -> list:
+                     gate_open: bool = True, gated_bands=frozenset()) -> list:
     """The DESIRED resting sell ladder, as pure policy: [{band_pct, price, qty}, …].
 
     Anchored to avg_entry (the WHOLE position's cost basis), never to individual tranches.
@@ -298,6 +298,12 @@ def plan_sell_ladder(*, holdings: float, avg_entry: float, peak_holdings: float,
     plan, allocated = [], 0.0
     for step in params.get("sell_ladder", []):
         band_pct = float(step["band_pct"])
+        if band_pct in gated_bands:
+            # ONE SHOT PER BAND: this band already sold and its rebuy is still outstanding.
+            # Without this the band re-arms the instant it fills, so a price parked above it
+            # trims again and again down to the floor — a slow liquidation, not a ratchet.
+            # A sell earns the right to fire again only by being bought back.
+            continue
         target   = avg_entry * (1.0 + band_pct / 100.0)
         px       = max(target, best_ask)          # never cross → always maker
         if ceiling > 0 and px >= ceiling:
@@ -318,7 +324,7 @@ def plan_sell_ladder(*, holdings: float, avg_entry: float, peak_holdings: float,
 
 
 def diff_sell_ladder(desired: list, tracked: list, *, tol_pct: float,
-                     qty_tol_pct: float = 0.10) -> tuple:
+                     qty_tol_pct: float = 0.10, gated_bands=frozenset()) -> tuple:
     """(to_cancel, to_place) — declarative re-arm of the resting ladder.
 
     Matches by band_pct and replaces an order whose price has drifted past tol_pct OR whose
@@ -337,7 +343,11 @@ def diff_sell_ladder(desired: list, tracked: list, *, tol_pct: float,
     tracked entries are order records carrying band_pct + price + orig_qty. Any tracked band
     absent from `desired` is cancelled (floor/ceiling reached, or holdings fell).
     """
-    by_band = {t["band_pct"]: t for t in tracked}
+    # A gated band's order is LEFT ALONE — neither re-armed nor pulled. The planner omits
+    # gated bands, so without this exclusion "absent from desired" would read as "no longer
+    # wanted" and cancel a live order the moment a partial fill gated its band, yanking the
+    # unfilled remainder off the book mid-fill.
+    by_band = {t["band_pct"]: t for t in tracked if t["band_pct"] not in gated_bands}
     to_cancel, to_place = [], []
     for d in desired:
         t = by_band.pop(d["band_pct"], None)
@@ -821,14 +831,18 @@ class AccumulationStrategy:
         a = self.acc
         if a.halted or not a.p.get("sell_ladder"):
             return
+        # A band that has sold and not yet been bought back is spent (one shot per band).
+        # pending_rebuys IS that record — no parallel bookkeeping to drift out of sync.
+        gated = {rb.band_pct for rb in a.pending_rebuys}
         desired = plan_sell_ladder(
             holdings=a.holdings_btc, avg_entry=a.avg_entry,
             peak_holdings=a.peak_holdings_btc, best_ask=best_ask, price=price,
-            params=a.p, gate_open=self._breakout_gate_open(price))
+            params=a.p, gate_open=self._breakout_gate_open(price), gated_bands=gated)
         to_cancel, to_place = diff_sell_ladder(
             desired, list(a.open_sells.values()),
             tol_pct=a.p.get("sell_rearm_tol_pct", 0.5) / 100.0,
-            qty_tol_pct=a.p.get("sell_resize_tol_pct", 10.0) / 100.0)
+            qty_tol_pct=a.p.get("sell_resize_tol_pct", 10.0) / 100.0,
+            gated_bands=gated)
         for rec in to_cancel:
             logger.info("ladder: canceling +%.1f%% sell %s @ %.6f (re-arm)",
                         rec["band_pct"], rec["order_id"], rec["price"])

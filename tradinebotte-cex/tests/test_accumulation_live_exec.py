@@ -309,7 +309,8 @@ class TestPlanSellLadder(unittest.TestCase):
 
     def _plan(self, **over):
         kw = dict(holdings=4000.0, avg_entry=0.0025, peak_holdings=4000.0,
-                  best_ask=0.0024, price=0.0024, params=self._P, gate_open=True)
+                  best_ask=0.0024, price=0.0024, params=self._P, gate_open=True,
+                  gated_bands=frozenset())
         kw.update(over)
         return plan_sell_ladder(**kw)
 
@@ -378,6 +379,21 @@ class TestPlanSellLadder(unittest.TestCase):
         # +5% = 882.52 @ 0.002605 = $2.30 (fine); +10% would be 378.2 @ 0.002618 = $0.99
         self.assertEqual([b["band_pct"] for b in plan], [5.0])
 
+    def test_a_band_awaiting_its_rebuy_is_not_re_armed(self):
+        """Semantic (a), one shot per band: the +5% sold and has not been bought back, so
+        it may not fire again. Without this a price parked above +5% re-arms it on every
+        fill and walks the position down to the floor — liquidation, not a ratchet."""
+        plan = self._plan(gated_bands={5.0})
+        self.assertEqual([p["band_pct"] for p in plan], [10.0])
+
+    def test_all_bands_gated_plans_nothing(self):
+        self.assertEqual(self._plan(gated_bands={5.0, 10.0}), [])
+
+    def test_gating_frees_the_allocation_for_the_remaining_band(self):
+        # the gated band must not reserve sellable capacity it is not going to use
+        plan = self._plan(gated_bands={5.0})
+        self.assertAlmostEqual(plan[0]["qty"], 1200.0)      # +10% still gets its full 30%
+
     def test_gate_closed_plans_nothing(self):
         self.assertEqual(self._plan(gate_open=False), [])
 
@@ -435,6 +451,21 @@ class TestDiffSellLadder(unittest.TestCase):
                                          tol_pct=0.005)
         self.assertEqual(len(cancel), 2)
         self.assertEqual(place, [])
+
+    def test_a_gated_bands_resting_order_is_left_alone_not_cancelled(self):
+        """The partial-fill trap: a partial gates the band (a rebuy is owed), the planner
+        then omits it — and 'absent from desired' would read as 'cancel', yanking the
+        unfilled remainder off the book mid-fill. Gated means hands off, not pull."""
+        tracked = [self._t(5.0, 0.0026)]
+        cancel, place = diff_sell_ladder([], tracked, tol_pct=0.005, gated_bands={5.0})
+        self.assertEqual((cancel, place), ([], []))
+
+    def test_gating_does_not_stop_other_bands_being_reconciled(self):
+        desired = [{"band_pct": 10.0, "price": 0.00275, "qty": 1200.0}]
+        cancel, place = diff_sell_ladder(desired, [self._t(5.0, 0.0026)],
+                                         tol_pct=0.005, gated_bands={5.0})
+        self.assertEqual(cancel, [])                     # gated +5% untouched
+        self.assertEqual(len(place), 1)                  # +10% still placed
 
 
 class TestLadderWiring(unittest.IsolatedAsyncioTestCase):
@@ -579,6 +610,56 @@ class TestLadderWiring(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await eng._place_live_sell(state, {"band_pct": 5.0, "price": 0.0026,
                                                            "qty": 1000.0}, 1))
         self.assertEqual(eng._sell_fail_streak, 0)
+
+    async def test_filled_band_is_not_re_armed_until_its_rebuy_completes(self):
+        """The full (a) cycle, as it happens live: +5% fills → band spent → no new +5% while
+        the rebuy is owed → rebuy fills → band earns the right to fire again."""
+        eng, state = _ladder_engine()
+        eng._api.post_order = AsyncMock(side_effect=["s1", "s2"])
+        await eng.on_book_update(state, self._tick(0.0024))
+        self.assertEqual(len(eng.acc.open_sells), 2)
+
+        # the +5% fills entirely
+        eng._api.get_open_orders = AsyncMock(return_value=[
+            {"order_id": "s2", "side": "SELL", "price": 0.00275, "qty": 1200.0,
+             "status": "NEW", "executed_qty": 0.0, "cummulative_quote_qty": 0.0}])
+        eng._api.get_order = AsyncMock(return_value={
+            "status": "FILLED", "executed_qty": 1200.0, "cummulative_quote_qty": 3.15})
+        await eng._reconcile_live_sells(state, 2_000_000)
+        self.assertEqual([rb.band_pct for rb in eng.acc.pending_rebuys], [5.0])
+
+        # Re-arm must not bring the +5% back — the old behaviour re-placed it instantly.
+        # (Other bands may legitimately be re-sized here: the fill changed holdings, so the
+        # +10% slice shrinks. Assert on the BAND, not on "no orders at all".)
+        eng._api.post_order = AsyncMock(return_value="s3")
+        await eng._rearm_sell_ladder(state, 0.0026, 0.0026, 2_000_001)
+        self.assertNotIn(5.0, {r["band_pct"] for r in eng.acc.open_sells.values()},
+                         "a spent band was re-armed before its rebuy was bought back")
+
+        # once the rebuy fills, the band is live again
+        eng.acc.pending_rebuys.clear()
+        eng.acc.holdings_btc = 4000.0
+        eng._api.post_order = AsyncMock(return_value="s4")
+        eng._api.get_order = AsyncMock(return_value={
+            "status": "NEW", "executed_qty": 0.0, "cummulative_quote_qty": 0.0})
+        await eng._rearm_sell_ladder(state, 0.0024, 0.0024, 2_000_002)
+        eng._api.post_order.assert_awaited()
+
+    async def test_partial_fill_gates_the_band_without_pulling_the_remainder(self):
+        eng, state = _ladder_engine()
+        eng._api.post_order = AsyncMock(side_effect=["s1", "s2"])
+        await eng.on_book_update(state, self._tick(0.0024))
+        eng._api.get_open_orders = AsyncMock(return_value=[
+            {"order_id": "s1", "side": "SELL", "price": 0.002625, "qty": 1200.0,
+             "status": "PARTIALLY_FILLED", "executed_qty": 400.0,
+             "cummulative_quote_qty": 1.05},
+            {"order_id": "s2", "side": "SELL", "price": 0.00275, "qty": 1200.0,
+             "status": "NEW", "executed_qty": 0.0, "cummulative_quote_qty": 0.0}])
+        await eng._reconcile_live_sells(state, 2_000_000)
+        eng._api.cancel_order = AsyncMock(return_value=True)
+        await eng._rearm_sell_ladder(state, 0.0024, 0.0024, 2_000_001)
+        eng._api.cancel_order.assert_not_awaited()       # remainder stays on the book
+        self.assertIn("s1", eng.acc.open_sells)
 
     async def test_halted_engine_places_nothing(self):
         eng, state = _ladder_engine()

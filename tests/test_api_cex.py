@@ -160,8 +160,8 @@ class TestBinanceComputeFee(unittest.TestCase):
 class TestMexcComputeFee(unittest.TestCase):
 
     def test_known_value(self):
-        # FEE_RATE = 0.002; fee = 0.002 × 65000 × 0.001 = 0.13
-        self.assertAlmostEqual(mexc.compute_fee(65000.0, 0.001), 0.13)
+        # FEE_RATE = 0.0004; fee = 0.0004 × 65000 × 0.001 = 0.026
+        self.assertAlmostEqual(mexc.compute_fee(65000.0, 0.001), 0.026)
 
     def test_zero_quantity(self):
         self.assertAlmostEqual(mexc.compute_fee(65000.0, 0.0), 0.0)
@@ -169,14 +169,23 @@ class TestMexcComputeFee(unittest.TestCase):
     def test_zero_price(self):
         self.assertAlmostEqual(mexc.compute_fee(0.0, 1.0), 0.0)
 
-    def test_mexc_fee_double_binance(self):
-        # MEXC 0.2% vs Binance 0.1% — same notional, MEXC is 2×
+    def test_mexc_spot_taker_is_cheaper_than_binance(self):
+        # These used to assert MEXC was 2x Binance, from an assumed 0.2% taker. Measured
+        # against the real account it is 0.04% effective — MEXC spot is the CHEAP one.
         fb = binance.compute_fee(65000.0, 0.001)
         fm = mexc.compute_fee(65000.0, 0.001)
-        self.assertAlmostEqual(fm, fb * 2)
+        self.assertLess(fm, fb)
 
-    def test_fee_rate_is_02_percent(self):
-        self.assertAlmostEqual(mexc.FEE_RATE, 0.002)
+    def test_taker_fee_is_the_accounts_effective_rate(self):
+        """0.04% = the account's base 0.05% (per /api/v3/tradeFee) x 0.8 MX deduction.
+        Not the 0.2% this file assumed for the life of the project — that was never
+        checked against MEXC and made every paper sim 5x too pessimistic."""
+        self.assertAlmostEqual(mexc.FEE_RATE, 0.0004)
+
+    def test_maker_is_free(self):
+        # The rate that actually matters: the live bot posts resting maker orders. Measured
+        # on a real fill — myTrades reported isMaker=True, commission=0.
+        self.assertAlmostEqual(mexc.MAKER_FEE_RATE, 0.0)
 
 
 # ── Binance parse_book_update ─────────────────────────────────────────────────
@@ -641,12 +650,14 @@ class TestMexcFuturesComputeFee(unittest.TestCase):
         f2 = mexc_futures.compute_fee(65000.0, 0.002)
         self.assertAlmostEqual(f2, f1 * 2)
 
-    def test_fee_lower_than_spot(self):
-        # Futures taker (0.06%) should be lower than MEXC spot taker (0.20%)
+    def test_futures_taker_costs_more_than_spot(self):
+        """This assertion INVERTED once the spot rate was measured instead of assumed:
+        futures taker is 0.06%, spot taker is 0.04% effective — so spot is the cheaper
+        venue, not the dearer one. The old test encoded the fictional 0.2% spot fee."""
         import api_mexc as _spot
         spot_fee    = _spot.compute_fee(65000.0, 0.001)
         futures_fee = mexc_futures.compute_fee(65000.0, 0.001)
-        self.assertLess(futures_fee, spot_fee)
+        self.assertGreater(futures_fee, spot_fee)
 
 
 # ── MEXC Futures metadata ──────────────────────────────────────────────────────
