@@ -178,6 +178,12 @@ class AccumState:
 # result, decide what changed. Kept pure + deterministic because shadow mode can NEVER
 # exercise it (a resting maker bid may not fill for days), so correctness rests on tests,
 # not on a live dry-run. Caller (the async wrapper) applies the deltas + issues any cancel.
+# Placement-failure backoff: 2s → 4s → 8s … capped. Keeps a persistent rejection from
+# retrying at book-tick rate (~2s) against an IP-whitelisted real-money key.
+_PLACE_BACKOFF_BASE_S = 2.0
+_PLACE_BACKOFF_MAX_S  = 300.0
+
+
 def reconcile_pending_buy(pending: dict, order: "dict | None", *, now_ts: float,
                           price: float, stale_pct: float, max_age_s: float) -> tuple:
     """(new_pending, holdings_delta, quote_delta, action).
@@ -247,6 +253,13 @@ class AccumulationStrategy:
         self.shadow   = bool(cfg.get("shadow", False))
         self._api     = None
         self._adopted = False
+        # Placement circuit breaker. A rejected order leaves no pending bid, so the next
+        # book tick retries immediately — a persistent rejection (filter change, permission
+        # flip, exchange maintenance) becomes a hot retry loop at tick rate against an
+        # IP-whitelisted key. Observed for real: 20 rejects in 50s during the Content-Type
+        # bug. Back off exponentially instead of hammering our way to a ban.
+        self._fail_streak = 0
+        self._retry_after = 0.0
         if self.live:
             try:
                 from connectors import load as _load_conn  # noqa: PLC0415  pylint: disable=import-outside-toplevel
@@ -460,6 +473,8 @@ class AccumulationStrategy:
             return False                              # no placement until startup adoption ran
         if a.pending_buy is not None:
             return False                              # one resting bid at a time
+        if time.time() < self._retry_after:
+            return False                              # backing off after placement failures
         if usdt_amount > a.free_usdt + a.p.get("buy_dust_tolerance_usdt", 0.01):
             logger.info("live BUY skipped — need %.2f USDT, budget %.2f", usdt_amount, a.free_usdt)
             return False
@@ -472,8 +487,14 @@ class AccumulationStrategy:
             return await self._buy_paper(state, bid, usdt_amount, reason + "|shadow", ts_ms)
         oid = await self._api.post_order(state.session, self.symbol, bid, usdt_amount, side="BUY")
         if not oid or str(oid).startswith("sim_"):
-            logger.error("live BUY placement failed (oid=%s) — key/precision/permission? Not tracking.", oid)
+            self._fail_streak += 1
+            backoff = min(_PLACE_BACKOFF_BASE_S * 2 ** (self._fail_streak - 1), _PLACE_BACKOFF_MAX_S)
+            self._retry_after = time.time() + backoff
+            logger.error("live BUY placement failed (oid=%s) — key/precision/permission? "
+                         "Not tracking. Retry #%d backing off %.0fs.", oid, self._fail_streak, backoff)
             return False
+        self._fail_streak = 0
+        self._retry_after = 0.0
         a.pending_buy = {"order_id": str(oid), "price": bid, "orig_qty": usdt_amount / bid,
                          "executed_qty_seen": 0.0, "quote_spent_seen": 0.0, "placed_ts": time.time()}
         self._save_pending(state.conn)

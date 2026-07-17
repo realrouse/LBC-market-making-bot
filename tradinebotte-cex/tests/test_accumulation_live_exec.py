@@ -10,6 +10,7 @@ cost-basis drift, full fill, cancel/expire, staleness (price + age), and the API
 import os
 import sqlite3
 import sys
+import time
 import types
 import unittest
 from unittest.mock import AsyncMock
@@ -239,6 +240,36 @@ class TestLiveWiring(unittest.IsolatedAsyncioTestCase):
         for _ in range(5):
             await eng.on_book_update(state, ts)
         eng._api.post_order.assert_awaited_once()       # one bid, not five
+
+    async def test_placement_failure_backs_off_instead_of_hot_looping(self):
+        """A rejected order leaves no pending bid, so the next tick retries at once. During
+        the real Content-Type outage this hammered MEXC ~20x in 50s with an IP-whitelisted
+        key. A persistent rejection must back off, not spin."""
+        eng, state = _live_engine()
+        eng._api.post_order = AsyncMock(return_value=None)      # exchange rejects everything
+        ts = types.SimpleNamespace(mid=0.0025, obi_ema=0.0, spread_bps=10.0, ts_ms=1_000_000)
+        for _ in range(6):
+            await eng.on_book_update(state, ts)
+        # first attempt fires, the rest are suppressed by the backoff window
+        self.assertEqual(eng._api.post_order.await_count, 1)
+        self.assertGreater(eng._retry_after, time.time())
+        self.assertEqual(eng.acc.holdings_btc, 0.0)             # nothing credited on failure
+
+    async def test_backoff_grows_and_clears_after_success(self):
+        eng, state = _live_engine()
+        eng._api.post_order = AsyncMock(return_value=None)
+        await eng._place_live_buy(state, 0.0025, 10.0, "initial", 1)
+        first = eng._retry_after
+        eng._retry_after = 0.0                                   # simulate the window elapsing
+        await eng._place_live_buy(state, 0.0025, 10.0, "initial", 2)
+        self.assertEqual(eng._fail_streak, 2)
+        self.assertGreater(eng._retry_after - time.time(), first - time.time())  # grew
+        # a successful placement clears the breaker
+        eng._retry_after = 0.0
+        eng._api.post_order = AsyncMock(return_value="oid9")
+        self.assertTrue(await eng._place_live_buy(state, 0.0025, 10.0, "initial", 3))
+        self.assertEqual(eng._fail_streak, 0)
+        self.assertEqual(eng._retry_after, 0.0)
 
     async def test_stale_bid_is_canceled_on_reconcile(self):
         eng, state = _live_engine()
