@@ -1,9 +1,9 @@
 """Unit tests for inventory_labels — account-label + live-bot derivation from inventory.
 
-The live_bots test is the load-bearing one: all bots are sim today, so _LIVE_BOTS is empty
-in production and the derivation is never exercised by real data — a silent bug would only
-surface the day a real-money bot is mislabelled SIM. So it's tested with a synthetic
-is_live=true row here.
+The live_bots test is the load-bearing one: it decides whether a real-money bot is badged
+LIVE or silently shown as SIM. Since 2026-07-17 exactly one bot (LBCUSDT accumulation) is
+live, and the real-inventory test pins that set — so an accidental second live bot fails
+the suite rather than quietly trading real funds.
 """
 
 import os
@@ -77,8 +77,13 @@ class TestLiveBots(unittest.TestCase):
             {("acct-2", "live_bot"), ("acct-4", "accumulation_bot")},
         )
 
-    def test_real_inventory_all_sim(self):
-        self.assertEqual(il.live_bots(il.load_rows()), set())
+    def test_real_inventory_live_set_is_exactly_the_known_real_money_bot(self):
+        """Pins the real-money set to the ONE bot we intend to be live (the LBCUSDT
+        accumulation bot, armed 2026-07-17). This replaces the old all-sim assertion:
+        the point was never "nothing is live", it was "nothing is live BY ACCIDENT".
+        A second bot appearing here means real funds are at stake somewhere unreviewed."""
+        self.assertEqual(il.live_bots(il.load_rows()),
+                         {("acct-8", "mexc-accumulation-lbcusdt-955a99")})
 
 
 class TestFailSoft(unittest.TestCase):

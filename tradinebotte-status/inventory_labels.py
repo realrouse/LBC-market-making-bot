@@ -102,8 +102,8 @@ def active_account_idxs(rows: list[dict]) -> list[int]:
 def live_bots(rows: list[dict]) -> set[tuple[str, str]]:
     """{(acct_short, bot_name)} for bots with is_live=true — the real-money set driving the
     SIM/LIVE badge. Keyed acct_short="acct-N" to match generate_status._mode_badge lookup.
-    All bots are sim today, so this is empty — its value is auto-tracking is_live the day a
-    bot goes live, removing the manual _LIVE_BOTS sync (a mislabel there = a real-money bot
-    shown as SIM)."""
+    Non-empty since 2026-07-17: the LBCUSDT accumulation bot trades real money. Auto-tracking
+    is_live (rather than a manual _LIVE_BOTS list) is what kept this correct on the day it
+    happened — a mislabel here shows a real-money bot as SIM."""
     return {(f"acct-{int(r.get('account_idx', 0)) + 1}", r.get("bot_name", ""))
             for r in rows if r.get("is_live") is True}
