@@ -371,6 +371,7 @@ class AccumulationStrategy:
         self._fail_streak = 0
         self._retry_after = 0.0
         self._last_drift_ts = 0.0
+        self._drift_ok      = None    # None = never checked (vs True = checked and clean)
         if self.live:
             try:
                 from connectors import load as _load_conn  # noqa: PLC0415  pylint: disable=import-outside-toplevel
@@ -872,11 +873,27 @@ class AccumulationStrategy:
         if not bal:
             return
         real = bal["free"] + bal["locked"]
-        if a.holdings_btc > real + a.p.get("drift_tolerance", 0.01):
-            a.halted = True
-            logger.error("HALT — books over-claim the exchange: internal=%.6f > real=%.6f "
-                         "(free=%.6f + locked=%.6f). No further orders until resolved.",
-                         a.holdings_btc, real, bal["free"], bal["locked"])
+        tol  = a.p.get("drift_tolerance", 0.01)
+        if a.holdings_btc > real + tol:
+            if not a.halted:
+                a.halted = True
+                logger.error("HALT — books over-claim the exchange: internal=%.6f > real=%.6f "
+                             "(free=%.6f + locked=%.6f). No further orders until resolved.",
+                             a.holdings_btc, real, bal["free"], bal["locked"])
+            return
+        # Report the FIRST clean check, and any transition back to clean, so a silent guard
+        # can be told apart from a guard that never ran. Steady state stays quiet.
+        if self._drift_ok is not True:
+            self._drift_ok = True
+            logger.info("drift check OK — internal=%.6f  real=%.6f (free=%.6f + locked=%.6f "
+                        "in resting orders)  surplus=%+.6f",
+                        a.holdings_btc, real, bal["free"], bal["locked"], real - a.holdings_btc)
+        elif real - a.holdings_btc > tol:
+            # Not dangerous (only over-claiming can oversell) but it means coins arrived that
+            # our books never credited — a deposit, or a fill we missed. Worth knowing.
+            logger.warning("drift: exchange holds %.6f MORE than our books (internal=%.6f "
+                           "real=%.6f) — deposit, or an uncredited fill?",
+                           real - a.holdings_btc, a.holdings_btc, real)
 
     async def _adopt_open_orders(self, state: Any) -> None:
         """Startup, BEFORE any placement: reconcile the persisted resting bid AND adopt the

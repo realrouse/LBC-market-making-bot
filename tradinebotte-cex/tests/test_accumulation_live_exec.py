@@ -532,6 +532,47 @@ class TestDriftGuard(unittest.IsolatedAsyncioTestCase):
         eng._api.get_account = AsyncMock(return_value=None)
         await eng._check_drift(state)
         self.assertFalse(eng.acc.halted)          # None = UNKNOWN, never "zero balance"
+        self.assertIsNone(eng._drift_ok)          # and it must NOT report a clean check
+
+    async def test_reports_the_first_clean_check_then_stays_quiet(self):
+        """A guard that only logs on halt is indistinguishable from one that never runs."""
+        eng, state = _ladder_engine()
+        eng._api.get_account = AsyncMock(return_value=self._acct(2800.0, 1200.0))
+        with self.assertLogs("accumulation", level="INFO") as cm:
+            await eng._check_drift(state)
+        self.assertTrue(any("drift check OK" in m for m in cm.output))
+        self.assertTrue(eng._drift_ok)
+
+    async def test_halt_is_latched_and_blocks_placement(self):
+        eng, state = _ladder_engine()
+        eng._api.get_account = AsyncMock(return_value=self._acct(1000.0, 0.0))
+        await eng._check_drift(state)
+        self.assertTrue(eng.acc.halted)
+        eng._last_drift_ts = 0.0                   # allow an immediate re-check
+        await eng._check_drift(state)              # must not un-halt itself
+        self.assertTrue(eng.acc.halted)
+        ok = await eng._place_live_sell(state, {"band_pct": 5.0, "price": 0.0026,
+                                                "qty": 100.0}, 1)
+        self.assertFalse(ok)
+        eng._api.post_order.assert_not_awaited()
+
+    async def test_throttled_between_checks(self):
+        eng, state = _ladder_engine(drift_check_every_s=300)
+        eng._api.get_account = AsyncMock(return_value=self._acct(2800.0, 1200.0))
+        await eng._check_drift(state)
+        await eng._check_drift(state)              # inside the window → no second call
+        self.assertEqual(eng._api.get_account.await_count, 1)
+
+    async def test_surplus_coins_warn_but_never_halt(self):
+        eng, state = _ladder_engine()
+        eng._api.get_account = AsyncMock(return_value=self._acct(2800.0, 1200.0))
+        await eng._check_drift(state)              # clean first
+        eng._api.get_account = AsyncMock(return_value=self._acct(9000.0, 0.0))
+        eng._last_drift_ts = 0.0
+        with self.assertLogs("accumulation", level="WARNING") as cm:
+            await eng._check_drift(state)
+        self.assertTrue(any("MORE than our books" in m for m in cm.output))
+        self.assertFalse(eng.acc.halted)
 
 
 class TestLadderAdoption(unittest.IsolatedAsyncioTestCase):
