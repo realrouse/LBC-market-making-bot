@@ -460,9 +460,11 @@ class AccumulationStrategy:
             try:
                 from connectors import load as _load_conn  # noqa: PLC0415  pylint: disable=import-outside-toplevel
                 self._api = _load_conn(getattr(config, "connector", cfg.get("connector", "mexc")))
-                logger.warning("AccumulationStrategy LIVE execution ENABLED [%s %s]%s — buy-only, "
-                               "real maker BUY orders (sells disabled)", cfg.get("connector", "mexc"),
-                               self.symbol, "  [SHADOW: places nothing]" if self.shadow else "")
+                _sells_on = bool(sell_ladder_spec(cfg))
+                logger.warning("AccumulationStrategy LIVE execution ENABLED [%s %s]%s — real maker BUY "
+                               "orders + %s", cfg.get("connector", "mexc"), self.symbol,
+                               "  [SHADOW: places nothing]" if self.shadow else "",
+                               "resting SELL ladder (the ratchet)" if _sells_on else "buy-only (no sell ladder)")
             except Exception as e:  # pylint: disable=broad-exception-caught  # fail-safe → paper
                 logger.error("LIVE execution requested but connector load failed — staying PAPER: %s", e)
                 self.live = False
