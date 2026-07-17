@@ -267,6 +267,49 @@ def reconcile_pending_buy(pending: dict, order: "dict | None", *, now_ts: float,
     return tracked, dqty, dquote, action
 
 
+# ── Sell POLICY, shared by both executors (pure) ────────────────────────────────────
+# Two sell executors exist and legitimately differ: the live ladder RESTS post-only orders
+# and fills whenever the market comes to them; the paper path REACTS to a tick and assumes
+# an instant fill. What must not differ is the policy underneath — which bands exist, what
+# each is worth, where a band triggers, and the floor no sell may breach. These three
+# functions are that policy, in one place, so a change lands on both paths at once.
+#
+# NOT shared: order sizing. Paper recomputes qty from holdings mutated by each sell in the
+# same tick (400 then 360); the ladder sizes every band off one snapshot with a cumulative
+# cap (400 then 400). Folding one into the other would silently change sim behaviour, so
+# each executor keeps its own sizing.
+
+def sell_ladder_spec(params: dict) -> list:
+    """The band ladder as [{band_pct, fraction}], from either config vocabulary.
+
+    Live bots declare `sell_ladder` explicitly (per-band fractions). Paper bots predate it
+    and say `profit_bands_pct` + one `sell_fraction` for every band. Deriving one from the
+    other gives the code a single vocabulary without re-configuring any running bot.
+    """
+    spec = params.get("sell_ladder")
+    if spec:
+        return [{"band_pct": float(s["band_pct"]), "fraction": float(s["fraction"])}
+                for s in spec]
+    frac = params.get("sell_fraction", 0.20)
+    return [{"band_pct": float(b), "fraction": float(frac)}
+            for b in sorted(params.get("profit_bands_pct", []))]
+
+
+def sell_floor_qty(peak_holdings: float, params: dict) -> float:
+    """The ratchet floor: coins no sell path may ever touch, as a fraction of PEAK holdings
+    (not current) — so the floor rises as the position grows and never falls back."""
+    if peak_holdings <= 0:
+        return 0.0
+    return peak_holdings * params.get("min_holdings_pct", 0.0)
+
+
+def band_target_price(avg_entry: float, band_pct: float) -> float:
+    """Where a band triggers: anchored to the WHOLE position's cost basis, never to an
+    individual tranche (per-tranche anchoring sells the cheapest coins first and ratchets
+    the basis up)."""
+    return avg_entry * (1.0 + band_pct / 100.0)
+
+
 def plan_sell_ladder(*, holdings: float, avg_entry: float, peak_holdings: float,
                      best_ask: float, price: float, params: dict,
                      gate_open: bool = True, gated_bands=frozenset()) -> list:
@@ -297,24 +340,24 @@ def plan_sell_ladder(*, holdings: float, avg_entry: float, peak_holdings: float,
     ceiling = params.get("sell_ceiling_price", 0.0)
     if ceiling > 0 and price >= ceiling:
         return []
-    floor_btc = peak_holdings * params.get("min_holdings_pct", 0.0)
+    floor_btc = sell_floor_qty(peak_holdings, params)
     sellable  = max(0.0, holdings - floor_btc)
     if sellable <= 0:
         return []
     plan, allocated = [], 0.0
-    for step in params.get("sell_ladder", []):
-        band_pct = float(step["band_pct"])
+    for step in sell_ladder_spec(params):
+        band_pct = step["band_pct"]
         if band_pct in gated_bands:
             # ONE SHOT PER BAND: this band already sold and its rebuy is still outstanding.
             # Without this the band re-arms the instant it fills, so a price parked above it
             # trims again and again down to the floor — a slow liquidation, not a ratchet.
             # A sell earns the right to fire again only by being bought back.
             continue
-        target   = avg_entry * (1.0 + band_pct / 100.0)
+        target   = band_target_price(avg_entry, band_pct)
         px       = max(target, best_ask)          # never cross → always maker
         if ceiling > 0 and px >= ceiling:
             continue
-        qty = min(holdings * float(step["fraction"]), sellable - allocated)
+        qty = min(holdings * step["fraction"], sellable - allocated)
         if qty <= 0:
             continue
         # Don't plan dust. The exchange rejects anything under its min notional (MEXC:
@@ -1105,20 +1148,22 @@ class AccumulationStrategy:
         if a.holdings_btc <= 0 or a.avg_entry <= 0:
             return
         p        = a.p
-        bands    = sorted(p.get("profit_bands_pct", []))
-        fraction = p.get("sell_fraction", 0.20)
         discount = self._rebuy_discount()
 
+        # Same policy as the live ladder (bands, fractions, floor, trigger price); different
+        # EXECUTOR — this one reacts to the tick and self-fills instantly, and re-sizes each
+        # band against holdings already reduced by the previous sell in this same loop.
         min_hold_pct = p.get("min_holdings_pct", 0.0)
-        floor_btc    = a.peak_holdings_btc * min_hold_pct if a.peak_holdings_btc > 0 else 0.0
+        floor_btc    = sell_floor_qty(a.peak_holdings_btc, p)
 
-        for band_pct in bands:
+        for step in sell_ladder_spec(p):
+            band_pct = step["band_pct"]
             if band_pct in a.active_bands:
                 continue
-            target = a.avg_entry * (1.0 + band_pct / 100.0)
+            target = band_target_price(a.avg_entry, band_pct)
             if price < target:
                 break
-            qty = a.holdings_btc * fraction
+            qty = a.holdings_btc * step["fraction"]
             max_sellable = max(0.0, a.holdings_btc - floor_btc)
             qty = min(qty, max_sellable)
             if qty < 1e-6:
@@ -1130,7 +1175,8 @@ class AccumulationStrategy:
                 a.active_bands.add(band_pct)
                 a.pending_rebuys.append(
                     PendingRebuy(band_pct=band_pct, sell_price=price,
-                                 qty_btc=qty, rebuy_price=rebuy, ts_ms=ts_ms))
+                                 qty_btc=qty, rebuy_price=rebuy, ts_ms=ts_ms,
+                                 rid=uuid.uuid4().hex[:8]))
                 logger.info("  → rebuy %.6f @ %.*f  (spread=%.4f%% → discount=%.3f%%)",
                             qty, decimals_for_price(rebuy), rebuy, a.spread_ema, discount * 100)
 

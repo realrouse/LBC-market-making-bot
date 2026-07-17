@@ -18,8 +18,9 @@ from unittest.mock import AsyncMock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from strategy_engines.accumulation import (  # noqa: E402
-    AccumulationStrategy, PendingRebuy, diff_sell_ladder, plan_sell_ladder,
-    reconcile_order, reconcile_pending_buy)
+    AccumulationStrategy, PendingRebuy, band_target_price, diff_sell_ladder,
+    plan_sell_ladder, reconcile_order, reconcile_pending_buy, sell_floor_qty,
+    sell_ladder_spec)
 
 
 def _pending(order_id="1", price=0.0025, orig_qty=4000.0,
@@ -400,6 +401,117 @@ class TestPlanSellLadder(unittest.TestCase):
     def test_no_holdings_or_no_basis_plans_nothing(self):
         self.assertEqual(self._plan(holdings=0.0), [])
         self.assertEqual(self._plan(avg_entry=0.0), [])
+
+
+class TestSharedSellPolicy(unittest.TestCase):
+    """The convergence contract (scope (i)): both executors read ONE policy, and NO bot's
+    behaviour changes. These tests pin both halves of that."""
+
+    def test_paper_vocabulary_derives_the_same_ladder_it_always_used(self):
+        # a BTC sim bot: profit_bands_pct + a single sell_fraction, no sell_ladder key
+        spec = sell_ladder_spec({"profit_bands_pct": [5.0, 10.0, 20.0, 30.0, 50.0],
+                                 "sell_fraction": 0.10})
+        self.assertEqual([s["band_pct"] for s in spec], [5.0, 10.0, 20.0, 30.0, 50.0])
+        self.assertTrue(all(s["fraction"] == 0.10 for s in spec))
+
+    def test_paper_bands_are_sorted_as_the_old_code_sorted_them(self):
+        # the old path did sorted(profit_bands_pct); order is load-bearing (it `break`s on
+        # the first unreached band), so the derivation must preserve it
+        spec = sell_ladder_spec({"profit_bands_pct": [50.0, 5.0, 20.0], "sell_fraction": 0.1})
+        self.assertEqual([s["band_pct"] for s in spec], [5.0, 20.0, 50.0])
+
+    def test_explicit_sell_ladder_wins_and_keeps_per_band_fractions(self):
+        spec = sell_ladder_spec({"sell_ladder": _LADDER,
+                                 "profit_bands_pct": [1.0], "sell_fraction": 0.99})
+        self.assertEqual(spec, [{"band_pct": 5.0, "fraction": 0.30},
+                                {"band_pct": 10.0, "fraction": 0.30}])
+
+    def test_default_fraction_matches_the_old_default(self):
+        spec = sell_ladder_spec({"profit_bands_pct": [5.0]})     # no sell_fraction
+        self.assertEqual(spec[0]["fraction"], 0.20)              # old code's default
+
+    def test_no_bands_configured_yields_nothing(self):
+        self.assertEqual(sell_ladder_spec({}), [])
+
+    def test_floor_is_a_fraction_of_PEAK_not_current_holdings(self):
+        self.assertAlmostEqual(sell_floor_qty(4000.0, {"min_holdings_pct": 0.40}), 1600.0)
+        self.assertAlmostEqual(sell_floor_qty(0.0, {"min_holdings_pct": 0.40}), 0.0)
+        self.assertAlmostEqual(sell_floor_qty(4000.0, {}), 0.0)   # no floor configured
+
+    def test_band_target_anchors_to_cost_basis(self):
+        self.assertAlmostEqual(band_target_price(0.0025, 5.0), 0.002625)
+        self.assertAlmostEqual(band_target_price(0.0025, 10.0), 0.00275)
+
+    def test_live_plan_is_byte_for_byte_what_it_was_before_the_refactor(self):
+        """The real-money bot calls plan_sell_ladder. The refactor must not move a single
+        number — this pins the LBC config's actual output."""
+        params = {"sell_ladder": _LADDER, "min_holdings_pct": 0.40,
+                  "sell_ceiling_price": 0.02, "sell_min_notional_usdt": 1.1}
+        plan = plan_sell_ladder(holdings=4213.24, avg_entry=0.00242,
+                                peak_holdings=4213.24, best_ask=0.00247, price=0.00247,
+                                params=params, gate_open=True)
+        self.assertEqual(len(plan), 2)
+        self.assertAlmostEqual(plan[0]["band_pct"], 5.0)
+        self.assertAlmostEqual(plan[0]["price"], 0.002541)        # 0.00242 * 1.05
+        self.assertAlmostEqual(plan[0]["qty"], 4213.24 * 0.30)
+        self.assertAlmostEqual(plan[1]["price"], 0.002662)        # 0.00242 * 1.10
+        # and the invariant still lands exactly on holdings - floor
+        self.assertAlmostEqual(sum(p["qty"] for p in plan),
+                               4213.24 - sell_floor_qty(4213.24, params))
+
+
+class TestPaperBandsUnchanged(unittest.IsolatedAsyncioTestCase):
+    """Scope (i) means the 3 BTC sims must behave EXACTLY as before. The subtle one: paper
+    re-sizes each band against holdings already reduced by the previous sell in the same
+    tick — sequential, not snapshot. Folding it into the ladder's snapshot sizing would
+    silently change every sim."""
+
+    def _paper(self):
+        cfg = {"symbol": "BTCUSDT", "capital_usdt": 1000.0, "initial_stake_usdt": 100.0,
+               "profit_bands_pct": [5.0, 10.0], "sell_fraction": 0.10,
+               "min_holdings_pct": 0.40, "rebuy_discount_min_pct": 3.0,
+               "rebuy_discount_max_pct": 10.0, "rebuy_spread_mult": 3.0,
+               "earn_enabled": False, "maker_fee_spot": 0.0, "fee_spot": 0.0004,
+               "use_limit_orders": True}
+        eng = AccumulationStrategy(types.SimpleNamespace(connector="mexc", strategy_cfg=cfg))
+        self.assertFalse(eng.live)                    # paper: no live_execution key
+        conn = sqlite3.connect(":memory:")
+        eng.ensure_schema(conn)
+        eng.acc.holdings_btc = 4000.0
+        eng.acc.peak_holdings_btc = 4000.0
+        eng.acc.avg_entry = 0.0025
+        state = types.SimpleNamespace(conn=conn, session=None, strategy=eng, last_book_ts=0.0)
+        return eng, state
+
+    async def test_two_bands_in_one_tick_size_sequentially_not_from_a_snapshot(self):
+        eng, state = self._paper()
+        await eng._check_profit_bands(state, 0.0030, 1)     # above BOTH +5% and +10%
+        qtys = [r[0] for r in state.conn.execute(
+            "SELECT qty_btc FROM accum_trades WHERE side='sell' ORDER BY ts_ms, rowid")]
+        self.assertEqual(len(qtys), 2)
+        self.assertAlmostEqual(qtys[0], 400.0)              # 10% of 4000
+        self.assertAlmostEqual(qtys[1], 360.0)              # 10% of the REMAINING 3600
+        self.assertAlmostEqual(eng.acc.holdings_btc, 3240.0)
+
+    async def test_band_below_price_stops_the_ladder(self):
+        eng, state = self._paper()
+        await eng._check_profit_bands(state, 0.002625, 1)   # exactly +5%, not +10%
+        self.assertEqual(eng.acc.active_bands, {5.0})
+        self.assertAlmostEqual(eng.acc.holdings_btc, 3600.0)
+
+    async def test_paper_sell_mints_its_rebuy_and_arms_the_band(self):
+        eng, state = self._paper()
+        await eng._check_profit_bands(state, 0.002625, 1)
+        self.assertEqual([rb.band_pct for rb in eng.acc.pending_rebuys], [5.0])
+        self.assertLess(eng.acc.pending_rebuys[0].rebuy_price, 0.002625)
+        await eng._check_profit_bands(state, 0.002625, 2)   # armed → no second sell
+        self.assertAlmostEqual(eng.acc.holdings_btc, 3600.0)
+
+    async def test_paper_never_sells_through_the_floor(self):
+        eng, state = self._paper()
+        eng.acc.holdings_btc = 1700.0                       # floor is 1600
+        await eng._check_profit_bands(state, 0.0030, 1)
+        self.assertGreaterEqual(eng.acc.holdings_btc, 1600.0 - 1e-9)
 
 
 class TestDiffSellLadder(unittest.TestCase):
