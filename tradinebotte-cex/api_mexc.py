@@ -94,12 +94,19 @@ WS_BATCH_SIZE = 10  # streams per WebSocket connection
 
 DEFAULT_SYMBOL = "BTCUSDT"
 
-# MEXC spot taker fee: 0.2% standard (0% maker with MEXC token in some tiers).
-FEE_RATE = 0.002
+# MEXC spot fees, from the exchange itself (exchangeInfo: makerCommission=0,
+# takerCommission=0.0005) — NOT the 0.2% this used to assume, which was 4x too high and
+# made every paper sim needlessly pessimistic. MAKER IS FREE, and that is measured, not
+# hoped: our first real fill reported `isMaker=True commission=0 USDT` in myTrades.
+# FEE_RATE stays the TAKER rate because compute_fee models the pessimistic (crossing)
+# case; the maker path costs nothing, which is why the live bot posts resting orders.
+FEE_RATE       = 0.0005   # taker, 0.05%
+MAKER_FEE_RATE = 0.0      # verified 0 on a real trade
 
 
 def compute_fee(price, quantity):
-    """MEXC taker fee: 0.2% of notional (price × quantity in USDT)."""
+    """MEXC taker fee: 0.05% of notional (price × quantity in USDT). Maker fills are free
+    (MAKER_FEE_RATE) — callers that know they rested should not use this."""
     return FEE_RATE * price * quantity
 
 
@@ -416,7 +423,11 @@ async def cancel_order(session, symbol, order_id, *,
             if resp.status != 200:
                 logger.warning("MEXC cancel_order error %d : %.300s", resp.status, data)
                 return False
-            return str(data.get("status", "")) == "CANCELED"
+            # Success is HTTP 200 + the echoed orderId — NOT status=="CANCELED". MEXC's
+            # DELETE response reports the order's status *before* the cancel (verified live:
+            # a successful cancel echoes "NEW", and only a subsequent GET shows CANCELED).
+            # Comparing to "CANCELED" therefore reported False on every successful cancel.
+            return bool(data.get("orderId"))
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("MEXC cancel_order error : %s", e)
         return False

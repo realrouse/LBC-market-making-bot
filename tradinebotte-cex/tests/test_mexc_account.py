@@ -187,7 +187,7 @@ class TestWriteFraming(unittest.IsolatedAsyncioTestCase):
     async def test_string_order_id_survives_to_the_wire(self):
         # MEXC order ids are opaque strings ("C01__…"). int() raised, the broad except
         # swallowed it, and every cancel/poll silently became a no-op.
-        sess = _RecordingSession(200, {"status": "CANCELED"})
+        sess = _RecordingSession(200, {"orderId": "C01__4465xyz", "status": "NEW"})
         ok = await api_mexc.cancel_order(sess, "LBCUSDT", "C01__4465xyz",
                                          api_key="k", api_secret="s")
         self.assertTrue(ok)
@@ -195,9 +195,24 @@ class TestWriteFraming(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kw["params"]["orderId"], "C01__4465xyz")
 
     async def test_cancel_of_string_id_is_not_swallowed_into_false(self):
-        sess = _RecordingSession(200, {"status": "CANCELED"})
+        sess = _RecordingSession(200, {"orderId": "C01__zzz", "status": "CANCELED"})
         self.assertTrue(await api_mexc.cancel_order(sess, "LBCUSDT", "C01__zzz",
                                                     api_key="k", api_secret="s"))
+
+    async def test_successful_cancel_reporting_precancel_status_is_still_success(self):
+        # Verified live: MEXC's DELETE echoes the status the order had BEFORE the cancel
+        # ("NEW"); only a later GET shows CANCELED. Requiring status=="CANCELED" reported
+        # failure on every successful cancel.
+        sess = _RecordingSession(200, {"orderId": "C02__706747869167583233090",
+                                       "status": "NEW", "executedQty": "0"})
+        self.assertTrue(await api_mexc.cancel_order(sess, "LBCUSDT",
+                                                    "C02__706747869167583233090",
+                                                    api_key="k", api_secret="s"))
+
+    async def test_cancel_http_error_is_failure(self):
+        sess = _RecordingSession(400, {"code": -2011, "msg": "Unknown order id."})
+        self.assertFalse(await api_mexc.cancel_order(sess, "LBCUSDT", "nope",
+                                                     api_key="k", api_secret="s"))
 
     async def test_get_order_accepts_string_id(self):
         sess = _RecordingSession(200, {"status": "FILLED", "origQty": "4000",
