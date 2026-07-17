@@ -101,7 +101,38 @@ CREATE INDEX IF NOT EXISTS idx_deploys_account_bot ON deploys(account, bot_name)
 CREATE INDEX IF NOT EXISTS idx_deploys_ts          ON deploys(ts);
 """
 
-SCHEMA = SCHEMA_HEARTBEATS + SCHEMA_INVENTORY + SCHEMA_DEPLOYS
+# bot_trades: durable per-fill trade log, pushed BY the bots on every fill (same PUSH→PULL
+# channel + collector as heartbeats).  Enables the real-money status page's per-trade tables
+# and trade statistics without SSH (the page is DB-only).  Mirrors the local accum_trades
+# schema, plus the (account, bot_name) join keys and the exchange order_id.
+#   The UNIQUE key makes ingestion idempotent: PUSH/PULL can drop OR redeliver a message, and
+#   a bot may re-push on restart — INSERT OR IGNORE against this key keeps exactly one row.
+#   A bot places one order at a time, so (account,bot_name,ts_ms,side,price,qty) is collision-free
+#   in practice (millisecond stamp + single in-flight order).
+SCHEMA_TRADES = """
+CREATE TABLE IF NOT EXISTS bot_trades (
+    id              INTEGER PRIMARY KEY,
+    account         TEXT    NOT NULL,
+    bot_name        TEXT    NOT NULL,
+    ts_ms           INTEGER NOT NULL,
+    side            TEXT    NOT NULL,
+    reason          TEXT,
+    price           REAL    NOT NULL,
+    qty             REAL    NOT NULL,
+    quote           REAL,
+    fee             REAL,
+    order_id        TEXT,
+    maker           INTEGER,
+    avg_entry_after REAL,
+    holdings_after  REAL,
+    free_after      REAL,
+    UNIQUE (account, bot_name, ts_ms, side, price, qty)
+);
+CREATE INDEX IF NOT EXISTS idx_bot_trades_account_bot ON bot_trades(account, bot_name);
+CREATE INDEX IF NOT EXISTS idx_bot_trades_ts          ON bot_trades(ts_ms);
+"""
+
+SCHEMA = SCHEMA_HEARTBEATS + SCHEMA_INVENTORY + SCHEMA_DEPLOYS + SCHEMA_TRADES
 
 INVENTORY_COLUMNS = (
     "account", "bot_name", "display_name", "kind", "bot_type", "service_unit",
@@ -215,6 +246,45 @@ def record_deploy(
         (int(ts or time.time()), account, bot_name, git_hash, script, mode, result, deployer),
     )
     db.commit()
+
+
+# ─── Trade log ───────────────────────────────────────────────────────────────
+
+def store_trade(db: sqlite3.Connection, payload: dict[str, Any]) -> bool:
+    """Idempotently record one fill pushed by a bot. Returns True if a row was inserted,
+    False if it was a duplicate (INSERT OR IGNORE against the UNIQUE key).
+
+    Required payload keys: account, bot_name, ts_ms, side, price, qty. Everything else is
+    optional. Numeric coercion is defensive — the payload arrives as JSON off the wire."""
+    def _f(k):  # float-or-None
+        v = payload.get(k)
+        return None if v is None else float(v)
+
+    cur = db.execute(
+        "INSERT OR IGNORE INTO bot_trades"
+        " (account, bot_name, ts_ms, side, reason, price, qty, quote, fee, order_id,"
+        "  maker, avg_entry_after, holdings_after, free_after)"
+        " VALUES (:account, :bot_name, :ts_ms, :side, :reason, :price, :qty, :quote, :fee,"
+        "         :order_id, :maker, :avg_entry_after, :holdings_after, :free_after)",
+        {
+            "account":         str(payload["account"]),
+            "bot_name":        str(payload["bot_name"]),
+            "ts_ms":           int(payload["ts_ms"]),
+            "side":            str(payload["side"]),
+            "reason":          payload.get("reason"),
+            "price":           float(payload["price"]),
+            "qty":             float(payload["qty"]),
+            "quote":           _f("quote"),
+            "fee":             _f("fee"),
+            "order_id":        payload.get("order_id"),
+            "maker":           None if payload.get("maker") is None else (1 if payload["maker"] else 0),
+            "avg_entry_after": _f("avg_entry_after"),
+            "holdings_after":  _f("holdings_after"),
+            "free_after":      _f("free_after"),
+        },
+    )
+    db.commit()
+    return cur.rowcount > 0
 
 
 # ─── Expected vs actual (status view) ────────────────────────────────────────

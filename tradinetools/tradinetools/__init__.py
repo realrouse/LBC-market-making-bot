@@ -178,6 +178,42 @@ async def heartbeat_loop(
         ctx.term()
 
 
+# A lazily-created, reused PUSH socket for trade pushes. Kept warm across fills so the
+# ZMQ slow-joiner drop only ever risks the very first send (loopback connect completes in
+# microseconds, and bot_trades ingestion is idempotent + backfillable, so a rare first-send
+# drop is harmless). Plain (non-asyncio) socket so push_trade is safe to call from sync code.
+_trade_push: dict[str, Any] = {"sock": None}
+
+
+def push_trade(payload: dict[str, Any], *, addr: str | None = None) -> None:
+    """Fire-and-forget: push one fill to the status collector for the durable bot_trades log.
+
+    Synchronous and non-blocking — safe to call from sync OR async code — and NEVER raises:
+    a collector outage or a full send queue must not disturb trading. Tags the message
+    type="trade" so the collector routes it to store_trade (heartbeats have no type).
+
+    `payload` must carry the store_trade keys: account, bot_name, ts_ms, side, price, qty
+    (+ optional reason/quote/fee/order_id/maker/*_after)."""
+    try:
+        import zmq  # noqa: PLC0415
+        from tradinetools.zmq import default_status_addr  # noqa: PLC0415
+    except ImportError:
+        return
+    try:
+        sock = _trade_push["sock"]
+        if sock is None:
+            a = addr or os.environ.get("TRADINEBOTTE_STATUS_ADDR") or default_status_addr()
+            sock = zmq.Context.instance().socket(zmq.PUSH)
+            sock.setsockopt(zmq.LINGER, 0)
+            sock.connect(a)
+            _trade_push["sock"] = sock
+        msg = dict(payload)
+        msg["type"] = "trade"
+        sock.send(json.dumps(msg).encode(), flags=zmq.NOBLOCK)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        _hb_logger.warning("trade push failed (dropped, non-fatal): %s", exc)
+
+
 # ─── HEALTH CHECK (HTTP, opt-in, loopback) ────────────────────────────────────
 # A lightweight `GET /health` endpoint that mirrors the heartbeat payload over
 # HTTP, so an external cron / reverse proxy / uptime monitor can pull liveness +
