@@ -302,13 +302,15 @@ def act_deps_and_tradinetools(host: Host, install_dir: str) -> bool:
     fi
     PY=$("$V/bin/python3" -c 'import sys;print(f"{{sys.version_info.major}}.{{sys.version_info.minor}}")')
     S=$V/lib/python$PY/site-packages
-    # Copy-then-swap: stage into .new, and only remove the live tradinetools AFTER a successful
-    # copy. The old `rm -rf … && cp …` left the venv WITHOUT tradinetools if the cp failed (a
-    # transient on the shared host), so the bot would ImportError-crash on its next restart. Skip
-    # entirely if the rsynced source is missing (never delete a working copy for a bad source).
+    # Import tradinetools straight from the rsynced source via a plain path .pth — no vendored
+    # copy. The old `cp -r` into site-packages went stale between deploys and forced the "refresh
+    # tradinetools before restart or it crashloops" ritual; a .pth has no copy to drift (this rsync
+    # is instantly live) and no dist-info (which historically broke restarts). Strip any prior
+    # copy/editable first: a real dir in site-packages wins over the .pth path entry and would
+    # shadow it. Skip if the rsynced source is missing (never wipe a working install for a bad source).
     if [ -d tradinetools/tradinetools ]; then
-        rm -rf "$S/tradinetools.new" && cp -r tradinetools/tradinetools "$S/tradinetools.new" \
-            && rm -rf "$S/tradinetools" && mv "$S/tradinetools.new" "$S/tradinetools"
+        rm -rf "$S/tradinetools" "$S/tradinetools.new" "$S"/tradinetools-*.dist-info "$S"/__editable__*tradinetools* "$S"/*tradinetools*.pth
+        echo "$(pwd)/tradinetools" > "$S/tradinetools-source.pth"
     fi
     # Import test with one retry: on the flaky shared host the test itself can transiently fail
     # even when tradinetools is intact (false negative → whole deploy step fails).

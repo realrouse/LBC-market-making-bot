@@ -216,6 +216,40 @@ ERROR_COUNT=$(run "grep -ciE '\[(ERROR|CRITICAL)\]' $LOG 2>/dev/null || true")
 [[ "$ERROR_COUNT" -eq 0 ]] && ok "$SA_USER: no critical errors" \
     || err "$SA_USER: $ERROR_COUNT ERROR/CRITICAL line(s) in log"
 
+# ─── Phase 4b: Restart ─────────────────────────────────────────────────────────
+# tradinetools is imported from source via a plain .pth (no vendored copy, no dist-info).
+# The failure mode that dist-info installs caused was a broken RESTART, so prove explicitly
+# that the bot re-imports tradinetools and reconnects after a stop+start. The import check
+# runs from $INSTALL_DIR — the cwd where the same-named source `tradinetools/` dir would
+# shadow the package if the .pth path did not win.
+section "PHASE 4b — RESTART"
+info "stopping bot..."
+run "
+    PID_FILE=$INSTALL_DIR/live.pid
+    if [ -f \"\$PID_FILE\" ]; then kill \"\$(cat \"\$PID_FILE\")\" 2>/dev/null || true; rm -f \"\$PID_FILE\"; fi
+    pkill -u \$(id -u) -f '[l]ive_bot.py' 2>/dev/null || true
+    sleep 2
+"
+info "verifying tradinetools imports from source .pth (from install dir)..."
+IMPORT_OUT=$(run "cd $INSTALL_DIR && .venv/bin/python3 -c 'from tradinetools import heartbeat_loop, infra_tasks, resolve_bot_id; print(\"tt-import-ok\")'")
+if echo "$IMPORT_OUT" | grep -q "tt-import-ok"; then
+    ok "$SA_USER: tradinetools imports after restart (source .pth resolves)"
+else
+    err "$SA_USER: tradinetools import FAILED after restart"; echo "$IMPORT_OUT"
+fi
+info "restarting bot via run.sh..."
+run "cd $INSTALL_DIR && rm -f $LOG; TRADINEBOTTE_DIR=$INSTALL_DIR bash run.sh" >/dev/null
+WS2_OK=false
+for _i in $(seq 1 20); do
+    if run "grep -q 'WebSocket connected' $LOG 2>/dev/null"; then WS2_OK=true; break; fi
+    sleep 3
+done
+[[ "$WS2_OK" == "true" ]] && ok "$SA_USER: WebSocket reconnected after restart" \
+    || err "$SA_USER: WebSocket not connected after restart"
+RESTART_ERRS=$(run "grep -ciE '\[(ERROR|CRITICAL)\]' $LOG 2>/dev/null || true")
+[[ "$RESTART_ERRS" -eq 0 ]] && ok "$SA_USER: no critical errors after restart" \
+    || err "$SA_USER: $RESTART_ERRS ERROR/CRITICAL line(s) after restart"
+
 # ─── Phase 5: Teardown ─────────────────────────────────────────────────────────
 section "PHASE 5 — TEARDOWN"
 run "

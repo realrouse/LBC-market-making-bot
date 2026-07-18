@@ -350,17 +350,18 @@ else
             $REMOTE_INSTALL_DIR/.venv/bin/pip install --quiet -r $REMOTE_INSTALL_DIR/requirements.txt
         " && ok "$user: dependencies installed" || { err "$user: pip install failed"; exit 1; }
 
-        # tradinetools isn't on PyPI / in requirements.txt — install it into the venv
-        # so account_bot's 'from tradinetools import heartbeat_loop' resolves to a real
-        # package instead of the source namespace dir on cwd. Plain copy (not pip) to
-        # avoid stale dist-info breaking restarts (see feedback_integration_test_tradinetools).
+        # tradinetools isn't on PyPI / in requirements.txt — put it on the venv's sys.path via a
+        # plain path .pth so account_bot's 'from tradinetools import heartbeat_loop' resolves the
+        # source package (a regular package on the .pth path beats the same-named namespace dir on
+        # cwd). A .pth beats the old cp copy on both counts: no vendored copy to go stale, and no
+        # dist-info (which historically broke restarts, see feedback_integration_test_tradinetools).
         info "install tradinetools into venv ($user)..."
         run "$idx" "
             VENV=$REMOTE_INSTALL_DIR/.venv
             PYVER=\$(\$VENV/bin/python3 -c 'import sys;print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')
             SITE=\$VENV/lib/python\$PYVER/site-packages
-            rm -rf \"\$SITE/tradinetools\"
-            cp -r $REMOTE_INSTALL_DIR/tradinetools/tradinetools \"\$SITE/tradinetools\"
+            rm -rf \"\$SITE/tradinetools\" \"\$SITE\"/tradinetools-*.dist-info \"\$SITE\"/__editable__*tradinetools* \"\$SITE\"/*tradinetools*.pth
+            echo $REMOTE_INSTALL_DIR/tradinetools > \"\$SITE/tradinetools-source.pth\"
             \$VENV/bin/python3 -c 'from tradinetools import heartbeat_loop'
         " && ok "$user: tradinetools installed" || { err "$user: tradinetools install failed"; exit 1; }
     done
