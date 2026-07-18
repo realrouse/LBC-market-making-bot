@@ -531,26 +531,6 @@ def parse_subscribe_request(req: dict[str, Any]) -> tuple[str, StreamSpec]:
 
 # ─── DATA SOURCES ────────────────────────────────────────────────────────────
 
-async def _seed_series(symbol: str, timeframe: str,
-                       n: int, series: PriceSeries) -> None:
-    """Seed PriceSeries with the last n closed candle closes from Binance REST."""
-    params = {"symbol": symbol.upper(), "interval": timeframe, "limit": n + 1}
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                _BINANCE_REST_URL, params=params,
-                timeout=aiohttp.ClientTimeout(total=15)
-            ) as resp:
-                data = await resp.json(content_type=None)
-        for candle in data[:-1]:          # skip last (still open)
-            series.push(float(candle[4])) # index 4 = close price
-        logger.info("[seed] %s/%s: %d closed candles loaded",
-                    symbol, timeframe, len(data) - 1)
-    except Exception as exc:              # pylint: disable=broad-except
-        logger.warning("[seed] %s/%s: REST seed failed (%s) — continuing without history",
-                       symbol, timeframe, exc)
-
-
 async def _seed_ohlcv_series(symbol: str, timeframe: str,
                               n: int, series: OHLCVSeries) -> None:
     """Seed OHLCVSeries with the last n closed candles (H/L/C/V) from Binance REST."""

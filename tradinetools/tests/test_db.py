@@ -11,9 +11,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from tradinetools.db import (
-    open_db, upsert_inventory, record_deploy, expected_vs_actual,
-)
+from tradinetools.db import open_db, upsert_inventory, record_deploy
 
 
 def _columns(db, table):
@@ -133,39 +131,6 @@ class TestDeploys(unittest.TestCase):
         record_deploy(self.db, account="acct2", bot_name="live_bot")
         ts = self.db.execute("SELECT ts FROM deploys").fetchone()[0]
         self.assertGreaterEqual(ts, before)
-
-
-class TestExpectedVsActual(unittest.TestCase):
-    def setUp(self):
-        self.dir = tempfile.mkdtemp()
-        self.db = open_db(os.path.join(self.dir, "t.db"))
-        upsert_inventory(self.db, [
-            {"account": "acct2", "bot_name": "live_bot", "kind": "bot"},
-            {"account": "acct9", "bot_name": "ghost_bot", "kind": "bot"},
-        ])
-
-    def tearDown(self):
-        self.db.close()
-
-    def test_silent_bot_has_null_last_ts(self):
-        rows = {(r["account"], r["bot_name"]): r for r in expected_vs_actual(self.db)}
-        # never sent a heartbeat → visible but last_ts None (today it would be invisible)
-        self.assertIsNone(rows[("acct9", "ghost_bot")]["last_ts"])
-
-    def test_reporting_bot_has_last_ts(self):
-        self.db.execute(
-            "INSERT INTO heartbeats (ts, account, bot_name, version, status)"
-            " VALUES (?, 'acct2', 'live_bot', 'v1', 'ok')", (1234567890,))
-        self.db.commit()
-        rows = {(r["account"], r["bot_name"]): r for r in expected_vs_actual(self.db)}
-        self.assertEqual(rows[("acct2", "live_bot")]["last_ts"], 1234567890)
-
-    def test_disabled_row_excluded(self):
-        upsert_inventory(self.db, [
-            {"account": "acct2", "bot_name": "live_bot", "kind": "bot", "enabled": False},
-        ])
-        keys = {(r["account"], r["bot_name"]) for r in expected_vs_actual(self.db)}
-        self.assertNotIn(("acct2", "live_bot"), keys)
 
 
 if __name__ == "__main__":

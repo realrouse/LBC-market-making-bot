@@ -289,31 +289,6 @@ def store_trade(db: sqlite3.Connection, payload: dict[str, Any]) -> bool:
 
 # ─── Expected vs actual (status view) ────────────────────────────────────────
 
-def expected_vs_actual(db: sqlite3.Connection) -> list[dict[str, Any]]:
-    """Left-join inventory → latest heartbeat, so EXPECTED-but-silent bots are visible.
-
-    Returns one row per enabled inventory entry.  last_ts is NULL when no heartbeat was
-    ever received (today such a bot is simply invisible).  `kind='service'` rows are
-    included but callers should judge their liveness via systemctl, not last_ts.
-    """
-    rows = db.execute(
-        """
-        SELECT i.account, i.bot_name, i.kind, i.bot_type, i.service_unit,
-               i.is_live, h.last_ts, h.version, h.status
-        FROM inventory AS i
-        LEFT JOIN (
-            SELECT account, bot_name, max(ts) AS last_ts, version, status
-            FROM heartbeats GROUP BY account, bot_name
-        ) AS h ON h.account = i.account AND h.bot_name = i.bot_name
-        WHERE i.enabled = 1
-        ORDER BY i.account, i.bot_name
-        """
-    ).fetchall()
-    cols = ("account", "bot_name", "kind", "bot_type", "service_unit",
-            "is_live", "last_ts", "version", "status")
-    return [dict(zip(cols, r)) for r in rows]
-
-
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 def _as_int_or_none(v: Any) -> int | None:

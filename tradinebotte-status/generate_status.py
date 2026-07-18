@@ -1808,10 +1808,8 @@ def main() -> None:
         sys.exit(1)
 
     conf      = _load_conf(args.conf)
-    server    = conf["server"]
-    port      = conf["port"]
     users     = conf["users"]
-    passwords = conf["passwords"]
+    passwords = conf["passwords"]   # kept only for the len()-lockstep account filter below
 
     # Render only accounts that host a bot in inventory. A TEST_USERS entry with no
     # inventory row (the ephemeral clean-install test account) must not appear as an empty
