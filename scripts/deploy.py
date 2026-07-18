@@ -208,6 +208,26 @@ def run_heartbeat_snapshot(label: str) -> None:
     subprocess.run(["bash", hb], cwd=REPO, check=False)
 
 
+def run_inventory_sync() -> bool:
+    """Post-deploy: reconcile the shared-DB `inventory` table with inventory.toml (the committed
+    source of truth) so fields like is_live can never silently drift from it — they did, once:
+    is_live sat at 0 in the DB for the real-money bot for months because sync_inventory was only
+    ever run by hand. Idempotent; runs on the operator, which can write the shared DB. Best-effort:
+    a failure is reported but does NOT fail the deploy, whose real work already succeeded."""
+    # sync_inventory.py lives in tradinebotte-status/ (NOT the scripts/ subdir STATUS_DIR points at).
+    script = os.path.join(REPO, "tradinebotte-status", "sync_inventory.py")
+    print(_c("y", "\n─── RECONCILE INVENTORY → shared DB (sync_inventory) ───"))
+    if not os.path.isfile(script):
+        print(_c("y", "  ! sync_inventory.py not found — skipping"))
+        return True
+    rc = subprocess.run([sys.executable, script], cwd=REPO, check=False).returncode
+    if rc == 0:
+        print(_c("g", "  ✓ inventory reconciled with inventory.toml"))
+        return True
+    print(_c("r", "  ✗ inventory sync FAILED — deploy is still OK; re-run sync_inventory.py by hand"))
+    return False
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Inventory-driven deploy orchestrator.")
     ap.add_argument("--restart-infra", action="store_true",
@@ -280,6 +300,12 @@ def main() -> int:
         results.append((s.label, "OK" if rc == 0 else "FAILED"))
         if rc != 0:
             failures += 1
+
+    # Reconcile inventory from toml after a real deploy (skip verify-only — it changes nothing).
+    # Runs regardless of step failures: it syncs DESIRED state, which is correct even if a step
+    # failed. Non-fatal to the deploy's own exit status.
+    if not args.dry_run and "--verify-only" not in forward:
+        run_inventory_sync()
 
     if not args.dry_run:
         run_heartbeat_snapshot("HEARTBEAT — POST-DEPLOY SNAPSHOT")

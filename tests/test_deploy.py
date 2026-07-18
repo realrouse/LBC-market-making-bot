@@ -317,5 +317,42 @@ class TestNativeDispatch(unittest.TestCase):
         self.assertEqual(step.args, [])
 
 
+class TestPostDeployInventorySync(unittest.TestCase):
+    """Post-deploy inventory reconciliation (run_inventory_sync) + its gating in main().
+    Prevents is_live (and the rest of the topology) drifting from the committed inventory.toml."""
+
+    import unittest.mock as _mock
+
+    def _run_main(self, argv, rc=0):
+        calls = []
+
+        def _fake_run(cmd, **_kw):
+            calls.append([str(x) for x in cmd])
+            return self._mock.Mock(returncode=rc)
+
+        with self._mock.patch.object(deploy.subprocess, "run", side_effect=_fake_run), \
+             self._mock.patch.object(sys, "argv", ["deploy.py", *argv]):
+            deploy.main()
+        return calls
+
+    @staticmethod
+    def _synced(calls):
+        return any(any("sync_inventory.py" in x for x in c) for c in calls)
+
+    def test_real_deploy_runs_sync(self):
+        self.assertTrue(self._synced(self._run_main(["--only", "account-5"])))
+
+    def test_verify_only_skips_sync(self):
+        self.assertFalse(self._synced(self._run_main(["--only", "account-5", "--verify-only"])))
+
+    def test_dry_run_skips_sync(self):
+        self.assertFalse(self._synced(self._run_main(["--only", "account-5", "--dry-run"])))
+
+    def test_sync_helper_returns_false_on_failure(self):
+        with self._mock.patch.object(deploy.subprocess, "run",
+                                     return_value=self._mock.Mock(returncode=1)):
+            self.assertFalse(deploy.run_inventory_sync())
+
+
 if __name__ == "__main__":
     unittest.main()
