@@ -151,18 +151,16 @@ def build_plan(rows: list[dict], *, restart_infra: bool) -> list[Step]:
     """Ordered deploy plan. Account-1 = bespoke block; accounts 2..N derived from inventory."""
     plan: list[Step] = []
 
-    # ── Account-1 (idx 0): bespoke, order-critical (mirrors deploy_all.sh) ──────────
+    # ── Account-1 (idx 0): infra only (feeds/indicators/collector), order-critical ─────
+    # The account_bot trading multibot that used to run here was retired 2026-07-18 (acct-1 is
+    # infra only now); this block deploys the shared data plane the rest of the fleet consumes.
     if restart_infra:
-        # feed restarted exactly ONCE and BEFORE account_bot, else the 15M consumer
-        # orphans on a dead feed (the recurring stale-feed gotcha).
         plan.append(Step("account-1 — indicators (rsync + restart)",
                          f"{PM}/update_claude1.sh", ["--restart-indicators"]))
         plan.append(Step("account-1 — data plane (feeds: 15M + feed5m + cex_feed)",
                          f"{STATUS_DIR}/setup_data_plane.sh"))
-        plan.append(Step("account-1 — account_bot (after feeds stable)",
-                         f"{PM}/update_claude1.sh", ["--restart-account"]))
     else:
-        plan.append(Step("account-1 — rsync (indicators + feed + account_bot)",
+        plan.append(Step("account-1 — rsync (indicators + feed)",
                          f"{PM}/update_claude1.sh", ["--skip-restart"]))
 
     # ── Accounts 2..N: derived from inventory, file order ───────────────────────────

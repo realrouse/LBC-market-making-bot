@@ -158,9 +158,6 @@ INFRA: dict[str, dict] = {
                        data_dir="~/tradinebotte", log="status.log",
                        extra=[("tradinebotte-status/status_collector.py", "status_collector.py", []),
                               ("tradinebotte-status/heartbeat_query.py", "heartbeat_query.py", [])]),
-    "account":    dict(unit="tradinebotte-account-{account}.service", template="tradinebotte-account.user.service",
-                       tdir="tradinebotte-polymarket/scripts/systemd", role="account", port_env=None,
-                       data_dir="~/tradinebotte", log="account.log", extra=[]),
 }
 
 
@@ -175,7 +172,6 @@ _NATIVE_TARGET_RULES: list[tuple[str, tuple[str, str]]] = [
     ("infra-feed-5m",      ("infra", "feed5m")),
     ("infra-indicators",   ("infra", "indicators")),
     ("infra-status",       ("infra", "status")),
-    ("polymarket-multibot", ("infra", "account")),   # account_bot — before the generic polymarket rule
     ("polymarket",         ("family", "polymarket")),
     ("cex-accumulation",   ("family", "accumulation")),
     ("cex-grid-binance",   ("family", "grid_binance")),   # before cex-grid (startswith) — own unit/dir

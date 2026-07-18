@@ -39,7 +39,6 @@ class TestTestEnv(unittest.TestCase):
 
     def test_ipc_services_have_no_offset(self):
         self.assertEqual(da._test_env(da.INFRA["feed"]), {})      # 15M feed — per-user IPC
-        self.assertEqual(da._test_env(da.INFRA["account"]), {})   # account_bot — per-user IPC
 
 
 class TestSpecTables(unittest.TestCase):
@@ -78,10 +77,6 @@ class TestNativeTarget(unittest.TestCase):
         self.assertEqual(da.native_target("infra-feed-5m"), ("infra", "feed5m"))
         self.assertEqual(da.native_target("infra-indicators"), ("infra", "indicators"))
         self.assertEqual(da.native_target("infra-status"), ("infra", "status"))
-
-    def test_account_bot_before_generic_polymarket(self):
-        # polymarket-multibot (account_bot, infra) must win over the generic polymarket family rule
-        self.assertEqual(da.native_target("polymarket-multibot"), ("infra", "account"))
 
     def test_unknown_returns_none(self):
         self.assertIsNone(da.native_target("cex-orderbook"))

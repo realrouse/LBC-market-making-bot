@@ -37,10 +37,9 @@ class TestBuildPlan(unittest.TestCase):
 
     def test_account1_restart_infra_is_ordered_block(self):
         plan = deploy.build_plan(_rows(), restart_infra=True)
-        # indicators (restart) → data plane (feeds) → account_bot, in that exact order.
+        # indicators (restart) → data plane (feeds), in that exact order (acct-1 is infra only now).
         self.assertEqual(plan[0].args, ["--restart-indicators"])
         self.assertIn("setup_data_plane.sh", plan[1].script)
-        self.assertEqual(plan[2].args, ["--restart-account"])
 
     def test_accounts_derived_in_file_order(self):
         plan = deploy.build_plan(_rows(), restart_infra=False)
