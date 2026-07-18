@@ -98,9 +98,10 @@ class TestRealInventory(unittest.TestCase):
     """Regression guard: the shipped inventory.toml must reproduce the historical deploy
     order (the sequence deploy_all.sh used to hardcode)."""
 
-    # Post single-tree reconciliation: accumulation (×4) + binance-grid + swing deploy NATIVELY
-    # (deployer=deploy_actions.py → a python step, signature = its family); the un-migrated
-    # primaries (poly/mexc-grid) stay on their bash deployers. Each signature is
+    # Post single-tree reconciliation: accumulation (×4) + binance-grid + swing + mexc-grid deploy
+    # NATIVELY (deployer=deploy_actions.py → a python step, signature = its family); the un-migrated
+    # primaries (poly + the acct-8 LBC mexc-grid on the real account) stay on their bash deployers.
+    # Each signature is
     # (script-basename, native-family-or-None) so the guard captures which engine AND, for
     # native steps, which family — deploy_actions.py alone would not distinguish accum vs grid.
     _STD = "update_standalone.sh"
@@ -113,8 +114,8 @@ class TestRealInventory(unittest.TestCase):
         (_STD, None),                 # acct-4 poly
         ("deploy_actions.py", "accumulation"),   # acct-4 accum (native)
         ("deploy_actions.py", "swing"),          # acct-5 swing (native, migrated 2026-07-18)
-        ("deploy_grid_mexc.sh", None),           # acct-6 mexc-grid (bash, not migrated)
-        ("deploy_grid_mexc.sh", None),           # acct-8/idx-7 mexc-grid LBC (bash)
+        ("deploy_actions.py", "grid"),           # acct-6 mexc-grid (native, migrated 2026-07-18)
+        ("deploy_grid_mexc.sh", None),           # acct-8/idx-7 mexc-grid LBC (bash — real account, deferred)
         ("deploy_actions.py", "accumulation"),   # acct-8/idx-7 accum LBC (native)
     ]
 
@@ -138,16 +139,16 @@ class TestRealInventory(unittest.TestCase):
         self.assertEqual(derived, self._EXPECTED_2_N)
 
     def test_migrated_families_deploy_natively(self):
-        # The migrated bots (accum ×4 + binance-grid + swing) must be python/native steps; the
-        # un-migrated primaries must stay bash — the reconciliation's core invariant.
+        # The migrated bots (accum ×4 + binance-grid + swing + mexc-grid) must be python/native
+        # steps; the un-migrated primaries must stay bash — the reconciliation's core invariant.
         rows = deploy.load_rows(deploy.INVENTORY)
         plan = deploy.build_plan(rows, restart_infra=False)
         native = [s for s in plan if s.interpreter == "python"]
-        self.assertEqual(len(native), 6)
+        self.assertEqual(len(native), 7)
         self.assertTrue(all(s.script.endswith("deploy_actions.py") for s in native))
         self.assertEqual(sorted(s.args[0] for s in native),
                          ["accumulation", "accumulation", "accumulation", "accumulation",
-                          "grid_binance", "swing"])
+                          "grid", "grid_binance", "swing"])
 
     def test_standalone_presets_have_distinct_indices(self):
         # The 3 update_standalone rows must carry TEST_STANDALONE_USER_IDX 1/2/3 (dedup
