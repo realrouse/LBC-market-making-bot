@@ -106,6 +106,7 @@ _rsync() {
         --exclude='__pycache__' --exclude='*.pyc' \
         --exclude='scripts' --exclude='tests' \
         --exclude='scalping_bot.py' --exclude='scalping_math.py' \
+        --exclude='accumulation_bot.py' --exclude='orderbook_bot.py' \
         --exclude='api_bitstamp.py' --exclude='api_mexc.py' \
         -e "ssh $ssh_opts" \
         "$LOCAL_REPO/tradinebotte-cex/" "$SW_USER@$SERVER:$INSTALL_DIR/" 2>&1 || return 1
