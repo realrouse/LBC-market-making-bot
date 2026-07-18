@@ -68,7 +68,28 @@ _pip_install() {
     local pip="$INSTALL_DIR/.venv/bin/pip"
     "$pip" install --quiet --upgrade pip
     "$pip" install --quiet "$@" -r "$REPO_DIR/requirements.txt"
-    "$pip" install --quiet -e "$REPO_DIR/tradinetools"
+    # tradinetools is imported straight from source via a plain path .pth (the package's parent
+    # dir on sys.path), never vendored. This kills two footguns at the root:
+    #   1. `pip install -e` writes a meta_path finder that the sibling `tradinetools/` dir (a
+    #      namespace-package candidate) shadows when Python runs from the repo root, and its
+    #      dist-info historically broke bot restarts.
+    #   2. A hard `cp` copy into site-packages silently drifts from source (the recurring
+    #      "refresh tradinetools before restart or it crashloops" incident).
+    # A .pth has neither: source is always authoritative, an rsync of the source is instantly live.
+    REPO_DIR="$REPO_DIR" "$INSTALL_DIR/.venv/bin/python3" - <<'PY'
+import os, pathlib, shutil, sysconfig
+sp = pathlib.Path(sysconfig.get_paths()["purelib"])
+# Remove any prior editable / hard-copy install so nothing shadows the source .pth.
+if (sp / "tradinetools").is_dir():
+    shutil.rmtree(sp / "tradinetools")
+for stale in sp.glob("tradinetools-*.dist-info"):
+    shutil.rmtree(stale)
+for f in list(sp.glob("__editable__*tradinetools*")) + list(sp.glob("*tradinetools*.pth")):
+    f.unlink()
+src = pathlib.Path(os.environ["REPO_DIR"], "tradinetools")
+(sp / "tradinetools-source.pth").write_text(str(src) + "\n")
+print(f"tradinetools: source .pth -> {src}")
+PY
 }
 
 # ── System dependencies ───────────────────────────────────────────
