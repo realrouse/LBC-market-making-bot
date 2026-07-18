@@ -157,5 +157,11 @@
   "tt_qty": "Qté",
   "tt_quote": "Montant",
   "tt_fee": "Frais",
-  "tt_order": "ID ordre"
+  "tt_order": "ID ordre",
+
+  "chart_pnl": "PnL",
+  "chart_asset": "Actifs",
+  "chart_fleet": "Évolution — flotte",
+  "chart_bot": "Évolution",
+  "chart_no_data": "pas encore d'historique"
 }

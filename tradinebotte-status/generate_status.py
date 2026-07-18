@@ -149,6 +149,96 @@ def _compute_pnl_windows(shared_path):
     return out
 
 
+_SERIES_MAX_POINTS = int(os.environ.get("STATUS_SERIES_POINTS", 200))
+
+
+def _downsample(rows: list, max_pts: int) -> list:
+    """Thin a time-ordered list of tuples (first element = ts) to ~max_pts by uniform time
+    bucketing, keeping the LAST row of each bucket (pnl/equity are cumulative LEVELS, so the
+    latest value in a bucket is the representative one)."""
+    n = len(rows)
+    if n <= max_pts or n == 0:
+        return rows
+    t0, t1 = rows[0][0], rows[-1][0]
+    bucket = max((t1 - t0) / max_pts, 1e-9)
+    out: list = []
+    cur = None
+    for r in rows:
+        idx = int((r[0] - t0) / bucket)
+        if idx != cur:
+            out.append(r)
+            cur = idx
+        else:
+            out[-1] = r
+    return out
+
+
+def _load_pnl_series(shared_path: str, keys: set | None = None) -> dict:
+    """Per-bot time series {"account|bot": {"ts":[…],"pnl":[…],"asset":[…]}} from heartbeat
+    history (last 30d), downsampled to ~_SERIES_MAX_POINTS points/bot to keep the embedded JSON
+    light. asset = the payload's `equity` (accumulation, market value) if present, else `capital`
+    (grid/swing/poly). `keys` (set of (account, bot_name)) filters; None keeps all."""
+    shared_path = os.path.expanduser(shared_path)
+    if not os.path.exists(shared_path):
+        return {}
+    db = sqlite3.connect(shared_path)
+    horizon = int(time.time()) - 30 * 86400
+    raw: dict = {}
+    for acct, bot, ts, pnl, eq, cap in db.execute(
+        "SELECT account, bot_name, ts,"
+        " json_extract(payload,'$.pnl_total') AS pnl,"
+        " json_extract(payload,'$.equity')   AS eq,"
+        " json_extract(payload,'$.capital')  AS cap"
+        " FROM heartbeats WHERE ts>=? AND json_extract(payload,'$.pnl_total') IS NOT NULL"
+        " ORDER BY ts", (horizon,)):
+        k = (acct, bot)
+        if keys is not None and k not in keys:
+            continue
+        raw.setdefault(k, []).append((ts, pnl, eq if eq is not None else cap))
+    db.close()
+    out: dict = {}
+    for (acct, bot), rows in raw.items():
+        rows = _downsample(rows, _SERIES_MAX_POINTS)
+        out[f"{acct}|{bot}"] = {
+            "ts":    [t for t, _, _ in rows],
+            "pnl":   [round(p, 2) if isinstance(p, (int, float)) else None for _, p, _ in rows],
+            "asset": [round(a, 2) if isinstance(a, (int, float)) else None for _, _, a in rows],
+        }
+    return out
+
+
+def _fleet_series(per_bot: dict) -> dict:
+    """Aggregate per-bot series into one fleet series on a shared time grid. pnl/asset are
+    cumulative LEVELS, so each bot is forward-filled (its last value carries across a gap) and
+    summed — a bot that hadn't started yet contributes nothing before its first heartbeat."""
+    if not per_bot:
+        return {"ts": [], "pnl": [], "asset": []}
+    grid = [t[0] for t in _downsample(
+        [(t,) for t in sorted({t for s in per_bot.values() for t in s["ts"]})], _SERIES_MAX_POINTS)]
+    if not grid:
+        return {"ts": [], "pnl": [], "asset": []}
+    sum_pnl = [0.0] * len(grid)
+    sum_asset = [0.0] * len(grid)
+    for s in per_bot.values():
+        ts, pnl, asset = s["ts"], s["pnl"], s["asset"]
+        j = 0
+        last_p = last_a = None
+        for gi, gt in enumerate(grid):
+            while j < len(ts) and ts[j] <= gt:
+                if pnl[j] is not None:
+                    last_p = pnl[j]
+                if asset[j] is not None:
+                    last_a = asset[j]
+                j += 1
+            if last_p is not None:
+                sum_pnl[gi] += last_p
+            if last_a is not None:
+                sum_asset[gi] += last_a
+    return {"ts": grid,
+            "pnl": [round(v, 2) for v in sum_pnl],
+            "asset": [round(v, 2) for v in sum_asset]}
+
+
 def _build_accounts_from_db(users: list, heartbeats: list) -> list:
     """One card-data dict per account (aligned with `users`), derived entirely from the
     shared-DB heartbeats — the replacement for the old per-account SSH `_collect_account`.
@@ -466,6 +556,94 @@ table.trades th{text-align:left;color:#8b949e;font-weight:600;border-bottom:1px 
                 padding:5px 8px;white-space:nowrap}
 table.trades td{padding:5px 8px;border-bottom:1px solid #161b22;white-space:nowrap}
 table.trades tr:hover td{background:#161b22}
+
+/* ── Evolution charts (PnL / asset value over time) ───── */
+.tbchart{margin:10px 0;background:#0d1117;border:1px solid #21262d;border-radius:8px;padding:8px 10px}
+.tbchart.mini{margin:6px 0 2px;padding:6px 8px}
+.tbc-head{display:flex;align-items:center;gap:10px;font-size:.8em;margin-bottom:4px}
+.tbc-title{color:#8b949e;font-weight:600}
+.tbc-toggle{display:inline-flex;gap:2px}
+.tbc-btn{background:#161b22;border:1px solid #30363d;color:#8b949e;border-radius:5px;
+         padding:1px 7px;font-size:.9em;cursor:pointer}
+.tbc-btn.active{color:#fff}
+.tbc-btn.tbc-pnl.active{background:#1f6feb;border-color:#1f6feb}
+.tbc-btn.tbc-asset.active{background:#9e6a1b;border-color:#9e6a1b}
+.tbc-readout{margin-left:auto;color:#c9d1d9;font-variant-numeric:tabular-nums}
+.tbc-readout .t{color:#6e7681;margin-right:6px}
+.tbc-plot{position:relative;width:100%}
+.tbchart svg{display:block;width:100%;height:110px}
+.tbchart.mini svg{height:60px}
+.tbc-grid{stroke:#21262d;stroke-width:1}
+.tbc-base{stroke:#484f58;stroke-width:1;stroke-dasharray:3 3}
+.tbc-line{fill:none;stroke-width:2;vector-effect:non-scaling-stroke}
+.tbc-cross{stroke:#6e7681;stroke-width:1;vector-effect:non-scaling-stroke;visibility:hidden}
+.tbc-tip{position:absolute;pointer-events:none;background:#161b22;border:1px solid #30363d;
+         border-radius:6px;padding:3px 7px;font-size:.74em;color:#c9d1d9;white-space:nowrap;
+         transform:translate(-50%,-115%);visibility:hidden;z-index:5;font-variant-numeric:tabular-nums}
+.tbc-tip .v{font-weight:600}
+.tbc-empty{color:#484f58;font-size:.78em;font-style:italic;padding:16px 4px}
+"""
+
+# Evolution-chart client script. A PLAIN string (not the f-string body) so its many braces stay
+# literal — the page interpolates it with {_CHART_JS} and the series JSON separately. Hand-rolled,
+# zero external deps: one <svg> line + area per chart, PnL⇄Asset toggle, crosshair+tooltip hover,
+# and range clipping synced to the page's daily/weekly/monthly/alltime window (setWin body class).
+_CHART_JS = r"""
+var TBWIN={daily:86400,weekly:604800,monthly:2592000,alltime:1e12};
+function tbCurWin(){var m=document.body.className.match(/win-(\w+)/);return TBWIN[m?m[1]:'alltime']||1e12;}
+function tbFmt(metric,v){var s=v<0?'-':(metric==='pnl'?'+':'');return s+'$'+Math.abs(v).toFixed(2);}
+function tbDate(sec){var d=new Date(sec*1000);function p(n){return(n<10?'0':'')+n;}
+  return p(d.getUTCMonth()+1)+'/'+p(d.getUTCDate())+' '+p(d.getUTCHours())+':'+p(d.getUTCMinutes());}
+function tbRender(el){
+  var s=window.TBSERIES&&TBSERIES[el.getAttribute('data-key')];
+  var metric=el.getAttribute('data-metric')||'pnl';
+  var plot=el.querySelector('.tbc-plot'),read=el.querySelector('.tbc-readout');
+  var empty=el.getAttribute('data-empty')||'—';
+  if(!s||!s.ts||!s.ts.length){plot.innerHTML="<div class='tbc-empty'>"+empty+"</div>";if(read)read.textContent='';return;}
+  var now=s.ts[s.ts.length-1],cut=now-tbCurWin(),T=[],V=[],col=s[metric]||[];
+  for(var i=0;i<s.ts.length;i++){var v=col[i];if(s.ts[i]>=cut&&v!=null){T.push(s.ts[i]);V.push(v);}}
+  if(V.length<2){plot.innerHTML="<div class='tbc-empty'>"+empty+"</div>";if(read)read.textContent='';return;}
+  var W=600,H=el.classList.contains('mini')?60:110,PX=3,PY=8;
+  var t0=T[0],t1=T[T.length-1],vmin=Math.min.apply(null,V),vmax=Math.max.apply(null,V);
+  if(metric==='pnl'){vmin=Math.min(vmin,0);vmax=Math.max(vmax,0);}
+  var vspan=(vmax-vmin)||1,tspan=(t1-t0)||1,color=metric==='pnl'?'#58a6ff':'#d29922';
+  function X(t){return PX+(t-t0)/tspan*(W-2*PX);}
+  function Y(v){return PY+(1-(v-vmin)/vspan)*(H-2*PY);}
+  var xs=[],d='';
+  for(var i=0;i<T.length;i++){var x=X(T[i]);xs.push(x);d+=(i?'L':'M')+x.toFixed(1)+','+Y(V[i]).toFixed(1)+' ';}
+  var baseY=Y(metric==='pnl'?0:vmin);
+  var area='M'+xs[0].toFixed(1)+','+baseY.toFixed(1)+' '+d.slice(1)+'L'+xs[xs.length-1].toFixed(1)+','+baseY.toFixed(1)+'Z';
+  var grid='';for(var g=1;g<3;g++){var gy=PY+g/3*(H-2*PY);grid+="<line class='tbc-grid' x1='0' y1='"+gy.toFixed(1)+"' x2='"+W+"' y2='"+gy.toFixed(1)+"'/>";}
+  var base=metric==='pnl'?"<line class='tbc-base' x1='0' y1='"+baseY.toFixed(1)+"' x2='"+W+"' y2='"+baseY.toFixed(1)+"'/>":'';
+  var uid='g'+Math.random().toString(36).slice(2,7);
+  var svg="<svg viewBox='0 0 "+W+" "+H+"' preserveAspectRatio='none'>"
+    +"<defs><linearGradient id='"+uid+"' x1='0' x2='0' y1='0' y2='1'>"
+    +"<stop offset='0' stop-color='"+color+"' stop-opacity='0.28'/><stop offset='1' stop-color='"+color+"' stop-opacity='0'/></linearGradient></defs>"
+    +grid+base+"<path d='"+area+"' fill='url(#"+uid+")' stroke='none'/>"
+    +"<path class='tbc-line' d='"+d+"' stroke='"+color+"'/>"
+    +"<line class='tbc-cross' x1='0' y1='0' x2='0' y2='"+H+"'/></svg>"
+    +"<div class='tbc-tip'></div>";
+  plot.innerHTML=svg;
+  if(read)read.innerHTML="<span class='t'>"+(metric==='pnl'?'PnL':'$')+"</span>"+tbFmt(metric,V[V.length-1]);
+  var cross=plot.querySelector('.tbc-cross'),tip=plot.querySelector('.tbc-tip'),svgEl=plot.querySelector('svg');
+  function move(ev){
+    var r=svgEl.getBoundingClientRect(),cx=ev.touches?ev.touches[0].clientX:ev.clientX;
+    var vx=(cx-r.left)/r.width*W,best=0,bd=1e9;
+    for(var i=0;i<xs.length;i++){var dd=Math.abs(xs[i]-vx);if(dd<bd){bd=dd;best=i;}}
+    cross.setAttribute('x1',xs[best]);cross.setAttribute('x2',xs[best]);cross.style.visibility='visible';
+    tip.style.visibility='visible';tip.style.left=(xs[best]/W*100)+'%';tip.style.top=(Y(V[best])/H*100)+'%';
+    tip.innerHTML="<span class='v'>"+tbFmt(metric,V[best])+"</span> · "+tbDate(T[best]);
+  }
+  function leave(){cross.style.visibility='hidden';tip.style.visibility='hidden';}
+  svgEl.addEventListener('mousemove',move);svgEl.addEventListener('mouseleave',leave);
+  svgEl.addEventListener('touchmove',move);svgEl.addEventListener('touchend',leave);
+}
+function tbToggle(btn,metric){
+  var el=btn.closest('.tbchart');el.setAttribute('data-metric',metric);
+  var bs=el.querySelectorAll('.tbc-btn');for(var i=0;i<bs.length;i++)bs[i].classList.remove('active');
+  btn.classList.add('active');tbRender(el);
+}
+function tbRenderAll(){var els=document.querySelectorAll('.tbchart');for(var i=0;i<els.length;i++)tbRender(els[i]);}
 """
 
 # ─── i18n ────────────────────────────────────────────────────────────────────
@@ -1085,12 +1263,22 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
             f"</div>"
         )
 
+    # Per-bot evolution charts (one per trading bot on this account; infra rows have no
+    # pnl_total and are skipped so they don't render an empty chart).
+    charts_html = ""
+    for r in (hb_rows or []):
+        if (r.get("payload") or {}).get("pnl_total") is None:
+            continue
+        charts_html += _chart_html(f"{r.get('account')}|{r.get('bot_name')}",
+                                   r.get("_display") or r.get("bot_name") or "bot",
+                                   t("chart_no_data"), mini=True)
+
     now = int(time.time())
     bot_section = _render_bot_section(hb_rows or [], now)
 
     return (
         f"<div class='account'>"
-        f"{header}{stats_html}{open_html}{trade_html}{grid_html}{cex_html}{bot_section}"
+        f"{header}{stats_html}{open_html}{trade_html}{grid_html}{cex_html}{charts_html}{bot_section}"
         f"</div>"
     )
 
@@ -1297,14 +1485,31 @@ def _render_live_trades(live_heartbeats: list, trades_by_bot: dict) -> str:
         else:
             table = f"<div class='dim'>{escape(t('lt_no_trades'))}</div>"
 
+        chart = _chart_html(f"{acct}|{bot}", t("chart_bot"), t("chart_no_data"), mini=True)
         panels.append(
             f"<div class='live-panel'><h3>{name} "
-            f"<span class='dim'>{escape(acct or '')}</span></h3>{stats}{table}</div>"
+            f"<span class='dim'>{escape(acct or '')}</span></h3>{stats}{chart}{table}</div>"
         )
 
     if not panels:
         return f"<div class='dim'>{escape(t('lt_none'))}</div>"
     return "".join(panels)
+
+
+def _chart_html(key: str, title: str, empty_label: str, mini: bool = False) -> str:
+    """Container for one evolution chart; the client JS (tbRender) fills .tbc-plot from
+    TBSERIES[key]. Defaults to the PnL metric with an Asset toggle."""
+    cls = "tbchart mini" if mini else "tbchart"
+    return (
+        f"<div class='{cls}' data-key='{escape(key)}' data-metric='pnl' "
+        f"data-empty='{escape(empty_label)}'>"
+        f"<div class='tbc-head'><span class='tbc-title'>{escape(title)}</span>"
+        f"<span class='tbc-toggle'>"
+        f"<button class='tbc-btn tbc-pnl active' onclick=\"tbToggle(this,'pnl')\">{escape(t('chart_pnl'))}</button>"
+        f"<button class='tbc-btn tbc-asset' onclick=\"tbToggle(this,'asset')\">{escape(t('chart_asset'))}</button>"
+        f"</span><span class='tbc-readout'></span></div>"
+        f"<div class='tbc-plot'></div></div>"
+    )
 
 
 def _render_html(
@@ -1320,6 +1525,7 @@ def _render_html(
     trades_by_bot: dict | None = None,
     nav_href: str = "",
     audit_heartbeats: list | None = None,
+    series: dict | None = None,
 ) -> str:
     # The expected-vs-actual audit is fleet-wide: it must see EVERY bot's heartbeat, not the
     # scope-filtered subset, or a live bot (filtered off the overview) would falsely read as
@@ -1485,6 +1691,9 @@ def _render_html(
             f"{t('footer_refresh', n=_rf_span)}</div>"
         )
 
+        # Fleet-level evolution chart (this page's scope) right under the summary bar.
+        fleet_chart = _chart_html("__fleet__", t("chart_fleet"), t("chart_no_data"))
+
         body_inner = (
             f"<h1><span class='dot {dot_cls}'></span>"
             f" {escape('tradinebotte')} · {escape(_scope_label)} — {escape(status_text)}"
@@ -1492,6 +1701,7 @@ def _render_html(
             f"<span style='font-size:.6em;color:#8b949e;font-weight:400'>{ts_str}</span>"
             f"{lang_sel}</span></h1>"
             f"{banners_html}{win_toggle}{summary_bar}"
+            f"{fleet_chart}"
             f"{mid_html}"
             f"{footer}"
         )
@@ -1499,6 +1709,7 @@ def _render_html(
 
     _CUR_LANG = _saved_lang
     default_lang = langs[0]
+    series_json = json.dumps(series or {}, separators=(",", ":"))
     title_attrs = " ".join(f'data-title-{L}="{escape(titles[L])}"' for L in langs)
     # Per-language display rules + active-selector highlight (static CSS only knows en/fr).
     lang_css = "".join(
@@ -1517,11 +1728,16 @@ def _render_html(
 </head>
 <body class="win-daily lang-{default_lang}" {title_attrs}>
 {''.join(langboxes)}
+<script>window.TBSERIES={series_json};</script>
+<script>
+{_CHART_JS}
+</script>
 <script>
 function setWin(w){{
   var b=document.body,c=b.className.replace(/\\bwin-\\w+\\b/g,'').trim();
   b.className=(c?c+' ':'')+'win-'+w;
   try{{localStorage.setItem('tbwin',w);}}catch(e){{}}
+  if(window.tbRenderAll)tbRenderAll();
 }}
 function setLang(l){{
   var b=document.body,c=b.className.replace(/\\blang-\\w+\\b/g,'').trim();
@@ -1669,6 +1885,17 @@ def main() -> None:
     overview_pnl_windows = {k: v for k, v in pnl_windows.items()
                             if tuple(k.split("|", 1)) not in live_keys}
 
+    # Time-series for the evolution charts, scoped per page + a fleet aggregate ("__fleet__").
+    all_series = _load_pnl_series(SHARED_DB)
+
+    def _scoped_series(want_live: bool) -> dict:
+        sub = {k: v for k, v in all_series.items()
+               if (tuple(k.split("|", 1)) in live_keys) == want_live}
+        sub["__fleet__"] = _fleet_series(sub)
+        return sub
+
+    live_series, overview_series = _scoped_series(True), _scoped_series(False)
+
     def _render(scope_name, hb_subset, nav_href):
         return _render_html(
             heartbeats=hb_subset,
@@ -1681,6 +1908,7 @@ def main() -> None:
             pnl_windows=(live_pnl_windows if scope_name == "live" else overview_pnl_windows),
             scope=scope_name,
             trades_by_bot=trades_by_bot,
+            series=(live_series if scope_name == "live" else overview_series),
             nav_href=nav_href,
             audit_heartbeats=heartbeats,
         )

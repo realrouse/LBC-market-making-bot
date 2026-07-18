@@ -91,5 +91,79 @@ class TestLoadTradesFilter(unittest.TestCase):
         self.assertNotIn(("acct-b", "other-bot"), only_live)
 
 
+class TestPnlSeries(unittest.TestCase):
+    """Evolution-chart data: _downsample, _load_pnl_series (equity-or-capital, key filter),
+    _fleet_series (forward-filled sum), and chart presence in the rendered page."""
+
+    def _db_with_history(self):
+        import json
+        import tempfile
+        import time
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "tradinetools"))
+        from tradinetools.db import open_db
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "s.db")
+        db = open_db(p)
+        base = int(time.time()) - 3600   # recent, inside the 30d history horizon
+        # accum bot: equity present, no capital. grid bot: capital present, no equity.
+        for i in range(10):
+            db.execute("INSERT INTO heartbeats(ts,account,bot_name,version,status,bounds_ok,payload)"
+                       " VALUES(?,?,?,?,?,?,?)",
+                       (base + i * 120, "acct-a", _LIVE_BOT, "v", "running", 1,
+                        json.dumps({"pnl_total": i * 0.1, "equity": 100 + i})))
+            db.execute("INSERT INTO heartbeats(ts,account,bot_name,version,status,bounds_ok,payload)"
+                       " VALUES(?,?,?,?,?,?,?)",
+                       (base + i * 120, "acct-b", "grid-x", "v", "running", 1,
+                        json.dumps({"pnl_total": i * 2.0, "capital": 1000 + i * 2})))
+        db.commit()
+        db.close()
+        return p
+
+    def test_downsample_caps_and_keeps_last(self):
+        rows = [(t, t) for t in range(1000)]
+        out = g._downsample(rows, 50)
+        self.assertLessEqual(len(out), 51)
+        self.assertEqual(out[-1], rows[-1])          # last point preserved
+
+    def test_series_equity_or_capital(self):
+        p = self._db_with_history()
+        s = g._load_pnl_series(p)
+        accum = s[f"acct-a|{_LIVE_BOT}"]
+        grid = s["acct-b|grid-x"]
+        self.assertEqual(accum["asset"][-1], 109.0)   # equity
+        self.assertEqual(grid["asset"][-1], 1018.0)   # capital fallback
+        self.assertAlmostEqual(accum["pnl"][-1], 0.9)
+
+    def test_series_key_filter(self):
+        p = self._db_with_history()
+        only = g._load_pnl_series(p, {("acct-a", _LIVE_BOT)})
+        self.assertIn(f"acct-a|{_LIVE_BOT}", only)
+        self.assertNotIn("acct-b|grid-x", only)
+
+    def test_fleet_sum(self):
+        p = self._db_with_history()
+        s = g._load_pnl_series(p)
+        fl = g._fleet_series(s)
+        # both bots' last equity summed (109 + 1018); pnl last (0.9 + 18.0)
+        self.assertAlmostEqual(fl["asset"][-1], 1127.0, places=1)
+        self.assertAlmostEqual(fl["pnl"][-1], 18.9, places=1)
+
+    def test_empty_series_no_crash(self):
+        self.assertEqual(g._fleet_series({}), {"ts": [], "pnl": [], "asset": []})
+
+    def test_chart_present_in_rendered_page(self):
+        html = g._render_html(
+            heartbeats=_live_hb(), accounts=[{"error": None, "services": []}],
+            generated_at=datetime.datetime.now(datetime.timezone.utc), collection_s=0.1,
+            inventory=[], deploys=[], user_to_label={}, pnl_windows={}, scope="live",
+            trades_by_bot=_trades(), nav_href="x.html",
+            series={f"acct-a|{_LIVE_BOT}": {"ts": [1, 2], "pnl": [0.1, 0.2], "asset": [100, 101]},
+                    "__fleet__": {"ts": [1, 2], "pnl": [0.1, 0.2], "asset": [100, 101]}})
+        self.assertIn("tbchart", html)
+        self.assertIn("window.TBSERIES=", html)
+        self.assertIn("function tbRender", html)
+        self.assertIn("__fleet__", html)
+
+
 if __name__ == "__main__":
     unittest.main()
