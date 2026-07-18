@@ -1024,6 +1024,14 @@ class TestDurableTradePush(unittest.TestCase):
         eng.live = False
         self.assertEqual(eng.heartbeat_payload()["mode"], "sim")
 
+    def test_heartbeat_equity_market_value(self):
+        eng, _ = _live_engine()
+        eng.acc.holdings_btc, eng.acc.free_usdt, eng.acc.last_price = 1000.0, 50.0, 0.0025
+        self.assertEqual(eng.heartbeat_payload()["equity"], 2.5 + 50.0)   # holdings*price + free
+        # No price yet → field omitted so a just-booted bot doesn't report $free-only equity.
+        eng.acc.last_price = 0.0
+        self.assertNotIn("equity", eng.heartbeat_payload())
+
     def test_record_trade_pushes_only_when_live(self):
         eng, state = _live_engine()
         eng._bot_id, eng._account = "mexc-accumulation-lbcusdt-955a99", "acct-a"

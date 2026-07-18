@@ -662,6 +662,12 @@ class AccumulationStrategy:
             "avg_entry":      round(a.avg_entry, decimals_for_price(a.avg_entry)),
             "total_realized": round(a.total_realized, 2),
             "pnl_total":      round(a.total_realized, 2),
+            # Market-value equity for the status page's asset-value chart: coins valued at the
+            # live mid + idle USDT. Distinct from the grid/swing/poly `capital` field on purpose
+            # (so their rendering is untouched); the chart reads equity-or-capital. Omitted until
+            # a price is known so a just-booted bot doesn't report a nonsense $0-priced equity.
+            **({"equity": round(a.holdings_btc * a.last_price + a.free_usdt, 2)}
+               if a.last_price > 0 else {}),
             "last_write_ts":  a.last_write_ts,
         }
 
