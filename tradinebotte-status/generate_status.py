@@ -113,21 +113,25 @@ def _compute_pnl_windows(shared_path):
             p = {}
         latest[(r["account"], r["bot_name"])] = p
     out = {}
-    windows = {"weekly": 7 * 86400, "monthly": 30 * 86400}
+    # Absolute window starts. daily = since UTC midnight ("today"); weekly/monthly = rolling
+    # 7/30 days. All FOUR windows (incl. alltime) are now the SAME kind of metric — pnl_total
+    # earned since the window start — so they compose consistently. (daily used to come from
+    # the bot's self-reported daily_pnl, a different measure than the weekly/monthly deltas,
+    # which made a positive daily look "impossibly" larger than a net-negative weekly.)
+    windows = {"daily": now - (now % 86400), "weekly": now - 7 * 86400,
+               "monthly": now - 30 * 86400}
     horizon = now - 30 * 86400
     for (acct, bot), p in latest.items():
         pt = p.get("pnl_total")
-        rec = {"daily": p.get("daily_pnl"), "alltime": pt,
-               "weekly": None, "monthly": None,
-               "weekly_reset": False, "monthly_reset": False}
+        rec = {"alltime": pt, "daily": None, "weekly": None, "monthly": None,
+               "daily_reset": False, "weekly_reset": False, "monthly_reset": False}
         if isinstance(pt, (int, float)):
             series = [(row["ts"], row["p"]) for row in wdb.execute(
                 "SELECT ts, json_extract(payload,'$.pnl_total') p FROM heartbeats"
                 " WHERE account=? AND bot_name=? AND ts>=?"
                 " AND json_extract(payload,'$.pnl_total') IS NOT NULL ORDER BY ts",
                 (acct, bot, horizon))]
-            for wname, secs in windows.items():
-                wstart = now - secs
+            for wname, wstart in windows.items():
                 first_val = reset_val = None
                 reset = False
                 prev = None
@@ -149,7 +153,7 @@ def _compute_pnl_windows(shared_path):
     return out
 
 
-_SERIES_MAX_POINTS = int(os.environ.get("STATUS_SERIES_POINTS", 200))
+_SERIES_MAX_POINTS = int(os.environ.get("STATUS_SERIES_POINTS", 120))
 
 
 def _downsample(rows: list, max_pts: int) -> list:
@@ -643,7 +647,8 @@ function tbToggle(btn,metric){
   var bs=el.querySelectorAll('.tbc-btn');for(var i=0;i<bs.length;i++)bs[i].classList.remove('active');
   btn.classList.add('active');tbRender(el);
 }
-function tbRenderAll(){var els=document.querySelectorAll('.tbchart');for(var i=0;i<els.length;i++)tbRender(els[i]);}
+function tbRenderAll(){var els=document.querySelectorAll('.tbchart');
+  for(var i=0;i<els.length;i++){if(els[i].offsetParent!==null)tbRender(els[i]);}}
 """
 
 # ─── i18n ────────────────────────────────────────────────────────────────────
@@ -1744,6 +1749,7 @@ function setLang(l){{
   b.className=(c?c+' ':'')+'lang-'+l;
   try{{localStorage.setItem('tblang',l);}}catch(e){{}}
   var tt=b.getAttribute('data-title-'+l);if(tt)document.title=tt;
+  if(window.tbRenderAll)tbRenderAll();
 }}
 (function(){{
   var w='daily';try{{w=localStorage.getItem('tbwin')||'daily';}}catch(e){{}}

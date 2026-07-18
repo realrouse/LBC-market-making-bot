@@ -58,19 +58,23 @@ class TestComputePnlWindows(unittest.TestCase):
     def test_missing_db_returns_empty(self):
         self.assertEqual(self.fn("/nonexistent/path.db"), {})
 
-    def test_weekly_and_monthly_diffs(self):
+    def test_window_diffs(self):
         now = int(time.time())
         day = 86400
-        # A bot climbing 100 → 130 (8d ago) → 150 (5d ago) → 200 (now).
+        midnight = now - (now % day)
+        mid_today = (midnight + now) // 2      # a point earlier TODAY (>= midnight, <= now)
+        # A bot climbing 130 (8d ago) → 150 (5d ago) → 190 (earlier today) → 200 (now).
         rows = [
-            (now - 8 * day, "c1", "live_bot", {"pnl_total": 130.0, "daily_pnl": 3.0}),
-            (now - 5 * day, "c1", "live_bot", {"pnl_total": 150.0, "daily_pnl": 3.0}),
-            (now - 1 * day, "c1", "live_bot", {"pnl_total": 190.0, "daily_pnl": 3.0}),
-            (now,           "c1", "live_bot", {"pnl_total": 200.0, "daily_pnl": 3.0}),
+            (now - 8 * day, "c1", "live_bot", {"pnl_total": 130.0}),
+            (now - 5 * day, "c1", "live_bot", {"pnl_total": 150.0}),
+            (mid_today,     "c1", "live_bot", {"pnl_total": 190.0}),
+            (now,           "c1", "live_bot", {"pnl_total": 200.0}),
         ]
         _make_db(self.path, rows)
         rec = self.fn(self.path)["c1|live_bot"]
-        self.assertEqual(rec["daily"], 3.0)                 # straight from latest payload
+        # daily = pnl_total delta since UTC midnight → first point today (190) → 200-190 = 10
+        self.assertAlmostEqual(rec["daily"], 10.0)
+        self.assertFalse(rec["daily_reset"])
         self.assertEqual(rec["alltime"], 200.0)             # pnl_total now
         # weekly baseline = first row >= now-7d → the 5d-ago row (150) → 200-150 = 50
         self.assertAlmostEqual(rec["weekly"], 50.0)
