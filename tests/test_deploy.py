@@ -114,7 +114,7 @@ class TestRealInventory(unittest.TestCase):
         ("deploy_actions.py", "accumulation"),   # acct-4 accum (native)
         ("deploy_actions.py", "swing"),          # acct-5 swing (native, migrated 2026-07-18)
         ("deploy_actions.py", "grid"),           # acct-6 mexc-grid (native, migrated 2026-07-18)
-        ("deploy_grid_mexc.sh", None),           # acct-8/idx-7 mexc-grid LBC (bash — real account, deferred)
+        ("deploy_actions.py", "grid"),           # acct-8/idx-7 mexc-grid LBC (native, migrated 2026-07-18)
         ("deploy_actions.py", "accumulation"),   # acct-8/idx-7 accum LBC (native)
     ]
 
@@ -138,17 +138,16 @@ class TestRealInventory(unittest.TestCase):
         self.assertEqual(derived, self._EXPECTED_2_N)
 
     def test_migrated_families_deploy_natively(self):
-        # The migrated bots (accum ×4 + binance-grid + swing + mexc-grid + polymarket ×3) must be
-        # python/native steps; the only un-migrated primary left is the acct-8 LBC mexc-grid (real
-        # account) — the reconciliation's core invariant.
+        # Every trading bot now deploys natively (accum ×4 + binance-grid + swing + mexc-grid ×2
+        # + polymarket ×3); only acct-1's infra + multibot account_bot stay bash (not family steps).
         rows = deploy.load_rows(deploy.INVENTORY)
         plan = deploy.build_plan(rows, restart_infra=False)
         native = [s for s in plan if s.interpreter == "python"]
-        self.assertEqual(len(native), 10)
+        self.assertEqual(len(native), 11)
         self.assertTrue(all(s.script.endswith("deploy_actions.py") for s in native))
         self.assertEqual(sorted(s.args[0] for s in native),
                          ["accumulation", "accumulation", "accumulation", "accumulation",
-                          "grid", "grid_binance", "polymarket", "polymarket", "polymarket", "swing"])
+                          "grid", "grid", "grid_binance", "polymarket", "polymarket", "polymarket", "swing"])
 
     def test_every_derived_script_exists(self):
         rows = deploy.load_rows(deploy.INVENTORY)
