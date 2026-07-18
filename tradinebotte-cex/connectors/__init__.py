@@ -24,7 +24,7 @@ _CORE_DIR = os.path.normpath(
 if os.path.isdir(_CORE_DIR) and _CORE_DIR not in sys.path:
     sys.path.insert(0, _CORE_DIR)
 
-# noqa/pylint: re-export the public surface so `from connectors import load` etc. work.
+# Re-export the public surface so `from connectors import load` etc. work.
 from botcore.connectors import (  # noqa: E402  pylint: disable=wrong-import-position
     load, validate, available,
 )

@@ -567,7 +567,7 @@ async def _zmq_loop(states: list, db: sqlite3.Connection, p: dict) -> None:
         return
 
     addr = (p.get("indicators_addr")
-            or _os.environ.get("TRADINEBOTTE_INDICATORS_ADDR")
+            or os.environ.get("TRADINEBOTTE_INDICATORS_ADDR")
             or default_ipc_addr("tradinebotte-indicators"))
     stream_map = {}
     for st in states:
