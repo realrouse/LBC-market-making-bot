@@ -1661,6 +1661,14 @@ def main() -> None:
     trades_by_bot = _load_trades(SHARED_DB, live_keys)
     _now = datetime.now(tz=timezone.utc)
 
+    # Scope the windowed PnL to each page's bots (keys are "account|bot_name"). Without this the
+    # real-money page's summary bar would aggregate the WHOLE fleet (sim bots included) — e.g. a
+    # meaningless alltime of the paper bots' PnL, not the live bot's real result.
+    live_pnl_windows     = {k: v for k, v in pnl_windows.items()
+                            if tuple(k.split("|", 1)) in live_keys}
+    overview_pnl_windows = {k: v for k, v in pnl_windows.items()
+                            if tuple(k.split("|", 1)) not in live_keys}
+
     def _render(scope_name, hb_subset, nav_href):
         return _render_html(
             heartbeats=hb_subset,
@@ -1670,7 +1678,7 @@ def main() -> None:
             inventory=inventory_rows,
             deploys=deploy_rows,
             user_to_label=user_to_label,
-            pnl_windows=pnl_windows,
+            pnl_windows=(live_pnl_windows if scope_name == "live" else overview_pnl_windows),
             scope=scope_name,
             trades_by_bot=trades_by_bot,
             nav_href=nav_href,
