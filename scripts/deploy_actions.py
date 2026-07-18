@@ -78,8 +78,11 @@ _BASE_SYNC: list[tuple[str, str, list[str]]] = [
 ]
 
 # Per-family deploy spec — the declarative data that replaces each ~300-line bash engine.
-#   config_mode "write" = overwrite config.json;  "merge" = keep it (wallet setup), set
-#   data_source/feed_addr only (polymarket, whose config.json holds the wallet).
+#   config_mode "write" = overwrite config with {strategy, data_source[, feed_addr]}. EVERY family is
+#   "write" now: keys/wallet live in a 600 env file loaded by the systemd unit (MEXC_API_KEY for CEX,
+#   POLY_PRIVATE_KEY for polymarket — read via env fallback in live_bot.make_config), NEVER in config.json.
+#   So config is self-contained and single-tree migration carries no wallet (the old poly "merge" mode,
+#   which kept a wallet in config.json, is gone — it was the last thing blocking poly from converging).
 #   data_suffix = data dir relative to install_dir ("" = same dir; "-accum" = ~/tradinebotte-accum).
 FAMILIES: dict[str, dict] = {
     "grid":         dict(role="grid", unit="tradinebotte-live.service",
@@ -106,9 +109,11 @@ FAMILIES: dict[str, dict] = {
                          # legacy accum DB is live_accum.db (not live.db) — see live_bot make_config;
                          # the P4 migration renames it to live_accumulation.db under single-tree.
                          legacy_db="live_accum.db"),
+    # write-mode like every other family: the wallet is read from POLY_PRIVATE_KEY (a 600 env file
+    # loaded by the unit), not config.json — so poly converges to single-tree natively (no merge gap).
     "polymarket":   dict(role="threshold", unit="tradinebotte-live.service",
                          template="tradinebotte-live.service", data_suffix="",
-                         connector="polymarket", config_mode="merge",
+                         connector="polymarket", config_mode="write",
                          data_source="feed", feed_addr="tcp://127.0.0.1:5557"),
 }
 
@@ -462,12 +467,10 @@ def deploy_family(host: Host, family: str, *, install_dir: str, strategy: str = 
                                            spec.get("legacy_db", "live.db")), "migrate failed"
         print(_c("y", f"▶ {label}: sync"))
         assert act_sync(host, install_dir, spec["template"]), "sync failed"
-        if spec["config_mode"] == "merge":
-            cfg = {"data_source": spec["data_source"]}
-        else:
-            # write: strategy path is absolute when the data dir differs from the code dir
-            strat = f"{install_dir}/{strategy}" if data_dir != install_dir else strategy
-            cfg = {"strategy": strat, "data_source": spec["data_source"]}
+        # write config for every family: strategy path is absolute when the data dir differs
+        # from the code dir. (The wallet/keys never live here — they come from the unit's env.)
+        strat = f"{install_dir}/{strategy}" if data_dir != install_dir else strategy
+        cfg = {"strategy": strat, "data_source": spec["data_source"]}
         if spec["feed_addr"]:
             # test_ports: consumer points at the offset producer (grid/swing 5563→5573, poly 5557→5567)
             cfg["feed_addr"] = _offset_addr(spec["feed_addr"], TEST_PORT_OFFSET) if test_ports else spec["feed_addr"]

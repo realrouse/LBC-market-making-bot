@@ -104,14 +104,13 @@ class TestRealInventory(unittest.TestCase):
     # Each signature is
     # (script-basename, native-family-or-None) so the guard captures which engine AND, for
     # native steps, which family — deploy_actions.py alone would not distinguish accum vs grid.
-    _STD = "update_standalone.sh"
     _EXPECTED_2_N = [
-        (_STD, None),                 # acct-2 poly
+        ("deploy_actions.py", "polymarket"),     # acct-2 poly (native, migrated 2026-07-18)
         ("deploy_actions.py", "accumulation"),   # acct-2 accum (native)
-        (_STD, None),                 # acct-3 poly
+        ("deploy_actions.py", "polymarket"),     # acct-3 poly (native, migrated 2026-07-18)
         ("deploy_actions.py", "accumulation"),   # acct-3 accum (native)
         ("deploy_actions.py", "grid_binance"),   # acct-3 binance-grid (native) — distinct step
-        (_STD, None),                 # acct-4 poly
+        ("deploy_actions.py", "polymarket"),     # acct-4 poly (native, migrated 2026-07-18)
         ("deploy_actions.py", "accumulation"),   # acct-4 accum (native)
         ("deploy_actions.py", "swing"),          # acct-5 swing (native, migrated 2026-07-18)
         ("deploy_actions.py", "grid"),           # acct-6 mexc-grid (native, migrated 2026-07-18)
@@ -139,25 +138,17 @@ class TestRealInventory(unittest.TestCase):
         self.assertEqual(derived, self._EXPECTED_2_N)
 
     def test_migrated_families_deploy_natively(self):
-        # The migrated bots (accum ×4 + binance-grid + swing + mexc-grid) must be python/native
-        # steps; the un-migrated primaries must stay bash — the reconciliation's core invariant.
+        # The migrated bots (accum ×4 + binance-grid + swing + mexc-grid + polymarket ×3) must be
+        # python/native steps; the only un-migrated primary left is the acct-8 LBC mexc-grid (real
+        # account) — the reconciliation's core invariant.
         rows = deploy.load_rows(deploy.INVENTORY)
         plan = deploy.build_plan(rows, restart_infra=False)
         native = [s for s in plan if s.interpreter == "python"]
-        self.assertEqual(len(native), 7)
+        self.assertEqual(len(native), 10)
         self.assertTrue(all(s.script.endswith("deploy_actions.py") for s in native))
         self.assertEqual(sorted(s.args[0] for s in native),
                          ["accumulation", "accumulation", "accumulation", "accumulation",
-                          "grid", "grid_binance", "swing"])
-
-    def test_standalone_presets_have_distinct_indices(self):
-        # The 3 update_standalone rows must carry TEST_STANDALONE_USER_IDX 1/2/3 (dedup
-        # must NOT collapse them despite sharing the engine).
-        rows = deploy.load_rows(deploy.INVENTORY)
-        plan = deploy.build_plan(rows, restart_infra=False)
-        idxs = sorted(s.env["TEST_STANDALONE_USER_IDX"] for s in plan
-                      if s.script.endswith("update_standalone.sh"))
-        self.assertEqual(idxs, ["1", "2", "3"])
+                          "grid", "grid_binance", "polymarket", "polymarket", "polymarket", "swing"])
 
     def test_every_derived_script_exists(self):
         rows = deploy.load_rows(deploy.INVENTORY)
