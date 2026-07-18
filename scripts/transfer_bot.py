@@ -29,6 +29,25 @@ import deploy_actions as da  # noqa: E402  (Host, FAMILIES, native_target, deplo
 
 INVENTORY = os.path.join(REPO, "inventory.toml")
 INSTALL_DIR = "~/tradinebotte"
+SHARED_DB = os.environ.get("TRADINEBOTTE_DB", "/data1/tradinebotte-shared/database/tradinebotte.db")
+
+
+def _reconcile_shared_db(old_acct: str, new_acct: str, bot_name: str, dry: bool) -> None:
+    """Keep the shared state DB consistent after the move (both tables key on (account, bot_name)):
+      - heartbeats: DELETE the source's rows — they are stale liveness pings that would otherwise
+        show the bot DEAD on its OLD account and inflate the statuspage issue count.
+      - bot_trades + deploys: re-account source→target so the bot's history stays under one account.
+    Runs under `sg claudes` (the shared dir is group-writable by claudes, per the collector)."""
+    sql = (f"DELETE FROM heartbeats WHERE account='{old_acct}' AND bot_name='{bot_name}';"
+           f"UPDATE bot_trades SET account='{new_acct}' WHERE account='{old_acct}' AND bot_name='{bot_name}';"
+           f"UPDATE deploys SET account='{new_acct}' WHERE account='{old_acct}' AND bot_name='{bot_name}';")
+    if dry:
+        print(f"  [DRY-RUN] shared-DB reconcile: {sql}")
+        return
+    cmd = ["sg", "claudes", "-c", f"umask 002; sqlite3 '{SHARED_DB}' \"{sql}\""]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    print(f"  ▸ shared-DB reconciled (purged stale heartbeats on {old_acct}, re-accounted trades/deploys)"
+          + (f"  [warn: {r.stderr.strip()}]" if r.returncode else ""))
 
 
 def _rp(p: str) -> str:
@@ -77,12 +96,15 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Move a native single-tree bot between accounts.")
     ap.add_argument("--bot", required=True, help="bot_name (inventory join key)")
     ap.add_argument("--to", type=int, required=True, metavar="IDX", help="target account index")
+    ap.add_argument("--from", type=int, dest="src", default=None, metavar="IDX",
+                    help="source account index (default: from inventory; pass it if inventory is stale, "
+                         "e.g. to move a bot back before the inventory edit is committed)")
     ap.add_argument("--dry-run", action="store_true", help="print the plan, change nothing")
     ap.add_argument("--force", action="store_true", help="allow transferring an is_live (real-money) bot")
     a = ap.parse_args()
 
     row = _find_bot(a.bot)
-    src_idx = row["account_idx"]
+    src_idx = a.src if a.src is not None else row["account_idx"]
     if src_idx == a.to:
         sys.exit("source and target are the same account")
     if os.path.basename(row.get("deployer", "")) != "deploy_actions.py":
@@ -114,7 +136,8 @@ def main() -> int:
 
     if a.dry_run:
         print("  [DRY-RUN] would: stop on source → copy state → deploy native on target → verify → "
-              "clean source → print inventory edit")
+              "clean source → reconcile shared DB → print inventory edit")
+        _reconcile_shared_db(conf["users"][src_idx], conf["users"][a.to], a.bot, dry=True)
         return 0
 
     tmp = f"/tmp/transfer_{a.bot}"
@@ -135,9 +158,11 @@ def main() -> int:
     da.act_single_tree_dropin(src, unit, "")   # clears the drop-in (idempotent)
     files = " ".join(f"{INSTALL_DIR}/{f}" for f in [*_state_files(role), f"config_{role}.json"])
     src.ssh(f"systemctl --user disable {unit} 2>/dev/null; rm -f {files}; echo cleaned")
+    # 6. reconcile the shared state DB so the statuspage shows the bot only on its new account
+    _reconcile_shared_db(conf["users"][src_idx], conf["users"][a.to], a.bot, dry=False)
 
-    print(f"\n✅ transferred. NOW edit inventory.toml: {a.bot} account_idx {src_idx} → {a.to}, "
-          f"then run check_inventory.py + update tests + commit.")
+    print(f"\n✅ transferred. NOW edit inventory.toml: {a.bot} account_idx {src_idx} → {a.to}, then run "
+          f"`sync_inventory.py` + `check_inventory.py`, update tests/test_deploy.py (plan order), commit.")
     return 0
 
 
