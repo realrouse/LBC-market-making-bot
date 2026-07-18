@@ -157,45 +157,19 @@ class TestRealInventory(unittest.TestCase):
                             f"deploy script missing: {s.script}")
 
 
-class TestAutoInjectIndex(unittest.TestCase):
-    """deploy.py injects each deployer's account-index env var from account_idx, so inventory
-    rows need not repeat the index — and two accounts can't collide on one engine."""
-
-    def test_index_injected_from_account_idx(self):
-        rows = [{"account_idx": 3, "bot_name": "swing_bot",
-                 "deployer": "tradinebotte-cex/scripts/update_swing.sh"}]   # no deploy_env
-        step = deploy.build_plan(rows, restart_infra=False)[1]
-        self.assertEqual(step.env["TEST_SWING_USER_IDX"], "3")
-
-    def test_explicit_deploy_env_index_wins(self):
-        rows = [{"account_idx": 3, "bot_name": "swing_bot",
-                 "deployer": "tradinebotte-cex/scripts/update_swing.sh",
-                 "deploy_env": {"TEST_SWING_USER_IDX": "9"}}]                # override
-        step = deploy.build_plan(rows, restart_infra=False)[1]
-        self.assertEqual(step.env["TEST_SWING_USER_IDX"], "9")
-
-    def test_unknown_deployer_gets_no_injection(self):
-        rows = [{"account_idx": 3, "bot_name": "x", "deployer": "custom.sh"}]
-        self.assertEqual(deploy.build_plan(rows, restart_infra=False)[1].env, {})
-
-    def test_same_engine_different_accounts_do_not_collide(self):
-        rows = [{"account_idx": i, "bot_name": "swing_bot",
-                 "deployer": "tradinebotte-cex/scripts/update_swing.sh"} for i in (1, 2, 3)]
-        plan = deploy.build_plan(rows, restart_infra=False)
-        self.assertEqual(len(plan) - 1, 3)          # none deduped away
-
-
 class TestScaleOut(unittest.TestCase):
     """Forward-looking: adding a bot of every family on every account (incl. account-1) must
     not silently drop any bot. account-1 trading bots are derived (only the bespoke INFRA
     scripts are skipped), and every (account, family) yields a distinct step — across BOTH bash
     preset engines AND native (deploy_actions.py) family steps, since the dedup key spans both."""
 
-    # bash engines (distinct account preset per account) …
+    # Hypothetical bash engines with an explicit per-account deploy_env preset — verifies the
+    # dedup key keeps same-engine/different-account steps apart even for bash rows. (All real
+    # trading deployers are native now; these fixtures just exercise the generic bash path.)
     _BASH = {
-        "live_bot":  ("tradinebotte-polymarket/scripts/update_standalone.sh", "TEST_STANDALONE_USER_IDX"),
-        "swing_bot": ("tradinebotte-cex/scripts/update_swing.sh",             "TEST_SWING_USER_IDX"),
-        "grid_bot":  ("tradinebotte-cex/scripts/deploy_grid_mexc.sh",         "TEST_GRID_MEXC_USER_IDX"),
+        "engine_a": ("some/scripts/engine_a.sh", "ENGINE_A_IDX"),
+        "engine_b": ("some/scripts/engine_b.sh", "ENGINE_B_IDX"),
+        "engine_c": ("some/scripts/engine_c.sh", "ENGINE_C_IDX"),
     }
     _NATIVE = "scripts/deploy_actions.py"
 
@@ -225,12 +199,12 @@ class TestScaleOut(unittest.TestCase):
         rows = [
             {"account_idx": 0, "bot_name": "account_bot", "kind": "bot",
              "deploy_script": "tradinebotte-polymarket/scripts/update_claude1.sh"},
-            {"account_idx": 0, "bot_name": "grid_bot", "kind": "bot",
-             "deployer": "tradinebotte-cex/scripts/deploy_grid_mexc.sh",
-             "deploy_env": {"TEST_GRID_MEXC_USER_IDX": "0"}},
+            {"account_idx": 0, "bot_name": "engine_bot", "kind": "bot",
+             "deployer": "some/scripts/engine_a.sh",
+             "deploy_env": {"ENGINE_A_IDX": "0"}},
         ]
         plan = deploy.build_plan(rows, restart_infra=False)
-        self.assertTrue(any(s.script.endswith("deploy_grid_mexc.sh") for s in plan),
+        self.assertTrue(any(s.script.endswith("engine_a.sh") for s in plan),
                         "account-1 trading bot was dropped from the derived plan")
 
     def test_bespoke_infra_scripts_are_skipped(self):
@@ -300,9 +274,9 @@ class TestNativeDispatch(unittest.TestCase):
         plan = deploy.build_plan(rows, restart_infra=False)
         self.assertEqual(len([s for s in plan if s.interpreter == "python"]), 2)
 
-    def test_bash_rows_unaffected_still_bash(self):
-        rows = [{"account_idx": 1, "bot_name": "swing", "kind": "bot",
-                 "deployer": "tradinebotte-cex/scripts/update_swing.sh"}]
+    def test_non_native_deployer_is_a_bash_step(self):
+        rows = [{"account_idx": 1, "bot_name": "engine", "kind": "bot",
+                 "deployer": "some/scripts/engine_a.sh"}]
         step = deploy.build_plan(rows, restart_infra=False)[1]
         self.assertEqual(step.interpreter, "bash")
         self.assertEqual(step.args, [])

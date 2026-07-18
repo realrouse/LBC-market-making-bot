@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import check_inventory as ci  # noqa: E402
 
-_GRID = "tradinebotte-cex/scripts/deploy_grid_mexc.sh"
+_GRID = "some/scripts/engine.sh"   # hypothetical bash deployer — collision-guard fixture
 
 
 class TestDeployPipeline(unittest.TestCase):

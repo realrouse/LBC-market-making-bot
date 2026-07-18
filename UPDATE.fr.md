@@ -87,32 +87,23 @@ Ce script copie en rsync le contenu de `tradinebotte-polymarket/` à plat dans l
 
 ---
 
-## Scénario 5 — Déploiement du compte swing
+## Scénario 5 — Déploiement d'une stratégie CEX / swing / grid / polymarket
 
-Pour le compte de déploiement dédié à la stratégie swing, utiliser le script de déploiement spécifique :
-
-```bash
-bash tradinebotte-cex/scripts/update_swing.sh
-```
-
-Ce script copie en rsync le moteur de stratégie swing et sa configuration vers le répertoire d'installation du compte swing, écrit son `config.json`, puis redémarre le bot — en préférant `systemctl --user restart tradinebotte-live.service` si le service user est actif ou activé, avec bascule automatique sur nohup sinon. L'étape de vérification utilise le filtrage `pgrep`/`/proc/$P/exe`, comme `update_standalone.sh`.
-
----
-
-## Scénario 6 — Déploiement d'une stratégie CEX
-
-Trois scripts couvrent les stratégies du sous-service CEX. Chacun copie en rsync le moteur et la configuration concernés, redémarre le bot via son fichier PID et vérifie le processus — le tout dans une seule session SSH.
+Tout bot de trading se déploie désormais via le déployeur natif piloté par l'inventaire — plus de script
+bash par stratégie. Déployer un bot (ou toute la flotte) via `deploy_all.sh`, qui dérive chaque étape de
+`inventory.toml` :
 
 ```bash
-# Bot de scalping (OBI Binance)
-bash tradinebotte-cex/scripts/deploy_scalping_claude4.sh
+# Un bot (filtrer sur son compte/label)
+bash tradinebotte-cex/scripts/deploy_all.sh --only "account-5 — binance-swing"
 
-# Bot d'accumulation BTC v1.5 (preset dans inventory.toml, dispatché par deploy.py)
-bash tradinebotte-cex/scripts/deploy_all.sh --only "account-4 — accumulation"
-
-# Stratégie swing
-bash tradinebotte-cex/scripts/update_swing.sh
+# Toute la flotte
+bash tradinebotte-cex/scripts/deploy_all.sh
 ```
+
+Chaque étape native rsync le code partagé, écrit un `config_<instance>.json` self-contained, rafraîchit
+tradinetools et redémarre l'unité systemd `--user`. Les clés/wallet viennent d'un fichier env 600 chargé par
+l'unité (`MEXC_API_KEY`, `POLY_PRIVATE_KEY`), jamais de config.json.
 
 ---
 

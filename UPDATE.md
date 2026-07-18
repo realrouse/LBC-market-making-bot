@@ -92,32 +92,22 @@ working from a dev machine without pushing to git first.
 
 ---
 
-## Scenario 5 — Deploying the swing strategy account
+## Scenario 5 — Deploying a CEX / swing / grid / polymarket strategy
 
-For the dedicated swing trading deployment account, use the swing-specific deploy script:
-
-```bash
-bash tradinebotte-cex/scripts/update_swing.sh
-```
-
-This script rsync-copies the swing strategy engine and config to the swing account's install directory, writes its `config.json`, then restarts the bot — preferring `systemctl --user restart tradinebotte-live.service` if the user service is active or enabled, falling back to nohup otherwise. Verify step uses `pgrep`/`/proc/$P/exe` filtering, matching the approach of `update_standalone.sh`.
-
----
-
-## Scenario 6 — Deploying a CEX strategy
-
-Three deploy scripts cover the CEX sub-service strategies. Each rsync-copies the relevant engine and config, restarts the running bot via its PID file, and verifies the process — all in a single SSH session.
+Every trading bot now deploys through the inventory-driven native deployer — no per-strategy bash
+script. Deploy one bot (or all) via `deploy_all.sh`, which derives each step from `inventory.toml`:
 
 ```bash
-# Scalping bot (Binance OBI)
-bash tradinebotte-cex/scripts/deploy_scalping_claude4.sh
+# One bot (match on its account/label)
+bash tradinebotte-cex/scripts/deploy_all.sh --only "account-5 — binance-swing"
 
-# BTC accumulation bot v1.5 (preset lives in inventory.toml, dispatched by deploy.py)
-bash tradinebotte-cex/scripts/deploy_all.sh --only "account-4 — accumulation"
-
-# Swing strategy
-bash tradinebotte-cex/scripts/update_swing.sh
+# The whole fleet
+bash tradinebotte-cex/scripts/deploy_all.sh
 ```
+
+Each native step rsyncs the shared code, writes a self-contained `config_<instance>.json`, refreshes
+tradinetools, and restarts the systemd `--user` unit. Keys/wallet come from a 600 env file loaded by the
+unit (`MEXC_API_KEY`, `POLY_PRIVATE_KEY`), never from config.json.
 
 ---
 

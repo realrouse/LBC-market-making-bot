@@ -50,29 +50,16 @@ STATUS_DIR = "tradinebotte-status/scripts"
 # account, incl. account-1, works without silently dropping it.
 _BESPOKE_SCRIPTS = {"update_claude1.sh", "setup_data_plane.sh", "deploy_status_service.sh"}
 
-# Each generic deployer resolves its target account from its own env var. deploy.py injects
-# it from the row's account_idx, so inventory rows need NOT repeat the index in deploy_env
-# (DRY, and a wrong index → wrong account becomes impossible: the account IS account_idx).
-# An explicit deploy_env value still wins (setdefault), for the rare non-account-idx target.
-# NB: accumulation + binance-grid are NOT here — they deploy natively (deployer=deploy_actions.py),
-# which takes --idx from account_idx directly, so they need no bash account-index env var.
-_DEPLOYER_IDX_VAR = {
-    "update_standalone.sh": "TEST_STANDALONE_USER_IDX",
-    "update_swing.sh": "TEST_SWING_USER_IDX",
-    "deploy_grid_mexc.sh": "TEST_GRID_MEXC_USER_IDX",
-}
+# Every trading bot deploys natively (deployer=scripts/deploy_actions.py, --idx from account_idx);
+# the last bash trading deployers (update_standalone / update_swing / deploy_grid_mexc) were retired
+# 2026-07-18. acct-1 infra stays on its bespoke scripts, handled by the account-1 block below (never
+# via _row_env). So there is no account-index injection left to do.
 
 
 def _row_env(row: dict) -> dict[str, str]:
-    """The deploy env for a row: explicit deploy_env + the auto-injected account-index var
-    (derived from account_idx unless deploy_env sets it). Used by both the plan builder and
-    check_inventory's collision guard so they agree on the post-injection env."""
-    env = {str(k): str(v) for k, v in (row.get("deploy_env") or {}).items()}
-    script = row.get("deployer") or row.get("deploy_script") or ""
-    idxvar = _DEPLOYER_IDX_VAR.get(os.path.basename(script))
-    if idxvar and row.get("account_idx") is not None:
-        env.setdefault(idxvar, str(row["account_idx"]))
-    return env
+    """The explicit deploy_env for a row (used by both the plan builder and check_inventory's
+    collision guard so they agree). No auto-injection: no bash trading deployer remains."""
+    return {str(k): str(v) for k, v in (row.get("deploy_env") or {}).items()}
 
 _C = {"y": "\033[1;33m", "g": "\033[0;32m", "r": "\033[0;31m", "b": "\033[1m", "n": "\033[0m"}
 
