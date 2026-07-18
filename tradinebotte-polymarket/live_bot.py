@@ -72,10 +72,7 @@ from pm_data import (
 )
 # pylint: enable=unused-import
 import bot_utils
-from tradinetools import (
-    heartbeat_loop, control_loop, Command, health_server,
-    write_reset_marker, consume_reset_marker, resolve_bot_id,
-)
+from tradinetools import infra_tasks, consume_reset_marker, resolve_bot_id
 from tradinetools.zmq import PORT_FEED, PORT_INDICATORS, PORT_IND_REG, default_ipc_addr
 
 # ─── STRATEGY DEFAULTS (module-level — tests reference these directly) ────────
@@ -1243,63 +1240,17 @@ async def main() -> None:
             if config.enable_snapshots:
                 state.last_write_ts = time.time()
 
-            _hb_task = asyncio.create_task(
-                heartbeat_loop(
-                    _hb_bot_name,
-                    config.install_dir,
-                    _hb_payload,
-                    mode=_hb_mode,
-                )
-            )
-
-            # Opt-in HTTP /health (no-op unless TRADINEBOTTE_HEALTH_PORT is set);
-            # reuses _hb_payload so the pulled view matches the pushed heartbeat.
-            _health_task = asyncio.create_task(
-                health_server(
-                    _hb_bot_name,
-                    config.install_dir,
-                    _hb_payload,
-                    mode=_hb_mode,
-                )
-            )
-
-            def _reset_handler(cmd_args: dict[str, Any]) -> dict[str, Any]:
-                """Sim-only: record a reset and hard-exit so systemd restarts cold,
-                wiping state and starting from `capital`. Guarded by control_loop."""
-                cap = float(cmd_args.get("capital", config.capital_start))
-                if cap <= 0:
-                    raise ValueError("capital must be > 0")
-                write_reset_marker(config.install_dir, _hb_bot_name, cap)
-                logger.warning("RESET requested via control plane — capital=$%.2f, "
-                               "exiting for systemd restart", cap)
-                # exit AFTER the reply is sent; non-zero trips Restart=on-failure.
-                asyncio.get_running_loop().call_later(0.5, os._exit, 1)
-                return {"capital": cap, "wiped_on_restart": True, "restart_in_s": 30}
-
-            _ctl_task = asyncio.create_task(
-                control_loop(
-                    _hb_bot_name,
-                    {"reset": Command(_reset_handler, destructive=True,
-                                      help="wipe state + restart with given --capital (sim only)")},
-                    mode=_hb_mode,
-                    is_live=_is_live,
-                )
-            )
             import importlib  # noqa: PLC0415
             _mod, _loop, _args, _warn = _resolve_run_loop(config)
             if _warn:
                 logger.warning("data_source=%s ignored for connector=%s — using direct WS",
                                config.data_source, config.connector)
-            try:
+            async with infra_tasks(_hb_bot_name, config.install_dir, _hb_payload,
+                                    mode=_hb_mode, is_live=_is_live,
+                                    capital_start=config.capital_start):
                 # Lazy import keeps a polymarket-only account from loading the CEX consumer.
                 _run_loop = getattr(importlib.import_module(_mod), _loop)
                 await _run_loop(*_args(state, config, session))
-            finally:
-                _hb_task.cancel()
-                _ctl_task.cancel()
-                _health_task.cancel()
-                await asyncio.gather(_hb_task, _ctl_task, _health_task,
-                                     return_exceptions=True)
     finally:
         conn.close()
 

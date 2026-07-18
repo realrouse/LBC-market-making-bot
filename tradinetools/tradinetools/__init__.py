@@ -1,6 +1,7 @@
 """tradinetools — shared utilities for the tradinebotte ecosystem."""
 
 import asyncio
+import contextlib
 import inspect
 import json
 import logging
@@ -539,3 +540,43 @@ def consume_reset_marker(
     os.remove(path)
     _ctl_logger.info("reset: state wiped, new starting capital=%s", capital)
     return float(capital) if capital is not None else None
+
+
+# ─── Host infra tasks (shared lifecycle) ─────────────────────────────────────
+
+@contextlib.asynccontextmanager
+async def infra_tasks(bot_id: str, install_dir: str, get_payload: Callable[[], dict],
+                      *, mode: str | None, is_live: bool, capital_start: float):
+    """Run a bot host's three background tasks — heartbeat, opt-in HTTP /health, and the
+    control plane (with the standard sim-only 'reset' command) — and cancel them cleanly on
+    exit. Factors out the identical setup+teardown that account_bot and live_bot both carried.
+
+    Usage:
+        async with infra_tasks(bot_id, cfg.install_dir, _hb_payload,
+                               mode=_mode, is_live=_is_live, capital_start=cfg.capital_start):
+            await _run(state)
+    """
+    def _reset_handler(cmd_args: dict) -> dict:
+        cap = float(cmd_args.get("capital", capital_start))
+        if cap <= 0:
+            raise ValueError("capital must be > 0")
+        write_reset_marker(install_dir, bot_id, cap)
+        _hb_logger.warning("RESET requested via control plane — capital=$%.2f, "
+                           "exiting for systemd restart", cap)
+        # exit AFTER the reply is sent; non-zero trips Restart=on-failure.
+        asyncio.get_running_loop().call_later(0.5, os._exit, 1)
+        return {"capital": cap, "wiped_on_restart": True, "restart_in_s": 30}
+
+    hb_task = asyncio.create_task(heartbeat_loop(bot_id, install_dir, get_payload, mode=mode))
+    health_task = asyncio.create_task(health_server(bot_id, install_dir, get_payload, mode=mode))
+    ctl_task = asyncio.create_task(control_loop(
+        bot_id,
+        {"reset": Command(_reset_handler, destructive=True,
+                          help="wipe state + restart with given --capital (sim only)")},
+        mode=mode, is_live=is_live))
+    try:
+        yield
+    finally:
+        for _t in (hb_task, ctl_task, health_task):
+            _t.cancel()
+        await asyncio.gather(hb_task, ctl_task, health_task, return_exceptions=True)

@@ -32,10 +32,7 @@ Message types consumed from feed.py:
 """
 import argparse, asyncio, fcntl, hashlib, logging, os, subprocess, sys, time
 import zmq, zmq.asyncio
-from tradinetools import (
-    heartbeat_loop, control_loop, Command, health_server,
-    write_reset_marker, consume_reset_marker, resolve_bot_id,
-)
+from tradinetools import infra_tasks, consume_reset_marker, resolve_bot_id
 from tradinetools.logging import setup_logger
 from tradinetools.zmq import make_req, make_sub, default_ipc_addr
 from tradinetools.schemas import MarketMessage
@@ -431,43 +428,10 @@ async def main() -> None:
             # never-recording restart ages to ⚠data instead of staying silently green.
             if config.enable_snapshots:
                 state.last_write_ts = time.time()
-            _hb_task = asyncio.create_task(
-                heartbeat_loop(_bot_id, config.install_dir, _hb_payload, mode=_hb_mode)
-            )
-            # Opt-in HTTP /health (no-op unless TRADINEBOTTE_HEALTH_PORT is set);
-            # reuses _hb_payload so the pulled view matches the pushed heartbeat.
-            _health_task = asyncio.create_task(
-                health_server(_bot_id, config.install_dir, _hb_payload, mode=_hb_mode)
-            )
-
-            def _reset_handler(cmd_args: dict) -> dict:
-                """Sim-only: record a reset and hard-exit so systemd restarts cold,
-                wiping state and starting from `capital`. Guarded by control_loop."""
-                cap = float(cmd_args.get("capital", config.capital_start))
-                if cap <= 0:
-                    raise ValueError("capital must be > 0")
-                write_reset_marker(config.install_dir, _bot_id, cap)
-                logger.warning("RESET requested via control plane — capital=$%.2f, "
-                               "exiting for systemd restart", cap)
-                asyncio.get_running_loop().call_later(0.5, os._exit, 1)
-                return {"capital": cap, "wiped_on_restart": True, "restart_in_s": 30}
-
-            _ctl_task = asyncio.create_task(
-                control_loop(
-                    _bot_id,
-                    {"reset": Command(_reset_handler, destructive=True,
-                                      help="wipe state + restart with given --capital (sim only)")},
-                    mode=_hb_mode, is_live=_is_live,
-                )
-            )
-            try:
+            async with infra_tasks(_bot_id, config.install_dir, _hb_payload,
+                                    mode=_hb_mode, is_live=_is_live,
+                                    capital_start=config.capital_start):
                 await _run(state)
-            finally:
-                _hb_task.cancel()
-                _ctl_task.cancel()
-                _health_task.cancel()
-                await asyncio.gather(_hb_task, _ctl_task, _health_task,
-                                     return_exceptions=True)
     finally:
         conn.close()
 
