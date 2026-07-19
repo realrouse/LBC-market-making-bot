@@ -130,7 +130,7 @@ echo "=== $(_t "Creating directories" "Création des répertoires") ==="
 mkdir -p "$INSTALL_DIR"
 
 echo "=== $(_t "Copying bot files" "Copie du bot") ==="
-for _f in live_bot.py api_polymarket.py bot_utils.py feed.py account_bot.py \
+for _f in live_bot.py api_polymarket.py bot_utils.py feed.py \
           pm_types.py pm_calendar.py pm_strategy.py pm_data.py; do
     cp "tradinebotte-polymarket/$_f" "$INSTALL_DIR/$_f"
 done

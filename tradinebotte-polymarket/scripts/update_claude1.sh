@@ -2,13 +2,12 @@
 # shellcheck disable=SC1090  # source "$CONF" path is determined at runtime
 # update_claude1.sh — Push a code update to the BTC 15M Polymarket account and verify services.
 #
-# This account is the fleet's data plane (NOT a standalone live_bot) — five systemd user services:
+# This account is the fleet's data plane (infra only, no trading bot) — four systemd user services:
 #   tradinebotte-indicators        — shared indicator pipeline
 #   tradinebotte-feed              — shared Polymarket WebSocket ZeroMQ broadcaster
 #   tradinebotte-feed5m            — the 5-minute-window feed variant (same feed.py)
 #   tradinebotte-cexfeed           — shared CEX book broadcaster (cex_feed.py, port 5563);
 #                                    DATA SOURCE for the real-money LBC accumulation bot
-#   tradinebotte-account-<user>    — account_bot subscribing to the feed
 #
 # Targets TEST_USERS[0] (15M Polymarket collector, tag=102467).
 # Retrieve live.db BEFORE any update if you plan to wipe the install.
@@ -21,8 +20,7 @@
 #   bash scripts/update_claude1.sh --restart-feed        # rsync + restart tradinebotte-feed
 #   bash scripts/update_claude1.sh --restart-feed5m      # rsync + restart tradinebotte-feed5m
 #   bash scripts/update_claude1.sh --restart-cexfeed     # rsync + restart tradinebotte-cexfeed (LBC bot's data source)
-#   bash scripts/update_claude1.sh --restart-account     # rsync + restart tradinebotte-account-<user>
-#   bash scripts/update_claude1.sh --restart-all-infra   # rsync + restart ALL FIVE infra services
+#   bash scripts/update_claude1.sh --restart-all-infra   # rsync + restart ALL FOUR infra services
 #
 # NOTE: the restart flags are the ONLY way version.stamp advances on this account — it is
 # written immediately before each restart, so a rsync-only run leaves it (correctly) showing
@@ -38,7 +36,6 @@ RESTART_INDICATORS=false
 RESTART_FEED=false
 RESTART_FEED5M=false
 RESTART_CEXFEED=false
-RESTART_ACCOUNT=false
 FORWARD_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -47,9 +44,8 @@ while [[ $# -gt 0 ]]; do
         --restart-feed)       RESTART_FEED=true ;;
         --restart-feed5m)     RESTART_FEED5M=true ;;
         --restart-cexfeed)    RESTART_CEXFEED=true ;;
-        --restart-account)    RESTART_ACCOUNT=true ;;
         --restart-all-infra)  RESTART_INDICATORS=true; RESTART_FEED=true
-                              RESTART_FEED5M=true; RESTART_CEXFEED=true; RESTART_ACCOUNT=true ;;
+                              RESTART_FEED5M=true; RESTART_CEXFEED=true ;;
         *) FORWARD_ARGS+=("$1") ;;
     esac
     shift
@@ -57,8 +53,7 @@ done
 
 # Any restart flag set → we are restarting infra services on this account.
 _ANY_RESTART=$([[ "$RESTART_INDICATORS" == "true" || "$RESTART_FEED" == "true" \
-    || "$RESTART_FEED5M" == "true" || "$RESTART_CEXFEED" == "true" \
-    || "$RESTART_ACCOUNT" == "true" ]] && echo true || echo false)
+    || "$RESTART_FEED5M" == "true" || "$RESTART_CEXFEED" == "true" ]] && echo true || echo false)
 
 # --restart-* flags imply --skip-restart (don't touch live_bot)
 # unless the caller explicitly passed --skip-restart themselves.
@@ -75,10 +70,9 @@ _verify_claude1_multiservice() {
     source "$CONF"
     local server="${TEST_SERVER:?}" port="${TEST_PORT:-22}"
     local c1_user="${TEST_USERS[0]}" c1_pass="${TEST_PASSWORDS[0]}"
-    local install_dir="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
 
     RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; NC='\033[0m'
-    echo -e "\n${BOLD}${YELLOW}═══ VERIFY ${c1_user} (indicators + feed + account_bot) ═══${NC}"
+    echo -e "\n${BOLD}${YELLOW}═══ VERIFY ${c1_user} (indicators + feed) ═══${NC}"
 
     local out
     out=$(SSHPASS="$c1_pass" /usr/bin/sshpass -e \
@@ -88,18 +82,16 @@ _verify_claude1_multiservice() {
         -p "$port" "${c1_user}@${server}" \
         "export XDG_RUNTIME_DIR=/run/user/\$(id -u)
          echo '=== services ==='
-         for svc in tradinebotte-indicators tradinebotte-feed tradinebotte-account-${c1_user}; do
+         for svc in tradinebotte-indicators tradinebotte-feed; do
              state=\$(systemctl --user is-active \"\$svc\" 2>/dev/null)
              pid=\$(systemctl --user show \"\$svc\" --property=MainPID --value 2>/dev/null)
              echo \"\$svc: \$state (PID=\$pid)\"
-         done
-         echo '=== account.log ==='
-         tail -15 ${install_dir}/account.log 2>/dev/null || echo '(no account.log)'" 2>&1)
+         done" 2>&1)
 
     echo "$out"
 
     local issues=0
-    for svc in tradinebotte-indicators tradinebotte-feed "tradinebotte-account-${c1_user}"; do
+    for svc in tradinebotte-indicators tradinebotte-feed; do
         if echo "$out" | grep "^${svc}:" | grep -qvE 'active'; then
             echo -e "${RED}  ✗ ${svc}: not running${NC}"
             (( issues++ )) || true
@@ -107,17 +99,6 @@ _verify_claude1_multiservice() {
             echo -e "${GREEN}  ✓ ${svc}: running${NC}"
         fi
     done
-
-    if echo "$out" | grep -qiE '\[ERROR\]|\[CRIT\]'; then
-        echo -e "${RED}  ✗ errors found in account.log${NC}"
-        (( issues++ )) || true
-    else
-        echo -e "${GREEN}  ✓ no errors in account.log${NC}"
-    fi
-
-    if echo "$out" | grep -q "Connected to feed"; then
-        echo -e "${GREEN}  ✓ account_bot connected to feed${NC}"
-    fi
 
     echo -e "\n${BOLD}${YELLOW}═══ RESULT ═══${NC}"
     if [[ $issues -eq 0 ]]; then
@@ -350,45 +331,14 @@ if [[ "$RESTART_CEXFEED" == "true" ]]; then
     _restart_service "tradinebotte-cexfeed.service" "CEXFEED" "PUB on|connected|ERROR"
 fi
 
-# ─── Restart tradinebotte-account-tradinebotte if requested ───────────────────
-if [[ "$RESTART_ACCOUNT" == "true" ]]; then
-    RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; NC='\033[0m'
-    LOCAL_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-    CONF="${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
-    source "$CONF"
-    _c1_user="${TEST_USERS[0]}"
-    _c1_pass="${TEST_PASSWORDS[0]}"
-    _server="${TEST_SERVER:?}"
-    _port="${TEST_PORT:-22}"
-    _install_dir="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
-    _ssh_opts="-p $_port -o StrictHostKeyChecking=yes -o PreferredAuthentications=password"
-
-    echo -e "\n${BOLD}${YELLOW}═══ RSYNC account_bot ═══${NC}"
-
-    # account_bot runs FLAT from $_install_dir/account_bot.py (uniform with every other
-    # account — the old ~/tradinebotte/bot/ subdir layout is gone). update_standalone (called
-    # above) already shipped live_bot.py + pm_*.py + botcore/ flat; setup_data_plane ships the
-    # feeds + botcore flat. So only account_bot.py needs syncing here (update_standalone
-    # excludes it).
-    SSHPASS="$_c1_pass" /usr/bin/sshpass -e \
-        rsync -az \
-        -e "ssh $_ssh_opts" \
-        "$LOCAL_REPO/tradinebotte-polymarket/account_bot.py" \
-        "$_c1_user@$_server:$_install_dir/account_bot.py" 2>&1 \
-        && echo -e "${GREEN}  ✓ account_bot.py synced (flat)${NC}" \
-        || { echo -e "${RED}  ✗ rsync account_bot.py failed${NC}"; exit 1; }
-
-    _restart_service "tradinebotte-account-${_c1_user}.service" "ACCOUNT BOT" "ACCOUNT BOT|Connected to feed|ERROR"
-fi
-
-# ─── Deploy journal: record the three account-1 infra units (both exit paths) ──
+# ─── Deploy journal: record the account-1 infra units (indicators + feed) (both exit paths) ──
 _C1_CONF="${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
 # shellcheck disable=SC1090
 source "$_C1_CONF"
 _c1_acct="${TEST_USERS[0]}"
 _c1_mode=$([[ "$_ANY_RESTART" == "true" ]] && echo restart || echo rsync)
 _c1_result=$([[ "${UPDATE_EXIT:-0}" -eq 0 ]] && echo OK || echo FAILED)
-for _b in indicators feed account_bot; do
+for _b in indicators feed; do
     tbnt_record_deploy "$_c1_acct" "$_b" "$_c1_result" "$_c1_mode"
 done
 
