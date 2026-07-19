@@ -27,7 +27,6 @@ Read each of these files and extract every CLI flag/option:
 - `scripts/run_tests.sh`
 
 **Exclude from audit** (internal developer/test scripts, intentionally undocumented):
-- `scripts/test_all_accounts.sh`
 - `scripts/test_multibot_deploy.sh`
 
 ## Documentation files to check

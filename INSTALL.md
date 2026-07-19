@@ -524,7 +524,7 @@ is online (`After=network-online.target`).
 
 > **Multi-bot (Option B)**: use `tradinebotte-polymarket/scripts/install_feed_service.sh`, `tradinebotte-indicators/scripts/install_indicators_service.sh` (optional shared indicators), and `tradinebotte-polymarket/scripts/install_account_service.sh` instead. See [docs/multi.md](docs/multi.md).
 >
-> **Multi-account server deployments** use `~/.config/systemd/user/` units (`systemctl --user`) instead of system units — no sudo required at deploy time. See `tradinebotte-polymarket/scripts/migrate_to_user_services.sh` and `tradinebotte-cex/scripts/migrate_cex_bots.sh`.
+> **Multi-account server deployments** use `~/.config/systemd/user/` units (`systemctl --user`) instead of system units — no sudo required at deploy time. Deploy them with `scripts/deploy.py` (or `bash tradinebotte-cex/scripts/deploy_all.sh`), which installs every unit natively.
 
 **Flags:**
 - *(no flag)* — normal mode: log writes are asynchronous (daemon thread, never blocks the event loop)

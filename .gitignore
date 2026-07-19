@@ -39,6 +39,10 @@ CLAUDE.md
 # Integration test configuration — contains server addresses and passwords
 scripts/test_multibot.conf
 
+# Generated bot identities — runtime state, one per deployed instance, never commit
+# (a committed bot_id would be adopted by every account and collide across the fleet)
+bot_id_*
+
 # Local notes — may contain infrastructure details (server names, IPs), never commit
 *.txt
 !docs/*.txt
