@@ -19,7 +19,7 @@ DEFAULT_INVENTORY = os.path.join(os.path.dirname(_HERE), "inventory.toml")
 # (indicators is ubiquitous shared infra and would just add noise). Derived, so adding a
 # bot to inventory updates the labels automatically — no hand-curated per-account string.
 _TAG = {
-    "live_bot": "poly", "account_bot": "poly", "feed": "poly", "feed5m": "poly",
+    "live_bot": "poly", "feed": "poly", "feed5m": "poly",
     "accumulation_bot": "accum", "grid_bot": "grid", "swing_bot": "swing",
     "orderbook_bot": "ob", "cex_feed": "cex", "status_collector": "status",
     "indicators": "",

@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""deploy_actions.py — Phase B of the deploy-engine refactor (docs/deploy-engine-design.md).
+"""deploy_actions.py — the native deploy engine (docs/deploy-engine-design.md).
 
 The native action library: small, idempotent, typed steps that a bot deploys through,
 driven by DECLARATIVE inventory fields instead of a ~300-line per-family bash script. It is
-now the pipeline's deployer for the single-tree families (accumulation + binance grid — the
-old deploy_accumulation.sh / deploy_grid_binance.sh were retired), and parallels the remaining
-bash deploy_grid_mexc.sh, with the design's improvements:
+now the pipeline's deployer for EVERY trading family (grid, binance-grid, swing, accumulation,
+polymarket — all the per-family bash deployers were retired), with the design's improvements:
 
   * verify via the service's systemd **MainPID** (no `pgrep -f` self-match),
   * `record_deploy` under the generated **bot_id** (no hardcoded name → no journal drift),
@@ -78,16 +77,15 @@ _BASE_SYNC: list[tuple[str, str, list[str]]] = [
 ]
 
 # Per-family deploy spec — the declarative data that replaces each ~300-line bash engine.
-#   config_mode "write" = overwrite config with {strategy, data_source[, feed_addr]}. EVERY family is
-#   "write" now: keys/wallet live in a 600 env file loaded by the systemd unit (MEXC_API_KEY for CEX,
-#   POLY_PRIVATE_KEY for polymarket — read via env fallback in live_bot.make_config), NEVER in config.json.
-#   So config is self-contained and single-tree migration carries no wallet (the old poly "merge" mode,
-#   which kept a wallet in config.json, is gone — it was the last thing blocking poly from converging).
+#   Every family writes a self-contained config = {strategy, data_source[, feed_addr]}. Keys/wallet
+#   live in a 600 env file loaded by the systemd unit (MEXC_API_KEY for CEX, POLY_PRIVATE_KEY for
+#   polymarket — read via env fallback in live_bot.make_config), NEVER in config.json — so a deploy
+#   overwrites the config cleanly and single-tree migration carries no wallet.
 #   data_suffix = data dir relative to install_dir ("" = same dir; "-accum" = ~/tradinebotte-accum).
 FAMILIES: dict[str, dict] = {
     "grid":         dict(role="grid", unit="tradinebotte-live.service",
                          template="tradinebotte-live.service", data_suffix="",
-                         connector="mexc", config_mode="write",
+                         connector="mexc",
                          data_source="cex_feed", feed_addr="tcp://127.0.0.1:5563"),
     # Binance grid: its OWN unit (tradinebotte-grid.service) + legacy data dir ~/tradinebotte-grid,
     # so it cohabits with the account's poly (live.service) + accum (accumulation.service) without
@@ -96,15 +94,15 @@ FAMILIES: dict[str, dict] = {
     # so config_grid.json / live_grid.db never collide across the two grid families in one tree.
     "grid_binance": dict(role="grid", unit="tradinebotte-grid.service",
                          template="tradinebotte-grid.service", data_suffix="-grid",
-                         connector="binance", config_mode="write",
+                         connector="binance",
                          data_source="cex_feed", feed_addr="tcp://127.0.0.1:5563"),
     "swing":        dict(role="swing", unit="tradinebotte-live.service",
                          template="tradinebotte-live.service", data_suffix="",
-                         connector="binance", config_mode="write",
+                         connector="binance",
                          data_source="cex_feed", feed_addr="tcp://127.0.0.1:5563"),
     "accumulation": dict(role="accumulation", unit="tradinebotte-accumulation.service",
                          template="tradinebotte-accumulation.service", data_suffix="-accum",
-                         connector="mexc", config_mode="write",
+                         connector="mexc",
                          data_source="indicators", feed_addr=None,
                          # legacy accum DB is live_accum.db (not live.db) — see live_bot make_config;
                          # the P4 migration renames it to live_accumulation.db under single-tree.
@@ -113,7 +111,7 @@ FAMILIES: dict[str, dict] = {
     # loaded by the unit), not config.json — so poly converges to single-tree natively (no merge gap).
     "polymarket":   dict(role="threshold", unit="tradinebotte-live.service",
                          template="tradinebotte-live.service", data_suffix="",
-                         connector="polymarket", config_mode="write",
+                         connector="polymarket",
                          data_source="feed", feed_addr="tcp://127.0.0.1:5557"),
 }
 
@@ -163,7 +161,7 @@ INFRA: dict[str, dict] = {
 
 # bot_type → native deploy target, as (kind, target) with kind ∈ {"family","infra"}. This is the
 # Phase-E bridge that lets the engine dispatch an inventory row to deploy_family/deploy_infra instead
-# of a bash script. Ordered: the most specific prefix wins (polymarket-multibot before polymarket*;
+# of a bash script. Ordered: the most specific prefix wins (cex-grid-binance before cex-grid;
 # infra-feed-15m/5m before any generic "feed"). Returns None for an unknown bot_type (check_inventory
 # flags it, and the engine falls back to the row's bash deployer — coexistence, not a hard failure).
 _NATIVE_TARGET_RULES: list[tuple[str, tuple[str, str]]] = [
@@ -267,20 +265,11 @@ def act_sync(host: Host, install_dir: str, template: str) -> bool:
     return ok and rc == 0
 
 
-def act_config(host: Host, data_dir: str, config: dict, mode: str = "write",
+def act_config(host: Host, data_dir: str, config: dict,
                config_name: str = "config.json") -> bool:
     """Write the bot's config to {data_dir}/{config_name}. config_name is 'config.json' on the
-    legacy layout and 'config_<instance>.json' under single-tree (matches live_bot.instance_paths)."""
-    if mode == "merge":
-        # Preserve an existing config (e.g. the Polymarket wallet setup); set only the
-        # given keys. Run via python heredoc so quoting/tilde are handled in-process.
-        py = (f"import json,os\n"
-              f"p=os.path.expanduser('{data_dir}/{config_name}')\n"
-              f"c=json.load(open(p)) if os.path.exists(p) else {{}}\n"
-              f"c.update({json.dumps(config)})\n"
-              f"json.dump(c,open(p,'w'),indent=2); print('cfg-merged')")
-        r = host.ssh(f"$HOME/tradinebotte/.venv/bin/python3 - <<'PYEOF'\n{py}\nPYEOF")
-        return "cfg-merged" in r.stdout
+    legacy layout and 'config_<instance>.json' under single-tree (matches live_bot.instance_paths).
+    Always a full overwrite: config holds no secret (keys/wallet come from the unit's env)."""
     body = json.dumps(config, indent=4)
     r = host.ssh(f"mkdir -p {_rp(data_dir)} && cat > {_rp(data_dir)}/{config_name} <<'EOJSON'\n{body}\nEOJSON\necho ok")
     return "ok" in r.stdout
@@ -470,8 +459,8 @@ def deploy_family(host: Host, family: str, *, install_dir: str, strategy: str = 
         if spec["feed_addr"]:
             # test_ports: consumer points at the offset producer (grid/swing 5563→5573, poly 5557→5567)
             cfg["feed_addr"] = _offset_addr(spec["feed_addr"], TEST_PORT_OFFSET) if test_ports else spec["feed_addr"]
-        print(_c("y", f"▶ {label}: config ({spec['config_mode']})"))
-        assert act_config(host, data_dir, cfg, spec["config_mode"], config_name), "config failed"
+        print(_c("y", f"▶ {label}: config (write)"))
+        assert act_config(host, data_dir, cfg, config_name), "config failed"
         print(_c("y", f"▶ {label}: deps+tradinetools"))
         assert act_deps_and_tradinetools(host, install_dir), "tradinetools import failed"
         if single_tree:
@@ -514,7 +503,7 @@ def deploy_infra(host: Host, service: str, *, install_dir: str = "~/tradinebotte
                  verify_only: bool = False, test_ports: bool = False,
                  skip_restart: bool = False) -> int:
     spec = INFRA[service]
-    unit = spec["unit"].replace("{account}", host.user)   # account_bot unit is per-user
+    unit = spec["unit"].replace("{account}", host.user)   # {account} → OS user for any per-user unit
     data_dir = spec["data_dir"]
     label = f"{host.user}/{service}"
     if not verify_only:
@@ -547,7 +536,7 @@ def main() -> int:
     ap.add_argument("target", choices=list(FAMILIES) + list(INFRA),
                     help="trading family (grid/swing/accumulation/polymarket) or infra service")
     ap.add_argument("--idx", type=int, required=True, help="account index in TEST_USERS")
-    ap.add_argument("--strategy", default="", help="strategy JSON (write families; ignored for polymarket merge)")
+    ap.add_argument("--strategy", default="", help="strategy JSON (required for every trading family)")
     ap.add_argument("--dir", default="~/tradinebotte", help="install (code) dir")
     ap.add_argument("--verify-only", action="store_true")
     ap.add_argument("--skip-restart", action="store_true",
@@ -589,7 +578,7 @@ def main() -> int:
             return 2
         return deploy_infra(host, a.target, install_dir=a.dir, verify_only=a.verify_only,
                             test_ports=test_ports, skip_restart=a.skip_restart)
-    if FAMILIES[a.target]["config_mode"] == "write" and not a.strategy:
+    if not a.strategy:   # every family writes a self-contained config, so it needs a strategy
         print(f"--strategy is required for family {a.target!r}", file=sys.stderr); return 2
     single_tree = a.single_tree or a.migrate   # --migrate implies single-tree
     return deploy_family(host, a.target, install_dir=a.dir, strategy=a.strategy,

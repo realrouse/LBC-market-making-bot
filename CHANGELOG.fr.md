@@ -6,6 +6,21 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
+## [Non publié]
+
+### Modifié
+- **Le déploiement est désormais uniformément natif single-tree pour tous les bots de trading.** Tous les bots (polymarket, accumulation, grid, swing) se déploient via l'unique moteur déclaratif (`scripts/deploy_actions.py`, dispatché depuis `inventory.toml` par `scripts/deploy.py`), chacun dans l'arbre partagé `~/tradinebotte` sous des noms par instance (`config_<role>.json`, `live_<role>.db`, un drop-in systemd single-tree). Les derniers déployeurs bash par famille (`update_swing.sh`, `deploy_grid_mexc.sh`) ont été retirés ; déployer un bot ou toute la flotte avec `bash tradinebotte-cex/scripts/deploy_all.sh [--only "<compte> — <label>"]`.
+- **`tradinetools` est importé depuis la source via un `.pth`, jamais une copie.** La bibliothèque partagée était copiée dans le virtualenv de chaque compte, où elle dérivait silencieusement de la source et imposait un rituel « rafraîchir avant restart sinon crashloop ». Elle est maintenant sur le chemin de l'interpréteur via un simple `.pth` pointant vers la source — un rsync de la source est instantanément actif, sans copie à périmer ni dist-info cassant les restarts.
+- **Les bots Polymarket lisent leur wallet depuis une variable d'environnement, pas `config.json`.** Comme les clés d'exchange des bots CEX (`MEXC_API_KEY`), le wallet Polymarket se lit désormais depuis `POLY_PRIVATE_KEY` (un fichier env 0600 chargé par l'unité systemd), si bien que la config d'un bot est self-contained et que son déploiement l'écrase proprement — ce qui a permis à polymarket de rejoindre le déploiement single-tree uniforme.
+
+### Ajouté
+- **`scripts/transfer_bot.py`** — déplacer un bot de trading d'un compte à un autre : il transporte l'état et l'identité du bot, le redéploie en natif sur la cible, le retire de la source, et réconcilie la base d'état partagée pour que le bot n'apparaisse que sur un seul compte. Pour rééquilibrer les comptes ou vider un compte jusqu'aux seuls services d'infrastructure.
+
+### Supprimé
+- **Le point d'entrée multi-bot `account_bot` et son chemin de déploiement.** L'« account bot » historique colocalisé avec le feed — le premier bot du projet — est supplanté par les bots natifs standalone. Lui, ses templates systemd et scripts de déploiement, et le test d'intégration multi-bot obsolète ont été retirés ; le compte-1 ne fait plus tourner que l'infrastructure (feeds, indicateurs, collecteur de statut).
+
+---
+
 ## [0.89.1] — 2026-07-02
 
 ### Documentation

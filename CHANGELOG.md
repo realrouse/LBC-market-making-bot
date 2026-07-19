@@ -6,6 +6,21 @@ All notable changes to this project are documented here.
 
 ---
 
+## [Unreleased]
+
+### Changed
+- **Deployment is now uniformly native single-tree for every trading bot.** All trading bots (polymarket, accumulation, grid, swing) deploy through the one declarative engine (`scripts/deploy_actions.py`, dispatched from `inventory.toml` by `scripts/deploy.py`), each living in the shared `~/tradinebotte` tree under per-instance names (`config_<role>.json`, `live_<role>.db`, a single-tree systemd drop-in). The last per-family bash deployers (`update_swing.sh`, `deploy_grid_mexc.sh`) were retired; deploy one bot or the whole fleet with `bash tradinebotte-cex/scripts/deploy_all.sh [--only "<account> — <label>"]`.
+- **`tradinetools` is imported from source via a path `.pth`, never a vendored copy.** The shared library used to be copied into each account's virtualenv, where it silently drifted from source and forced a "refresh before restart or it crashloops" ritual. It now sits on the interpreter path via a plain `.pth` pointing at the source tree — an rsync of the source is instantly live, with no copy to go stale and no dist-info to break restarts.
+- **Polymarket bots read their wallet from an environment variable, not `config.json`.** Like the CEX bots' exchange keys (`MEXC_API_KEY`), the Polymarket wallet is now read from `POLY_PRIVATE_KEY` (a 0600 env file loaded by the systemd unit), so a bot's config is self-contained and its deploy overwrites it cleanly — which is what let polymarket join the uniform single-tree deploy.
+
+### Added
+- **`scripts/transfer_bot.py`** — move a trading bot from one account to another: it carries the bot's state and identity, redeploys it natively on the target, retires it on the source, and reconciles the shared status database so the bot shows on exactly one account. For rebalancing accounts or emptying one down to infrastructure services only.
+
+### Removed
+- **The `account_bot` multi-bot entrypoint and its deploy path.** The original feed-colocated "account bot" — the project's first bot — is superseded by the standalone native bots. It, its systemd templates and deploy scripts, and the obsolete multi-bot integration test were removed; account-1 now runs infrastructure only (feeds, indicators, status collector).
+
+---
+
 ## [0.89.1] — 2026-07-02
 
 ### Documentation

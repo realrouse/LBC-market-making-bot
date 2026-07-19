@@ -7,9 +7,8 @@ Replaces the hardcoded per-account `run_step` list in
 duplicate of the topology. Behaviour is otherwise identical to deploy_all.sh:
 
   * Sequential, one account at a time (never parallel — same host).
-  * Account-1 stays a bespoke, order-critical block (feeds restarted exactly once,
-    BEFORE account_bot; rsync-only unless --restart-infra) — kept as a special case in
-    Phase 1 (see docs/audit-and-inventory-deploy-plan.md open question #3).
+  * Account-1 stays a bespoke, order-critical block (feeds restarted exactly once;
+    rsync-only unless --restart-infra) — acct-1 is infra only (feeds/indicators/collector).
   * Accounts 2–6 run each inventory row's `deploy_script`, in file order (which already
     matches the current deploy order), deduped, with flags forwarded.
 
@@ -39,8 +38,8 @@ from dataclasses import dataclass, field
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INVENTORY = os.path.join(REPO, "inventory.toml")
 
-# Account-1 (idx 0) INFRA is order-critical (feeds before account_bot) — not naively
-# derivable, so it stays a hardcoded block mirroring deploy_all.sh.
+# Account-1 (idx 0) is infra only and order-critical (feeds/indicators/collector) — not naively
+# derivable, so it stays a hardcoded block.
 PM = "tradinebotte-polymarket/scripts"
 STATUS_DIR = "tradinebotte-status/scripts"
 
@@ -81,9 +80,9 @@ class Step:
 # ── Native (single-tree) dispatch ────────────────────────────────────────────
 # A row deploys through the native declarative engine (scripts/deploy_actions.py) instead of
 # a bash deployer iff its `deployer` IS deploy_actions.py AND its bot_type resolves to a native
-# family target. This is EXPLICIT (keyed on the deployer path, not derived from bot_type) so the
-# un-migrated primaries (poly/swing/mexc-grid), which have native family targets too, stay on
-# their bash deployers until they are individually migrated.
+# family target. Keyed on the deployer path (not derived from bot_type) so an acct-1 infra row on
+# its bespoke deploy_script is never mistaken for a native family step. Every trading bot is native
+# single-tree now; only acct-1 infra keeps a bespoke bash deployer.
 _NATIVE_DEPLOYER = "deploy_actions.py"
 _DEPLOY_ACTIONS = None
 
@@ -164,12 +163,11 @@ def build_plan(rows: list[dict], *, restart_infra: bool) -> list[Step]:
                          f"{PM}/update_claude1.sh", ["--skip-restart"]))
 
     # ── Accounts 2..N: derived from inventory, file order ───────────────────────────
-    # A row is deployed by `deployer` + `deploy_env` (Phase 2: generic engine + preset), by the
-    # native single-tree engine (deployer=deploy_actions.py → a python step), or, for
-    # not-yet-migrated rows, by a standalone `deploy_script`. Dedup on the full step identity
-    # (_step_key: interpreter+script+env+args) — several rows share one generic engine
-    # (update_standalone.sh) with different presets, and two native rows can share deploy_actions.py
-    # with the same account index but different family/strategy, so deduping on script alone (or
+    # A trading row is deployed by the native single-tree engine (deployer=deploy_actions.py → a
+    # python step); the code still also supports a bespoke `deploy_script` (acct-1 infra). Dedup on
+    # the full step identity (_step_key: interpreter+script+env+args) — two native rows can share
+    # deploy_actions.py with the same account index but different family/strategy (idx-2 accumulation
+    # + binance-grid), so deduping on script alone (or
     # script+env) would wrongly collapse them.
     seen: set[tuple] = set()
     for row in rows:

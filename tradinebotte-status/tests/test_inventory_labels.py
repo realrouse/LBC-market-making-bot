@@ -20,7 +20,7 @@ class TestAccountLabels(unittest.TestCase):
     def test_derives_bracket_from_bots_ordered_and_deduped(self):
         rows = [
             {"account_idx": 0, "bot_name": "indicators"},      # "" → omitted
-            {"account_idx": 0, "bot_name": "account_bot"},     # poly
+            {"account_idx": 0, "bot_name": "feed"},            # poly (acct-1 is infra: the feed carries the poly tag)
             {"account_idx": 0, "bot_name": "cex_feed"},        # cex
             {"account_idx": 0, "bot_name": "status_collector"},  # status
             {"account_idx": 1, "bot_name": "live_bot"},        # poly

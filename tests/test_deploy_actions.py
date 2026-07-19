@@ -106,20 +106,14 @@ class TestActConfigFilename(unittest.TestCase):
     def test_write_uses_config_name(self):
         # _rp maps ~ → $HOME, so the remote path is $HOME/tradinebotte/config_grid.json
         h = _FakeHost(stdout="ok")
-        self.assertTrue(da.act_config(h, "~/tradinebotte", {"a": 1}, "write", "config_grid.json"))
+        self.assertTrue(da.act_config(h, "~/tradinebotte", {"a": 1}, "config_grid.json"))
         self.assertIn("$HOME/tradinebotte/config_grid.json", h.scripts[0])
         self.assertNotIn("config.json", h.scripts[0])  # not the fixed name
 
     def test_write_defaults_to_legacy_name(self):
         h = _FakeHost(stdout="ok")
-        self.assertTrue(da.act_config(h, "~/tradinebotte", {"a": 1}, "write"))
+        self.assertTrue(da.act_config(h, "~/tradinebotte", {"a": 1}))
         self.assertIn("$HOME/tradinebotte/config.json", h.scripts[0])
-
-    def test_merge_uses_config_name(self):
-        h = _FakeHost(stdout="cfg-merged")
-        self.assertTrue(da.act_config(h, "~/tradinebotte", {"data_source": "feed"}, "merge",
-                                      "config_threshold.json"))
-        self.assertIn("config_threshold.json", h.scripts[0])
 
 
 class TestSingleTreeDropin(unittest.TestCase):
