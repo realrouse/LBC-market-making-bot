@@ -4,9 +4,7 @@
 # Prerequisites: ~/.tradinebotte-test.conf configured (see test_multibot.conf.example)
 #
 # Usage:
-#   bash scripts/run_integration_tests.sh              # all tests
-#   bash scripts/run_integration_tests.sh --standalone # standalone test only
-#   bash scripts/run_integration_tests.sh --multibot   # multibot test only
+#   bash scripts/run_integration_tests.sh              # the clean-install native-deploy test
 #
 # These tests require SSH access to a remote test server.
 # For unit tests (no SSH): bash scripts/run_tests.sh
@@ -16,15 +14,10 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; NC='\033[0m'
 
-RUN_STANDALONE=true
-RUN_MULTIBOT=true
-
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --standalone) RUN_MULTIBOT=false ;;
-        --multibot)   RUN_STANDALONE=false ;;
         -h|--help)
-            grep '^#' "${BASH_SOURCE[0]}" | head -15 | sed 's/^# \?//'
+            grep '^#' "${BASH_SOURCE[0]}" | head -12 | sed 's/^# \?//'
             exit 0 ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
@@ -50,11 +43,7 @@ run_test() {
 echo -e "${BOLD}tradinebotte — SSH Integration Tests${NC}"
 echo -e "Config: ${TEST_MULTIBOT_CONF:-$HOME/.tradinebotte-test.conf}"
 
-[[ "$RUN_STANDALONE" == "true" ]] && \
-    run_test "Standalone multi-user (Option A)" "$(dirname "$SCRIPT_DIR")/tradinebotte-polymarket/scripts/test_standalone_deploy.sh"
-
-[[ "$RUN_MULTIBOT" == "true" ]] && \
-    run_test "Multi-bot ZeroMQ (Option B)" "$SCRIPT_DIR/test_multibot_deploy.sh"
+run_test "Native single-tree clean-install deploy" "$(dirname "$SCRIPT_DIR")/tradinebotte-polymarket/scripts/test_standalone_deploy.sh"
 
 ELAPSED=$(( $(date +%s) - START_TS ))
 echo -e "\n${BOLD}${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
