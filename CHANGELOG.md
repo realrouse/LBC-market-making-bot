@@ -16,6 +16,10 @@ All notable changes to this project are documented here.
 ### Added
 - **`scripts/transfer_bot.py`** — move a trading bot from one account to another: it carries the bot's state and identity, redeploys it natively on the target, retires it on the source, and reconciles the shared status database so the bot shows on exactly one account. For rebalancing accounts or emptying one down to infrastructure services only.
 
+### Fixed
+- **The fleet status report no longer skips the real-money account.** `bot_status.sh` iterated a hard-coded range of six accounts when listing per-account service states, so an account added later was never polled — its services could all be down and the report would still conclude "All systems nominal". The account list is now derived from `inventory.toml`, the same single source of truth already used for the labels, and an account present in the inventory but absent from the local credentials file is reported instead of silently skipped.
+- **The fleet status report no longer raises a false alarm while the feed watchdog runs.** The watchdog is a one-shot service triggered by a timer; a report generated while it happened to be running counted it as a failed service and exited non-zero on a perfectly healthy fleet. Services in a transient state are now shown distinctly and excluded from the failure count, while genuinely failed or stopped services are still flagged.
+
 ### Removed
 - **The `account_bot` multi-bot entrypoint and its deploy path.** The original feed-colocated "account bot" — the project's first bot — is superseded by the standalone native bots. It, its systemd templates and deploy scripts, and the obsolete multi-bot integration test were removed; account-1 now runs infrastructure only (feeds, indicators, status collector).
 

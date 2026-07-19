@@ -16,6 +16,10 @@ Toutes les modifications notables de ce projet sont documentées ici.
 ### Ajouté
 - **`scripts/transfer_bot.py`** — déplacer un bot de trading d'un compte à un autre : il transporte l'état et l'identité du bot, le redéploie en natif sur la cible, le retire de la source, et réconcilie la base d'état partagée pour que le bot n'apparaisse que sur un seul compte. Pour rééquilibrer les comptes ou vider un compte jusqu'aux seuls services d'infrastructure.
 
+### Corrigé
+- **Le rapport d'état de la flotte n'ignore plus le compte en argent réel.** `bot_status.sh` parcourait une liste de six comptes codée en dur pour établir l'état des services par compte : un compte ajouté par la suite n'était jamais interrogé — tous ses services pouvaient être à l'arrêt, le rapport concluait malgré tout « All systems nominal ». La liste des comptes est désormais dérivée d'`inventory.toml`, la même source unique de vérité que celle déjà utilisée pour les libellés, et un compte présent dans l'inventaire mais absent du fichier d'identifiants local est signalé au lieu d'être ignoré silencieusement.
+- **Le rapport d'état de la flotte ne déclenche plus de fausse alerte pendant l'exécution du watchdog de feed.** Ce watchdog est un service one-shot déclenché par un timer ; un rapport généré pendant qu'il tournait le comptait comme un service en panne et sortait en erreur sur une flotte pourtant saine. Les services dans un état transitoire sont maintenant affichés distinctement et exclus du décompte des pannes, tandis que les services réellement en échec ou arrêtés restent signalés.
+
 ### Supprimé
 - **Le point d'entrée multi-bot `account_bot` et son chemin de déploiement.** L'« account bot » historique colocalisé avec le feed — le premier bot du projet — est supplanté par les bots natifs standalone. Lui, ses templates systemd et scripts de déploiement, et le test d'intégration multi-bot obsolète ont été retirés ; le compte-1 ne fait plus tourner que l'infrastructure (feeds, indicateurs, collecteur de statut).
 

@@ -111,20 +111,45 @@ fi
 
 echo -e "\n${BOLD}${YELLOW}─── SERVICES ───${NC}"
 
-# Account labels are DERIVED from inventory.toml (single source of truth) via the shared
-# helper; fall back to plain acct-N if the helper/inventory/python is unavailable.
+# Account labels AND the set of accounts to poll are DERIVED from inventory.toml (single
+# source of truth) via the shared helper; fall back to plain acct-N over 0..5 if the
+# helper/inventory/python is unavailable.
+# The index list MUST come from the inventory, never a hard-coded range: it used to be
+# `for IDX in 0 1 2 3 4 5`, which silently skipped account_idx 7 — the real-money account —
+# so its services were never polled yet the report still printed "All systems nominal".
 _BS_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 _BS_PY="$_BS_REPO/.venv/bin/python3"; [ -x "$_BS_PY" ] || _BS_PY=python3
 mapfile -t LABELS < <(
     "$_BS_PY" -c "import sys; sys.path.insert(0, '$_BS_REPO/tradinebotte-status'); \
 import inventory_labels as i; print('\n'.join(i.account_labels(i.load_rows())))" 2>/dev/null
 )
-[ "${#LABELS[@]}" -gt 0 ] || LABELS=("acct-1" "acct-2" "acct-3" "acct-4" "acct-5" "acct-6")
+mapfile -t IDXS < <(
+    "$_BS_PY" -c "import sys; sys.path.insert(0, '$_BS_REPO/tradinebotte-status'); \
+import inventory_labels as i; print('\n'.join(str(x) for x in i.active_account_idxs(i.load_rows())))" 2>/dev/null
+)
+if [ "${#IDXS[@]}" -eq 0 ]; then
+    # Degraded path (no venv python, missing/malformed inventory.toml). Derive the indexes
+    # from TEST_USERS rather than hard-coding a range — a literal 0..5 here would silently
+    # skip the real-money account all over again, and precisely when we know least about the
+    # fleet. Only the ephemeral clean-install test account is excluded.
+    IDXS=()
+    for _i in "${!ALL_USERS[@]}"; do
+        [ "$_i" -ne "${TEST_STANDALONE_USER_IDX:-6}" ] && IDXS+=("$_i")
+    done
+fi
 
-for IDX in 0 1 2 3 4 5; do
-    USER="${ALL_USERS[$IDX]}"
-    PASS="${ALL_PASSWORDS[$IDX]}"
-    TAG="${LABELS[$IDX]}"
+for IDX in "${IDXS[@]}"; do
+    USER="${ALL_USERS[$IDX]:-}"
+    PASS="${ALL_PASSWORDS[$IDX]:-}"
+    TAG="${LABELS[$IDX]:-acct-$((IDX + 1))}"
+
+    # inventory.toml lists an account the local credentials file does not — report it
+    # rather than SSHing to an empty username (which would hang/fail opaquely).
+    if [ -z "$USER" ]; then
+        echo -e "  ${RED}✗ $TAG: account_idx $IDX missing from TEST_USERS in $CONF${NC}"
+        ISSUES=$((ISSUES + 1))
+        continue
+    fi
 
     ROW=$(_ssh "$USER" "$PASS" "
         export XDG_RUNTIME_DIR=/run/user/\$(id -u)
@@ -133,9 +158,19 @@ for IDX in 0 1 2 3 4 5; do
         systemctl --user list-units 'tradinebotte-*' --no-legend --plain 2>/dev/null \
         | while read -r UNIT _L STATE _S _REST; do
             SVC=\$(printf '%s' \"\$UNIT\" | sed 's/tradinebotte-//;s/\\.service\$//')
-            [ \"\$STATE\" = 'active' ] \
-                && printf ' \033[0;32m✓ %s\033[0;36m(v=%s)\033[0m' \"\$SVC\" \"\$VS\" \
-                || printf ' \033[0;31m✗ %s(%s)\033[0m' \"\$SVC\" \"\$STATE\"
+            case \"\$STATE\" in
+                active)
+                    printf ' \033[0;32m✓ %s\033[0;36m(v=%s)\033[0m' \"\$SVC\" \"\$VS\" ;;
+                activating|deactivating)
+                    # Transient, NOT a failure: feedwatchdog is a oneshot driven by
+                    # feedwatchdog.timer, so a check landing mid-run used to print ✗ and
+                    # exit 1 on a perfectly healthy fleet. Marked '~' so the ✗ count below
+                    # ignores it. (An idle oneshot never shows up at all — list-units
+                    # without --all lists only active/activating units.)
+                    printf ' \033[1;33m~ %s(%s)\033[0m' \"\$SVC\" \"\$STATE\" ;;
+                *)
+                    printf ' \033[0;31m✗ %s(%s)\033[0m' \"\$SVC\" \"\$STATE\" ;;
+            esac
         done
         printf '\n'
     ") || ROW="  ${RED}✗ $TAG: unreachable${NC}"
