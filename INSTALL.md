@@ -211,7 +211,7 @@ takes precedence over both.
 | `TRADINEBOTTE_INDICATORS_REG_ADDR` | `indicators_reg_addr` | IPC auto-detected (`/run/user/$UID/tradinebotte-ind-reg.sock`) | account\_bot | ZeroMQ REP address of the shared indicators service for dynamic stream registration. Each `account_bot` sends subscribe requests here at startup. |
 | — | `feed_auto_start` | `true` | account\_bot | When `false`, `account_bot` expects `feed.py` to be managed externally (e.g. systemd); probes with retries instead of auto-starting it. Exits if the feed is unreachable after 30 s. |
 | — | `indicators_streams` | `[]` | account\_bot | List of stream subscription specs sent to the shared indicators service at startup. See [Technical Indicator Service](#technical-indicator-service). |
-| `TRADINEBOTTE_INSTALL_DIR` | — | auto-detected | install scripts | Override the install directory used by `install_feed_service.sh` and `install_indicators_service.sh` when searching for the virtualenv. |
+| `TRADINEBOTTE_INSTALL_DIR` | — | auto-detected | install scripts | Override the install directory used by `install_indicators_service.sh` when searching for the virtualenv. |
 | `POLY_PRIVATE_KEY` | `private_key` | `""` | live\_bot, account\_bot | Polygon wallet private key (`0x` + 64 hex chars). If empty, orders are simulated with no on-chain execution. |
 | `POLY_API_KEY` | `api_key` | `""` | live\_bot, account\_bot | Polymarket CLOB API key (derived by `setup.py`). |
 | `POLY_API_SECRET` | `api_secret` | `""` | live\_bot, account\_bot | Polymarket CLOB API secret. |
@@ -522,7 +522,7 @@ The service restarts automatically on failure (`Restart=on-failure`, 30 s delay,
 max 5 restarts per 5 minutes). On reboot the bot comes back up once the network
 is online (`After=network-online.target`).
 
-> **Multi-bot (Option B)**: use `tradinebotte-polymarket/scripts/install_feed_service.sh`, `tradinebotte-indicators/scripts/install_indicators_service.sh` (optional shared indicators), and `tradinebotte-polymarket/scripts/install_account_service.sh` instead. See [docs/multi.md](docs/multi.md).
+> **Shared infrastructure services** (feed, indicators, collector) are installed natively by `scripts/deploy.py`. See [docs/multi.md](docs/multi.md) for the shared-feed architecture.
 >
 > **Multi-account server deployments** use `~/.config/systemd/user/` units (`systemctl --user`) instead of system units — no sudo required at deploy time. Deploy them with `scripts/deploy.py` (or `bash tradinebotte-cex/scripts/deploy_all.sh`), which installs every unit natively.
 
@@ -1119,35 +1119,6 @@ systemctl --user status tradinebotte-account.service
 sessions.  The `export XDG_RUNTIME_DIR=/run/user/$(id -u)` line above is
 required whenever you run `systemctl --user` over SSH.
 
-### Manual launch (without systemd)
-
-```bash
-# 1. Start indicators (required by feed and account bots)
-cd ~/tradinebotte && .venv/bin/python3 indicators.py &
-
-# 2. Start the shared feed (one instance)
-bash tradinebotte-polymarket/scripts/start_feed.sh
-
-# 3. Start each account bot in a separate shell
-TRADINEBOTTE_DIR=~/account-a bash tradinebotte-polymarket/scripts/start_account.sh
-TRADINEBOTTE_DIR=~/account-b bash tradinebotte-polymarket/scripts/start_account.sh
-```
-
-TCP override — useful for a second independent stack or cross-host routing:
-
-```bash
-TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash tradinebotte-polymarket/scripts/start_feed.sh
-TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-a bash tradinebotte-polymarket/scripts/start_account.sh
-```
-
-**Feed flags** (`scripts/start_feed.sh` passes these through to `feed.py`):
-
-- `--verbose` — enable DEBUG logging; prints every raw WebSocket message and ZMQ publish; useful for diagnosing feed connectivity or message format issues
-
-**Account bot flags** (`scripts/start_account.sh` passes these through to `account_bot.py`):
-
-- `--verbose` — enable DEBUG logging for diagnostics; prints every book update, signal evaluation, and ZMQ message received; useful during initial setup or troubleshooting
-
 ### Stopping
 
 With systemd user services:
@@ -1264,6 +1235,8 @@ grep "order=" ~/tradinebotte/live.log | grep -v "order=sim" | tail -20
 ## Data collection
 
 The first deployment account runs the bot in simulate mode with 1-second snapshot intervals to build a high-resolution dataset for strategy research and backtesting.
+
+> ⚠ **Dormant since 2026-05.** This pipeline is not currently deployed — no collector directory on the account, no cron entry installed, newest archive `data/live_2026_W19.db`. The scripts are kept because this is the tooling that produces the backtest datasets; the instructions below describe how to reactivate it.
 
 ### Collector scripts
 

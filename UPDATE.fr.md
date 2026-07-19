@@ -141,26 +141,6 @@ Le fichier DB est créé avec les droits `0o644`. Le répertoire parent du chemi
 
 ---
 
-## Option B — Mise à jour multi-bot
-
-Mettre à jour le repo partagé et redémarrer. Les répertoires de comptes (`~/account-a`, etc.) ne sont pas touchés.
-
-```bash
-cd ~/src/tradinebotte   # ou l'emplacement du repo
-git pull
-bash scripts/install.sh
-
-kill $(cat ~/tradinebotte/feed.pid)
-kill $(cat ~/account-a/account.pid)
-kill $(cat ~/account-b/account.pid)
-
-bash tradinebotte-polymarket/scripts/start_feed.sh
-TRADINEBOTTE_DIR=~/account-a bash tradinebotte-polymarket/scripts/start_account.sh
-TRADINEBOTTE_DIR=~/account-b bash tradinebotte-polymarket/scripts/start_account.sh
-```
-
----
-
 ## Tableau de bord de statut multi-bot — chemin de sortie
 
 Depuis la v0.80, `generate_status.py` écrit dans `~/public_html/tradinebottestatus.html`

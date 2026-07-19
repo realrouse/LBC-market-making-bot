@@ -145,26 +145,6 @@ The DB file is created with `0o644` permissions. Ensure the path's parent direct
 
 ---
 
-## Option B — Multi-bot update
-
-Update the shared repo and restart. Account dirs (`~/account-a`, etc.) are not touched.
-
-```bash
-cd ~/src/tradinebotte   # or wherever the repo lives
-git pull
-bash scripts/install.sh
-
-kill $(cat ~/tradinebotte/feed.pid)
-kill $(cat ~/account-a/account.pid)
-kill $(cat ~/account-b/account.pid)
-
-bash tradinebotte-polymarket/scripts/start_feed.sh
-TRADINEBOTTE_DIR=~/account-a bash tradinebotte-polymarket/scripts/start_account.sh
-TRADINEBOTTE_DIR=~/account-b bash tradinebotte-polymarket/scripts/start_account.sh
-```
-
----
-
 ## Multi-bot status dashboard — output path
 
 Since v0.80, `generate_status.py` writes to `~/public_html/tradinebottestatus.html`

@@ -152,7 +152,7 @@ sqlite3 live.db "SELECT id, direction, outcome, pnl_net, capital_after FROM trad
 sqlite3 live.db "SELECT COUNT(*) total, SUM(CASE WHEN outcome='WIN' THEN 1 END) wins, ROUND(SUM(pnl_net),2) net_pnl FROM trades WHERE resolved=1;"
 ```
 
-**Collecte de données** (mode simulation, snapshots à 1 seconde) :
+**Collecte de données** (mode simulation, snapshots à 1 seconde) — ⚠ en sommeil depuis 2026-05, non déployée actuellement :
 
 ```bash
 bash tradinebotte-polymarket/scripts/start_collector.sh           # déploiement + lancement
