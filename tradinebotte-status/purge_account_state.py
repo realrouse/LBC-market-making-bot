@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""purge_account_state.py — delete a TEST account's rows from the shared state DB.
+"""purge_account_state.py — delete a TEST account's rows (heartbeats + deploys + bot_trades)
+from the shared state DB.
 
 The ephemeral standalone test account (resolved from TEST_STANDALONE_USER_IDX) runs real
 bots during an integration test; those bots PUSH heartbeats to the PROD status collector
@@ -40,13 +41,28 @@ def inventory_accounts(db: sqlite3.Connection) -> set:
         return set()
 
 
-def purge_account(db: sqlite3.Connection, account: str) -> tuple[int, int]:
-    """Delete every heartbeat + deploy row for `account`. Returns (heartbeats, deploys)
-    deleted. Caller MUST have checked the inventory guard first."""
+def _count_trades(db: sqlite3.Connection, account: str) -> int:
+    """bot_trades rows for `account`, or 0 if the table is absent (older/bare test DBs)."""
+    try:
+        return db.execute("SELECT count(*) FROM bot_trades WHERE account=?", (account,)).fetchone()[0]
+    except sqlite3.OperationalError:
+        return 0
+
+
+def purge_account(db: sqlite3.Connection, account: str) -> tuple[int, int, int]:
+    """Delete every heartbeat + deploy + bot_trades row for `account`. Returns
+    (heartbeats, deploys, trades) deleted. Caller MUST have checked the inventory guard first.
+    bot_trades is included because a test that fires a trade (e.g. the accumulation engine's
+    push_trade) leaks per-fill rows there too, not just heartbeats — the table is guarded so a
+    DB predating it doesn't crash the purge."""
     hb = db.execute("DELETE FROM heartbeats WHERE account=?", (account,)).rowcount
     dep = db.execute("DELETE FROM deploys WHERE account=?", (account,)).rowcount
+    try:
+        trades = db.execute("DELETE FROM bot_trades WHERE account=?", (account,)).rowcount
+    except sqlite3.OperationalError:
+        trades = 0
     db.commit()
-    return hb, dep
+    return hb, dep, trades
 
 
 def main() -> int:
@@ -76,10 +92,11 @@ def main() -> int:
         if a.dry_run:
             hb = db.execute("SELECT count(*) FROM heartbeats WHERE account=?", (a.account,)).fetchone()[0]
             dep = db.execute("SELECT count(*) FROM deploys WHERE account=?", (a.account,)).fetchone()[0]
-            print(f"[dry-run] would purge account '{a.account}': {hb} heartbeat(s), {dep} deploy(s)")
+            tr = _count_trades(db, a.account)
+            print(f"[dry-run] would purge account '{a.account}': {hb} heartbeat(s), {dep} deploy(s), {tr} trade(s)")
             return 0
-        hb, dep = purge_account(db, a.account)
-        print(f"purged account '{a.account}': {hb} heartbeat(s), {dep} deploy(s)")
+        hb, dep, tr = purge_account(db, a.account)
+        print(f"purged account '{a.account}': {hb} heartbeat(s), {dep} deploy(s), {tr} trade(s)")
         return 0
     finally:
         db.close()
