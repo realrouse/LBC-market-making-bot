@@ -26,6 +26,14 @@ cd "$PROJECT_DIR"
 # Redirect bot I/O to ~/tmp so tests never touch /opt or write credentials.
 export TRADINEBOTTE_DIR="${HOME}/tmp/tradinebotte-test"
 
+# Isolation: point the status channel at a dead loopback port so no test can push a
+# heartbeat/trade to the PROD collector on 5562 and pollute the shared state DB. The pytest
+# conftest (tradinebotte-cex/tests/conftest.py) already does this — but `unittest discover`,
+# below, does NOT load conftest.py, so without this line a test that fires a trade (e.g.
+# accumulation.on_book_update) leaks real rows into the shared DB as account=<operator>.
+# push_trade caches its socket from this env on first use, so setting it here covers every test.
+export TRADINEBOTTE_STATUS_ADDR="tcp://127.0.0.1:5599"
+
 echo "Python : $PYTHON ($("$PYTHON" --version))"
 echo "Tests  : $PROJECT_DIR/tests/ + tradinebotte-*/tests/"
 echo ""
