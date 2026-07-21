@@ -36,8 +36,6 @@ from tradinetools.zmq import make_pub, PORT_CEX_FEED     # noqa: E402
 from tradinetools.logging import setup_logger            # noqa: E402
 
 _INSTALL_DIR = os.environ.get("TRADINEBOTTE_DIR", os.getcwd())
-# Fleet join key: generated unique bot_id (readable prefix + suffix), persisted per-role.
-_BOT_ID = resolve_bot_id(_INSTALL_DIR, "cexfeed", "infra", "cexfeed")
 FEED_ADDR = os.environ.get("TRADINEBOTTE_CEX_FEED_ADDR", f"tcp://127.0.0.1:{PORT_CEX_FEED}")
 # "binance:BTCUSDT,mexc:BTCUSDT,mexc_futures:BTC_USDT" — one symbol per (exchange).
 # Every external CEX data source is fetched once here and fanned out; bots never open
@@ -129,11 +127,15 @@ async def main() -> None:
     pub = make_pub(ctx, FEED_ADDR, "CEX_FEED")
     logger.info("cex_feed PUB on %s — feeds: %s", FEED_ADDR, FEEDS)
     tasks = [asyncio.create_task(_exchange_task(pub, c, s)) for c, s in FEEDS]
+    # Fleet join key: generated unique bot_id (readable prefix + suffix), persisted per-role.
+    # Resolved here, not at import: resolve_bot_id PERSISTS a generated id, so doing it at
+    # module level makes merely importing this file write a stray bot_id into the cwd.
+    bot_id = resolve_bot_id(_INSTALL_DIR, "cexfeed", "infra", "cexfeed")
     tasks.append(asyncio.create_task(
-        heartbeat_loop(_BOT_ID, _INSTALL_DIR,
+        heartbeat_loop(bot_id, _INSTALL_DIR,
                        lambda: {"exchanges": list(_last_pub.keys()),
                                 "last_pub_ts": max(_last_pub.values(), default=0.0)})))
-    tasks.append(asyncio.create_task(control_loop(_BOT_ID)))
+    tasks.append(asyncio.create_task(control_loop(bot_id)))
     try:
         await asyncio.gather(*tasks)
     finally:

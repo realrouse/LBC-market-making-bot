@@ -121,7 +121,6 @@ _DERIBIT_DVOL_URL         = "https://www.deribit.com/api/v2/public/get_volatilit
 _FEAR_GREED_URL           = "https://api.alternative.me/fng/"
 _WS_RECV_TIMEOUT_S        = 120   # force reconnect if no WS message in this many seconds
 _INSTALL_DIR = os.environ.get("TRADINEBOTTE_DIR", os.path.dirname(os.path.abspath(__file__)))
-_BOT_ID = resolve_bot_id(_INSTALL_DIR, "indicators", "infra", "indicators")  # fleet join key
 
 
 def _shift_addr(addr: str) -> str:
@@ -2019,12 +2018,16 @@ async def run(feed_addr: str, ind_addr: str, reg_addr: str,
         name="registration",
     ))
 
+    # Fleet join key. Resolved here, not at import: resolve_bot_id PERSISTS a generated
+    # id, so doing it at module level makes merely importing this file write a stray
+    # bot_id into the source tree (or the cwd) of anyone who imports it.
+    bot_id = resolve_bot_id(_INSTALL_DIR, "indicators", "infra", "indicators")
     tasks.append(asyncio.create_task(
-        heartbeat_loop(_BOT_ID, _INSTALL_DIR, lambda: {"last_pub_ts": _last_pub_ts}),
+        heartbeat_loop(bot_id, _INSTALL_DIR, lambda: {"last_pub_ts": _last_pub_ts}),
         name="heartbeat",
     ))
     # Infra service: control surface for ping/status only (no destructive commands).
-    tasks.append(asyncio.create_task(control_loop(_BOT_ID), name="control"))
+    tasks.append(asyncio.create_task(control_loop(bot_id), name="control"))
 
     try:
         await asyncio.gather(*tasks)
