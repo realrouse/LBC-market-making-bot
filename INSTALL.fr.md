@@ -215,7 +215,7 @@ défaut, mais `config.json` est prioritaire sur les deux.
 | `TRADINEBOTTE_INDICATORS_REG_ADDR` | `indicators_reg_addr` | IPC auto-détecté (`/run/user/$UID/tradinebotte-ind-reg.sock`) | account\_bot | Adresse ZeroMQ REP du service d'indicateurs pour l'enregistrement dynamique de flux. Chaque `account_bot` envoie ses demandes d'abonnement ici au démarrage. |
 | — | `feed_auto_start` | `true` | account\_bot | Si `false`, `account_bot` s'attend à ce que `feed.py` soit géré par un processus externe (ex. systemd) ; sonde avec des tentatives répétées plutôt que de le démarrer automatiquement. Quitte si le feed est inaccessible après 30 s. |
 | — | `indicators_streams` | `[]` | account\_bot | Liste de spécifications d'abonnement envoyées au service d'indicateurs partagé au démarrage. Voir [Service d'indicateurs techniques](#service-dindicateurs-techniques). |
-| `TRADINEBOTTE_INSTALL_DIR` | — | auto-détecté | scripts d'install | Remplace le répertoire d'installation utilisé par `install_indicators_service.sh` lors de la recherche du virtualenv. |
+| `TRADINEBOTTE_INSTALL_DIR` | — | auto-détecté | scripts d'install | Remplace le répertoire d'installation utilisé par le moteur de déploiement lors de la recherche du virtualenv. |
 | `POLY_PRIVATE_KEY` | `private_key` | `""` | live\_bot, account\_bot | Clé privée du wallet Polygon (`0x` + 64 caractères hex). Si vide, les ordres sont simulés sans exécution on-chain. |
 | `POLY_API_KEY` | `api_key` | `""` | live\_bot, account\_bot | Clé API Polymarket CLOB (dérivée par `setup.py`). |
 | `POLY_API_SECRET` | `api_secret` | `""` | live\_bot, account\_bot | Secret API Polymarket CLOB. |
@@ -726,22 +726,15 @@ Sources disponibles : `binance_ws`, `binance_scalping`, `binance_funding`, `deri
 
 ### Service systemd (recommandé)
 
-```bash
-INDICATORS_CONFIG=~/tradinebotte/strategies/indicators/indicators_4h_bitcoin.json \
-bash tradinebotte-indicators/scripts/install_indicators_service.sh
-```
-
-Génère `~/tmp/tradinebotte-indicators.service`. Installer aux côtés du service feed :
+Le service indicators est installé et géré nativement par le moteur de déploiement
+(`scripts/deploy.py`, cible infra `indicators`) — pas de script d'installation séparé :
 
 ```bash
-sudo cp ~/tmp/tradinebotte-indicators.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable tradinebotte-indicators
-sudo systemctl start tradinebotte-indicators
-journalctl -u tradinebotte-indicators -f
+bash tradinebotte-cex/scripts/deploy_all.sh --only "<compte> — indicators"
 ```
 
-Optionnel : définir `INDICATORS_LABEL=btc` pour nommer le service `tradinebotte-indicators-btc` en cas de deux instances indépendantes.
+Définir `INDICATORS_LABEL=btc` dans l'inventaire pour nommer le service
+`tradinebotte-indicators-btc` en cas de deux instances indépendantes.
 
 ### Démarrage manuel
 

@@ -576,29 +576,11 @@ Le projet fournit trois scripts générateurs dédiés :
 
 | Script | Génère | Rôle |
 |---|---|---|
-| `scripts/install_indicators_service.sh` | `tradinebotte-indicators.service` | Pipeline indicators partagé (un par machine, optionnel) |
 | `scripts/install_account_service.sh` | `tradinebotte-account-<nom>.service` | Bot de trading par compte (un par portefeuille) |
 
 **Étape 1 — installer le service feed :** déployé nativement par `scripts/deploy.py` (cible `feed`) ; pas de script d'installation manuel.
 
-**Étape 1b — installer le service indicators (optionnel, une fois par machine) :**
-
-Le service indicators est un **processus partagé** — une seule instance tourne
-sur la machine (comme le feed). Chaque `account_bot` enregistre les flux dont il
-a besoin au démarrage via la socket REP ; le service démarre les tâches correspondantes
-dynamiquement.
-
-```bash
-INDICATORS_CONFIG=~/tradinebotte/strategies/indicators/indicators_4h_bitcoin.json \
-bash tradinebotte-indicators/scripts/install_indicators_service.sh
-
-# Suivre les commandes sudo affichées :
-sudo cp ~/tmp/tradinebotte-indicators.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable tradinebotte-indicators
-sudo systemctl start tradinebotte-indicators
-journalctl -u tradinebotte-indicators -f
-```
+**Étape 1b — installer le service indicators :** déployé nativement par `scripts/deploy.py` (cible `indicators`) ; pas de script d'installation manuel. C'est un processus partagé — une instance par machine, comme le feed.
 
 **Étape 2 — installer un service de compte (une fois par répertoire de portefeuille) :**
 

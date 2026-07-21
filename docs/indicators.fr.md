@@ -764,14 +764,20 @@ Chaque fichier déclare un flux sur une paire de ports PUB + REP dédiés.
 | `indicators_ls_ratio_bitcoin.json` | `binance_ls_ratio` | `btc_ls_ratio` | 5571 | 5572 | 300 s |
 | `indicators_liquidations_bitcoin.json` | `binance_liquidations` | `btc_liquidations` | 5573 | 5574 | 300 s |
 
-### Démarrer l'instance de production unifiée
+### Lancer indicators à la main (debug)
+
+En **production**, indicators tourne avec la config unifiée à 14 flux sous
+l'unité systemd `tradinebotte-indicators`, installée par le moteur de
+déploiement (`scripts/deploy.py`). `start_indicators.sh` est le chemin de
+**debug / lancement manuel** — pratique pour isoler un flux lors d'un
+diagnostic ; à ne pas utiliser sur un compte déployé.
 
 ```bash
-# Production : 14 flux (géré par le service systemd tradinebotte-indicators)
+# Debug : lancer la config unifiée complète à la main
 TRADINEBOTTE_INDICATORS_CONFIG=tradinebotte-indicators/strategies/indicators_all.json \
   bash tradinebotte-indicators/scripts/start_indicators.sh
 
-# Test d'un flux unique en isolation
+# Debug : tester un flux unique en isolation
 TRADINEBOTTE_INDICATORS_CONFIG=tradinebotte-indicators/strategies/indicators_oi_bitcoin.json \
   bash tradinebotte-indicators/scripts/start_indicators.sh
 ```

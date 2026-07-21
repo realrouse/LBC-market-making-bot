@@ -567,28 +567,11 @@ The project ships three dedicated generator scripts:
 
 | Script | Generates | Purpose |
 |---|---|---|
-| `tradinebotte-indicators/scripts/install_indicators_service.sh` | `tradinebotte-indicators.service` | Shared indicators pipeline (one per machine, optional) |
 | `tradinebotte-polymarket/scripts/install_account_service.sh` | `tradinebotte-account-<name>.service` | Per-account trading bot (one per wallet) |
 
 **Step 1 — install the feed service:** deployed natively by `scripts/deploy.py` (target `feed`); no manual install script.
 
-**Step 1b — install the indicators service (optional, run once per machine):**
-
-The indicators service is a **shared process** — one instance runs on the machine
-(like the feed). Each `account_bot` registers the streams it needs at startup via
-the REP socket; the indicators service starts the corresponding tasks dynamically.
-
-```bash
-INDICATORS_CONFIG=~/tradinebotte/strategies/indicators/indicators_4h_bitcoin.json \
-bash tradinebotte-indicators/scripts/install_indicators_service.sh
-
-# Follow the printed sudo commands:
-sudo cp ~/tmp/tradinebotte-indicators.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable tradinebotte-indicators
-sudo systemctl start tradinebotte-indicators
-journalctl -u tradinebotte-indicators -f
-```
+**Step 1b — install the indicators service:** deployed natively by `scripts/deploy.py` (target `indicators`); no manual install script. It is a shared process — one instance per machine, like the feed.
 
 **Step 2 — install an account service (once per wallet directory):**
 

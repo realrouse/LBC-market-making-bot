@@ -753,14 +753,20 @@ Each file declares a single stream on a dedicated port pair.
 | `indicators_ls_ratio_bitcoin.json` | `binance_ls_ratio` | `btc_ls_ratio` | 5571 | 5572 | 300 s |
 | `indicators_liquidations_bitcoin.json` | `binance_liquidations` | `btc_liquidations` | 5573 | 5574 | 300 s |
 
-### Starting the unified production instance
+### Running indicators by hand (debug)
+
+In **production**, indicators runs the unified 14-stream config under the
+`tradinebotte-indicators` systemd unit, installed by the deploy engine
+(`scripts/deploy.py`). `start_indicators.sh` is the **debug / manual-launch**
+path — handy for running one stream in isolation while diagnosing it; do not
+use it on a deployed account.
 
 ```bash
-# Production: all 14 streams (managed by tradinebotte-indicators systemd service)
+# Debug: run the full unified config by hand
 TRADINEBOTTE_INDICATORS_CONFIG=tradinebotte-indicators/strategies/indicators_all.json \
   bash tradinebotte-indicators/scripts/start_indicators.sh
 
-# Testing a single stream in isolation
+# Debug: test a single stream in isolation
 TRADINEBOTTE_INDICATORS_CONFIG=tradinebotte-indicators/strategies/indicators_oi_bitcoin.json \
   bash tradinebotte-indicators/scripts/start_indicators.sh
 ```
