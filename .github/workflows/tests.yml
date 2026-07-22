@@ -21,11 +21,15 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
+        pip install pytest
         pip install -e tradinetools/
     - name: Run tests
+      # pytest per dir (matches scripts/run_tests.sh) so each subproject's conftest.py isolation
+      # applies here too — the canonical runner and CI run the same thing.
       run: |
-        python -m unittest discover -s tests                         -p "test_*.py" -v
-        python -m unittest discover -s tradinetools/tests            -p "test_*.py" -v
-        python -m unittest discover -s tradinebotte-cex/tests        -p "test_*.py" -v
-        python -m unittest discover -s tradinebotte-polymarket/tests -p "test_*.py" -v
-        python -m unittest discover -s tradinebotte-indicators/tests -p "test_*.py" -v
+        python -m pytest tests/                         -p no:cacheprovider
+        python -m pytest tradinetools/tests/            -p no:cacheprovider
+        python -m pytest tradinebotte-cex/tests/        -p no:cacheprovider
+        python -m pytest tradinebotte-polymarket/tests/ -p no:cacheprovider
+        python -m pytest tradinebotte-indicators/tests/ -p no:cacheprovider
+        python -m pytest tradinebotte-status/tests/     -p no:cacheprovider

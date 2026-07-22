@@ -34,6 +34,14 @@ export TRADINEBOTTE_DIR="${HOME}/tmp/tradinebotte-test"
 # env on first use, so setting it here covers every test regardless of subproject.
 export TRADINEBOTTE_STATUS_ADDR="tcp://127.0.0.1:5599"
 
+# The runner uses pytest (so conftest isolation applies). pytest is a dev dep, not runtime —
+# fail with a clear pointer rather than a raw ModuleNotFoundError if this is a runtime-only venv.
+if ! "$PYTHON" -c "import pytest" 2>/dev/null; then
+    echo "ERROR: pytest not found in $PYTHON"
+    echo "Install the dev dependencies:  pip install -r requirements-dev.txt"
+    exit 1
+fi
+
 echo "Python : $PYTHON ($("$PYTHON" --version))"
 echo "Tests  : $PROJECT_DIR/tests/ + tradinebotte-*/tests/"
 echo ""
