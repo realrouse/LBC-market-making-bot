@@ -11,8 +11,9 @@
 # honour .gitignore) rather than raw `find`/`grep -r`, which do NOT.
 
 [tool.pytest.ini_options]
-# The project's canonical runner is scripts/run_tests.sh (unittest discover per dir); this
-# only makes an occasional `pytest` from the repo root deterministic and venv-safe.
+# The project's canonical runner is scripts/run_tests.sh (pytest per dir, so each subproject's
+# conftest.py isolation always applies); these options also make an occasional `pytest` from the
+# repo root deterministic and venv-safe.
 addopts = "-q"
 norecursedirs = [
   ".venv", "venv", ".git", "__pycache__", ".mypy_cache", ".pytest_cache",

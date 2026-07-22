@@ -26,23 +26,28 @@ cd "$PROJECT_DIR"
 # Redirect bot I/O to ~/tmp so tests never touch /opt or write credentials.
 export TRADINEBOTTE_DIR="${HOME}/tmp/tradinebotte-test"
 
-# Isolation: point the status channel at a dead loopback port so no test can push a
-# heartbeat/trade to the PROD collector on 5562 and pollute the shared state DB. The pytest
-# conftest (tradinebotte-cex/tests/conftest.py) already does this — but `unittest discover`,
-# below, does NOT load conftest.py, so without this line a test that fires a trade (e.g.
-# accumulation.on_book_update) leaks real rows into the shared DB as account=<operator>.
-# push_trade caches its socket from this env on first use, so setting it here covers every test.
+# Isolation floor: point the status channel at a dead loopback port so no test can push a
+# heartbeat/trade to the PROD collector on 5562 and pollute the shared state DB. The cex
+# conftest.py sets the same thing, but it only covers the cex suite — this line is the
+# project-wide floor for the other subprojects (poly/status/indicators/tradinetools), which
+# have no conftest, in case any grows a pushing path. push_trade caches its socket from this
+# env on first use, so setting it here covers every test regardless of subproject.
 export TRADINEBOTTE_STATUS_ADDR="tcp://127.0.0.1:5599"
 
 echo "Python : $PYTHON ($("$PYTHON" --version))"
 echo "Tests  : $PROJECT_DIR/tests/ + tradinebotte-*/tests/"
 echo ""
-"$PYTHON" -W ignore::ResourceWarning -m unittest discover -s tests/ -p "test_*.py" -v
+# pytest (not `unittest discover`) so the per-subproject conftest.py isolation ALWAYS applies —
+# unittest never loads conftest, which let a test's push_trade reach the prod collector. Run one
+# invocation per directory (as the old runner did) to keep each subproject's sys.path/module
+# resolution and its own conftest scoped to its own tree. pytest runs the unittest.TestCase
+# suites unchanged. -p no:cacheprovider keeps .pytest_cache out of every test dir.
+"$PYTHON" -W ignore::ResourceWarning -m pytest tests/ -p no:cacheprovider
 for _svc_tests in tradinebotte-*/tests/ tradinetools/tests/; do
     if [ -d "$_svc_tests" ] && ls "$_svc_tests"test_*.py >/dev/null 2>&1; then
         echo ""
         echo "=== Tests: $_svc_tests ==="
-        "$PYTHON" -W ignore::ResourceWarning -m unittest discover -s "$_svc_tests" -p "test_*.py" -v
+        "$PYTHON" -W ignore::ResourceWarning -m pytest "$_svc_tests" -p no:cacheprovider
     fi
 done
 

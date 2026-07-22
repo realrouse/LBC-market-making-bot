@@ -8,6 +8,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **The test runner now uses pytest, so test isolation always applies.** `scripts/run_tests.sh` ran the suite with `unittest discover`, which never loads the `conftest.py` that redirects test pushes away from the production status collector — the guard only worked when someone ran pytest by hand. The runner now invokes pytest (one call per test directory, preserving each subproject's module resolution and its own conftest); the unittest-style test classes run unchanged. The dead-port redirect the runner also exports stays as a project-wide floor for the subprojects that have no conftest.
+
 ### Changed
 - **Deployment is now uniformly native single-tree for every trading bot.** All trading bots (polymarket, accumulation, grid, swing) deploy through the one declarative engine (`scripts/deploy_actions.py`, dispatched from `inventory.toml` by `scripts/deploy.py`), each living in the shared `~/tradinebotte` tree under per-instance names (`config_<role>.json`, `live_<role>.db`, a single-tree systemd drop-in). The last per-family bash deployers (`update_swing.sh`, `deploy_grid_mexc.sh`) were retired; deploy one bot or the whole fleet with `bash tradinebotte-cex/scripts/deploy_all.sh [--only "<account> — <label>"]`.
 - **`tradinetools` is imported from source via a path `.pth`, never a vendored copy.** The shared library used to be copied into each account's virtualenv, where it silently drifted from source and forced a "refresh before restart or it crashloops" ritual. It now sits on the interpreter path via a plain `.pth` pointing at the source tree — an rsync of the source is instantly live, with no copy to go stale and no dist-info to break restarts.
