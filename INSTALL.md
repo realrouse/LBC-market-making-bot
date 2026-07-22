@@ -490,37 +490,18 @@ For password protection on the directory, see
 ~/tradinebotte/run.sh
 ```
 
-### Auto-start with systemd (recommended for dedicated servers)
+### Auto-start with systemd
 
-Run the generator script once after installation:
-
-```bash
-TRADINEBOTTE_DIR=~/tradinebotte bash tradinebotte-polymarket/scripts/install_service.sh
-```
-
-It validates the install, writes a ready-to-use unit file to `~/tmp/tradinebotte.service`,
-and prints the exact commands to enable it:
+Bots run as `systemctl --user` units installed by the native deploy engine — there is no
+separate hand-run installer. Deploy a bot (or the whole fleet) with:
 
 ```bash
-sudo cp ~/tmp/tradinebotte.service /etc/systemd/system/tradinebotte.service
-sudo systemctl daemon-reload
-sudo systemctl enable tradinebotte   # start on boot
-sudo systemctl start tradinebotte    # start now
+bash tradinebotte-cex/scripts/deploy_all.sh          # whole fleet (thin shim over scripts/deploy.py)
 ```
 
-Useful systemd commands:
-
-```bash
-sudo systemctl status tradinebotte
-sudo systemctl stop tradinebotte
-sudo systemctl restart tradinebotte
-journalctl -u tradinebotte -f        # live systemd logs
-tail -f ~/tradinebotte/live.log      # bot application logs
-```
-
-The service restarts automatically on failure (`Restart=on-failure`, 30 s delay,
-max 5 restarts per 5 minutes). On reboot the bot comes back up once the network
-is online (`After=network-online.target`).
+The engine writes each unit, enables it (linger keeps it across reboots), and restarts it. Units
+restart on failure and come back on reboot once the network is up. Inspect a running bot with
+`systemctl --user status <unit>` and `journalctl --user -u <unit> -f`.
 
 > **Shared infrastructure services** (feed, indicators, collector) are installed natively by `scripts/deploy.py`. See [docs/multi.md](docs/multi.md) for the shared-feed architecture.
 >

@@ -20,7 +20,6 @@ Scan all scripts for CLI flags/options, then check whether each one appears in t
 Read each of these files and extract every CLI flag/option:
 - `scripts/start_bot.sh` (bash `for arg in "$@"` patterns)
 - `scripts/install.sh` (bash flag parsing)
-- `scripts/install_service.sh`
 - `scripts/backtest.py` (argparse)
 - `bot/live_bot.py` (sys.argv or argparse)
 - `bot/account_bot.py` (argparse)

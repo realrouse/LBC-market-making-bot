@@ -619,7 +619,7 @@ journalctl -u tradinebotte-account-account-a -f
 | Strategy file | `TRADINEBOTTE_DIR/strategies/` | `TRADINEBOTTE_DIR/strategies/` per account |
 | Crash recovery | `restore_state_from_db()` on restart | same, per account |
 | Signal logic | `pm_strategy.check_signal()` | identical (re-exported through `live_bot`) |
-| systemd service | `tradinebotte.service` | separate units for feed + each account |
+| systemd units | native `tradinebotte-*.service` (user units) | one per bot + shared feed/indicators, installed by `scripts/deploy.py` |
 
 ---
 

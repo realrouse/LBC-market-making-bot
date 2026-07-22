@@ -504,37 +504,18 @@ Pour la protection par mot de passe du répertoire, voir
 ~/tradinebotte/run.sh
 ```
 
-### Démarrage automatique avec systemd (recommandé pour les serveurs dédiés)
+### Démarrage automatique avec systemd
 
-Exécuter le script générateur une fois après l'installation :
-
-```bash
-TRADINEBOTTE_DIR=~/tradinebotte bash tradinebotte-polymarket/scripts/install_service.sh
-```
-
-Il valide l'installation, écrit un fichier d'unité prêt à l'emploi dans `~/tmp/tradinebotte.service`
-et affiche les commandes exactes pour l'activer :
+Les bots tournent en unités `systemctl --user` installées par le moteur de déploiement natif — pas
+d'installeur manuel séparé. Déployez un bot (ou toute la flotte) avec :
 
 ```bash
-sudo cp ~/tmp/tradinebotte.service /etc/systemd/system/tradinebotte.service
-sudo systemctl daemon-reload
-sudo systemctl enable tradinebotte   # démarrer au boot
-sudo systemctl start tradinebotte    # démarrer maintenant
+bash tradinebotte-cex/scripts/deploy_all.sh          # toute la flotte (shim au-dessus de scripts/deploy.py)
 ```
 
-Commandes utiles :
-
-```bash
-sudo systemctl status tradinebotte
-sudo systemctl stop tradinebotte
-sudo systemctl restart tradinebotte
-journalctl -u tradinebotte -f        # logs systemd en direct
-tail -f ~/tradinebotte/live.log      # logs applicatifs du bot
-```
-
-Le service redémarre automatiquement en cas d'erreur (`Restart=on-failure`, délai 30 s,
-max 5 redémarrages par 5 minutes). Au reboot, le bot revient dès que le réseau est
-disponible (`After=network-online.target`).
+Le moteur écrit chaque unité, l'active (le linger la maintient après reboot) et la redémarre. Les
+unités redémarrent en cas d'échec et reviennent au reboot une fois le réseau disponible. Inspectez
+un bot avec `systemctl --user status <unité>` et `journalctl --user -u <unité> -f`.
 
 > **Les services d'infrastructure partagés** (feed, indicateurs, collecteur) sont installés nativement par `scripts/deploy.py`. Voir [docs/multi.md](docs/multi.md) pour l'architecture du feed partagé.
 >
