@@ -122,7 +122,7 @@ FAMILIES: dict[str, dict] = {
 # that mirrors bash update_claude1.sh (_restart_service = rsync .py + restart, unit untouched)
 # and is what preserves hand-set remote env like the 15M feed's TRADINEBOTTE_MARKET_TAG_ID
 # (102467, absent from the git template — see docs/deploy-engine-design §Phase D).
-#   tdir      = repo dir holding the systemd template (varies: cex/status live outside polymarket)
+#   (every systemd unit template now lives in the top-level systemd/ dir — no per-family override)
 #   extra     = entry .py not covered by _BASE_SYNC (indicators/status live in their own packages)
 #   role      = bot_id_<role> to read back; "" = no generated bot_id (status uses a fixed bot_name)
 #   data_dir  = where bot_id_<role> + <log> live (feed5m logs to ~/feed5m; the rest to ~/tradinebotte)
@@ -132,7 +132,7 @@ FAMILIES: dict[str, dict] = {
 #               shifts all 3 of its addrs — feed/out/reg — + the config addrs by one env var).
 INFRA: dict[str, dict] = {
     "indicators": dict(unit="tradinebotte-indicators.service", template="tradinebotte-indicators.user.service",
-                       tdir="tradinebotte-polymarket/scripts/systemd", role="indicators",
+                       role="indicators",
                        port_env="TRADINEBOTTE_PORT_BASE", base_port=5557, port_is_addr=False,
                        data_dir="~/tradinebotte", log="indicators.log",
                        extra=[("tradinebotte-indicators/indicators.py", "indicators.py", []),
@@ -140,18 +140,18 @@ INFRA: dict[str, dict] = {
                               # its config lives in its own package, flattened into strategies/indicators/.
                               ("tradinebotte-indicators/strategies/", "strategies/indicators/", [])]),
     "feed":       dict(unit="tradinebotte-feed.service", template="tradinebotte-feed15m.service",
-                       tdir="tradinebotte-polymarket/scripts/systemd", role="feed", port_env=None,
+                       role="feed", port_env=None,
                        data_dir="~/tradinebotte", log="feed.log", extra=[]),
     "feed5m":     dict(unit="tradinebotte-feed5m.service", template="tradinebotte-feed5m.service",
-                       tdir="tradinebotte-polymarket/scripts/systemd", role="feed5m",
+                       role="feed5m",
                        port_env="TRADINEBOTTE_FEED_ADDR", base_port=5557, port_is_addr=True,
                        data_dir="~/feed5m", log="feed.log", extra=[]),
     "cexfeed":    dict(unit="tradinebotte-cexfeed.service", template="tradinebotte-cexfeed.service",
-                       tdir="tradinebotte-cex/scripts/systemd", role="cexfeed",
+                       role="cexfeed",
                        port_env="TRADINEBOTTE_CEX_FEED_ADDR", base_port=5563, port_is_addr=True,
                        data_dir="~/tradinebotte", log="cex_feed.log", extra=[]),
     "status":     dict(unit="tradinebotte-status.service", template="tradinebotte-status.service",
-                       tdir="tradinebotte-status/scripts/systemd", role="", bot_name="status_collector",
+                       role="", bot_name="status_collector",
                        port_env="TRADINEBOTTE_STATUS_ADDR", base_port=5562, port_is_addr=True,
                        data_dir="~/tradinebotte", log="status.log",
                        extra=[("tradinebotte-status/status_collector.py", "status_collector.py", []),
@@ -253,7 +253,7 @@ def act_sync(host: Host, install_dir: str, template: str) -> bool:
         ok = ok and rc == 0
     # the family's systemd unit template (excluded from _BASE_SYNC's 'scripts')
     ok = ok and host.rsync(
-        os.path.join(REPO, "tradinebotte-polymarket/scripts/systemd", template),
+        os.path.join(REPO, "systemd", template),
         f"{install_dir}/{template}", []) == 0
     # strategy JSONs (filtered) — every family reads strategies/*.json
     rc = subprocess.run(["/usr/bin/sshpass", "-e", "rsync", "-az",
@@ -495,7 +495,7 @@ def act_sync_infra(host: Host, install_dir: str, spec: dict) -> bool:
     for local, sub, ex in spec.get("extra", []):
         ok = ok and host.rsync(os.path.join(REPO, local), f"{install_dir}/{sub}", ex) == 0
     ok = ok and host.rsync(
-        os.path.join(REPO, spec["tdir"], spec["template"]), f"{install_dir}/{spec['template']}", []) == 0
+        os.path.join(REPO, "systemd", spec["template"]), f"{install_dir}/{spec['template']}", []) == 0
     return ok
 
 

@@ -111,6 +111,14 @@ _rsync() {
         -e "$ssh_cmd" \
         "$LOCAL_REPO/tradinebotte-status/" "$COLL_USER@$SERVER:$INSTALL_DIR/" 2>&1 || return 1
 
+    # systemd unit templates now live in the top-level systemd/ dir (not under the subproject);
+    # push them to $INSTALL/systemd/ so install_status_service.sh finds tradinebotte-status.service.
+    SSHPASS="$COLL_PASS" /usr/bin/sshpass -e \
+        rsync -az \
+        --exclude='__pycache__' --exclude='*.pyc' \
+        -e "$ssh_cmd" \
+        "$LOCAL_REPO/systemd/" "$COLL_USER@$SERVER:$INSTALL_DIR/systemd/" 2>&1 || return 1
+
     # tradinetools shared library
     SSHPASS="$COLL_PASS" /usr/bin/sshpass -e \
         rsync -az \

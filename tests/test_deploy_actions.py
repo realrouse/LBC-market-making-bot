@@ -169,5 +169,20 @@ class TestSingleTreeInstanceMatchesBotId(unittest.TestCase):
                           "accumulation": "accumulation", "polymarket": "threshold"})
 
 
+class TestSystemdTemplatesResolve(unittest.TestCase):
+    """Every systemd unit template a family/infra spec names must exist in the top-level systemd/
+    dir — the single location act_sync and deploy_infra now read (no per-family tdir override).
+    A wrong/missing template passes deploy_all.sh --list (which never opens a template) and fails
+    only at a real deploy; this catches it in CI instead."""
+
+    def test_every_template_exists_under_top_level_systemd(self):
+        systemd_dir = os.path.join(da.REPO, "systemd")
+        for name, spec in {**da.FAMILIES, **da.INFRA}.items():
+            tmpl = spec["template"]
+            path = os.path.join(systemd_dir, tmpl)
+            self.assertTrue(os.path.isfile(path),
+                            f"{name}: template {tmpl!r} not found at systemd/{tmpl}")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -33,7 +33,14 @@ INSTALL_DIR="${TRADINEBOTTE_STATUS_DIR:-$HOME/tradinebotte}"
 STATUS_ADDR="${TRADINEBOTTE_STATUS_ADDR:-tcp://127.0.0.1:5562}"
 
 UNIT_NAME="tradinebotte-status.service"
-UNIT_TEMPLATE="$SCRIPT_DIR/systemd/$UNIT_NAME"
+# Unit templates live in the top-level systemd/ dir. On a deployed account the tree is flattened
+# ($INSTALL/scripts/ + $INSTALL/systemd/), so it's one level up; in the repo checkout it's two
+# ($REPO/tradinebotte-status/scripts/ → $REPO/systemd/). Try the account layout first.
+if [ -f "$SCRIPT_DIR/../systemd/$UNIT_NAME" ]; then
+    UNIT_TEMPLATE="$SCRIPT_DIR/../systemd/$UNIT_NAME"
+else
+    UNIT_TEMPLATE="$SCRIPT_DIR/../../systemd/$UNIT_NAME"
+fi
 UNIT_DEST="$HOME/.config/systemd/user/$UNIT_NAME"
 
 echo -e "\n${BOLD}${YELLOW}═══ tradinebotte-status install ═══${NC}"

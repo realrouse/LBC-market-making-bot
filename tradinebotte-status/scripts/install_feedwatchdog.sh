@@ -32,7 +32,7 @@ SERVER="${TEST_SERVER:?}"; PORT="${TEST_PORT:-22}"
 IDX="${FEED_IDX:-0}"
 USER="${TEST_USERS[$IDX]}"; PASS="${TEST_PASSWORDS[$IDX]}"
 SRC="$LOCAL_REPO/tradinebotte-status"
-UNITS="$SRC/scripts/systemd"
+UNITS="$LOCAL_REPO/systemd"
 SSH_OPTS=(-o StrictHostKeyChecking=yes -o ConnectTimeout=20 -p "$PORT")
 
 _ssh(){ SSHPASS="$PASS" /usr/bin/sshpass -e ssh "${SSH_OPTS[@]}" "$USER@$SERVER" "$@"; }

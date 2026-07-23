@@ -52,8 +52,8 @@ for _f in api_common.py api_binance.py api_mexc.py api_mexc_futures.py mexc_spot
 done
 _rsync "$REPO/tradinebotte-core/botcore/" "$R_DIR/botcore/"
 _rsync "$REPO/tradinebotte-cex/connectors/" "$R_DIR/connectors/"
-_rsync "$REPO/tradinebotte-polymarket/scripts/systemd/tradinebotte-feed5m.service" "$R_UNIT/tradinebotte-feed5m.service"
-_rsync "$REPO/tradinebotte-cex/scripts/systemd/tradinebotte-cexfeed.service" "$R_UNIT/tradinebotte-cexfeed.service"
+_rsync "$REPO/systemd/tradinebotte-feed5m.service" "$R_UNIT/tradinebotte-feed5m.service"
+_rsync "$REPO/systemd/tradinebotte-cexfeed.service" "$R_UNIT/tradinebotte-cexfeed.service"
 _rsync "$REPO/tradinetools/" "$R_DIR/tradinetools/"
 ok "pushed feed.py, cex_feed.py + connectors (+ mexc spot pb), unit templates, tradinetools"
 
