@@ -3,6 +3,16 @@
 > Working document — draft to iterate on. Two parts: (1) the codebase audit, (2) the plan
 > to replace the per-account deploy scripts with a dynamic, inventory-driven deploy system.
 
+> ⚠ **STATUS 2026-07-23 — THIS PLAN HAS LANDED; the body below is largely HISTORY.** Deploy is now
+> 100% **native single-tree**: `deploy_all.sh` → `scripts/deploy.py` derives the plan from
+> `inventory.toml` and runs `scripts/deploy_actions.py` per row; every per-account/per-family bash
+> deployer this doc's Part 2 names (the `deploy_grid_*` / `deploy_scalping_*` / per-account `update_*`
+> family) is **DELETED**. Only the acct-1 infra keeps bespoke bash (`update_*` for the infra account,
+> `setup_data_plane.sh`, `deploy_status_service.sh`). Components this doc discusses are gone: **`account_bot` DELETED**
+> (idx0 is infra-only), **`orderbook_bot` RETIRED entirely** (so the §255 "enabled=false row" question
+> is moot), **`scripts/deploy_engine.py` RETIRED**. systemd unit templates now live in a top-level
+> `systemd/` dir. A full prose rewrite is a P5 item; read the code + `inventory.toml` for current truth.
+
 ---
 
 ## Part 0 — About the `.venv` "polluting scans"

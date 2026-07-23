@@ -3,10 +3,42 @@
 > Code, comments, logs, and docstrings are English-only. Documentation files (README, CHANGELOG, INSTALL, QUICKSTART, UPDATE) are bilingual (EN + FR).
 
 > **Path note (2026-06-23):** the codebase was restructured — `bot/*` modules now live under
-> `tradinebotte-polymarket/` (`feed.py`, `live_bot.py`, `account_bot.py`, `api_polymarket.py`,
+> `tradinebotte-polymarket/` (`feed.py`, `live_bot.py`, `api_polymarket.py`,
 > `bot_utils.py`), `tradinebotte-indicators/` (`indicators.py`), and `tradinebotte-cex/`
 > (`api_binance.py`, `api_mexc.py`, `cex_feed.py`, …). File references in the older DONE sections
 > below still point at the old `bot/…` paths and have not been refreshed (cosmetic only).
+
+---
+
+## Current architecture state (2026-07-23) — read this before the historical sections below
+
+The load-bearing 2026-07 cleanup is DONE and on `origin/dev`:
+- **Deploy is 100% native single-tree.** `deploy_all.sh` → `scripts/deploy.py` (derives the plan from
+  `inventory.toml`) → `scripts/deploy_actions.py` per row. Every per-account/per-family bash deployer
+  is deleted; only acct-1 infra keeps bespoke bash. systemd unit templates live in a top-level `systemd/`.
+- **Retired entirely:** `account_bot`/`polymarket-multibot` (idx0 is now infra-only), `orderbook_bot`
+  (bot + backtest + status rendering), `scripts/deploy_engine.py`, and the hand-run feed/indicators
+  install scripts. `tradinetools` is imported from source via a `.pth`; the Polymarket wallet is in
+  `POLY_PRIVATE_KEY` (env), not `config.json`. The collector pipeline is kept but DORMANT (banner-flagged).
+- **Tests:** `scripts/run_tests.sh` and CI both run **pytest** per dir (so the collector-isolation conftest
+  always applies); CI is green on Python 3.10/3.11/3.12 + Type Check + Pylint + Security Audit.
+- **Real money:** exactly ONE real bot — idx7 LBC accumulation (since 2026-07-17); everything else is sim.
+
+### ▶ Deferred / next-session lots (full detail in the session plan)
+1. **Verify the acct-1 bespoke systemd path** at the next `deploy.py --restart-infra` (the systemd→top-level
+   consolidation repointed the acct-1 infra install scripts; native path was test-proven, acct-1 path was not).
+2. **Legacy-list cleanup:** `account_bot`/`grid_bot`/`swing_bot` still in `generate_status`
+   `_PNL_FAMILIES`/`_FAMILY_ORDER` + i18n (render nothing live — dead display code). Do NOT touch the SQL
+   index names `idx_*_account_bot` (columns, not the process).
+3. **Relocate fleet-wide bash scripts** out of the poly/cex/status subprojects into a top-level `scripts/`
+   (cosmetic, ~100 ref-sites, real-money deploy path — path-math traps; best done with the P5 doc rewrite).
+4. **P5 — design-docs rewrite** for the new architecture: `docs/multi(.fr).md` (~1430 lines, Option-B/account_bot
+   → rewrite not delete), `docs/design(.fr)`, `docs/going-live(.fr)`, `docs/deploy-engine-design(.fr)`, this
+   file, `docs/gen_architecture_diagram.py` (phantom account_bot/orderbook/Option-A/B boxes), and the parked
+   orderbook/account_bot doc-prose sweeps.
+5. **Indicators residuals** needing infra-account (acct-1) log/file access: `btc_dvol` empty-result +
+   `btc_full_depth_perp` resync rate (the infra account's `indicators.log`); byte-diff the deployed
+   `indicators_all.json` vs repo.
 
 ---
 
