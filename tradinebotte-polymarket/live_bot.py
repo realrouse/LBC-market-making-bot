@@ -1190,7 +1190,7 @@ async def main() -> None:
         state = BotState(conn, config, strategy=ThresholdStrategy(), connector=connector)
         restore_state_from_db(state)
 
-        _fam = socket.AF_INET if os.environ.get("TRADINEBOTTE_IPV4_ONLY") else 0
+        _fam = socket.AF_INET if os.environ.get("TRADINEBOTTE_IPV4_ONLY") else socket.AF_UNSPEC
         async with aiohttp.ClientSession(
             connector=aiohttp.TCPConnector(limit=10, family=_fam),
             timeout=aiohttp.ClientTimeout(total=30),
@@ -1213,7 +1213,7 @@ async def main() -> None:
                 # provides heartbeat_payload(), that IS the payload — keeps acct-2/3/4's status
                 # page fields identical to the former standalone bot.
                 _strat = getattr(state, "strategy", None)
-                if hasattr(_strat, "heartbeat_payload"):
+                if _strat is not None and hasattr(_strat, "heartbeat_payload"):
                     return _strat.heartbeat_payload()
                 pnl_total, trades_total = cumulative_pnl(state)
                 hb: dict[str, Any] = {

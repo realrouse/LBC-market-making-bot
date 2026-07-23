@@ -15,7 +15,10 @@ import logging
 import math
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from live_bot import BotConfig  # flat import beside live_bot.py; type-check only
 
 from botcore import Strategy
 from bot_utils import write_web_status

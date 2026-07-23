@@ -32,3 +32,13 @@ omit = [
   "*/.venv/*", "*/venv/*", "*/tests/*", "*/__pycache__/*",
   "*/analysis/*", "*/reports/*", "*/data/*",
 ]
+
+[tool.mypy]
+# Light type smoke-test on the entrypoints (see .github/workflows/mypy.yml). tradinetools is
+# imported as a source package via a .pth at runtime, but from the repo root its outer dir has no
+# __init__.py, so a plain `import tradinetools` looks like a namespace with no attributes — treat it
+# as Any here rather than chasing its source (which pulls in unrelated modules).
+[[tool.mypy.overrides]]
+module = "tradinetools.*"
+follow_imports = "skip"
+ignore_missing_imports = true
