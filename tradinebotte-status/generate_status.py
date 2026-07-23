@@ -586,11 +586,9 @@ def _render_payload_summary(bot_name: str, payload: dict, now: int) -> str:
         return t("ago_d", n=age // 86400)
 
     parts = []
-    if bot_name in ("live_bot", "grid_bot", "swing_bot", "account_bot"):
+    if bot_name == "live_bot":
         # Cumulative realized PnL is the headline; daily shown alongside. Fall back to
-        # daily_pnl for heartbeats from bots predating pnl_total. account_bot shares this
-        # payload shape (pnl_total/trades_total/capital) — same labels across trading bots;
-        # it reports a feed message ts rather than a book ts.
+        # daily_pnl for heartbeats from bots predating pnl_total.
         pt = payload.get("pnl_total")
         if pt is not None:
             parts.append(f"{t('k_pnl')}${pt:+.2f}")
@@ -608,9 +606,9 @@ def _render_payload_summary(bot_name: str, payload: dict, now: int) -> str:
         ot = payload.get("open_trades")
         if ot is not None:
             parts.append(f"{t('k_open')}{ot}")
-        ts = payload.get("last_feed_msg_ts") if bot_name == "account_bot" else payload.get("last_book_ts")
+        ts = payload.get("last_book_ts")
         if ts:
-            parts.append(f"{t('k_feed') if bot_name == 'account_bot' else t('k_book')}{_ago(ts)}")
+            parts.append(f"{t('k_book')}{_ago(ts)}")
     elif bot_name == "accumulation_bot":
         h = payload.get("holdings_btc")
         if h is not None:
@@ -667,7 +665,7 @@ def _flag_label(flag: str) -> str:
 
 def _key_metric(bot_name: str, payload: dict) -> str:
     """Return the single most important display value for a bot heartbeat pill."""
-    if bot_name in ("live_bot", "grid_bot", "swing_bot", "account_bot"):
+    if bot_name == "live_bot":
         pnl = payload.get("daily_pnl")
         if pnl is not None:
             sign = "+" if pnl >= 0 else "-"
@@ -684,9 +682,8 @@ def _key_metric(bot_name: str, payload: dict) -> str:
 # Families that carry a comparable cumulative PnL (pnl_total) — these get windowed
 # PnL. accumulation_bot heartbeats holdings/realized (its pnl_total is a flat 0), so it
 # is a detail family: its rows show the payload summary, not a misleading windowed $0.
-_PNL_FAMILIES = {"live_bot", "grid_bot", "swing_bot", "account_bot"}
-_FAMILY_ORDER = ["live_bot", "grid_bot", "swing_bot", "account_bot",
-                 "accumulation_bot", "feed", "feed5m", "cex_feed", "indicators"]
+_PNL_FAMILIES = {"live_bot"}
+_FAMILY_ORDER = ["live_bot", "accumulation_bot", "feed", "feed5m", "cex_feed", "indicators"]
 def _family_title(fam: str) -> str:
     """"<bot_name> · <translated descriptor>". The bot name is a literal identifier; only
     the descriptor is translated (i18n key fam_<bot_name>)."""
@@ -916,8 +913,8 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
                 else t("card_collect_failed", err=escape(str(error))))
         return f"<div class='account'>{header}<p class='no-data'>⚠ {_msg}</p></div>"
 
-    # Determine whether this account runs Polymarket bots (live_bot / account_bot).
-    _POLY_BOT_NAMES = {"live_bot", "account_bot"}
+    # Determine whether this account runs Polymarket bots (live_bot).
+    _POLY_BOT_NAMES = {"live_bot"}
     has_poly = any(r["bot_name"] in _POLY_BOT_NAMES for r in (hb_rows or []))
 
     live = data.get("live")
@@ -929,7 +926,7 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
     # the single source of truth shared with the pills and the fleet headline. live.db
     # is used only for the Polymarket win-rate and the trade tables further below.
     primary = None
-    for _name in ("live_bot", "account_bot", "grid_bot", "swing_bot"):
+    for _name in ("live_bot",):
         primary = next((r for r in (hb_rows or []) if r["bot_name"] == _name), None)
         if primary:
             break

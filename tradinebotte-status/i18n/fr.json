@@ -45,9 +45,6 @@
 
   "no_hb_data": "Aucune donnée de heartbeat disponible",
   "fam_live_bot": "Polymarket",
-  "fam_grid_bot": "grille CEX",
-  "fam_swing_bot": "swing CEX",
-  "fam_account_bot": "consommateur de flux Polymarket",
   "fam_accumulation_bot": "accumulation CEX",
   "fam_feed": "Polymarket 15M",
   "fam_feed5m": "Polymarket 5M",
@@ -113,7 +110,6 @@
   "k_cap": "cap=",
   "k_open": "ouv=",
   "k_book": "carnet=",
-  "k_feed": "flux=",
   "k_data": "données=",
   "k_ws_on": "ws=✓",
   "k_ws_off": "ws=✗",
