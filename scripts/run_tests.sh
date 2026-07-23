@@ -81,6 +81,32 @@ else
     echo "ℹ️  No data/*.db files found — multi-DB backtest skipped"
 fi
 
+# ── CEX engine fidelity harness ───────────────────────────────────
+# Drives the REAL strategy_engines (grid/swing) on replayed klines and prints the delta vs the
+# re-implemented backtest — the delta IS the drift (docs/backtest-fidelity.md §3). Runs only where
+# a kline dataset is present; data DBs are not in git, so this skips in CI, where the in-memory
+# test_backtest_engine_parity already guards the engine. Non-blocking.
+_kline_db=""
+for _db in "$PROJECT_DIR"/data/*.db; do
+    [ -e "$_db" ] || continue
+    if "$PYTHON" -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); \
+        sys.exit(0 if 'klines' in [r[0] for r in c.execute(\"SELECT name FROM sqlite_master WHERE type='table'\")] else 1)" \
+        "$_db" 2>/dev/null; then
+        _kline_db="$_db"; break
+    fi
+done
+if [ -n "$_kline_db" ]; then
+    echo ""
+    echo "=== CEX engine fidelity harness ($(basename "$_kline_db")) ==="
+    for _strat in grid swing; do
+        "$PYTHON" analysis/backtest_engine.py "$_kline_db" --strategy "$_strat" \
+            || { echo "⚠️  Engine harness ($_strat) non-blocking — check manually"; true; }
+    done
+else
+    echo ""
+    echo "ℹ️  No kline data/*.db found — CEX engine fidelity harness skipped"
+fi
+
 # ── Documentation audit ───────────────────────────────────────────
 if command -v claude &>/dev/null; then
     echo ""
