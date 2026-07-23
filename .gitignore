@@ -62,7 +62,9 @@ bot_id_*
 *.db
 .coverage
 notes/audit170526.md
-tradinetools.egg-info/
+# Python build artifacts (a `pip install <pkg>/` from the repo drops these in the source tree)
+build/
+*.egg-info/
 
 # backtest / analysis databases + generated reports (runtime artifacts, never source)
 data/
