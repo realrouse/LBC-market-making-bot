@@ -116,7 +116,7 @@ _rsync() {
         --exclude='__pycache__' --exclude='*.pyc' \
         --exclude='config.json' --exclude='live.db' --exclude='*.log' \
         --exclude='scripts' --exclude='tests' \
-        --exclude='account_bot.py' --exclude='feed.py' \
+        --exclude='feed.py' \
         -e "ssh $ssh_opts" \
         "$LOCAL_REPO/tradinebotte-polymarket/" "$SA_USER@$SERVER:$INSTALL_DIR/" 2>&1 || return 1
 

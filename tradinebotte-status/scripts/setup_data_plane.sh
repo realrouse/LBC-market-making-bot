@@ -7,7 +7,7 @@
 #   - tradinebotte-feed5m.service  (5M Polymarket feed, TCP :5557)
 #   - tradinebotte-cexfeed.service (Binance + MEXC CEX feed, TCP :5563)
 #   - tradinetools refreshed in the venv site-packages (cex_feed needs PORT_CEX_FEED)
-#   - account_bot feed_auto_start=false (don't spawn a duplicate feed)
+#   - feed_auto_start=false in the bot config (don't spawn a duplicate feed)
 #
 # Safe to re-run. Restarts the feeds (consumers reconnect via ZMQ, ~seconds).
 #
@@ -88,7 +88,7 @@ p = os.path.expanduser("~/tradinebotte/config.json")
 c = json.load(open(p)) if os.path.exists(p) else {}
 c["feed_auto_start"] = False
 json.dump(c, open(p, "w"), indent=2)
-print("  account_bot feed_auto_start=false")
+print("  feed_auto_start=false")
 PY
 mkdir -p "$HOME/feed5m"
 

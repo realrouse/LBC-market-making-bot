@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # test_standalone_deploy.sh — Standalone (live_bot.py) integration test
 #
-# Verifies that the standalone deployment (Option A, no shared feed) works
+# Verifies that the standalone deployment (live_bot.py, no shared feed) works
 # correctly for the designated standalone user (TEST_STANDALONE_USER_IDX).
 #
 # Tested scenario:

@@ -14,7 +14,7 @@
 #
 # Usage:
 #   bash tradinebotte-status/scripts/heartbeat_status.sh
-#   bash tradinebotte-status/scripts/heartbeat_status.sh --require account_bot --require live_bot
+#   bash tradinebotte-status/scripts/heartbeat_status.sh --require live_bot
 #   bash tradinebotte-status/scripts/heartbeat_status.sh --collector-idx 0
 #   bash tradinebotte-status/scripts/heartbeat_status.sh --stale-after 3600 --dead-after 7200
 #
