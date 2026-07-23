@@ -47,7 +47,6 @@
   "fam_live_bot": "Polymarket",
   "fam_grid_bot": "CEX grid",
   "fam_swing_bot": "CEX swing",
-  "fam_orderbook_bot": "CEX orderbook",
   "fam_account_bot": "Polymarket feed consumer",
   "fam_accumulation_bot": "CEX accumulation",
   "fam_feed": "Polymarket 15M",

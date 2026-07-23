@@ -21,7 +21,7 @@ DEFAULT_INVENTORY = os.path.join(os.path.dirname(_HERE), "inventory.toml")
 _TAG = {
     "live_bot": "poly", "feed": "poly", "feed5m": "poly",
     "accumulation_bot": "accum", "grid_bot": "grid", "swing_bot": "swing",
-    "orderbook_bot": "ob", "cex_feed": "cex", "status_collector": "status",
+    "cex_feed": "cex", "status_collector": "status",
     "indicators": "",
 }
 _TAG_ORDER = ["poly", "accum", "grid", "swing", "ob", "cex", "status"]
@@ -34,7 +34,7 @@ _TAG_ORDER = ["poly", "accum", "grid", "swing", "ob", "cex", "status"]
 # before "feed", else the wrong tag wins.
 _TAG_KEYWORDS = [("polymarket", "poly"), ("threshold", "poly"),
                  ("accum", "accum"), ("grid", "grid"), ("swing", "swing"),
-                 ("orderbook", "ob"), ("cex-feed", "cex"), ("cexfeed", "cex"),
+                 ("cex-feed", "cex"), ("cexfeed", "cex"),
                  ("status", "status"), ("indicators", ""), ("feed", "poly")]
 
 

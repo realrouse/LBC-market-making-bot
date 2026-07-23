@@ -26,6 +26,8 @@ All notable changes to this project are documented here.
 
 - **`scripts/deploy_engine.py`** — the Phase-A bounded-parallel deploy scheduler. It layered concurrency over the old per-family bash deployers to speed up a fleet redeploy; once every bot moved to the native single-tree deployer (whose steps take seconds, not the minutes the bash deployers cost), its entire reason to exist was gone, and nothing invoked it. Its test went with it. The design document is kept as history.
 
+- **The orderbook bot, retired entirely.** `orderbook_bot.py` was disabled in June as structurally unprofitable and kept only as dead code; it is now removed along with its backtest (`analysis/backtest_orderbook.py`), its strategy file, its status-page rendering (payload summary + key-metric branches, the family label, the i18n string), and its inventory placeholder. The orderbook *indicator* streams (OBI/depth microstructure feeding other bots) are unrelated and untouched. Documentation prose still mentioning it will be swept in the docs rewrite.
+
 ### Removed
 - **Four completed one-shot migration and test scripts.** `migrate_to_user_services.sh`, `migrate_claude1_services.sh` and `migrate_cex_bots.sh` each performed a one-time move of running bots onto systemd user units; that move finished long ago on every account, and new accounts are installed directly onto user units by the deploy engine, so the scripts could only ever be run against an already-migrated fleet. `test_all_accounts.sh` drove a clean-install test of the multi-bot-per-account deployment that no longer exists. The multi-account installation note in the install guide now points at the deploy engine instead.
 

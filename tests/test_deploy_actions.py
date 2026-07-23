@@ -79,7 +79,7 @@ class TestNativeTarget(unittest.TestCase):
         self.assertEqual(da.native_target("infra-status"), ("infra", "status"))
 
     def test_unknown_returns_none(self):
-        self.assertIsNone(da.native_target("cex-orderbook"))
+        self.assertIsNone(da.native_target("cex-nonexistent"))
         self.assertIsNone(da.native_target(""))
 
     def test_every_target_is_a_real_deployer(self):

@@ -64,7 +64,7 @@ class TestNativeCoverage(unittest.TestCase):
     cycle detector would ship untested."""
 
     def test_unknown_bot_type_flagged(self):
-        rows = [{"account_idx": 1, "bot_name": "x", "bot_type": "cex-orderbook"}]  # no native target
+        rows = [{"account_idx": 1, "bot_name": "x", "bot_type": "cex-nonexistent"}]  # no native target
         self.assertTrue(any("no native deploy target" in p for p in ci.check_native_coverage(rows)))
 
     def test_known_bot_type_ok(self):

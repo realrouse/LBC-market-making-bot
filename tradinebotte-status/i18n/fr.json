@@ -47,7 +47,6 @@
   "fam_live_bot": "Polymarket",
   "fam_grid_bot": "grille CEX",
   "fam_swing_bot": "swing CEX",
-  "fam_orderbook_bot": "carnet CEX",
   "fam_account_bot": "consommateur de flux Polymarket",
   "fam_accumulation_bot": "accumulation CEX",
   "fam_feed": "Polymarket 15M",
