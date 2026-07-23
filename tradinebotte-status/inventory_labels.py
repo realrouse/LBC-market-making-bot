@@ -10,7 +10,10 @@ so a missing/malformed inventory never takes down the live status page.
 from __future__ import annotations
 
 import os
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python < 3.11 (tomllib is stdlib only in 3.11+)
+    import tomli as tomllib
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_INVENTORY = os.path.join(os.path.dirname(_HERE), "inventory.toml")

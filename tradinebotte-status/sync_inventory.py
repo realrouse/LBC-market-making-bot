@@ -26,7 +26,10 @@ import argparse
 import os
 import subprocess
 import sys
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python < 3.11 (tomllib is stdlib only in 3.11+)
+    import tomli as tomllib
 
 # Make `tradinetools` importable whether run from the repo or a deployed install dir.
 _HERE = os.path.dirname(os.path.abspath(__file__))

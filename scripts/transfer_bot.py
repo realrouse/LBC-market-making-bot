@@ -21,7 +21,10 @@ import argparse
 import os
 import subprocess
 import sys
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python < 3.11 (tomllib is stdlib only in 3.11+)
+    import tomli as tomllib
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "scripts"))
