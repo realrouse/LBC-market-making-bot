@@ -1,6 +1,10 @@
 # Moteur de déploiement — Design & plan par phases
 
 > Statut : **proposition / brouillon à itérer.**
+>
+> ⚠ **`scripts/deploy_engine.py` (Phase A, l'ordonnanceur parallèle borné) a été RETIRÉ le 2026-07-23** —
+> le déploiement natif single-tree a éliminé les étapes bash lentes qu'il parallélisait, le laissant
+> orphelin. Ce document est conservé pour l'historique de design ; en attente d'une réécriture P5.
 > Companion de [`audit-and-inventory-deploy-plan.md`](audit-and-inventory-deploy-plan.md),
 > qui a livré le *dispatcher* piloté par l'inventaire (Phases 1/2/2b **faites**). Ce document
 > propose l'étape suivante que ce plan avait différée : remplacer les **moteurs bash** par-famille

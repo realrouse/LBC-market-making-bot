@@ -1,6 +1,10 @@
 # Deploy Engine — Design & Phased Plan
 
 > Status: **proposal / draft to iterate on.**
+>
+> ⚠ **`scripts/deploy_engine.py` (Phase A, the bounded-parallel scheduler) was RETIRED 2026-07-23** —
+> the native single-tree deploy eliminated the slow bash steps it parallelised, leaving it orphaned.
+> This doc is kept for the broader design history; pending a P5 rewrite.
 > Companion to [`audit-and-inventory-deploy-plan.md`](audit-and-inventory-deploy-plan.md),
 > which delivered the inventory-driven *dispatcher* (Phases 1/2/2b **done**). This document
 > proposes the next step that plan deferred: replacing the per-family **bash engines** with a
