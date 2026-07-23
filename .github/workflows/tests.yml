@@ -22,7 +22,11 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install pytest
-        pip install -e tradinetools/
+        # NON-editable: the repo root holds an outer `tradinetools/` dir (no __init__.py). Under
+        # `python -m pytest` the repo root is on sys.path, so an editable install lets that dir
+        # shadow the package as a namespace ("cannot import name … from 'tradinetools'"). A real
+        # install into site-packages is a regular package and wins.
+        pip install tradinetools/
     - name: Run tests
       # pytest per dir (matches scripts/run_tests.sh) so each subproject's conftest.py isolation
       # applies here too — the canonical runner and CI run the same thing.
