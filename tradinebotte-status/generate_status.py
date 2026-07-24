@@ -571,7 +571,9 @@ def _fmt_pnl(v) -> str:
 def _fmt_ts(ts) -> str:
     if not ts:
         return "—"
-    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%H:%M:%S")
+    # Full UTC date + time for the trade tables — a bare HH:MM:SS is ambiguous across days
+    # (the live per-trade log spans weeks).
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _wr(w: int, l: int) -> str:

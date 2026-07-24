@@ -75,7 +75,7 @@
   "services": "Services",
 
   "th_num": "#",
-  "th_time": "Heure",
+  "th_time": "Date / heure (UTC)",
   "th_dir": "Sens",
   "th_result": "Résultat",
   "th_entry": "Entrée",
@@ -148,7 +148,7 @@
   "lt_capped": "affichage des {n} plus récentes sur {total}",
   "lt_no_trades": "aucune transaction enregistrée",
   "lt_none": "aucun bot en argent réel",
-  "tt_time": "Heure",
+  "tt_time": "Date / heure (UTC)",
   "tt_side": "Sens",
   "tt_reason": "Raison",
   "tt_price": "Prix",
