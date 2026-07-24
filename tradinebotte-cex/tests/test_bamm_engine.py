@@ -30,10 +30,10 @@ class TestBammEngineShadow(unittest.TestCase):
             ts = types.SimpleNamespace(mid=px, obi_ema=0.0, spread_bps=10.0, ts_ms=1)
             asyncio.run(eng.on_book_update(state, ts))
 
-    def test_bamm_detected_and_shadow_forced(self):
-        eng = _eng(shadow=False)              # bamm live is not wired → must force shadow
+    def test_bamm_detected_and_shadow_respected(self):
+        eng = _eng(shadow=True)
         self.assertTrue(eng.bamm)
-        self.assertTrue(eng.shadow)
+        self.assertTrue(eng.shadow)                   # configured shadow stays shadow
 
     def test_grid_inits_and_sim_buys_on_a_dip(self):
         eng = _eng()
@@ -53,6 +53,93 @@ class TestBammEngineShadow(unittest.TestCase):
         self._run(eng, [0.00278, 0.00300, 0.00320])       # rip up → sim sells the seeded asks
         self.assertGreater(eng._bamm.n_sells, 0)
         self.assertEqual(eng.acc.holdings_btc, 3765.0)    # SAFETY: real position not moved
+
+
+class _MockEx:
+    """Minimal MEXC-shaped exchange: records maker orders, lets a test fill them, and answers
+    get_order / get_open_orders / cancel_order the way reconcile_order expects."""
+    def __init__(self):
+        self.orders = {}
+        self.n = 0
+
+    async def post_order(self, _session, _symbol, price, usdt=None, *, quantity=None,
+                         side="BUY", order_type=None):
+        self.n += 1
+        oid = f"o{self.n}"
+        qty = float(quantity) if quantity is not None else float(usdt) / price
+        self.orders[oid] = {"order_id": oid, "status": "NEW", "executed_qty": 0.0,
+                            "cummulative_quote_qty": 0.0, "price": price, "qty": qty, "side": side}
+        return oid
+
+    async def get_order(self, _session, _symbol, oid):
+        return self.orders.get(oid)
+
+    async def get_open_orders(self, _session, _symbol):
+        return [o for o in self.orders.values() if o["status"] in ("NEW", "PARTIALLY_FILLED")]
+
+    async def cancel_order(self, _session, _symbol, oid):
+        if oid in self.orders:
+            self.orders[oid]["status"] = "CANCELED"
+
+    def fill(self, oid):
+        o = self.orders[oid]
+        o["status"] = "FILLED"
+        o["executed_qty"] = o["qty"]
+        o["cummulative_quote_qty"] = o["qty"] * o["price"]
+
+
+class TestBammLiveExec(unittest.TestCase):
+    """The real-money path against a mock exchange: places a ladder, and a fill spawns the paired
+    order while the REAL wallet is credited from the actual fill deltas."""
+
+    def _live_eng(self):
+        eng = _eng(shadow=True)          # constructed keyless → live cleared → shadow
+        eng._api = _MockEx()             # stub the connector, force live like the accum tests do
+        eng.live = True
+        eng.shadow = False
+        eng.acc.holdings_btc = 0.0
+        eng.acc.free_usdt = 150.0
+        return eng
+
+    def _tick(self, eng, px):
+        state = types.SimpleNamespace(conn=None, session=None)
+        # _record_accum_trade needs a conn; give it a throwaway in-memory sqlite with the schema
+        import sqlite3
+        conn = sqlite3.connect(":memory:")
+        eng.ensure_schema(conn)
+        state.conn = conn
+        eng._check_drift = _noop_async          # skip the balance-drift probe (no real balances)
+        ts = types.SimpleNamespace(mid=px, obi_ema=0.0, spread_bps=10.0, ts_ms=1)
+        asyncio.run(eng.on_book_update(state, ts))
+
+    def test_places_ladder_then_a_fill_spawns_the_paired_sell(self):
+        eng = self._live_eng()
+        self._tick(eng, 0.00250)                       # price below top → bids rest on rungs
+        self.assertTrue(eng.acc.open_buys, "should rest a buy ladder")
+        self.assertEqual(eng.acc.holdings_btc, 0.0)    # nothing filled yet
+        # fill one resting buy, tick again → it should credit + rest the paired sell
+        oid, rec = next(iter(eng.acc.open_buys.items()))
+        coins = rec["orig_qty"]
+        eng._api.fill(oid)
+        self._tick(eng, 0.00250)
+        self.assertAlmostEqual(eng.acc.holdings_btc, coins, places=3)   # real credit
+        self.assertLess(eng.acc.free_usdt, 150.0)                       # real USDT spent
+        self.assertTrue(eng.acc.open_sells, "a filled buy must rest its paired sell")
+        self.assertNotIn(oid, eng.acc.open_buys)
+
+    def test_sell_fill_books_realized_and_rebuys(self):
+        eng = self._live_eng()
+        self._tick(eng, 0.00250)
+        boid, brec = next(iter(eng.acc.open_buys.items()))
+        eng._api.fill(boid); self._tick(eng, 0.00250)          # buy fills → sell rests
+        soid, srec = next(iter(eng.acc.open_sells.items()))
+        eng._api.fill(soid); self._tick(eng, 0.00250)          # sell fills → rebuy rests
+        self.assertGreater(eng.acc.total_realized, 0.0)        # grid profit booked
+        self.assertNotIn(soid, eng.acc.open_sells)
+
+
+async def _noop_async(*_a, **_k):
+    return None
 
 
 if __name__ == "__main__":

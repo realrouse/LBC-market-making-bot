@@ -181,6 +181,9 @@ class AccumState:
     # pending_buy because the lifecycles genuinely differ — bids are one-at-a-time and
     # staleness-driven, sells are a declarative ladder re-armed against avg_entry.
     open_sells:         dict  = field(default_factory=dict)
+    # BAMM only: the resting BUY ladder (order_id -> record + rung). The avg-entry engine rests
+    # ONE bid (pending_buy); BAMM rests a whole ladder, so it needs its own book like open_sells.
+    open_buys:          dict  = field(default_factory=dict)
     # Tripped when internal books over-claim vs the exchange: blocks ALL placement.
     halted:             bool  = False
     peak_holdings_btc:  float = 0.0
@@ -497,8 +500,9 @@ class AccumulationStrategy:
         self.bamm = (cfg.get("strategy_type") == "bamm")
         self._bamm = None            # bamm.BammGrid, built lazily on the first tick (needs a price)
         self._bamm_last_price = 0.0
-        if self.bamm and not self.shadow:
-            logger.error("BAMM live placement is NOT wired yet — forcing shadow=true.")
+        if self.bamm and not self.shadow and not self.live:
+            logger.error("BAMM live requested but the connector did not load (key/precision?) — "
+                         "forcing shadow=true (places nothing).")
             self.shadow = True
 
     # ── Schema ────────────────────────────────────────────────────────────────
@@ -757,6 +761,168 @@ class AccumulationStrategy:
                         "free=$%.2f eq=$%.2f buys=%d sells=%d", price, nb, len(book) - nb,
                         g.holdings, g.stash, g.free_usdt, g.free_usdt + g.holdings * price,
                         g.n_buys, g.n_sells)
+
+    # ── BAMM LIVE execution: a resting buy+sell ladder on MEXC (mirrors the sell-ladder path) ───
+
+    async def _bamm_live_tick(self, state: Any, price: float, ts_ms: int) -> None:
+        self._bamm_ensure(price)
+        if not self._adopted:
+            await self._bamm_adopt(state)
+        await self._bamm_reconcile(state, ts_ms)      # credit fills → settle → place the paired order
+        await self._bamm_rearm(state, price, ts_ms)   # place missing rungs, cancel stale ones
+        await self._check_drift(state)                # halt if our book over-claims vs the exchange
+        a = self.acc
+        a.last_price = price
+        a.last_write_ts = time.time()
+        a.snap_counter += 1
+        if a.snap_counter % max(1, int(a.p.get("snapshot_every_n", 20))) == 0:
+            g = self._bamm
+            logger.info("BAMM book [LIVE] mid=%.6f bids=%d asks=%d | held=%.0f stash=%.0f free=$%.2f "
+                        "realized=$%.2f buys=%d sells=%d", price, len(a.open_buys), len(a.open_sells),
+                        a.holdings_btc, g.stash, a.free_usdt, a.total_realized, g.n_buys, g.n_sells)
+
+    async def _bamm_adopt(self, state: Any) -> None:
+        """Clean-slate cutover: cancel EVERY open order on the symbol, then let the ladder re-arm
+        from the REAL holdings. Simpler + far safer than partial adoption — a restart can never
+        double-place or lose track of a real order; it just rebuilds the ladder (rare event)."""
+        a = self.acc
+        oo = await self._api.get_open_orders(state.session, self.symbol)
+        n = 0
+        for o in (oo or []):
+            await self._api.cancel_order(state.session, self.symbol, o["order_id"])
+            n += 1
+        a.open_buys.clear()
+        a.open_sells.clear()
+        self._adopted = True
+        logger.warning("BAMM adopt [%s]: cancelled %d open order(s); clean ladder rebuild from %.0f coins",
+                       "SHADOW" if self.shadow else "LIVE", n, a.holdings_btc)
+
+    async def _bamm_reconcile(self, state: Any, ts_ms: int) -> None:
+        """Credit fills on every resting BAMM order, then settle any that FILLED and rest its paired
+        order (buy→sell one rung up, sell→rebuy one rung down). Runs BEFORE re-arm so a fill that
+        landed between ticks is credited before its order could be cancelled."""
+        a = self.acc
+        if not (a.open_buys or a.open_sells):
+            return
+        oo = await self._api.get_open_orders(state.session, self.symbol)
+        if oo is None:
+            return                                        # transient error → assume nothing
+        live = {o["order_id"]: o for o in oo}
+        for oid, rec in list(a.open_buys.items()):
+            view = live.get(oid) or await self._api.get_order(state.session, self.symbol, oid)
+            new_rec, dqty, dquote, action = reconcile_order(rec, view)
+            if dqty > 0:
+                self._bamm_credit_buy(state, dqty, dquote, ts_ms, rec["rung"])
+            if new_rec is None:
+                a.open_buys.pop(oid, None)
+                if action == "filled":
+                    order = self._bamm.on_buy_settled(rec["rung"], rec["orig_qty"])
+                    await self._bamm_place(state, "SELL", rec["rung"], order["price"], order["coins"], ts_ms)
+            else:
+                a.open_buys[oid] = new_rec
+        for oid, rec in list(a.open_sells.items()):
+            view = live.get(oid) or await self._api.get_order(state.session, self.symbol, oid)
+            new_rec, dqty, dquote, action = reconcile_order(rec, view)
+            if dqty > 0:
+                self._bamm_credit_sell(state, dqty, dquote, ts_ms, rec["rung"])
+            if new_rec is None:
+                a.open_sells.pop(oid, None)
+                if action == "filled":
+                    order = self._bamm.on_sell_settled(rec["rung"], rec["orig_qty"])
+                    await self._bamm_place(state, "BUY", rec["rung"], order["price"], order["coins"], ts_ms)
+            else:
+                a.open_sells[oid] = new_rec
+
+    def _bamm_credit_buy(self, state: Any, dqty: float, dquote: float, ts_ms: int, rung: int) -> None:
+        a = self.acc
+        a.holdings_btc += dqty
+        a.free_usdt    -= dquote
+        a.peak_holdings_btc = max(a.peak_holdings_btc, a.holdings_btc)
+        a.last_write_ts = time.time()
+        self._record_accum_trade(state.conn, ts_ms=ts_ms, side="buy", reason="bamm",
+                                 price=(dquote / dqty if dqty else 0.0), qty=dqty, quote=dquote, fee=0.0)
+        logger.info("BAMM BUY fill +%.0f @ %.6f rung%d | held=%.0f free=$%.2f",
+                    dqty, (dquote / dqty if dqty else 0.0), rung, a.holdings_btc, a.free_usdt)
+
+    def _bamm_credit_sell(self, state: Any, dqty: float, dquote: float, ts_ms: int, rung: int) -> None:
+        a = self.acc
+        fill_price = dquote / dqty if dqty > 0 else 0.0
+        a.holdings_btc -= dqty
+        a.free_usdt    += dquote
+        rprice = self._bamm.rungs[rung]["price"] if 0 <= rung < len(self._bamm.rungs) else fill_price
+        a.total_realized += dqty * (fill_price - rprice)   # grid profit on the spread, not vs avg_entry
+        a.last_write_ts = time.time()
+        self._record_accum_trade(state.conn, ts_ms=ts_ms, side="sell", reason="bamm",
+                                 price=fill_price, qty=dqty, quote=dquote, fee=0.0)
+        logger.info("BAMM SELL fill -%.0f @ %.6f rung%d | held=%.0f free=$%.2f realized=$%.2f",
+                    dqty, fill_price, rung, a.holdings_btc, a.free_usdt, a.total_realized)
+
+    async def _bamm_rearm(self, state: Any, mid: float, ts_ms: int) -> None:
+        """Declarative: desired resting orders are a pure function of grid state, so place what is
+        missing and cancel any order whose rung no longer wants that side. Idempotent."""
+        a = self.acc
+        if a.halted:
+            return
+        desired = self._bamm.desired_orders(mid)
+        have_buy  = {rec["rung"] for rec in a.open_buys.values()}
+        have_sell = {rec["rung"] for rec in a.open_sells.values()}
+        want_buy  = {d["rung"] for d in desired if d["side"] == "buy"}
+        want_sell = {d["rung"] for d in desired if d["side"] == "sell"}
+        for d in desired:
+            if d["side"] == "buy" and d["rung"] not in have_buy:
+                await self._bamm_place(state, "BUY", d["rung"], d["price"], d["coins"], ts_ms)
+            elif d["side"] == "sell" and d["rung"] not in have_sell:
+                await self._bamm_place(state, "SELL", d["rung"], d["price"], d["coins"], ts_ms)
+        for oid, rec in list(a.open_buys.items()):
+            if rec["rung"] not in want_buy:
+                await self._api.cancel_order(state.session, self.symbol, oid)
+                a.open_buys.pop(oid, None)
+        for oid, rec in list(a.open_sells.items()):
+            if rec["rung"] not in want_sell:
+                await self._api.cancel_order(state.session, self.symbol, oid)
+                a.open_sells.pop(oid, None)
+
+    async def _bamm_place(self, state: Any, side: str, rung: int, price: float,
+                          coins: float, ts_ms: int) -> bool:
+        """Place ONE resting post-only order (BUY or SELL) and track it. Holdings/free are NOT
+        moved here — only on fill, in the credit helpers. Shadow logs intent and places nothing."""
+        a = self.acc
+        if a.halted or time.time() < self._retry_after:
+            return False
+        pd = decimals_for_price(price)
+        if coins * price < a.p.get("sell_min_notional_usdt", 1.1):
+            return False                                  # dust — MEXC rejects < ~1 USDT
+        if side == "BUY" and coins * price > a.free_usdt + a.p.get("buy_dust_tolerance_usdt", 0.01):
+            return False                                  # not enough USDT for this rung yet
+        if self.shadow:
+            logger.info("BAMM SHADOW would %s rung%d %.0f @ %.*f — placing nothing", side, rung, coins, pd, price)
+            return False
+        if side == "BUY":
+            oid = await self._api.post_order(state.session, self.symbol, price, coins * price, side="BUY")
+        else:
+            oid = await self._api.post_order(state.session, self.symbol, price, quantity=coins,
+                                             side="SELL", order_type="LIMIT_MAKER")
+        if not oid or str(oid).startswith("sim_"):
+            self._fail_streak += 1
+            backoff = min(_PLACE_BACKOFF_BASE_S * 2 ** (self._fail_streak - 1), _PLACE_BACKOFF_MAX_S)
+            self._retry_after = time.time() + backoff
+            logger.error("BAMM %s rung%d placement failed (oid=%s, %.0f @ %.*f = %.2f USDT). "
+                         "Retry #%d backing off %.0fs.", side, rung, oid, coins, pd, price,
+                         coins * price, self._fail_streak, backoff)
+            return False
+        self._fail_streak = 0
+        self._retry_after = 0.0
+        # LIMIT_MAKER returns an id even when it auto-cancels for crossing — confirm it rests.
+        view = await self._api.get_order(state.session, self.symbol, str(oid))
+        if view is not None and view.get("status") in ("CANCELED", "EXPIRED", "REJECTED"):
+            logger.info("BAMM %s rung%d @ %.*f auto-canceled (post-only would cross) — re-plan next tick",
+                        side, rung, pd, price)
+            return False
+        rec = {"order_id": str(oid), "rung": rung, "price": price, "orig_qty": coins,
+               "executed_qty_seen": 0.0, "quote_spent_seen": 0.0, "placed_ts": time.time()}
+        (a.open_buys if side == "BUY" else a.open_sells)[str(oid)] = rec
+        logger.info("BAMM maker %s placed rung%d %.0f @ %.*f id=%s", side, rung, coins, pd, price, oid)
+        return True
 
     def _record_accum_trade(self, conn: Any, *, ts_ms: int, side: str, reason: str,
                             price: float, qty: float, quote: float, fee: float,
@@ -1488,8 +1654,11 @@ class AccumulationStrategy:
             return
         if self.bamm:
             a.last_price = float(mid)
-            await self._bamm_tick(state, float(mid),
-                                  int(getattr(ts, "ts_ms", None) or time.time() * 1000))
+            _ts = int(getattr(ts, "ts_ms", None) or time.time() * 1000)
+            if self.live and not self.shadow:
+                await self._bamm_live_tick(state, float(mid), _ts)   # real orders on MEXC
+            else:
+                await self._bamm_tick(state, float(mid), _ts)        # shadow: simulate + log
             return
         self._ensure_earn(state)
         conn  = state.conn

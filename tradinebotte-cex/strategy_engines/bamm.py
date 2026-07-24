@@ -191,28 +191,40 @@ class BammGrid:
                     out.append({"side": "sell", "rung": i, "price": px, "coins": coins})
         return out
 
-    def on_buy_fill(self, i: int, coins: float) -> None:
-        """A bid at rung i filled for `coins`. Bank the stash, flip the rung to an ask of the rest."""
+    # State-only transitions (no wallet) — LIVE calls these; the real wallet is credited from real
+    # fills by the engine. Each returns the paired order the engine must now rest.
+    def on_buy_settled(self, i: int, coins: float) -> dict:
+        """Rung i's buy fully filled for `coins`: bank the stash, flip to an ask of the rest, and
+        return the SELL to rest one rung up."""
         r = self.rungs[i]
-        px = r["price"]
-        self.free_usdt -= coins * px * (1.0 + self.maker_fee)
-        self.holdings += coins
         stash = coins * self.stash_pct
         self.stash += stash
         r["mode"] = "ask"
         r["loop_coins"] = coins - stash          # only the 90% is offered for sale
         self.n_buys += 1
+        return {"price": self._ask_price(i), "coins": r["loop_coins"]}
 
-    def on_sell_fill(self, i: int, coins: float) -> None:
-        """An ask at rung i filled for `coins`. Book grid profit, flip the rung back to a rebuy bid."""
+    def on_sell_settled(self, i: int, coins: float) -> dict:
+        """Rung i's ask fully filled for `coins`: flip back to a rebuy bid and return the BUY to
+        rest one rung down (back at the origin rung price)."""
         r = self.rungs[i]
-        ask_px = self._ask_price(i)
-        self.free_usdt += coins * ask_px * (1.0 - self.maker_fee)
-        self.holdings -= coins
-        self.realized_usdt += coins * (ask_px - r["price"])
         r["mode"] = "bid"
         r["loop_coins"] = coins                  # rebuy exactly what we sold, back at r["price"]
         self.n_sells += 1
+        return {"price": r["price"], "coins": coins}
+
+    # Sim-wallet variants — SHADOW/BACKTEST only (drive the internal wallet + realized).
+    def on_buy_fill(self, i: int, coins: float) -> None:
+        self.free_usdt -= coins * self.rungs[i]["price"] * (1.0 + self.maker_fee)
+        self.holdings += coins
+        self.on_buy_settled(i, coins)
+
+    def on_sell_fill(self, i: int, coins: float) -> None:
+        ask_px = self._ask_price(i)
+        self.free_usdt += coins * ask_px * (1.0 - self.maker_fee)
+        self.holdings -= coins
+        self.realized_usdt += coins * (ask_px - self.rungs[i]["price"])
+        self.on_sell_settled(i, coins)
 
     def snapshot(self, mid: float) -> dict:
         return {"holdings": self.holdings, "stash": self.stash, "free_usdt": self.free_usdt,
