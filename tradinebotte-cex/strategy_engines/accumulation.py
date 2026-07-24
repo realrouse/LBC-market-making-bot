@@ -30,6 +30,10 @@ import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
+try:                       # sibling module — works both as a package submodule and flat-imported
+    from . import bamm
+except ImportError:        # accumulation imported flat (tests put strategy_engines on sys.path)
+    import bamm
 from api_common import decimals_for_price
 
 try:
@@ -484,6 +488,19 @@ class AccumulationStrategy:
                 logger.error("LIVE execution requested but connector load failed — staying PAPER: %s", e)
                 self.live = False
 
+        # ── BAMM (Bullish Accumulating Market Maker) — SHADOW ONLY for now ─────────
+        # strategy_type=bamm routes the tick to a fixed-rung grid (bamm.BammGrid) instead of the
+        # avg-entry ratchet. Shadow only: it SIMULATES fills off the live mid and LOGS intended
+        # orders — never places, never writes accum_state, never overwrites self.acc's real
+        # holdings, never pushes to the shared DB. So sim numbers can't leak into real accounting;
+        # switching a bot to bamm just stops it trading and starts a shadow log.
+        self.bamm = (cfg.get("strategy_type") == "bamm")
+        self._bamm = None            # bamm.BammGrid, built lazily on the first tick (needs a price)
+        self._bamm_last_price = 0.0
+        if self.bamm and not self.shadow:
+            logger.error("BAMM live placement is NOT wired yet — forcing shadow=true.")
+            self.shadow = True
+
     # ── Schema ────────────────────────────────────────────────────────────────
 
     def ensure_schema(self, conn: sqlite3.Connection) -> None:
@@ -670,6 +687,76 @@ class AccumulationStrategy:
                if a.last_price > 0 else {}),
             "last_write_ts":  a.last_write_ts,
         }
+
+    # ── BAMM shadow: fixed-rung grid, simulate fills off the live mid, LOG intended orders ──────
+
+    def _bamm_ensure(self, price: float) -> None:
+        """Build the grid on the first tick: top = configured grid_top or the current mid, down to
+        the hard floor; seed the bot's current holdings as pre-loaded asks (the cutover position)."""
+        if self._bamm is not None:
+            return
+        p = self.acc.p
+        top   = float(p.get("grid_top") or price)
+        step  = float(p.get("grid_step_pct", 5.0))
+        minn  = float(p.get("sell_min_notional_usdt", 1.1))
+        budget = float(p.get("grid_budget_usdt", p.get("capital_usdt", 100.0)))
+        rungs = bamm.build_buy_grid(top=top, floor=float(p.get("grid_floor", 0.001)),
+                                    step_pct=step, budget_usdt=budget,
+                                    sizing_power=float(p.get("grid_sizing_power", 0.5)),
+                                    min_notional_usdt=minn)
+        g = bamm.BammGrid(rungs, step_pct=step, stash_pct=float(p.get("grid_stash_pct", 0.10)),
+                          free_usdt=budget, maker_fee=float(p.get("maker_fee_spot", 0.0)),
+                          min_notional_usdt=minn)
+        seed = float(self.acc.holdings_btc or 0.0)
+        if seed > 0:
+            g.seed_holdings(seed)
+        self._bamm = g
+        self._bamm_last_price = price
+        s = bamm.deploy_summary(rungs)
+        logger.warning("BAMM [SHADOW] grid init: %d rungs %.6f->%.6f budget=$%.0f seed=%.0f coins "
+                       "(full-fill %.0f LBC @ avg %.6f)", s["rungs"], s["top"], s["bottom"],
+                       budget, seed, s["coins"], s["avg_cost"])
+
+    def _bamm_fills(self, g: "bamm.BammGrid", price: float) -> list:
+        """Rungs the CURRENT mid crosses: a resting bid at/above mid → buy fill, a resting ask
+        at/below mid → sell fill. One fill per rung per tick (the rung flips, so it can't refill
+        until it cycles). Conservative vs the backtest's wick model — the mid must reach the level."""
+        fills = []
+        for i, r in enumerate(g.rungs):
+            if r["mode"] == "bid":
+                px, coins = r["price"], r["loop_coins"]
+                if price <= px and coins * px >= g.min_notional and coins * px <= g.free_usdt + 1e-9:
+                    fills.append(("buy", i, coins, px))
+            elif r["mode"] == "ask":
+                ask, coins = g._ask_price(i), r["loop_coins"]
+                if price >= ask and coins * ask >= g.min_notional:
+                    fills.append(("sell", i, coins, ask))
+        return fills
+
+    async def _bamm_tick(self, state: Any, price: float, ts_ms: int) -> None:
+        """One shadow tick: simulate any fills the mid crosses, LOG them + the resting book. Never
+        places, never writes state, never overwrites real holdings/free (nothing actually traded)."""
+        self._bamm_ensure(price)
+        g = self._bamm
+        for side, i, coins, px in self._bamm_fills(g, price):
+            if side == "buy":
+                g.on_buy_fill(i, coins)
+            else:
+                g.on_sell_fill(i, coins)
+            logger.info("BAMM %s [SHADOW] rung%d %.6f x%.0f | held=%.0f stash=%.0f free=$%.2f realized=$%.2f",
+                        side.upper(), i, px, coins, g.holdings, g.stash, g.free_usdt, g.realized_usdt)
+        self._bamm_last_price = price
+        # liveness only — do NOT touch real holdings/free (shadow places nothing)
+        self.acc.last_price = price
+        self.acc.last_write_ts = time.time()
+        self.acc.snap_counter += 1
+        if self.acc.snap_counter % max(1, int(self.acc.p.get("snapshot_every_n", 20))) == 0:
+            book = g.desired_orders(price)
+            nb = sum(1 for o in book if o["side"] == "buy")
+            logger.info("BAMM book [SHADOW] mid=%.6f bids=%d asks=%d | held=%.0f stash=%.0f "
+                        "free=$%.2f eq=$%.2f buys=%d sells=%d", price, nb, len(book) - nb,
+                        g.holdings, g.stash, g.free_usdt, g.free_usdt + g.holdings * price,
+                        g.n_buys, g.n_sells)
 
     def _record_accum_trade(self, conn: Any, *, ts_ms: int, side: str, reason: str,
                             price: float, qty: float, quote: float, fee: float,
@@ -1398,6 +1485,11 @@ class AccumulationStrategy:
         a = self.acc
         mid = getattr(ts, "mid", None)
         if mid is None:
+            return
+        if self.bamm:
+            a.last_price = float(mid)
+            await self._bamm_tick(state, float(mid),
+                                  int(getattr(ts, "ts_ms", None) or time.time() * 1000))
             return
         self._ensure_earn(state)
         conn  = state.conn

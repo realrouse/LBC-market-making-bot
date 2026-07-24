@@ -12,9 +12,8 @@ Operator intent (neofutur):
   • The WHOLE USDT budget is deployed by the floor: Σ(buy-rung USDT) == budget, weighted so a
     DEEPER rung buys MORE ("5% dip → ~5% of funds, 10% dip → ~10%…", tunable via sizing_power) —
     support the price, accumulate cheaper lower.
-  • A permanent accumulation stash on every round trip (the "+coins" ratchet). ⚠ the EXACT stash
-    accounting is a money-critical decision still open — see build_cycle_orders below; not yet
-    implemented, so nothing here places a paired sell/rebuy until it is locked.
+  • Keep 10% of EVERY buy as a permanent accumulation stash (operator-confirmed); the other 90%
+    loops (sell one rung up, rebuy one rung down) — self-funding and net-accumulating.
   • No stop-loss: below the floor the bot is simply out of USDT (the accepted max-loss boundary).
 
 Why fixed rungs (not the old avg-entry ladder): the +10% band stranded for 6 days owing a rebuy it
@@ -219,4 +218,3 @@ class BammGrid:
         return {"holdings": self.holdings, "stash": self.stash, "free_usdt": self.free_usdt,
                 "realized_usdt": self.realized_usdt, "equity": self.free_usdt + self.holdings * mid,
                 "n_buys": self.n_buys, "n_sells": self.n_sells}
-
