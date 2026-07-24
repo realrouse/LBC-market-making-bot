@@ -39,6 +39,13 @@ The load-bearing 2026-07 cleanup is DONE and on `origin/dev`:
 5. **Indicators residuals** needing infra-account (acct-1) log/file access: `btc_dvol` empty-result +
    `btc_full_depth_perp` resync rate (the infra account's `indicators.log`); byte-diff the deployed
    `indicators_all.json` vs repo.
+6. **Give the status page a pinned deploy target instead of running from the dev working tree.** The
+   `tradinebotte-statuspage` systemd `--user` timer runs `generate_status.py` with
+   `WorkingDirectory=/home/neofutur/tradinebotte/tradinebotte` every 2 min — i.e. straight from the live
+   *development* checkout, so any local edit (even uncommitted) reaches the published page on the next tick,
+   with no rsync and no version pin. Deploy it to a pinned/committed tree like every other service (or fold
+   the generator into `deploy_status_service.sh` alongside the collector), so production tracks a deployed
+   revision rather than whatever is currently in the working directory.
 
 ---
 
