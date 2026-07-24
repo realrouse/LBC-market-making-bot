@@ -713,7 +713,7 @@ class AccumulationStrategy:
                           min_notional_usdt=minn)
         seed = float(self.acc.holdings_btc or 0.0)
         if seed > 0:
-            g.seed_holdings(seed)
+            g.seed_holdings(seed, price)
         self._bamm = g
         self._bamm_last_price = price
         s = bamm.deploy_summary(rungs)
@@ -774,6 +774,9 @@ class AccumulationStrategy:
         a = self.acc
         a.last_price = price
         a.last_write_ts = time.time()
+        # Persist real holdings/free so a restart re-seeds the grid from the true position (the
+        # clean-rebuild adopt handles orders; only the wallet must survive). Cheap, once/tick.
+        self._save_state(state.conn)
         a.snap_counter += 1
         if a.snap_counter % max(1, int(a.p.get("snapshot_every_n", 20))) == 0:
             g = self._bamm

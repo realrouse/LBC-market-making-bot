@@ -149,12 +149,22 @@ class TestBammGrid(unittest.TestCase):
         self.assertTrue(all(o["side"] == "buy" and o["price"] < 0.0026 for o in orders))
         self.assertTrue(all(o["coins"] * o["price"] >= g.min_notional - 1e-9 for o in orders))
 
-    def test_seed_holdings_loads_deep_rungs_as_asks(self):
+    def test_seed_holdings_never_rests_a_sell_below_market(self):
         g = self._grid()
-        g.seed_holdings(5000.0)
+        g.seed_holdings(5000.0, mid=0.00278)
         self.assertAlmostEqual(g.holdings, 5000.0)
-        self.assertTrue(any(r["mode"] == "ask" for r in g.rungs))
+        # every loaded ask must be ABOVE the market — never dump the existing bag at a loss
+        for i, r in enumerate(g.rungs):
+            if r["mode"] == "ask":
+                self.assertGreater(g._ask_price(i), 0.00278)
+        self.assertGreater(g.stash, 0)             # the bulk that can't sit above market → stash
         self._held_invariant(g)
+
+    def test_seed_all_stash_when_market_below_whole_grid(self):
+        g = self._grid()
+        g.seed_holdings(5000.0, mid=0.01)          # market above every rung's ask → nothing rests
+        self.assertAlmostEqual(g.stash, 5000.0)
+        self.assertTrue(all(r["mode"] == "bid" for r in g.rungs))
 
 
 if __name__ == "__main__":

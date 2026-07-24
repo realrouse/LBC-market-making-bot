@@ -159,22 +159,27 @@ class BammGrid:
     def _ask_price(self, i: int) -> float:
         return self.rungs[i]["price"] * (1.0 + self.step / 100.0)
 
-    def seed_holdings(self, coins: float) -> None:
-        """Assign pre-existing holdings to the LOWEST rungs as already-loaded ASKs, so they get
-        sold on the way up (cutover from the current position). Coins beyond the grid's capacity
-        become pure stash (never sold)."""
+    def seed_holdings(self, coins: float, mid: float) -> None:
+        """Cutover: assign pre-existing holdings to loaded ASKs whose price is ABOVE `mid`, nearest
+        above first (so they sell on the way up, soonest). NEVER load a rung whose ask is at/below
+        the market — that would dump the position at a loss. Coins that don't fit above the market
+        (the common case for a bullish accumulator's existing bag) become permanent stash: held,
+        never force-sold."""
         left = coins
-        for i in range(len(self.rungs) - 1, -1, -1):     # deepest first
+        for i in sorted(range(len(self.rungs)), key=self._ask_price):   # lowest ask first
             if left <= 0:
                 break
+            ask = self._ask_price(i)
+            if ask <= mid:
+                continue                                  # never rest a sell at/below market
             r = self.rungs[i]
             take = min(left, r["loop_coins"])
-            if take * self._ask_price(i) >= self.min_notional:
+            if take * ask >= self.min_notional:
                 r["mode"] = "ask"
                 r["loop_coins"] = take
                 left -= take
         self.holdings += coins
-        self.stash += max(0.0, left)                      # overflow → permanent stash
+        self.stash += max(0.0, left)                      # everything above-market couldn't hold → stash
 
     def desired_orders(self, mid: float) -> list[dict]:
         """The resting book we WANT right now: a bid at every empty rung below `mid`, an ask at

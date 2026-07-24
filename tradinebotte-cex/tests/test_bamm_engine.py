@@ -50,9 +50,18 @@ class TestBammEngineShadow(unittest.TestCase):
     def test_seed_position_sold_up_but_real_holdings_untouched(self):
         eng = _eng()
         eng.acc.holdings_btc = 3765.0                     # the current live position
-        self._run(eng, [0.00278, 0.00300, 0.00320])       # rip up → sim sells the seeded asks
-        self.assertGreater(eng._bamm.n_sells, 0)
+        # first mid is BELOW grid_top so the seed rests asks ABOVE market; then price rises → sells
+        self._run(eng, [0.00255, 0.00290, 0.00300])
+        self.assertGreater(eng._bamm.n_sells, 0)          # seeded asks sold on the way up
         self.assertEqual(eng.acc.holdings_btc, 3765.0)    # SAFETY: real position not moved
+
+    def test_seed_below_market_never_dumps(self):
+        eng = _eng()
+        eng.acc.holdings_btc = 3765.0
+        self._run(eng, [0.00278])                          # mid == grid_top → no ask above market
+        # nothing should be offered for sale below the market — all seed is held as stash
+        self.assertEqual(eng._bamm.n_sells, 0)
+        self.assertAlmostEqual(eng._bamm.stash, 3765.0)
 
 
 class _MockEx:

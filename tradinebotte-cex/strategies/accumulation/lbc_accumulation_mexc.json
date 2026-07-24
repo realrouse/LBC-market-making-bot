@@ -3,7 +3,14 @@
     "_version": "2.0-mexc-lbc",
     "_band_note": "The requested 0.001–0.0025 range is not a hard bound (the accumulation engine has no lower/upper band like the grid). It emerges from behaviour: dip-buying pulls entries down toward ~0.001 and the profit bands (+5..+50% from a ~0.0021 avg entry, i.e. up to ~0.00253) take profit as price rises toward 0.0025.",
 
-    "strategy_type":        "accumulation",
+    "strategy_type":        "bamm",
+    "_bamm_note": "BAMM = Bullish Accumulating Market Maker: fixed-rung two-sided maker, downside-weighted, floored at 0.001, keeps 10% of every buy as permanent stash. Replaces the avg-entry ratchet whose one-shot rebuy gate stranded the +10% band 6 days (missed the 2026-07-24 spike). grid_top pinned so the ladder is stable across restarts; grid_budget_usdt is the ladder SIZING — actual placement is gated by real free_usdt (so it under-fills until the top-up to $150).",
+    "grid_top":             0.0028,
+    "grid_floor":           0.001,
+    "grid_step_pct":        5.0,
+    "grid_budget_usdt":     150.0,
+    "grid_sizing_power":    0.5,
+    "grid_stash_pct":       0.10,
     "connector":            "mexc",
 
     "symbol":               "LBCUSDT",
@@ -18,7 +25,7 @@
 
     "_live_note": "REAL MONEY, ARMED. Buy-only accumulation (Option B): live_execution routes buys to real MEXC maker resting bids, credited only on actual fill. Clips are tiny ($10 initial / $5 dip-adds; both validated via order/test — minNotional is 1 USDT) vs the thin book. Exposure is capped at ONE resting clip at a time (the pending_buy guard), budget $100 tracked internally. Requires EnvironmentFile=~/.config/tradinebotte/mexc7.env + TRADINEBOTTE_IPV4_ONLY=1 on the unit; without the key the connector fail-safes to paper. Buy-only: profit-band sells + rebuys are skipped when live_execution=true — we never sell into the ~$27/10% bid book. Set shadow=true to disarm back to logging-only.",
     "live_execution":       true,
-    "shadow":               false,
+    "shadow":               true,
     "maker_bid_offset_pct": 0.5,
     "rebid_stale_pct":      2.0,
     "rebid_max_age_s":      3600,
