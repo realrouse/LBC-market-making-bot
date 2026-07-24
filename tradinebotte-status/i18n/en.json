@@ -44,12 +44,15 @@
   "flag_na": "n/a",
 
   "no_hb_data": "No heartbeat data available",
-  "fam_live_bot": "Polymarket",
-  "fam_accumulation_bot": "CEX accumulation",
+  "fam_polymarket": "Polymarket",
+  "fam_grid": "CEX grid",
+  "fam_swing": "CEX swing",
+  "fam_accumulation": "CEX accumulation",
   "fam_feed": "Polymarket 15M",
   "fam_feed5m": "Polymarket 5M",
   "fam_cex_feed": "CEX market feed",
   "fam_indicators": "signal publisher",
+  "fam_status": "status collector",
 
   "badge_alive": "ALIVE",
   "badge_stale": "STALE",

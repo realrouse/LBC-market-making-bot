@@ -53,8 +53,19 @@ _HEARTBEAT_SQL = (
     "SELECT account, bot_name, max(ts) as last_ts, status, bounds_ok, version, payload"
     " FROM heartbeats GROUP BY account, bot_name ORDER BY account, bot_name"
 )
+# Two forms: the full query selects strategy_type; the base one omits it. generate_status
+# reads via _qdb (raw SELECT), NOT open_db, so it never runs the strategy_type ALTER — if the
+# code ships before sync_inventory has migrated the prod DB, the full SELECT would error and
+# _qdb returns [] for that key, which would blank the whole inventory (→ the real-money bot
+# rendered as SIM, the is_live=0-for-months failure). So run both and take whichever returns
+# rows; the family derivation falls back to bot_type when strategy_type is absent.
+_INVENTORY_COLS_BASE = "account, bot_name, display_name, kind, bot_type, is_live"
 _INVENTORY_SQL = (
-    "SELECT account, bot_name, display_name, kind, bot_type, is_live"
+    f"SELECT {_INVENTORY_COLS_BASE}, strategy_type"
+    " FROM inventory WHERE enabled=1 ORDER BY account, bot_name"
+)
+_INVENTORY_SQL_BASE = (
+    f"SELECT {_INVENTORY_COLS_BASE}"
     " FROM inventory WHERE enabled=1 ORDER BY account, bot_name"
 )
 _DEPLOYS_SQL = (
@@ -532,8 +543,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     import inventory_labels as _inv  # noqa: E402
     _INV_ROWS = _inv.load_rows()
+    _family_of = _inv.family_of      # canonical bot_type/bot_name → family key
 except Exception:
     _INV_ROWS = []
+    def _family_of(bot_type: str = "", bot_name: str = ""):  # fail-soft: no derivation
+        return None
 
 if _INV_ROWS:
     _ACCOUNT_LABELS = _inv.account_labels(_INV_ROWS)
@@ -569,7 +583,9 @@ def _wr(w: int, l: int) -> str:
     return f"<span class='{cls}'>{pct:.1f}%</span>"
 
 
-def _render_payload_summary(bot_name: str, payload: dict, now: int) -> str:
+def _render_payload_summary(family: str, payload: dict, now: int) -> str:
+    """Per-bot heartbeat summary, keyed on the canonical family (strategy or infra category),
+    NOT the generated bot_id — the id is unique per bot and matches no branch."""
     if not payload:
         return "—"
 
@@ -586,9 +602,9 @@ def _render_payload_summary(bot_name: str, payload: dict, now: int) -> str:
         return t("ago_d", n=age // 86400)
 
     parts = []
-    if bot_name == "live_bot":
-        # Cumulative realized PnL is the headline; daily shown alongside. Fall back to
-        # daily_pnl for heartbeats from bots predating pnl_total.
+    if family in ("polymarket", "grid", "swing"):
+        # PnL strategies: cumulative realized PnL is the headline; daily shown alongside.
+        # Fall back to daily_pnl for heartbeats from bots predating pnl_total.
         pt = payload.get("pnl_total")
         if pt is not None:
             parts.append(f"{t('k_pnl')}${pt:+.2f}")
@@ -609,7 +625,7 @@ def _render_payload_summary(bot_name: str, payload: dict, now: int) -> str:
         ts = payload.get("last_book_ts")
         if ts:
             parts.append(f"{t('k_book')}{_ago(ts)}")
-    elif bot_name == "accumulation_bot":
+    elif family == "accumulation":
         h = payload.get("holdings_btc")
         if h is not None:
             parts.append(f"{t('k_btc')}{h:.4f}")
@@ -622,7 +638,7 @@ def _render_payload_summary(bot_name: str, payload: dict, now: int) -> str:
         r = payload.get("total_realized")
         if r is not None:
             parts.append(f"{t('k_pnl')}${r:+.2f}")
-    elif bot_name == "feed":
+    elif family in ("feed", "feed5m", "cex_feed"):
         ws = payload.get("ws_connected")
         if ws is not None:
             parts.append(t("k_ws_on") if ws else t("k_ws_off"))
@@ -632,7 +648,7 @@ def _render_payload_summary(bot_name: str, payload: dict, now: int) -> str:
         ts = payload.get("last_book_ts")
         if ts:
             parts.append(f"{t('k_book')}{_ago(ts)}")
-    elif bot_name == "indicators":
+    elif family == "indicators":
         ts = payload.get("last_pub_ts")
         if ts:
             parts.append(f"{t('k_pub')}{_ago(ts)}")
@@ -663,14 +679,15 @@ def _flag_label(flag: str) -> str:
     return t(_FLAG_KEYS[flag]) if flag in _FLAG_KEYS else flag
 
 
-def _key_metric(bot_name: str, payload: dict) -> str:
-    """Return the single most important display value for a bot heartbeat pill."""
-    if bot_name == "live_bot":
+def _key_metric(family: str, payload: dict) -> str:
+    """Return the single most important display value for a bot heartbeat pill, keyed on the
+    canonical family (strategy/infra category), NOT the generated bot_id."""
+    if family in ("polymarket", "grid", "swing"):
         pnl = payload.get("daily_pnl")
         if pnl is not None:
             sign = "+" if pnl >= 0 else "-"
             return f"{sign}${abs(pnl):.2f}"
-    elif bot_name == "accumulation_bot":
+    elif family == "accumulation":
         btc = payload.get("holdings_btc")
         if btc is not None:
             return f"{btc:.4f} BTC"
@@ -679,11 +696,12 @@ def _key_metric(bot_name: str, payload: dict) -> str:
 
 # ─── Bot-family view (primary "by bot, not by account" layout) ───────────────
 
-# Families that carry a comparable cumulative PnL (pnl_total) — these get windowed
-# PnL. accumulation_bot heartbeats holdings/realized (its pnl_total is a flat 0), so it
-# is a detail family: its rows show the payload summary, not a misleading windowed $0.
-_PNL_FAMILIES = {"live_bot"}
-_FAMILY_ORDER = ["live_bot", "accumulation_bot", "feed", "feed5m", "cex_feed", "indicators"]
+# Strategy families that carry a comparable cumulative PnL (pnl_total) — these get windowed
+# PnL rolled up across instances. accumulation heartbeats holdings/realized (its pnl_total is
+# a flat 0), so it is a detail family: its rows show the payload summary, not a misleading $0.
+_PNL_STRATEGIES = {"polymarket", "grid", "swing"}
+_FAMILY_ORDER = ["polymarket", "grid", "swing", "accumulation",
+                 "feed", "feed5m", "cex_feed", "indicators", "status"]
 def _family_title(fam: str) -> str:
     """"<bot_name> · <translated descriptor>". The bot name is a literal identifier; only
     the descriptor is translated (i18n key fam_<bot_name>)."""
@@ -742,15 +760,20 @@ def _render_bot_families(heartbeats: list, pnl_windows: dict, now: int) -> str:
     pw = pnl_windows or {}
     by_family: dict[str, list] = {}
     for r in heartbeats:
-        by_family.setdefault(r["bot_name"], []).append(r)
+        # Group by the canonical family (attached in main()); derive-if-missing keeps a
+        # heartbeat with no inventory row grouping sensibly instead of vanishing.
+        fam_key = r.get("_family") or _family_of("", r["bot_name"]) or r["bot_name"]
+        by_family.setdefault(fam_key, []).append(r)
     ordered = [f for f in _FAMILY_ORDER if f in by_family]
     ordered += sorted(f for f in by_family if f not in _FAMILY_ORDER)
 
     sections = ""
     for fam in ordered:
         rows = sorted(by_family[fam], key=lambda r: (r.get("_label") or r["account"]))
-        is_pnl = fam in _PNL_FAMILIES
-        recs = [pw.get(f"{r['account']}|{fam}", {}) for r in rows]
+        is_pnl = fam in _PNL_STRATEGIES
+        # Windowed PnL is keyed account|bot_name (per instance) — NOT the family; _sum_windows
+        # then rolls the per-instance recs up into the family head.
+        recs = [pw.get(f"{r['account']}|{r['bot_name']}", {}) for r in rows]
         alive = sum(1 for r in rows if r["flag"] == "ALIVE")
         alive_cls = "alive" if alive == len(rows) else ("dead" if alive == 0 else "stale")
         title = escape(_family_title(fam))
@@ -762,7 +785,7 @@ def _render_bot_families(heartbeats: list, pnl_windows: dict, now: int) -> str:
             flag = r["flag"]
             acct_short = r.get("_label") or r["account"]
             payload = r.get("payload", {}) or {}
-            mode = _mode_badge(acct_short, fam)
+            mode = _mode_badge(acct_short, r["bot_name"])
             data_badge = (f"<span class='badge stale' style='font-size:.6em' "
                           f"title='{escape(t('badge_data_title'))}'>{t('badge_data')}</span>"
                           if _data_flag(payload, now) else "")
@@ -846,11 +869,12 @@ def _render_bot_section(hb_rows: list, now: int) -> str:
         flag = r["flag"].lower()
         acct_short = (r.get("_label") or "").split()[0]
         bot = r["bot_name"]
+        fam = r.get("_family") or _family_of("", bot) or bot
         age_min = r["age_s"] // 60
         age_str = f"{age_min}min" if age_min < 120 else f"{age_min//60}h{age_min%60:02d}m"
-        detail = _render_payload_summary(bot, r.get("payload", {}), now)
+        detail = _render_payload_summary(fam, r.get("payload", {}), now)
         mode_cell = _mode_badge(acct_short, bot)
-        km = _key_metric(bot, r.get("payload", {}))
+        km = _key_metric(fam, r.get("payload", {}))
         km_cls = " pnl-pos" if km.startswith("+") else (" pnl-neg" if km.startswith("-") else "")
         km_html = f"<span class='bot-metric{km_cls}'>{escape(km)}</span>" if km else ""
         tip_content = (
@@ -913,9 +937,9 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
                 else t("card_collect_failed", err=escape(str(error))))
         return f"<div class='account'>{header}<p class='no-data'>⚠ {_msg}</p></div>"
 
-    # Determine whether this account runs Polymarket bots (live_bot).
-    _POLY_BOT_NAMES = {"live_bot"}
-    has_poly = any(r["bot_name"] in _POLY_BOT_NAMES for r in (hb_rows or []))
+    # Determine whether this account runs Polymarket bots (drives the poly-only win-rate +
+    # trade tables below). Keyed on the canonical family, not the generated bot_id.
+    has_poly = any(r.get("_family") == "polymarket" for r in (hb_rows or []))
 
     live = data.get("live")
     stats_html = ""
@@ -926,8 +950,8 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
     # the single source of truth shared with the pills and the fleet headline. live.db
     # is used only for the Polymarket win-rate and the trade tables further below.
     primary = None
-    for _name in ("live_bot",):
-        primary = next((r for r in (hb_rows or []) if r["bot_name"] == _name), None)
+    for _fam in ("polymarket", "grid", "swing"):
+        primary = next((r for r in (hb_rows or []) if r.get("_family") == _fam), None)
         if primary:
             break
     if primary:
@@ -1624,9 +1648,11 @@ def main() -> None:
     # Everything comes from the shared state DB — one local read, no SSH per account.
     hb_blob  = _qdb(SHARED_DB, {"rows": _HEARTBEAT_SQL}) or {}
     raw_rows = hb_blob.get("rows", [])
-    inv_blob = _qdb(SHARED_DB, {"rows": _INVENTORY_SQL}) or {}
+    inv_blob = _qdb(SHARED_DB, {"rows": _INVENTORY_SQL, "base": _INVENTORY_SQL_BASE}) or {}
     dep_blob = _qdb(SHARED_DB, {"rows": _DEPLOYS_SQL}) or {}
-    inventory_rows = inv_blob.get("rows", [])
+    # Prefer the strategy_type form; fall back to the base one if that column isn't migrated
+    # yet (see _INVENTORY_SQL) so the inventory is never silently blanked.
+    inventory_rows = inv_blob.get("rows") or inv_blob.get("base") or []
     deploy_rows    = dep_blob.get("rows", [])
 
     # Map OS usernames to "acct-N" labels (avoids exposing real usernames in HTML)
@@ -1643,12 +1669,18 @@ def main() -> None:
     deploy_rows = [r for r in deploy_rows if r.get("account") in _kept_accounts]
     heartbeats = _classify_heartbeats(raw_rows, user_to_label)
 
-    # Attach the readable display_name (from inventory) onto each heartbeat row so the
-    # account cards show it instead of the raw bot_id; bot_name stays the join key.
-    _disp = {(r.get("account"), r.get("bot_name")): r.get("display_name")
-             for r in inventory_rows if r.get("display_name")}
+    # Attach the readable display_name AND the canonical family (from inventory) onto each
+    # heartbeat so the account cards show the name (not the raw bot_id) and the family view
+    # groups by strategy. bot_name stays the join key. _family precedence: the inventory
+    # strategy_type column (authoritative) → derived from bot_type → derived from bot_name →
+    # the raw bot_name (never vanish). Same fail-soft path when a heartbeat has no inventory row.
+    _inv_by_key = {(r.get("account"), r.get("bot_name")): r for r in inventory_rows}
     for _h in heartbeats:
-        _h["_display"] = _disp.get((_h.get("account"), _h.get("bot_name")))
+        _invrow = _inv_by_key.get((_h.get("account"), _h.get("bot_name"))) or {}
+        _h["_display"] = _invrow.get("display_name")
+        _h["_family"] = (_invrow.get("strategy_type")
+                         or _family_of(_invrow.get("bot_type", ""), _h.get("bot_name", ""))
+                         or _h.get("bot_name"))
 
     # Per-account card data, derived from the heartbeats (was: one SSH per account).
     accounts_data = _build_accounts_from_db(users, heartbeats)

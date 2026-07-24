@@ -106,6 +106,35 @@ class TestInventory(unittest.TestCase):
             "SELECT bot_type FROM inventory WHERE bot_name='grid_bot'").fetchone()[0]
         self.assertEqual(val, "cex-grid-binance-LIVE")
 
+    def test_strategy_type_roundtrips(self):
+        rows = self._rows()
+        rows[0]["strategy_type"] = "grid"        # trading bot carries a strategy_type
+        upsert_inventory(self.db, rows)           # the service row leaves it unset → NULL
+        self.assertEqual(self.db.execute(
+            "SELECT strategy_type FROM inventory WHERE bot_name='grid_bot'").fetchone()[0], "grid")
+        self.assertIsNone(self.db.execute(
+            "SELECT strategy_type FROM inventory WHERE bot_name='feed'").fetchone()[0])
+
+
+class TestMigration(unittest.TestCase):
+    def test_open_db_adds_strategy_type_to_legacy_inventory(self):
+        """A shared DB whose inventory table predates strategy_type must gain the column on
+        open_db (idempotent ALTER) — generate_status reads via raw SELECT, so if the column
+        were missing the strategy_type query would blank the inventory."""
+        import sqlite3
+        path = os.path.join(tempfile.mkdtemp(), "legacy.db")
+        con = sqlite3.connect(path)
+        con.execute("CREATE TABLE inventory (account TEXT NOT NULL, bot_name TEXT NOT NULL, "
+                    "kind TEXT, bot_type TEXT, enabled INTEGER DEFAULT 1, updated_ts INTEGER, "
+                    "PRIMARY KEY(account, bot_name))")
+        con.commit()
+        con.close()
+        db = open_db(path)
+        cols = {r[1] for r in db.execute("PRAGMA table_info(inventory)")}
+        self.assertIn("strategy_type", cols)
+        db.close()
+        open_db(path).close()   # second open: duplicate-column ALTER is ignored, no raise
+
 
 class TestDeploys(unittest.TestCase):
     def setUp(self):

@@ -38,6 +38,9 @@ for _cand in (os.path.join(_HERE, "tradinetools"),                       # deplo
     if os.path.isdir(_cand):
         sys.path.insert(0, _cand)
         break
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from inventory_labels import strategy_type_of  # noqa: E402
 from tradinetools.db import open_db, upsert_inventory  # noqa: E402
 
 DEFAULT_DB = os.environ.get(
@@ -83,6 +86,12 @@ def resolve(rows: list[dict], users: list[str]) -> list[dict]:
         out["account"] = account
         if out.get("service_unit"):
             out["service_unit"] = out["service_unit"].replace("{account}", account)
+        # strategy_type is authoritative from the toml; derive it from bot_type when a
+        # trading-bot row omits it, so the DB column is never silently NULL for a bot.
+        if not out.get("strategy_type"):
+            derived = strategy_type_of(out)
+            if derived:
+                out["strategy_type"] = derived
         resolved.append(out)
     return resolved
 

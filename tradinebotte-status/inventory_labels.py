@@ -41,6 +41,46 @@ _TAG_KEYWORDS = [("polymarket", "poly"), ("threshold", "poly"),
                  ("status", "status"), ("indicators", ""), ("feed", "poly")]
 
 
+# ── Canonical family/strategy taxonomy (status-page grouping) ────────────────
+# The status page groups bots by *family*, not by the generated bot_id (e.g.
+# "binance-grid-btcusdt-df6dd9"). This is the single normaliser: a keyword scan over
+# "<bot_type> <bot_name>" → one canonical family key. It is the SAME data the deploy
+# engine reads as bot_type, normalised to a stable display key. Distinct from _TAG_KEYWORDS
+# above (which yields short account-label tags like "poly"/"cex" and collapses the feeds).
+# ⚠ Order matters exactly like _TAG_KEYWORDS: polymarket/threshold BEFORE grid (a Polymarket
+# bot's type is e.g. "polymarket-grid"), cex-feed and the 5m/15m feeds before the bare "feed".
+_FAMILY_KEYWORDS = [
+    ("polymarket", "polymarket"), ("threshold", "polymarket"),
+    ("accum", "accumulation"), ("grid", "grid"), ("swing", "swing"),
+    ("cex-feed", "cex_feed"), ("cexfeed", "cex_feed"),
+    ("feed-5m", "feed5m"), ("feed5m", "feed5m"),
+    ("indicators", "indicators"), ("status", "status"),
+    ("feed", "feed"),
+]
+# The four TRADING-bot strategies (the ones that carry a strategy_type); the rest are infra.
+STRATEGIES = ("polymarket", "grid", "swing", "accumulation")
+
+
+def family_of(bot_type: str = "", bot_name: str = "") -> str | None:
+    """Canonical status-page family key for any row (trading strategy OR infra category),
+    derived from bot_type/bot_name via a keyword scan. None if nothing matches (the caller
+    then falls back to the raw bot_name so the row still groups, never vanishes)."""
+    hay = f"{bot_type or ''} {bot_name or ''}".lower()
+    for kw, fam in _FAMILY_KEYWORDS:
+        if kw in hay:
+            return fam
+    return None
+
+
+def strategy_type_of(row: dict) -> str | None:
+    """Normalized strategy_type for a TRADING bot (accumulation/grid/swing/polymarket), for
+    the inventory `strategy_type` column. None for infra services (kind != 'bot') or unknowns."""
+    if row.get("kind", "bot") != "bot":
+        return None
+    fam = family_of(row.get("bot_type", ""), row.get("bot_name", ""))
+    return fam if fam in STRATEGIES else None
+
+
 def _tag_for(row: dict) -> str:
     """Category tag for a bot: its legacy bot_name (exact match), else a keyword scan of
     bot_type/bot_name for the generated bot_id scheme ('cex-grid-…' → 'grid')."""

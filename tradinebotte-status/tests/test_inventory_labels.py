@@ -86,6 +86,50 @@ class TestLiveBots(unittest.TestCase):
                          {("acct-8", "mexc-accumulation-lbcusdt-955a99")})
 
 
+class TestFamilyTaxonomy(unittest.TestCase):
+    """family_of / strategy_type_of are the single source of the status-page grouping — the
+    generated bot_id (binance-grid-btcusdt-…) no longer matches a hardcoded family name."""
+
+    def test_family_of_maps_bot_type_to_canonical_family(self):
+        cases = {
+            ("cex-accumulation", ""):            "accumulation",
+            ("cex-accumulation-mexc-lbc", ""):   "accumulation",
+            ("cex-grid-binance-sim", ""):        "grid",
+            ("cex-swing", ""):                   "swing",
+            ("polymarket-threshold", ""):        "polymarket",
+            ("polymarket-grid", ""):             "polymarket",   # poly wins over grid (order)
+            ("infra-cex-feed", ""):              "cex_feed",
+            ("infra-feed-15m", ""):              "feed",
+            ("infra-feed-5m", ""):               "feed5m",
+            ("infra-indicators", ""):            "indicators",
+            ("infra-status", ""):                "status",
+        }
+        for (bt, bn), want in cases.items():
+            self.assertEqual(il.family_of(bt, bn), want, f"{bt!r}")
+
+    def test_family_of_derives_from_bot_name_when_type_missing(self):
+        # fallback path: no bot_type, derive from the generated bot_id alone
+        self.assertEqual(il.family_of("", "binance-grid-btcusdt-df6dd9"), "grid")
+        self.assertEqual(il.family_of("", "mexc-accumulation-lbcusdt-955a99"), "accumulation")
+
+    def test_family_of_unknown_is_none(self):
+        self.assertIsNone(il.family_of("something-new", "future-bot-xyz"))
+
+    def test_strategy_type_is_none_for_services_and_unknowns(self):
+        self.assertIsNone(il.strategy_type_of({"kind": "service", "bot_type": "infra-cex-feed"}))
+        self.assertIsNone(il.strategy_type_of({"kind": "bot", "bot_type": "infra-status"}))  # not a strategy
+        self.assertEqual(il.strategy_type_of({"kind": "bot", "bot_type": "cex-grid-mexc-sim"}), "grid")
+
+    def test_real_inventory_strategy_types(self):
+        """Pins the strategy_type of every trading bot in inventory.toml (infra → None)."""
+        got = {r["bot_name"]: il.strategy_type_of(r) for r in il.load_rows()}
+        self.assertEqual(got["binance-grid-btcusdt-df6dd9"], "grid")
+        self.assertEqual(got["binance-swing-btcusdt-062cc5"], "swing")
+        self.assertEqual(got["mexc-accumulation-lbcusdt-955a99"], "accumulation")
+        self.assertEqual(got["polymarket-threshold-e100a8"], "polymarket")  # bot_type=polymarket-grid
+        self.assertIsNone(got["infra-cexfeed-0e7b3a"])                       # service
+
+
 class TestFailSoft(unittest.TestCase):
 
     def test_missing_file_returns_empty(self):

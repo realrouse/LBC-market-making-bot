@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS inventory (
     display_name  TEXT,
     kind          TEXT NOT NULL DEFAULT 'bot',
     bot_type      TEXT,
+    strategy_type TEXT,
     service_unit  TEXT,
     install_dir   TEXT,
     port          INTEGER,
@@ -78,8 +79,11 @@ CREATE TABLE IF NOT EXISTS inventory (
 # Columns added after the table first shipped. CREATE TABLE IF NOT EXISTS never alters an
 # existing table, so migrate explicitly + idempotently (ignore "duplicate column").
 _INVENTORY_ADD_COLUMNS = (
-    ("display_name", "TEXT"),   # readable label for the status page (bot_name is the unique id)
-    ("depends_on",   "TEXT"),   # JSON list of bot_names this bot needs up (deploy order + monitoring root-cause)
+    ("display_name",  "TEXT"),   # readable label for the status page (bot_name is the unique id)
+    ("depends_on",    "TEXT"),   # JSON list of bot_names this bot needs up (deploy order + monitoring root-cause)
+    ("strategy_type", "TEXT"),   # canonical strategy family for the status grouping
+                                 # (accumulation/grid/swing/polymarket); bot_type is free-text/
+                                 # variant-level. NULL for infra services.
 )
 
 # deploys: append-only journal.  One row per (bot, deploy step).
@@ -135,7 +139,7 @@ CREATE INDEX IF NOT EXISTS idx_bot_trades_ts          ON bot_trades(ts_ms);
 SCHEMA = SCHEMA_HEARTBEATS + SCHEMA_INVENTORY + SCHEMA_DEPLOYS + SCHEMA_TRADES
 
 INVENTORY_COLUMNS = (
-    "account", "bot_name", "display_name", "kind", "bot_type", "service_unit",
+    "account", "bot_name", "display_name", "kind", "bot_type", "strategy_type", "service_unit",
     "install_dir", "port", "is_live", "deploy_script", "depends_on", "enabled", "updated_ts",
 )
 
@@ -190,14 +194,15 @@ def upsert_inventory(db: sqlite3.Connection, rows: Iterable[dict[str, Any]]) -> 
     for r in rows:
         db.execute(
             "INSERT INTO inventory"
-            " (account, bot_name, display_name, kind, bot_type, service_unit, install_dir,"
-            "  port, is_live, deploy_script, depends_on, enabled, updated_ts)"
-            " VALUES (:account, :bot_name, :display_name, :kind, :bot_type, :service_unit,"
-            "         :install_dir, :port, :is_live, :deploy_script, :depends_on, :enabled,"
-            "         :updated_ts)"
+            " (account, bot_name, display_name, kind, bot_type, strategy_type, service_unit,"
+            "  install_dir, port, is_live, deploy_script, depends_on, enabled, updated_ts)"
+            " VALUES (:account, :bot_name, :display_name, :kind, :bot_type, :strategy_type,"
+            "         :service_unit, :install_dir, :port, :is_live, :deploy_script, :depends_on,"
+            "         :enabled, :updated_ts)"
             " ON CONFLICT(account, bot_name) DO UPDATE SET"
             "   display_name=excluded.display_name, kind=excluded.kind,"
-            "   bot_type=excluded.bot_type, service_unit=excluded.service_unit,"
+            "   bot_type=excluded.bot_type, strategy_type=excluded.strategy_type,"
+            "   service_unit=excluded.service_unit,"
             "   install_dir=excluded.install_dir, port=excluded.port,"
             "   is_live=excluded.is_live, deploy_script=excluded.deploy_script,"
             "   depends_on=excluded.depends_on, enabled=excluded.enabled,"
@@ -211,6 +216,7 @@ def upsert_inventory(db: sqlite3.Connection, rows: Iterable[dict[str, Any]]) -> 
                                   else r.get("depends_on")),
                 "kind":          r.get("kind", "bot"),
                 "bot_type":      r.get("bot_type"),
+                "strategy_type": r.get("strategy_type"),
                 "service_unit":  r.get("service_unit"),
                 "install_dir":   r.get("install_dir"),
                 "port":          r.get("port"),

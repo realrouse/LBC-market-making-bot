@@ -153,47 +153,50 @@ class TestWindowRenderHelpers(unittest.TestCase):
         self.assertIn("no-data", html)
 
 
-def _hb(bot, label, payload, flag="ALIVE"):
+def _hb(bot, label, payload, flag="ALIVE", fam=None):
     return {"bot_name": bot, "account": label.replace("acct-", "c"), "_label": label,
             "flag": flag, "age_s": 30, "bounds_ok": "ok", "version": "abc1234",
-            "payload": payload}
+            "payload": payload, "_family": fam}
 
 
 class TestRenderBotFamilies(unittest.TestCase):
 
-    def test_groups_by_family_with_windowed_pnl(self):
+    def test_groups_by_strategy_with_windowed_pnl(self):
+        # Two grid INSTANCES (distinct generated bot_ids, different accounts) roll up into
+        # ONE 'grid' family; windowed PnL is keyed per instance (account|bot_name) and summed.
         hb = [
-            _hb("live_bot", "acct-2", {"capital": 1200}),
-            _hb("live_bot", "acct-3", {"capital": 1000}),
-            _hb("grid_bot", "acct-6", {}),
+            _hb("binance-grid-btcusdt-aa", "acct-2", {"capital": 1200}, fam="grid"),
+            _hb("mexc-grid-lbcusdt-bb", "acct-3", {"capital": 1000}, fam="grid"),
+            _hb("binance-swing-btcusdt-cc", "acct-6", {}, fam="swing"),
         ]
         pw = {
-            "c2|live_bot": {"daily": 5.0, "weekly": 45.0, "monthly": 226.0,
-                            "alltime": 226.0, "monthly_reset": True},
-            "c3|live_bot": {"daily": -9.0, "weekly": 63.0, "monthly": 231.0,
-                            "alltime": 231.0},
-            "c6|grid_bot": {"daily": 0.0, "weekly": 8.0, "monthly": 327.0,
-                            "alltime": 327.0},
+            "c2|binance-grid-btcusdt-aa": {"daily": 5.0, "weekly": 45.0, "monthly": 226.0,
+                                           "alltime": 226.0, "monthly_reset": True},
+            "c3|mexc-grid-lbcusdt-bb": {"daily": -9.0, "weekly": 63.0, "monthly": 231.0,
+                                        "alltime": 231.0},
+            "c6|binance-swing-btcusdt-cc": {"daily": 0.0, "weekly": 8.0, "monthly": 327.0,
+                                            "alltime": 327.0},
         }
         html = g._render_bot_families(hb, pw, int(time.time()))
-        # families present, accounts demoted to rows
-        self.assertIn("live_bot", html)
-        self.assertIn("grid_bot", html)
+        # strategy families present, accounts demoted to rows
+        self.assertIn("fam-name'>grid", html)
+        self.assertIn("fam-name'>swing", html)
         self.assertIn("acct-2", html)
         self.assertIn("acct-3", html)
         # windowed spans + capital
         self.assertIn("pw-weekly", html)
         self.assertIn("cap $1,200", html)
-        # aggregate weekly for live_bot = 45+63 = 108
+        # aggregate weekly for the grid family = 45+63 = 108 (cross-instance rollup)
         self.assertIn("$108.00", html)
         # reset marker surfaced from the flagged instance
         self.assertIn("class='rst'", html)
 
     def test_accumulation_is_detail_not_windowed(self):
-        hb = [_hb("accumulation_bot", "acct-3",
-                  {"holdings_btc": 0.0075, "free_usdt": 500, "total_realized": 0.0})]
+        hb = [_hb("mexc-accumulation-lbcusdt-dd", "acct-3",
+                  {"holdings_btc": 0.0075, "free_usdt": 500, "total_realized": 0.0},
+                  fam="accumulation")]
         html = g._render_bot_families(hb, {}, int(time.time()))
-        self.assertIn("accumulation_bot", html)
+        self.assertIn("fam-name'>accumulation", html)
         self.assertIn("fam-detail", html)       # detail row, not windowed PnL
         self.assertNotIn("fam-pnl", html)       # no aggregate PnL header for accum
         self.assertIn("btc=0.0075", html)
