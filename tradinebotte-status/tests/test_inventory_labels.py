@@ -78,12 +78,12 @@ class TestLiveBots(unittest.TestCase):
         )
 
     def test_real_inventory_live_set_is_exactly_the_known_real_money_bot(self):
-        """Pins the real-money set to the ONE bot we intend to be live (the LBCUSDT
-        accumulation bot, armed 2026-07-17). This replaces the old all-sim assertion:
-        the point was never "nothing is live", it was "nothing is live BY ACCIDENT".
-        A second bot appearing here means real funds are at stake somewhere unreviewed."""
+        """Pins the real-money set to the ONE bot we intend to be live (the LBCUSDT bot; it
+        became BAMM on 2026-07-24, re-minting its bot_id → mexc-bamm-lbcusdt-d83114). This
+        replaces the old all-sim assertion: the point was never "nothing is live", it was
+        "nothing is live BY ACCIDENT". A second bot here means real funds are at stake unreviewed."""
         self.assertEqual(il.live_bots(il.load_rows()),
-                         {("acct-8", "mexc-accumulation-lbcusdt-955a99")})
+                         {("acct-8", "mexc-bamm-lbcusdt-d83114")})
 
 
 class TestFamilyTaxonomy(unittest.TestCase):
@@ -110,7 +110,7 @@ class TestFamilyTaxonomy(unittest.TestCase):
     def test_family_of_derives_from_bot_name_when_type_missing(self):
         # fallback path: no bot_type, derive from the generated bot_id alone
         self.assertEqual(il.family_of("", "binance-grid-btcusdt-df6dd9"), "grid")
-        self.assertEqual(il.family_of("", "mexc-accumulation-lbcusdt-955a99"), "accumulation")
+        self.assertEqual(il.family_of("", "mexc-accumulation-btcusdt-4a3e3a"), "accumulation")
 
     def test_family_of_unknown_is_none(self):
         self.assertIsNone(il.family_of("something-new", "future-bot-xyz"))
@@ -125,7 +125,7 @@ class TestFamilyTaxonomy(unittest.TestCase):
         got = {r["bot_name"]: il.strategy_type_of(r) for r in il.load_rows()}
         self.assertEqual(got["binance-grid-btcusdt-df6dd9"], "grid")
         self.assertEqual(got["binance-swing-btcusdt-062cc5"], "swing")
-        self.assertEqual(got["mexc-accumulation-lbcusdt-955a99"], "accumulation")
+        self.assertEqual(got["mexc-bamm-lbcusdt-d83114"], "accumulation")   # LBC bot (now BAMM), family stays accumulation
         self.assertEqual(got["polymarket-threshold-e100a8"], "polymarket")  # bot_type=polymarket-grid
         self.assertIsNone(got["infra-cexfeed-0e7b3a"])                       # service
 

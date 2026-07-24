@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import generate_status as g  # noqa: E402
 
-_LIVE_BOT = "mexc-accumulation-lbcusdt-955a99"
+_LIVE_BOT = "mexc-bamm-lbcusdt-d83114"
 
 
 def _live_hb(mode="live"):
