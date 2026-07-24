@@ -35,6 +35,18 @@ class TestBammEngineShadow(unittest.TestCase):
         self.assertTrue(eng.bamm)
         self.assertTrue(eng.shadow)                   # configured shadow stays shadow
 
+    def test_dispatcher_knows_bamm(self):
+        # live_bot.py loads the engine via strategy_engines.load(config.strategy_type) — the
+        # dispatcher MUST map "bamm" (it crash-looped the real bot when it didn't). Direct
+        # construction in the other tests bypasses this path, so pin it here.
+        from strategy_engines import load, available
+        self.assertIn("bamm", available())
+        cfg = {"strategy_type": "bamm", "symbol": "LBCUSDT", "shadow": True,
+               "grid_top": 0.0028, "grid_budget_usdt": 150.0}
+        strat = load("bamm", types.SimpleNamespace(connector="mexc", strategy_cfg=cfg, bot_id="x"))
+        self.assertEqual(type(strat).__name__, "AccumulationStrategy")
+        self.assertTrue(strat.bamm)
+
     def test_grid_inits_and_sim_buys_on_a_dip(self):
         eng = _eng()
         eng.acc.holdings_btc = 0.0
