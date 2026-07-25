@@ -6,7 +6,7 @@ All notable changes to this project are documented here.
 
 ---
 
-## [Unreleased]
+## [0.90] — 2026-07-25
 
 - **BAMM gained a manual top-up path (`extra_buy_rungs`), and a restart-time bug that could silently swallow it is fixed.** The real-money LBC accumulation bot's fixed-rung ladder is entirely parametric (top/floor/step/budget), with no way to drop in an operator-chosen price and size outside that geometric lattice — needed when a manual USDT deposit should land two specific new buy rungs rather than reshaping the whole ladder. `bamm.build_buy_grid()` now accepts `extra_rungs` (price, usdt) pairs, independent of the weighted budget split. Caught during the live rollout: the restart-time holdings reconstruction (`seed_holdings`) greedily claims any rung whose ask sits above market, ascending by ask price — a newly added low-ask extra rung can jump that queue ahead of rungs that were genuinely already loaded, silently turning the intended new buy into a resting sell of coins already owned, with the fresh capital never spent. Extra rungs are now marked non-seedable so they always start as an empty bid after any restart; verified live on the real bot, both rungs now rest as real maker buys.
 

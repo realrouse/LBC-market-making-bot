@@ -6,7 +6,7 @@ Toutes les modifications notables de ce projet sont documentées ici.
 
 ---
 
-## [Non publié]
+## [0.90] — 2026-07-25
 
 - **BAMM dispose désormais d'un chemin de recharge manuelle (`extra_buy_rungs`), et un bug au redémarrage pouvant l'avaler silencieusement est corrigé.** L'échelle à paliers fixes du bot d'accumulation LBC en argent réel est entièrement paramétrique (sommet/plancher/pas/budget), sans moyen d'insérer un prix et une taille choisis par l'opérateur en dehors de cette grille géométrique — nécessaire quand un dépôt USDT manuel doit poser deux nouveaux paliers d'achat précis plutôt que remodeler toute l'échelle. `bamm.build_buy_grid()` accepte maintenant des paires `extra_rungs` (prix, usdt), indépendantes de la répartition pondérée du budget. Repéré pendant le déploiement en réel : la reconstruction des avoirs au redémarrage (`seed_holdings`) s'approprie avidement tout palier dont l'ask est au-dessus du marché, par ordre croissant de prix d'ask — un palier manuel fraîchement ajouté à bas prix d'ask peut doubler la file devant des paliers réellement déjà chargés, transformant silencieusement l'achat voulu en une vente au repos de pièces déjà possédées, sans que le capital frais ne soit jamais dépensé. Les paliers manuels sont désormais marqués non-« seedable » : ils démarrent toujours en offre d'achat vide après tout redémarrage ; vérifié en direct sur le bot réel, les deux paliers se posent maintenant comme de vrais achats maker.
 
