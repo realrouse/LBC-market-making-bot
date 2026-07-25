@@ -42,6 +42,22 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO = os.path.dirname(_HERE)
 DEFAULT_INVENTORY = os.path.join(_REPO, "inventory.toml")
 _REQUIRED = ("account_idx", "bot_name", "kind")
+
+# Reuse one authenticated connection per account across this run's ssh calls (mirrors
+# scripts/deploy_actions.py's Host.SSH_OPTS — same ~13s-per-connection cost measured on apollo
+# with password auth). Directory created lazily by _ssh_opts(), not at import: this module is
+# imported SSH-free by test_check_inventory.py.
+_CONTROL_DIR = os.path.expanduser("~/.ssh/cm-sockets")
+
+
+def _ssh_opts() -> list[str]:
+    os.makedirs(_CONTROL_DIR, mode=0o700, exist_ok=True)
+    return ["-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=10",
+            "-o", "PreferredAuthentications=password",
+            "-o", "ControlMaster=auto", "-o", f"ControlPath={_CONTROL_DIR}/%C",
+            "-o", "ControlPersist=10m"]
+
+
 _KINDS = {"bot", "service"}
 
 # Shared state DB on the collector account — read for the heartbeat-key drift check.
@@ -362,8 +378,7 @@ def _remote_heartbeat_modes(server, port, user, password, db_path) -> dict | Non
     )
     env = dict(os.environ, SSHPASS=password)
     out = subprocess.run(
-        ["sshpass", "-e", "ssh", "-o", "StrictHostKeyChecking=yes",
-         "-o", "ConnectTimeout=10", "-o", "PreferredAuthentications=password",
+        ["sshpass", "-e", "ssh", *_ssh_opts(),
          "-p", port, f"{user}@{server}", f"python3 -c \"{py}\""],
         capture_output=True, text=True, env=env,
     )
@@ -409,8 +424,7 @@ def _remote_units(server: str, port: str, user: str, password: str) -> set[str] 
     )
     env = dict(os.environ, SSHPASS=password)
     out = subprocess.run(
-        ["sshpass", "-e", "ssh", "-o", "StrictHostKeyChecking=yes",
-         "-o", "ConnectTimeout=10", "-o", "PreferredAuthentications=password",
+        ["sshpass", "-e", "ssh", *_ssh_opts(),
          "-p", port, f"{user}@{server}", cmd],
         capture_output=True, text=True, env=env,
     )
@@ -428,8 +442,7 @@ def _remote_heartbeat_keys(server, port, user, password, db_path) -> set | None:
     )
     env = dict(os.environ, SSHPASS=password)
     out = subprocess.run(
-        ["sshpass", "-e", "ssh", "-o", "StrictHostKeyChecking=yes",
-         "-o", "ConnectTimeout=10", "-o", "PreferredAuthentications=password",
+        ["sshpass", "-e", "ssh", *_ssh_opts(),
          "-p", port, f"{user}@{server}", f"python3 -c \"{py}\""],
         capture_output=True, text=True, env=env,
     )

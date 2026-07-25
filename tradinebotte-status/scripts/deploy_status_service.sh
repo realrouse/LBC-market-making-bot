@@ -87,15 +87,20 @@ SVC_NAME="tradinebotte-status.service"
 
 # ─── SSH / rsync helpers ───────────────────────────────────────────────────────
 
+mkdir -p ~/.ssh/cm-sockets && chmod 700 ~/.ssh/cm-sockets
+# ControlMaster: this script makes several ssh+rsync calls to the SAME collector account in
+# sequence — reuse one authenticated connection instead of paying the ~13s password-auth cost
+# each time (measured on apollo; same fix as scripts/deploy_actions.py's Host.SSH_OPTS).
+_CM_OPTS="-o ControlMaster=auto -o ControlPath=$HOME/.ssh/cm-sockets/%C -o ControlPersist=10m"
 SSH_OPTS="-o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no
           -o ServerAliveInterval=10 -o ServerAliveCountMax=3
-          -o PreferredAuthentications=password -p $PORT"
+          -o PreferredAuthentications=password $_CM_OPTS -p $PORT"
 
 _ssh() {
     SSHPASS="$COLL_PASS" /usr/bin/sshpass -e \
         ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
         -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
-        -o PreferredAuthentications=password \
+        -o PreferredAuthentications=password $_CM_OPTS \
         -p "$PORT" "$COLL_USER@$SERVER" "$@" 2>&1
 }
 

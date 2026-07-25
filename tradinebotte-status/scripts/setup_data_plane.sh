@@ -28,7 +28,11 @@ USERS=("${TEST_USERS[@]:?TEST_USERS missing}"); PASSWORDS=("${TEST_PASSWORDS[@]:
 IDX="${TRADINEBOTTE_INFRA_IDX:-0}"
 U="${USERS[$IDX]}"; P="${PASSWORDS[$IDX]}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SSH_OPTS="-p $PORT -o StrictHostKeyChecking=yes -o PreferredAuthentications=password -o ConnectTimeout=20"
+mkdir -p ~/.ssh/cm-sockets && chmod 700 ~/.ssh/cm-sockets
+# ControlMaster: this script makes several ssh+rsync calls to the SAME account in sequence —
+# reuse one authenticated connection instead of paying the ~13s password-auth cost each time
+# (measured on apollo; same fix as scripts/deploy_actions.py's Host.SSH_OPTS).
+SSH_OPTS="-p $PORT -o StrictHostKeyChecking=yes -o PreferredAuthentications=password -o ConnectTimeout=20 -o ControlMaster=auto -o ControlPath=$HOME/.ssh/cm-sockets/%C -o ControlPersist=10m"
 
 _ssh(){ SSHPASS="$P" /usr/bin/sshpass -e ssh $SSH_OPTS "$U@$SERVER" "$@" 2>&1 | grep -v "Warning: Permanently" || true; }
 _rsync(){ SSHPASS="$P" /usr/bin/sshpass -e rsync -az --exclude=__pycache__ -e "ssh $SSH_OPTS" "$1" "$U@$SERVER:$2" 2>&1 | grep -vi warning || true; }

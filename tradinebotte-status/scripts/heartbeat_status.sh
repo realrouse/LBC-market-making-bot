@@ -77,7 +77,7 @@ if [[ ! -x "$(command -v sshpass)" ]]; then
     exit 1
 fi
 
-mkdir -p ~/.ssh && chmod 700 ~/.ssh
+mkdir -p ~/.ssh ~/.ssh/cm-sockets && chmod 700 ~/.ssh ~/.ssh/cm-sockets
 if ! ssh-keygen -F "[$SERVER]:$PORT" &>/dev/null && \
    ! ssh-keygen -F "$SERVER"         &>/dev/null; then
     ssh-keyscan -p "$PORT" -H "$SERVER" >> ~/.ssh/known_hosts 2>/dev/null
@@ -102,6 +102,7 @@ SSHPASS="$COLL_PASS" /usr/bin/sshpass -e \
     ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
     -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
     -o PreferredAuthentications=password \
+    -o ControlMaster=auto -o "ControlPath=$HOME/.ssh/cm-sockets/%C" -o ControlPersist=10m \
     -p "$PORT" "$COLL_USER@$SERVER" \
     "python3 ${INSTALL_DIR}/heartbeat_query.py ${REMOTE_ARGS[*]+"${REMOTE_ARGS[*]}"}"
 

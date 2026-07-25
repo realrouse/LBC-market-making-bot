@@ -91,11 +91,18 @@ HB_USER="${ALL_USERS[0]}"
 HB_PASS="${ALL_PASSWORDS[0]}"
 
 # ─── SSH helpers ───────────────────────────────────────────────────────────────
+# ControlMaster: this script chains many ssh/rsync calls (often to the SAME account twice
+# over — e.g. update_claude1.sh's SA_USER and HB_USER are both idx 0) — reuse one
+# authenticated connection instead of the ~13s password-auth cost each time (measured on
+# apollo; same fix as scripts/deploy_actions.py's Host.SSH_OPTS).
+mkdir -p ~/.ssh/cm-sockets && chmod 700 ~/.ssh/cm-sockets
+_CM_OPTS="-o ControlMaster=auto -o ControlPath=$HOME/.ssh/cm-sockets/%C -o ControlPersist=10m"
+
 _ssh() {
     SSHPASS="$SA_PASS" /usr/bin/sshpass -e \
         ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
         -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
-        -o PreferredAuthentications=password \
+        -o PreferredAuthentications=password $_CM_OPTS \
         -p "$PORT" "$SA_USER@$SERVER" "$@" 2>&1
 }
 
@@ -103,12 +110,12 @@ _ssh_hb() {
     SSHPASS="$HB_PASS" /usr/bin/sshpass -e \
         ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
         -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
-        -o PreferredAuthentications=password \
+        -o PreferredAuthentications=password $_CM_OPTS \
         -p "$PORT" "$HB_USER@$SERVER" "$@" 2>&1
 }
 
 _rsync() {
-    local ssh_opts="-p $PORT -o StrictHostKeyChecking=yes -o PreferredAuthentications=password"
+    local ssh_opts="-p $PORT -o StrictHostKeyChecking=yes -o PreferredAuthentications=password $_CM_OPTS"
 
     # tradinebotte-polymarket/ contents → $INSTALL_DIR/ (flat deploy layout)
     SSHPASS="$SA_PASS" /usr/bin/sshpass -e \

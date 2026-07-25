@@ -32,6 +32,10 @@ LOCAL_REPO_C1="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 GIT_HASH=$(git -C "$LOCAL_REPO_C1" rev-parse --short HEAD 2>/dev/null || echo "unknown")
 source "$LOCAL_REPO_C1/tradinebotte-status/scripts/record_deploy.sh"
 
+# ControlMaster socket dir — this script chains many ssh/rsync calls to the same acct-1
+# infra account; created once up front so every call path (verify-only, restarts, rsync) finds it.
+mkdir -p ~/.ssh/cm-sockets && chmod 700 ~/.ssh/cm-sockets
+
 RESTART_INDICATORS=false
 RESTART_FEED=false
 RESTART_FEED5M=false
@@ -79,6 +83,7 @@ _verify_claude1_multiservice() {
         ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
         -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
         -o PreferredAuthentications=password \
+        -o ControlMaster=auto -o ControlPath=$HOME/.ssh/cm-sockets/%C -o ControlPersist=10m \
         -p "$port" "${c1_user}@${server}" \
         "export XDG_RUNTIME_DIR=/run/user/\$(id -u)
          echo '=== services ==='
@@ -145,6 +150,7 @@ _restart_service() {
         ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
         -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
         -o PreferredAuthentications=password \
+        -o ControlMaster=auto -o ControlPath=$HOME/.ssh/cm-sockets/%C -o ControlPersist=10m \
         -p "$port" "$c1_user@$server" \
         "echo '${GIT_HASH}' > ${_install_dir}/version.stamp; \
          export XDG_RUNTIME_DIR=/run/user/\$(id -u); \
@@ -174,7 +180,11 @@ if [[ "$_ANY_RESTART" == "true" ]]; then
     _server="${TEST_SERVER:?}"
     _port="${TEST_PORT:-22}"
     _install_dir="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
-    _ssh_opts="-p $_port -o StrictHostKeyChecking=yes -o PreferredAuthentications=password"
+    # ControlMaster: this script chains many ssh/rsync calls to the SAME acct-1 infra
+    # account — reuse one authenticated connection instead of the ~13s password-auth
+    # cost each time (measured on apollo; same fix as scripts/deploy_actions.py). Socket
+    # dir created once near the top of this script.
+    _ssh_opts="-p $_port -o StrictHostKeyChecking=yes -o PreferredAuthentications=password -o ControlMaster=auto -o ControlPath=$HOME/.ssh/cm-sockets/%C -o ControlPersist=10m"
 
     echo -e "\n${BOLD}${YELLOW}═══ RSYNC tradinetools ═══${NC}"
 
@@ -192,6 +202,7 @@ if [[ "$_ANY_RESTART" == "true" ]]; then
         ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
         -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
         -o PreferredAuthentications=password \
+        -o ControlMaster=auto -o ControlPath=$HOME/.ssh/cm-sockets/%C -o ControlPersist=10m \
         -p "$_port" "$_c1_user@$_server" "
 VENV=$_install_dir/.venv
 PYVER=\$(\$VENV/bin/python3 -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')
@@ -217,7 +228,11 @@ if [[ "$RESTART_INDICATORS" == "true" ]]; then
     _server="${TEST_SERVER:?}"
     _port="${TEST_PORT:-22}"
     _install_dir="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
-    _ssh_opts="-p $_port -o StrictHostKeyChecking=yes -o PreferredAuthentications=password"
+    # ControlMaster: this script chains many ssh/rsync calls to the SAME acct-1 infra
+    # account — reuse one authenticated connection instead of the ~13s password-auth
+    # cost each time (measured on apollo; same fix as scripts/deploy_actions.py). Socket
+    # dir created once near the top of this script.
+    _ssh_opts="-p $_port -o StrictHostKeyChecking=yes -o PreferredAuthentications=password -o ControlMaster=auto -o ControlPath=$HOME/.ssh/cm-sockets/%C -o ControlPersist=10m"
 
     echo -e "\n${BOLD}${YELLOW}═══ RSYNC indicators ═══${NC}"
 
@@ -258,7 +273,11 @@ if [[ "$RESTART_FEED" == "true" ]]; then
     _server="${TEST_SERVER:?}"
     _port="${TEST_PORT:-22}"
     _install_dir="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
-    _ssh_opts="-p $_port -o StrictHostKeyChecking=yes -o PreferredAuthentications=password"
+    # ControlMaster: this script chains many ssh/rsync calls to the SAME acct-1 infra
+    # account — reuse one authenticated connection instead of the ~13s password-auth
+    # cost each time (measured on apollo; same fix as scripts/deploy_actions.py). Socket
+    # dir created once near the top of this script.
+    _ssh_opts="-p $_port -o StrictHostKeyChecking=yes -o PreferredAuthentications=password -o ControlMaster=auto -o ControlPath=$HOME/.ssh/cm-sockets/%C -o ControlPersist=10m"
 
     echo -e "\n${BOLD}${YELLOW}═══ RSYNC feed ═══${NC}"
 
@@ -287,7 +306,11 @@ if [[ "$RESTART_FEED5M" == "true" ]]; then
     _server="${TEST_SERVER:?}"
     _port="${TEST_PORT:-22}"
     _install_dir="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
-    _ssh_opts="-p $_port -o StrictHostKeyChecking=yes -o PreferredAuthentications=password"
+    # ControlMaster: this script chains many ssh/rsync calls to the SAME acct-1 infra
+    # account — reuse one authenticated connection instead of the ~13s password-auth
+    # cost each time (measured on apollo; same fix as scripts/deploy_actions.py). Socket
+    # dir created once near the top of this script.
+    _ssh_opts="-p $_port -o StrictHostKeyChecking=yes -o PreferredAuthentications=password -o ControlMaster=auto -o ControlPath=$HOME/.ssh/cm-sockets/%C -o ControlPersist=10m"
 
     echo -e "\n${BOLD}${YELLOW}═══ RSYNC feed5m ═══${NC}"
 
@@ -316,7 +339,11 @@ if [[ "$RESTART_CEXFEED" == "true" ]]; then
     _server="${TEST_SERVER:?}"
     _port="${TEST_PORT:-22}"
     _install_dir="${TEST_REMOTE_INSTALL_DIR:-~/tradinebotte}"
-    _ssh_opts="-p $_port -o StrictHostKeyChecking=yes -o PreferredAuthentications=password"
+    # ControlMaster: this script chains many ssh/rsync calls to the SAME acct-1 infra
+    # account — reuse one authenticated connection instead of the ~13s password-auth
+    # cost each time (measured on apollo; same fix as scripts/deploy_actions.py). Socket
+    # dir created once near the top of this script.
+    _ssh_opts="-p $_port -o StrictHostKeyChecking=yes -o PreferredAuthentications=password -o ControlMaster=auto -o ControlPath=$HOME/.ssh/cm-sockets/%C -o ControlPersist=10m"
 
     echo -e "\n${BOLD}${YELLOW}═══ RSYNC cexfeed ═══${NC}"
 

@@ -60,7 +60,7 @@ if [[ ! -x "$(command -v sshpass)" ]]; then
     echo "sshpass not found — apt-get install sshpass" >&2; exit 1
 fi
 
-mkdir -p ~/.ssh && chmod 700 ~/.ssh
+mkdir -p ~/.ssh ~/.ssh/cm-sockets && chmod 700 ~/.ssh ~/.ssh/cm-sockets
 if ! ssh-keygen -F "[$SERVER]:$PORT" &>/dev/null && \
    ! ssh-keygen -F "$SERVER"         &>/dev/null; then
     ssh-keyscan -p "$PORT" -H "$SERVER" >> ~/.ssh/known_hosts 2>/dev/null
@@ -74,10 +74,14 @@ RED='\033[0;31m'; NC='\033[0m'
 
 _ssh() {
     local user="$1" pass="$2"; shift 2
+    # ControlMaster: reuse one authenticated connection per account (idx 0 gets hit twice in
+    # this script — heartbeat query + services loop). ~13s/connection measured on apollo with
+    # password auth, so this is the same fix as scripts/deploy_actions.py's Host.SSH_OPTS.
     SSHPASS="$pass" /usr/bin/sshpass -e \
         ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=10 -o BatchMode=no \
         -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
         -o PreferredAuthentications=password \
+        -o ControlMaster=auto -o "ControlPath=$HOME/.ssh/cm-sockets/%C" -o ControlPersist=10m \
         -p "$PORT" "$user@$SERVER" "$@" 2>/dev/null
 }
 

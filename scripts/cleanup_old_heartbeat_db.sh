@@ -43,10 +43,14 @@ USER0="${TEST_USERS[0]:?TEST_USERS missing}"; PASS0="${TEST_PASSWORDS[0]:?TEST_P
 
 if ! command -v sshpass >/dev/null; then log "ABORT: sshpass not installed"; exit 1; fi
 
+mkdir -p ~/.ssh/cm-sockets && chmod 700 ~/.ssh/cm-sockets
 _ssh() {
+    # ControlMaster: this script calls _ssh twice (gate + delete) on the same account —
+    # reuse one authenticated connection instead of the ~13s password-auth cost each time.
     SSHPASS="$PASS0" sshpass -e ssh \
         -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
         -o PreferredAuthentications=password \
+        -o ControlMaster=auto -o "ControlPath=$HOME/.ssh/cm-sockets/%C" -o ControlPersist=10m \
         -p "$PORT" "$USER0@$SERVER" "$@" 2>&1
 }
 

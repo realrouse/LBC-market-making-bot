@@ -41,12 +41,17 @@ done
 
 should_run() { local p="$1"; for x in "${RUN_PHASES[@]}"; do [[ "$x" == "$p" ]] && return 0; done; return 1; }
 
+mkdir -p ~/.ssh/cm-sockets && chmod 700 ~/.ssh/cm-sockets
 _ssh() {
     local user="$1" pass="$2"; shift 2
+    # ControlMaster: this script calls _ssh many times per account (per-phase cleanup
+    # commands) — reuse one authenticated connection instead of paying the ~13s
+    # password-auth cost on every single call (measured on apollo).
     SSHPASS="$pass" /usr/bin/sshpass -e \
         ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=no \
         -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
         -o PreferredAuthentications=password \
+        -o ControlMaster=auto -o "ControlPath=$HOME/.ssh/cm-sockets/%C" -o ControlPersist=10m \
         -p "$PORT" "$user@$SERVER" "$@" 2>&1
 }
 
