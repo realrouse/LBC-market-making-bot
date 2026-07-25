@@ -29,7 +29,7 @@ from urllib.parse import urlencode
 
 import aiohttp
 
-from api_common import book_snapshot, parse_levels
+from api_common import book_snapshot, decimals_of, fmt_price, parse_levels
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +40,63 @@ WS_BATCH_SIZE = 10
 
 DEFAULT_SYMBOL = "BTC_USDT"
 
-# 1 BTC_USDT perpetual contract = 0.001 BTC.
-# Verify with GET /api/v1/contract/detail before trading at scale.
-BTC_USDT_CONTRACT_SIZE = 0.001  # BTC per contract
+# Last-resort contract size (BTC per contract) used ONLY to convert already-open orders
+# back to base units when contract/detail can't be reached. The order-placement path
+# fetches the real per-symbol contractSize and fails closed instead of guessing — a
+# hardcoded size is wrong for every non-BTC perp AND was even wrong for BTC_USDT
+# (real value 0.0001, not 0.001), which is why it must never size a live order.
+_FALLBACK_CONTRACT_SIZE = 0.0001
+
+# Per-symbol contract info from /api/v1/contract/detail (public), cached process-wide.
+_CONTRACT_INFO: dict = {}
+
+
+async def get_contract_info(session, symbol):
+    """Return {"price_decimals", "contract_size", "vol_unit"} for `symbol` from MEXC
+    Futures contract/detail (PUBLIC — works in sim), cached. None on failure so the
+    order path FAILS CLOSED: contract size drives order quantity, so a wrong/guessed
+    value silently mis-sizes every order. Price tick = priceUnit (e.g. 0.1 → 1dp)."""
+    sym = str(symbol).split(":", maxsplit=1)[0]
+    cached = _CONTRACT_INFO.get(sym)
+    if cached is not None:
+        return cached
+    try:
+        async with session.get(
+            f"{BASE_URL}/api/v1/contract/detail",
+            params={"symbol": sym},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            data = (await resp.json(content_type=None)).get("data") or {}
+        if isinstance(data, list):
+            data = data[0] if data else {}
+        # A transient/error response (empty or partial `data`) must fail closed CLEANLY —
+        # missing fields → None + a WARNING, never a KeyError logged as ERROR (which would
+        # trip the deploy verify). The caller then falls back (grid) or refuses (order).
+        price_unit = data.get("priceUnit")
+        contract_size = data.get("contractSize")
+        if price_unit is None or contract_size is None:
+            logger.warning("MEXC Futures contract/detail [%s] missing priceUnit/contractSize "
+                           "(%.100s) — precision unresolved", sym, str(data))
+            return None
+        info = {
+            "price_decimals": decimals_of(price_unit),
+            "contract_size":  float(contract_size),
+            "vol_unit":       int(float(data.get("volUnit", 1))),
+        }
+        _CONTRACT_INFO[sym] = info
+        logger.info("MEXC Futures contract [%s]: price=%ddp contractSize=%s volUnit=%d",
+                    sym, info["price_decimals"], info["contract_size"], info["vol_unit"])
+        return info
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        logger.warning("MEXC Futures get_contract_info failed [%s]: %s", sym, e)
+        return None
+
+
+async def get_symbol_precision(session, symbol):
+    """(price_decimals, qty_decimals) — qty is integer contracts so qty_decimals=0.
+    Lets the grid engine round levels to the futures price tick. None on failure."""
+    info = await get_contract_info(session, symbol)
+    return None if info is None else (info["price_decimals"], 0)
 
 # MEXC Futures fee rates (standard tier, no discount)
 FEE_RATE       = 0.0006   # taker 0.06%
@@ -74,38 +128,6 @@ _STATUS_MAP = {
 def compute_fee(price, quantity):
     """MEXC Futures taker fee: 0.06% of notional (price × quantity in USDT)."""
     return FEE_RATE * price * quantity
-
-
-# ── MARKET METADATA ───────────────────────────────────────────────────────────
-
-def get_market_id(market):
-    """Return the trading symbol as the market identifier."""
-    return market.get("symbol", "")
-
-
-def get_market_question(market):
-    """Return a human-readable market description (falls back to symbol)."""
-    return market.get("question", market.get("symbol", ""))
-
-
-def get_market_end_ts_ms(_market):
-    """Return 0 — perpetual futures have no scheduled expiry."""
-    return 0.0
-
-
-def get_market_start_ts_ms(_market):
-    """Return 0 — start time is not applicable to perpetual contracts."""
-    return 0.0
-
-
-def get_up_token_id(market):
-    """Long (buy) direction maps to UP."""
-    return market.get("symbol", "")
-
-
-def get_down_token_id(market):
-    """Short direction maps to DOWN — ":SHORT" suffix mirrors ":SELL" convention."""
-    return market.get("symbol", "") + ":SHORT"
 
 
 # ── AUTH ──────────────────────────────────────────────────────────────────────
@@ -249,9 +271,9 @@ async def get_markets(session, symbol=DEFAULT_SYMBOL, **_):
 
 # ── ORDER PLACEMENT ───────────────────────────────────────────────────────────
 
-def _to_vol(size_usdc: float, price: float) -> int:
-    """Convert USDT notional to integer contract count for BTC_USDT perpetual."""
-    return max(1, round(size_usdc / price / BTC_USDT_CONTRACT_SIZE))
+def _to_vol(size_usdc: float, price: float, contract_size: float) -> int:
+    """Convert USDT notional to integer contract count. 1 contract = contract_size base asset."""
+    return max(1, round(size_usdc / price / contract_size))
 
 
 async def post_order(session, symbol, price, size_usdc, *,
@@ -262,7 +284,7 @@ async def post_order(session, symbol, price, size_usdc, *,
 
     Args:
         symbol    : perpetual pair, e.g. "BTC_USDT". Append ":SHORT" to force
-                    open-short side (mirrors get_down_token_id convention).
+                    open-short side (the ':SELL' suffix convention).
         price     : limit price in USDT
         size_usdc : USDT notional — converted to contracts via BTC_USDT_CONTRACT_SIZE
         api_key   : MEXC Futures key (falls back to MEXC_FUTURES_API_KEY env var)
@@ -287,10 +309,14 @@ async def post_order(session, symbol, price, size_usdc, *,
         logger.warning("MEXC Futures — order simulated (MEXC_FUTURES_API_KEY/SECRET not set)")
         return f"sim_{uuid.uuid4().hex[:12]}"
 
-    vol      = _to_vol(size_usdc, price)
+    info = await get_contract_info(session, _sym)
+    if info is None:
+        logger.error("MEXC Futures — no contract info for %s, refusing order (fail-closed)", _sym)
+        return None
+    vol      = _to_vol(size_usdc, price, info["contract_size"])
     body     = {
         "symbol":   _sym,
-        "price":    str(price),
+        "price":    fmt_price(price, info["price_decimals"]),  # rounded to priceUnit tick
         "vol":      vol,
         "side":     fut_side,
         "type":     _TYPE_LIMIT,
@@ -340,7 +366,11 @@ async def post_market_order(session, symbol, side, quantity, *,
         logger.warning("MEXC Futures — market order simulated (no credentials)")
         return f"sim_{uuid.uuid4().hex[:12]}"
 
-    vol      = max(1, round(quantity / BTC_USDT_CONTRACT_SIZE))
+    info = await get_contract_info(session, _sym)
+    if info is None:
+        logger.error("MEXC Futures — no contract info for %s, refusing market order (fail-closed)", _sym)
+        return None
+    vol      = max(1, round(quantity / info["contract_size"]))
     body     = {
         "symbol":   _sym,
         "vol":      vol,
@@ -387,7 +417,7 @@ async def get_order_status(session, symbol, order_id, *,
     if str(order_id).startswith("sim_"):
         return None
 
-    _sym    = str(symbol).split(":")[0]
+    _sym    = str(symbol).split(":", maxsplit=1)[0]
     qs      = urlencode({"symbol": _sym})
     headers = _auth_headers(_key, _secret, qs)
     try:
@@ -426,7 +456,7 @@ async def cancel_order(session, symbol, order_id, *,
     if not _key or not _secret:
         return True
 
-    _sym    = str(symbol).split(":")[0]
+    _sym    = str(symbol).split(":", maxsplit=1)[0]
     qs      = urlencode({"symbol": _sym})
     headers = _auth_headers(_key, _secret, qs)
     try:
@@ -462,7 +492,7 @@ async def get_open_orders(session, symbol, *, api_key=None, api_secret=None):
     if not _key or not _secret:
         return []
 
-    _sym    = str(symbol).split(":")[0]
+    _sym    = str(symbol).split(":", maxsplit=1)[0]
     qs      = urlencode({"symbol": _sym})
     headers = _auth_headers(_key, _secret, qs)
     try:
@@ -476,13 +506,17 @@ async def get_open_orders(session, symbol, *, api_key=None, api_secret=None):
                 logger.warning("MEXC Futures get_open_orders error %d : %.300s", resp.status, data)
                 return None   # error sentinel — not [] (sim/no-orders)
             orders = data.get("data") or []
+            # Convert contracts → base units with the real per-symbol size (fallback to
+            # the BTC constant only if contract/detail is unreachable — read path).
+            _info = await get_contract_info(session, _sym)
+            csize = _info["contract_size"] if _info else _FALLBACK_CONTRACT_SIZE
             return [
                 {
                     "order_id": str(o.get("orderId", "")),
                     "side":     "BUY" if o.get("side") in (_SIDE_OPEN_LONG, _SIDE_CLOSE_SHORT)
                                 else "SELL",
                     "price":    float(o.get("price", 0)),
-                    "qty":      float(o.get("vol", 0)) * BTC_USDT_CONTRACT_SIZE,
+                    "qty":      float(o.get("vol", 0)) * csize,
                     "status":   _STATUS_MAP.get(o.get("state", 0), "UNKNOWN"),
                 }
                 for o in orders

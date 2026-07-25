@@ -6,15 +6,17 @@ core machinery, not a plugin: it statically imports no exchange module (only
 `importlib.import_module(name)` on demand), so `import botcore.connectors` pulls in
 no `api_*`. Both the Polymarket and CEX paths resolve their connector through here.
 
-Each connector module exposes the same interface:
+Each connector exposes the common EXCHANGE interface:
     parse_book_update(msg)          → dict | None
     get_markets(session, ...)       → list[dict]
     post_order(session, ...)        → str | None
     compute_fee(price, qty)         → float
     make_subscribe_msg(symbols)     → str
-    get_market_id/question/...      → str
     WS_URL                          → str
     WS_BATCH_SIZE                   → int
+The Polymarket market-metadata accessors (get_market_id/question/{start,end}_ts_ms,
+get_{up,down}_token_id) are Polymarket-ONLY — spot/futures CEX adapters do not carry
+them. validate() enforces only the methods each strategy_type actually requires.
 
 Usage:
     from botcore.connectors import load
@@ -59,6 +61,10 @@ _STRATEGY_REQUIREMENTS: dict[str, list[str]] = {
         "get_open_orders",
         "compute_fee",
     ],
+    # accumulation is a PAPER strategy: _buy/_sell self-account, no exchange orders — so it
+    # needs no connector methods. Listed explicitly (empty) so validate() documents that,
+    # rather than relying on the .get(..., []) default for an unlisted strategy.
+    "accumulation": [],
 }
 
 

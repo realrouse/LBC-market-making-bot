@@ -1,5 +1,11 @@
 # Architecture multi-bot WebSocket
 
+> ⚠ **Ce document décrit l'architecture multi-bots « Option B », retirée** (un feed partagé
+> plus un processus `account_bot` par compte). `account_bot` et ses scripts d'installation et
+> de lancement ont été supprimés : tous les bots de trading se déploient désormais nativement
+> dans un arbre partagé unique via `scripts/deploy.py`. Le raisonnement sur le feed partagé et
+> le protocole de messages ZeroMQ ci-dessous restent exacts ; les instructions de déploiement
+> et de lancement, non. En attente de réécriture.
 > 🇬🇧 [English version](multi.md)
 
 Ce document décrit l'**Option B** : partager une seule connexion WebSocket entre
@@ -346,24 +352,6 @@ TRADINEBOTTE_DIR=~/account-c bash scripts/start_account.sh
 
 Les logs du feed vont dans `/tmp/tradinebotte-feed-<hash>.log`.
 
-Si vous préférez démarrer le feed explicitement (ex. pour systemd) :
-
-```bash
-# Optionnel : démarrage manuel du feed
-bash scripts/start_feed.sh
-
-# Les account bots sautent l'auto-démarrage et se connectent directement
-TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
-TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
-```
-
-Avec une adresse personnalisée :
-
-```bash
-TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-a bash scripts/start_account.sh
-TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 TRADINEBOTTE_DIR=~/account-b bash scripts/start_account.sh
-```
-
 ### Lancement systemd (feed_auto_start=false, recommandé en production)
 
 Quand le feed est géré par systemd, désactiver l'auto-démarrage dans chaque `config.json` :
@@ -500,30 +488,6 @@ utilisateur peut le lancer. Choix typiques :
 | Le même utilisateur qu'un des comptes (ex. `user1`) | 2–3 comptes, setup simple |
 | Un compte système dédié (`tradinebotte-feed`) | Production ; séparation claire des responsabilités |
 
-### Séquence de lancement (cross-user)
-
-```bash
-# En tant que user1 — lancer le feed partagé (IPC par défaut)
-bash ~/tradinebotte/scripts/start_feed.sh
-
-# En tant que user2 — lancer son account bot.
-# Cross-user : l'IPC est par UID, donc user2 ne peut pas accéder au socket IPC de user1.
-# Utiliser TCP quand feed et account bots tournent sous des OS users différents :
-TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5557 \
-TRADINEBOTTE_DIR=~/account-2 \
-bash ~/tradinebotte/scripts/start_account.sh
-
-# En tant que user3 — un autre account bot
-TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5557 \
-TRADINEBOTTE_DIR=~/account-3 \
-bash ~/tradinebotte/scripts/start_account.sh
-```
-
-Chaque utilisateur utilise **son propre venv** (`~/tradinebotte/venv/`) via son
-propre `start_account.sh`. En TCP (cross-user), `TRADINEBOTTE_FEED_ADDR` doit être
-identique pour tous les utilisateurs. Quand tous les services tournent sous le même
-OS user, l'IPC est utilisé automatiquement — aucune variable d'env n'est nécessaire.
-
 ### Arborescence (cross-user)
 
 ```
@@ -602,9 +566,8 @@ déjà occupé :
 ss -tlnp | grep 5557
 
 # Utiliser un base différent pour tous les participants
-TRADINEBOTTE_PORT_BASE=6557 bash scripts/start_feed.sh
-# — chaque account bot doit utiliser le même base
-TRADINEBOTTE_PORT_BASE=6557 TRADINEBOTTE_DIR=~/account-2 bash scripts/start_account.sh
+# — chaque participant sur l'hôte doit utiliser le même base
+export TRADINEBOTTE_PORT_BASE=6557
 ```
 
 ### Services systemd
@@ -613,42 +576,11 @@ Le projet fournit trois scripts générateurs dédiés :
 
 | Script | Génère | Rôle |
 |---|---|---|
-| `scripts/install_feed_service.sh` | `tradinebotte-feed.service` | Feed WebSocket système (un par machine) |
-| `scripts/install_indicators_service.sh` | `tradinebotte-indicators.service` | Pipeline indicators partagé (un par machine, optionnel) |
 | `scripts/install_account_service.sh` | `tradinebotte-account-<nom>.service` | Bot de trading par compte (un par portefeuille) |
 
-**Étape 1 — installer le service feed (une fois par machine) :**
+**Étape 1 — installer le service feed :** déployé nativement par `scripts/deploy.py` (cible `feed`) ; pas de script d'installation manuel.
 
-```bash
-bash scripts/install_feed_service.sh
-# optionnel : adresse ZMQ non standard
-TRADINEBOTTE_FEED_ADDR=tcp://127.0.0.1:5558 bash scripts/install_feed_service.sh
-
-# Suivre les commandes sudo affichées :
-sudo cp /tmp/tradinebotte-feed.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable tradinebotte-feed
-sudo systemctl start tradinebotte-feed
-```
-
-**Étape 1b — installer le service indicators (optionnel, une fois par machine) :**
-
-Le service indicators est un **processus partagé** — une seule instance tourne
-sur la machine (comme le feed). Chaque `account_bot` enregistre les flux dont il
-a besoin au démarrage via la socket REP ; le service démarre les tâches correspondantes
-dynamiquement.
-
-```bash
-INDICATORS_CONFIG=~/tradinebotte/strategies/indicators/indicators_4h_bitcoin.json \
-bash tradinebotte-indicators/scripts/install_indicators_service.sh
-
-# Suivre les commandes sudo affichées :
-sudo cp ~/tmp/tradinebotte-indicators.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable tradinebotte-indicators
-sudo systemctl start tradinebotte-indicators
-journalctl -u tradinebotte-indicators -f
-```
+**Étape 1b — installer le service indicators :** déployé nativement par `scripts/deploy.py` (cible `indicators`) ; pas de script d'installation manuel. C'est un processus partagé — une instance par machine, comme le feed.
 
 **Étape 2 — installer un service de compte (une fois par répertoire de portefeuille) :**
 
@@ -671,8 +603,8 @@ L'unité account déclare :
 - `Requires=tradinebotte-feed.service` — systemd refuse de la démarrer si le feed n'est pas actif, et la redémarre automatiquement si le feed revient après un crash.
 - `Wants=tradinebotte-indicators.service` — systemd démarre le service indicators en premier s'il est installé (optionnel ; l'account bot continue sans indicateurs si le service est absent).
 
-**Cross-user** : le service feed tourne sous l'utilisateur qui a exécuté
-`install_feed_service.sh`. Les services account tournent chacun sous le
+**Cross-user** : le service feed tourne sous l'utilisateur qui l'a déployé.
+Les services account tournent chacun sous le
 propriétaire du portefeuille. Tous se connectent via `127.0.0.1` — aucun
 droit Linux supplémentaire requis.
 
@@ -697,7 +629,7 @@ journalctl -u tradinebotte-account-account-a -f
 | Fichier stratégie | `TRADINEBOTTE_DIR/strategies/` | `TRADINEBOTTE_DIR/strategies/` par compte |
 | Reprise après crash | `restore_state_from_db()` au démarrage | identique, par compte |
 | Logique du signal | `pm_strategy.check_signal()` | identique (ré-exporté via `live_bot`) |
-| Service systemd | `tradinebotte.service` | unités séparées pour le feed + chaque compte |
+| Unités systemd | `tradinebotte-*.service` natives (unités user) | une par bot + feed/indicators partagés, installées par `scripts/deploy.py` |
 
 ---
 

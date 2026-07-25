@@ -1,3 +1,14 @@
+[MAIN]
+# Pylint runs as a gate on the SCORE, not on every advisory message: the suite carries a few
+# intentional W/R/C (unused test imports, module length) that shouldn't fail CI, but a real
+# regression that tanks the score below this threshold should. (run_tests.sh runs it non-blocking.)
+fail-under=9.5
+
+# Research/backtest scripts are exploratory (pandas/dict heavy) and pylint's static
+# analysis raises false E1136/E1137 "unsubscriptable" on their DataFrame/dict locals,
+# dragging the repo score for code that never ships. Keep them out of the quality gate.
+ignore-paths=^analysis/,^scripts/backtest,.*_pb2
+
 [FORMAT]
 # 100 chars (pylint default) is tight for async code with long identifiers.
 max-line-length=120
@@ -87,4 +98,4 @@ disable=
 # connectors/ and strategy_engines/ live alongside live_bot.py in the flat
 # deploy directory (tradinebotte-cex/); they are absent from the source tree
 # during lint runs.
-ignored-modules = websockets,zmq,py_clob_client,connectors,strategy_engines,mexc_spot_depth_pb2
+ignored-modules = websockets,zmq,py_clob_client,connectors,strategy_engines,mexc_spot_depth_pb2,matplotlib,numpy

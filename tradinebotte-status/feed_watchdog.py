@@ -4,7 +4,7 @@
 Solution C of the feed-robustness plan. The feed (feed.py) can sit "active" yet silent:
 get_markets() masks API/session errors as [] → the bot loops in "No markets — waiting 30s"
 without ever connecting its WebSocket or pinging (0 books, 0 pings observed 2026-06-27).
-Its consumers (account_bot) then starve invisibly. This watchdog is failure-mode-agnostic:
+Its consumers (the standalone Polymarket bots) then starve invisibly. This watchdog is failure-mode-agnostic:
 it reads the feed's own heartbeat (already published: ws_connected + last_book_ts) from the
 shared state DB and restarts the feed service if it has been alive-but-not-publishing.
 
@@ -21,7 +21,7 @@ import os
 import sqlite3
 import subprocess
 import time
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger("feed_watchdog")
 

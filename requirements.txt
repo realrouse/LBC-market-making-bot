@@ -5,3 +5,4 @@ py-clob-client
 pyzmq
 bcrypt
 protobuf>=5,<6
+tomli ; python_version < "3.11"

@@ -7,7 +7,7 @@
 #   - tradinebotte-feed5m.service  (5M Polymarket feed, TCP :5557)
 #   - tradinebotte-cexfeed.service (Binance + MEXC CEX feed, TCP :5563)
 #   - tradinetools refreshed in the venv site-packages (cex_feed needs PORT_CEX_FEED)
-#   - account_bot feed_auto_start=false (don't spawn a duplicate feed)
+#   - feed_auto_start=false in the bot config (don't spawn a duplicate feed)
 #
 # Safe to re-run. Restarts the feeds (consumers reconnect via ZMQ, ~seconds).
 #
@@ -28,7 +28,11 @@ USERS=("${TEST_USERS[@]:?TEST_USERS missing}"); PASSWORDS=("${TEST_PASSWORDS[@]:
 IDX="${TRADINEBOTTE_INFRA_IDX:-0}"
 U="${USERS[$IDX]}"; P="${PASSWORDS[$IDX]}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SSH_OPTS="-p $PORT -o StrictHostKeyChecking=yes -o PreferredAuthentications=password -o ConnectTimeout=20"
+mkdir -p ~/.ssh/cm-sockets && chmod 700 ~/.ssh/cm-sockets
+# ControlMaster: this script makes several ssh+rsync calls to the SAME account in sequence —
+# reuse one authenticated connection instead of paying the ~13s password-auth cost each time
+# (measured on apollo; same fix as scripts/deploy_actions.py's Host.SSH_OPTS).
+SSH_OPTS="-p $PORT -o StrictHostKeyChecking=yes -o PreferredAuthentications=password -o ConnectTimeout=20 -o ControlMaster=auto -o ControlPath=$HOME/.ssh/cm-sockets/%C -o ControlPersist=10m"
 
 _ssh(){ SSHPASS="$P" /usr/bin/sshpass -e ssh $SSH_OPTS "$U@$SERVER" "$@" 2>&1 | grep -v "Warning: Permanently" || true; }
 _rsync(){ SSHPASS="$P" /usr/bin/sshpass -e rsync -az --exclude=__pycache__ -e "ssh $SSH_OPTS" "$1" "$U@$SERVER:$2" 2>&1 | grep -vi warning || true; }
@@ -52,8 +56,8 @@ for _f in api_common.py api_binance.py api_mexc.py api_mexc_futures.py mexc_spot
 done
 _rsync "$REPO/tradinebotte-core/botcore/" "$R_DIR/botcore/"
 _rsync "$REPO/tradinebotte-cex/connectors/" "$R_DIR/connectors/"
-_rsync "$REPO/tradinebotte-polymarket/scripts/systemd/tradinebotte-feed5m.service" "$R_UNIT/tradinebotte-feed5m.service"
-_rsync "$REPO/tradinebotte-cex/scripts/systemd/tradinebotte-cexfeed.service" "$R_UNIT/tradinebotte-cexfeed.service"
+_rsync "$REPO/systemd/tradinebotte-feed5m.service" "$R_UNIT/tradinebotte-feed5m.service"
+_rsync "$REPO/systemd/tradinebotte-cexfeed.service" "$R_UNIT/tradinebotte-cexfeed.service"
 _rsync "$REPO/tradinetools/" "$R_DIR/tradinetools/"
 ok "pushed feed.py, cex_feed.py + connectors (+ mexc spot pb), unit templates, tradinetools"
 
@@ -88,7 +92,7 @@ p = os.path.expanduser("~/tradinebotte/config.json")
 c = json.load(open(p)) if os.path.exists(p) else {}
 c["feed_auto_start"] = False
 json.dump(c, open(p, "w"), indent=2)
-print("  account_bot feed_auto_start=false")
+print("  feed_auto_start=false")
 PY
 mkdir -p "$HOME/feed5m"
 

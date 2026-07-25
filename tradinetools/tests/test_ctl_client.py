@@ -5,7 +5,6 @@ import os
 import threading
 import unittest
 
-import tradinetools
 from tradinetools import Command, control_loop, ctl_client
 
 

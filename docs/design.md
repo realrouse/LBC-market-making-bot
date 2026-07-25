@@ -1,3 +1,9 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../graphics/logo-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="../graphics/logo-light.svg">
+  <img src="../graphics/logo-dark.svg" alt="tradinebotte" height="56">
+</picture>
+
 # Process Architecture & ZeroMQ Message Flow
 
 > 🇫🇷 [Version française](design.fr.md)

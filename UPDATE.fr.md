@@ -87,32 +87,23 @@ Ce script copie en rsync le contenu de `tradinebotte-polymarket/` à plat dans l
 
 ---
 
-## Scénario 5 — Déploiement du compte swing
+## Scénario 5 — Déploiement d'une stratégie CEX / swing / grid / polymarket
 
-Pour le compte de déploiement dédié à la stratégie swing, utiliser le script de déploiement spécifique :
-
-```bash
-bash tradinebotte-cex/scripts/update_swing.sh
-```
-
-Ce script copie en rsync le moteur de stratégie swing et sa configuration vers le répertoire d'installation du compte swing, écrit son `config.json`, puis redémarre le bot — en préférant `systemctl --user restart tradinebotte-live.service` si le service user est actif ou activé, avec bascule automatique sur nohup sinon. L'étape de vérification utilise le filtrage `pgrep`/`/proc/$P/exe`, comme `update_standalone.sh`.
-
----
-
-## Scénario 6 — Déploiement d'une stratégie CEX
-
-Trois scripts couvrent les stratégies du sous-service CEX. Chacun copie en rsync le moteur et la configuration concernés, redémarre le bot via son fichier PID et vérifie le processus — le tout dans une seule session SSH.
+Tout bot de trading se déploie désormais via le déployeur natif piloté par l'inventaire — plus de script
+bash par stratégie. Déployer un bot (ou toute la flotte) via `deploy_all.sh`, qui dérive chaque étape de
+`inventory.toml` :
 
 ```bash
-# Bot de scalping (OBI Binance)
-bash tradinebotte-cex/scripts/deploy_scalping_claude4.sh
+# Un bot (filtrer sur son compte/label)
+bash tradinebotte-cex/scripts/deploy_all.sh --only "account-5 — binance-swing"
 
-# Bot d'accumulation BTC v1.5
-bash tradinebotte-cex/scripts/deploy_accumulation_claude4.sh
-
-# Stratégie swing
-bash tradinebotte-cex/scripts/update_swing.sh
+# Toute la flotte
+bash tradinebotte-cex/scripts/deploy_all.sh
 ```
+
+Chaque étape native rsync le code partagé, écrit un `config_<instance>.json` self-contained, rafraîchit
+tradinetools et redémarre l'unité systemd `--user`. Les clés/wallet viennent d'un fichier env 600 chargé par
+l'unité (`MEXC_API_KEY`, `POLY_PRIVATE_KEY`), jamais de config.json.
 
 ---
 
@@ -147,26 +138,6 @@ bash tradinebotte-indicators/scripts/start_indicators.sh
 Le fichier DB est créé avec les droits `0o644`. Le répertoire parent du chemin doit être accessible en écriture par l'utilisateur du service d'indicateurs.
 
 3. Aucune modification de `config.json`, `live.db` ou des fichiers JSON de stratégie des bots n'est requise pour cette mise à jour.
-
----
-
-## Option B — Mise à jour multi-bot
-
-Mettre à jour le repo partagé et redémarrer. Les répertoires de comptes (`~/account-a`, etc.) ne sont pas touchés.
-
-```bash
-cd ~/src/tradinebotte   # ou l'emplacement du repo
-git pull
-bash scripts/install.sh
-
-kill $(cat ~/tradinebotte/feed.pid)
-kill $(cat ~/account-a/account.pid)
-kill $(cat ~/account-b/account.pid)
-
-bash tradinebotte-polymarket/scripts/start_feed.sh
-TRADINEBOTTE_DIR=~/account-a bash tradinebotte-polymarket/scripts/start_account.sh
-TRADINEBOTTE_DIR=~/account-b bash tradinebotte-polymarket/scripts/start_account.sh
-```
 
 ---
 

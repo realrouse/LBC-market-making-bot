@@ -267,7 +267,7 @@ class TestLoadDailyFromDailyDB(unittest.TestCase):
             (1_577_923_200, 9_200.0, 9_800.0, 9_100.0, 9_700.0, 120.0, "test"),
         ])
         # Patch sqlite3.connect to return our in-memory conn
-        import unittest.mock as mock
+        from unittest import mock
         with mock.patch("sqlite3.connect", return_value=conn):
             result = bcs.load_daily(":memory:")
         self.assertIsInstance(result, list)
@@ -277,7 +277,7 @@ class TestLoadDailyFromDailyDB(unittest.TestCase):
         conn = self._make_db([
             (1_577_836_800, 9_000.0, 9_500.0, 8_800.0, 9_200.0, 100.0, "test"),
         ])
-        import unittest.mock as mock
+        from unittest import mock
         with mock.patch("sqlite3.connect", return_value=conn):
             result = bcs.load_daily(":memory:")
         row = result[0]
@@ -292,7 +292,7 @@ class TestLoadDailyFromDailyDB(unittest.TestCase):
             (1_577_923_200, 9_200.0, 9_800.0, 9_100.0, 9_700.0, 120.0, "test"),
             (1_577_836_800, 9_000.0, 9_500.0, 8_800.0, 9_200.0, 100.0, "test"),
         ])
-        import unittest.mock as mock
+        from unittest import mock
         with mock.patch("sqlite3.connect", return_value=conn):
             result = bcs.load_daily(":memory:")
         self.assertLess(result[0]["ts"], result[1]["ts"])

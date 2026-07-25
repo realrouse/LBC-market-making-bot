@@ -2,6 +2,14 @@
 # ═══════════════════════════════════════════════════════════════════
 #  start_collector.sh — Deploy and start the data-collection bot
 #
+#  ⚠ DORMANT since 2026-05 — this pipeline is not currently deployed.
+#  The collector account holds no ~/tradinebotte-collector directory and no
+#  cron entry is installed; the newest archive is data/live_2026_W19.db.
+#  Kept intentionally: this is the tooling that produces the backtest
+#  datasets, and it is expected to be reactivated for a future collection
+#  campaign. Re-read the usage notes below before relying on it.
+#
+#
 #  Deploys tradinebotte code to the first deployment account and
 #  launches it in simulation mode with 1-second snapshots.
 #  No real orders are placed; only live.db + snapshots are written.

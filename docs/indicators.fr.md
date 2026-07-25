@@ -269,6 +269,29 @@ cassures (breakout).
 
 ---
 
+#### ichimoku — Ichimoku Kinko Hyo
+
+**Clés :** `ichi_tenkan`, `ichi_kijun`, `ichi_cloud_top`, `ichi_cloud_bottom`, `ichi_chikou`  
+**Config :** `{"type": "ichimoku"}` — pas de `period` ; périodes conventionnelles fixes 9 / 26 / 52 / 26.  
+**Source requise :** `binance_ws`
+
+Un groupe multi-lignes émettant cinq valeurs (une entrée de config → cinq clés) :
+
+| Clé | Signification |
+| --- | --- |
+| `ichi_tenkan` | Ligne de conversion, **courante** : `(max(high,9) + min(low,9)) / 2` |
+| `ichi_kijun` | Ligne de base, **courante** : `(max(high,26) + min(low,26)) / 2` |
+| `ichi_cloud_top` / `ichi_cloud_bottom` | Les Senkou Span A/B qui **s'appliquent à la barre courante** — les spans leading sont calculés il y a 26 barres (displacement), donc c'est le nuage contre lequel le prix live évolue réellement. `top = max(A,B)`, `bottom = min(A,B)`. **Comparer le prix live à ces valeurs, jamais à un span forming courant.** |
+| `ichi_chikou` | `close[t − 26]` — le prix auquel la lagging span est comparée ; un consommateur détenant le close courant dérive le signal chikou via `sign(close_now − ichi_chikou)`. |
+
+**Historique requis :** le nuage applicable nécessite 52 (Senkou B) + 26 (displacement)
+= **78 barres**. Comme le publisher supprime le message entier d'un stream tant que
+*l'un* de ses indicateurs vaut `None`, mettre `seed_periods >= 78` et de préférence
+faire tourner l'ichimoku dans **son propre stream** pour qu'un nuage en préchauffage
+ne bloque pas les indicateurs plus rapides. Voir `strategies/indicators_ichimoku_btc.json`.
+
+---
+
 ## 4. Sources WebSocket
 
 Ces sources maintiennent une connexion Binance WebSocket persistante et
@@ -741,14 +764,20 @@ Chaque fichier déclare un flux sur une paire de ports PUB + REP dédiés.
 | `indicators_ls_ratio_bitcoin.json` | `binance_ls_ratio` | `btc_ls_ratio` | 5571 | 5572 | 300 s |
 | `indicators_liquidations_bitcoin.json` | `binance_liquidations` | `btc_liquidations` | 5573 | 5574 | 300 s |
 
-### Démarrer l'instance de production unifiée
+### Lancer indicators à la main (debug)
+
+En **production**, indicators tourne avec la config unifiée à 14 flux sous
+l'unité systemd `tradinebotte-indicators`, installée par le moteur de
+déploiement (`scripts/deploy.py`). `start_indicators.sh` est le chemin de
+**debug / lancement manuel** — pratique pour isoler un flux lors d'un
+diagnostic ; à ne pas utiliser sur un compte déployé.
 
 ```bash
-# Production : 14 flux (géré par le service systemd tradinebotte-indicators)
+# Debug : lancer la config unifiée complète à la main
 TRADINEBOTTE_INDICATORS_CONFIG=tradinebotte-indicators/strategies/indicators_all.json \
   bash tradinebotte-indicators/scripts/start_indicators.sh
 
-# Test d'un flux unique en isolation
+# Debug : tester un flux unique en isolation
 TRADINEBOTTE_INDICATORS_CONFIG=tradinebotte-indicators/strategies/indicators_oi_bitcoin.json \
   bash tradinebotte-indicators/scripts/start_indicators.sh
 ```

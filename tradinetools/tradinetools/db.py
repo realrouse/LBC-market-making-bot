@@ -7,8 +7,9 @@ ONE file on the always-on server (apollo), three tables:
                   DDL is intentionally identical to status_collector.py's historical
                   inline schema so the Phase-2 migration can copy rows column-for-column.
     inventory   — desired state ("what SHOULD run where"): the single source of truth,
-                  synced from inventory.toml (git-tracked).  Replaces the topology that
-                  is today duplicated across deploy_all.sh / bot_status.sh / generate_status.py.
+                  synced from inventory.toml (local/git-ignored — see inventory.toml.example).
+                  Replaces the topology that is today duplicated across
+                  deploy_all.sh / bot_status.sh / generate_status.py.
     deploys     — append-only deploy journal: when / how / which version, written by every
                   deploy_*.sh path (closes the gap left by the overwrite-only version.stamp).
 
@@ -23,6 +24,7 @@ from here instead of keeping its own _DB_SCHEMA copy (Phase 2).
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import time
@@ -59,18 +61,31 @@ SCHEMA_INVENTORY = """
 CREATE TABLE IF NOT EXISTS inventory (
     account       TEXT NOT NULL,
     bot_name      TEXT NOT NULL,
+    display_name  TEXT,
     kind          TEXT NOT NULL DEFAULT 'bot',
     bot_type      TEXT,
+    strategy_type TEXT,
     service_unit  TEXT,
     install_dir   TEXT,
     port          INTEGER,
     is_live       INTEGER,
     deploy_script TEXT,
+    depends_on    TEXT,
     enabled       INTEGER NOT NULL DEFAULT 1,
     updated_ts    INTEGER NOT NULL,
     PRIMARY KEY (account, bot_name)
 );
 """
+
+# Columns added after the table first shipped. CREATE TABLE IF NOT EXISTS never alters an
+# existing table, so migrate explicitly + idempotently (ignore "duplicate column").
+_INVENTORY_ADD_COLUMNS = (
+    ("display_name",  "TEXT"),   # readable label for the status page (bot_name is the unique id)
+    ("depends_on",    "TEXT"),   # JSON list of bot_names this bot needs up (deploy order + monitoring root-cause)
+    ("strategy_type", "TEXT"),   # canonical strategy family for the status grouping
+                                 # (accumulation/grid/swing/polymarket); bot_type is free-text/
+                                 # variant-level. NULL for infra services.
+)
 
 # deploys: append-only journal.  One row per (bot, deploy step).
 #   mode    'rsync' | 'restart' | 'full'   (how the step ran)
@@ -91,11 +106,42 @@ CREATE INDEX IF NOT EXISTS idx_deploys_account_bot ON deploys(account, bot_name)
 CREATE INDEX IF NOT EXISTS idx_deploys_ts          ON deploys(ts);
 """
 
-SCHEMA = SCHEMA_HEARTBEATS + SCHEMA_INVENTORY + SCHEMA_DEPLOYS
+# bot_trades: durable per-fill trade log, pushed BY the bots on every fill (same PUSH→PULL
+# channel + collector as heartbeats).  Enables the real-money status page's per-trade tables
+# and trade statistics without SSH (the page is DB-only).  Mirrors the local accum_trades
+# schema, plus the (account, bot_name) join keys and the exchange order_id.
+#   The UNIQUE key makes ingestion idempotent: PUSH/PULL can drop OR redeliver a message, and
+#   a bot may re-push on restart — INSERT OR IGNORE against this key keeps exactly one row.
+#   A bot places one order at a time, so (account,bot_name,ts_ms,side,price,qty) is collision-free
+#   in practice (millisecond stamp + single in-flight order).
+SCHEMA_TRADES = """
+CREATE TABLE IF NOT EXISTS bot_trades (
+    id              INTEGER PRIMARY KEY,
+    account         TEXT    NOT NULL,
+    bot_name        TEXT    NOT NULL,
+    ts_ms           INTEGER NOT NULL,
+    side            TEXT    NOT NULL,
+    reason          TEXT,
+    price           REAL    NOT NULL,
+    qty             REAL    NOT NULL,
+    quote           REAL,
+    fee             REAL,
+    order_id        TEXT,
+    maker           INTEGER,
+    avg_entry_after REAL,
+    holdings_after  REAL,
+    free_after      REAL,
+    UNIQUE (account, bot_name, ts_ms, side, price, qty)
+);
+CREATE INDEX IF NOT EXISTS idx_bot_trades_account_bot ON bot_trades(account, bot_name);
+CREATE INDEX IF NOT EXISTS idx_bot_trades_ts          ON bot_trades(ts_ms);
+"""
+
+SCHEMA = SCHEMA_HEARTBEATS + SCHEMA_INVENTORY + SCHEMA_DEPLOYS + SCHEMA_TRADES
 
 INVENTORY_COLUMNS = (
-    "account", "bot_name", "kind", "bot_type", "service_unit",
-    "install_dir", "port", "is_live", "deploy_script", "enabled", "updated_ts",
+    "account", "bot_name", "display_name", "kind", "bot_type", "strategy_type", "service_unit",
+    "install_dir", "port", "is_live", "deploy_script", "depends_on", "enabled", "updated_ts",
 )
 
 
@@ -118,6 +164,14 @@ def open_db(db_path: str) -> sqlite3.Connection:
         db = sqlite3.connect(db_path, check_same_thread=False)
         db.execute("PRAGMA journal_mode=WAL")
         db.executescript(SCHEMA)
+        # Idempotent column migrations for tables that predate a column (CREATE IF NOT
+        # EXISTS won't add it). "duplicate column name" = already migrated → ignore.
+        for _col, _type in _INVENTORY_ADD_COLUMNS:
+            try:
+                db.execute(f"ALTER TABLE inventory ADD COLUMN {_col} {_type}")
+            except sqlite3.OperationalError as _e:
+                if "duplicate column" not in str(_e).lower():
+                    raise
         db.commit()
         try:
             os.chmod(db_path, 0o660)
@@ -141,21 +195,29 @@ def upsert_inventory(db: sqlite3.Connection, rows: Iterable[dict[str, Any]]) -> 
     for r in rows:
         db.execute(
             "INSERT INTO inventory"
-            " (account, bot_name, kind, bot_type, service_unit, install_dir,"
-            "  port, is_live, deploy_script, enabled, updated_ts)"
-            " VALUES (:account, :bot_name, :kind, :bot_type, :service_unit, :install_dir,"
-            "         :port, :is_live, :deploy_script, :enabled, :updated_ts)"
+            " (account, bot_name, display_name, kind, bot_type, strategy_type, service_unit,"
+            "  install_dir, port, is_live, deploy_script, depends_on, enabled, updated_ts)"
+            " VALUES (:account, :bot_name, :display_name, :kind, :bot_type, :strategy_type,"
+            "         :service_unit, :install_dir, :port, :is_live, :deploy_script, :depends_on,"
+            "         :enabled, :updated_ts)"
             " ON CONFLICT(account, bot_name) DO UPDATE SET"
-            "   kind=excluded.kind, bot_type=excluded.bot_type,"
-            "   service_unit=excluded.service_unit, install_dir=excluded.install_dir,"
-            "   port=excluded.port, is_live=excluded.is_live,"
-            "   deploy_script=excluded.deploy_script, enabled=excluded.enabled,"
+            "   display_name=excluded.display_name, kind=excluded.kind,"
+            "   bot_type=excluded.bot_type, strategy_type=excluded.strategy_type,"
+            "   service_unit=excluded.service_unit,"
+            "   install_dir=excluded.install_dir, port=excluded.port,"
+            "   is_live=excluded.is_live, deploy_script=excluded.deploy_script,"
+            "   depends_on=excluded.depends_on, enabled=excluded.enabled,"
             "   updated_ts=excluded.updated_ts",
             {
                 "account":       r["account"],
                 "bot_name":      r["bot_name"],
+                "display_name":  r.get("display_name"),
+                "depends_on":    (json.dumps(r["depends_on"])
+                                  if isinstance(r.get("depends_on"), (list, dict))
+                                  else r.get("depends_on")),
                 "kind":          r.get("kind", "bot"),
                 "bot_type":      r.get("bot_type"),
+                "strategy_type": r.get("strategy_type"),
                 "service_unit":  r.get("service_unit"),
                 "install_dir":   r.get("install_dir"),
                 "port":          r.get("port"),
@@ -193,32 +255,46 @@ def record_deploy(
     db.commit()
 
 
+# ─── Trade log ───────────────────────────────────────────────────────────────
+
+def store_trade(db: sqlite3.Connection, payload: dict[str, Any]) -> bool:
+    """Idempotently record one fill pushed by a bot. Returns True if a row was inserted,
+    False if it was a duplicate (INSERT OR IGNORE against the UNIQUE key).
+
+    Required payload keys: account, bot_name, ts_ms, side, price, qty. Everything else is
+    optional. Numeric coercion is defensive — the payload arrives as JSON off the wire."""
+    def _f(k):  # float-or-None
+        v = payload.get(k)
+        return None if v is None else float(v)
+
+    cur = db.execute(
+        "INSERT OR IGNORE INTO bot_trades"
+        " (account, bot_name, ts_ms, side, reason, price, qty, quote, fee, order_id,"
+        "  maker, avg_entry_after, holdings_after, free_after)"
+        " VALUES (:account, :bot_name, :ts_ms, :side, :reason, :price, :qty, :quote, :fee,"
+        "         :order_id, :maker, :avg_entry_after, :holdings_after, :free_after)",
+        {
+            "account":         str(payload["account"]),
+            "bot_name":        str(payload["bot_name"]),
+            "ts_ms":           int(payload["ts_ms"]),
+            "side":            str(payload["side"]),
+            "reason":          payload.get("reason"),
+            "price":           float(payload["price"]),
+            "qty":             float(payload["qty"]),
+            "quote":           _f("quote"),
+            "fee":             _f("fee"),
+            "order_id":        payload.get("order_id"),
+            "maker":           None if payload.get("maker") is None else (1 if payload["maker"] else 0),
+            "avg_entry_after": _f("avg_entry_after"),
+            "holdings_after":  _f("holdings_after"),
+            "free_after":      _f("free_after"),
+        },
+    )
+    db.commit()
+    return cur.rowcount > 0
+
+
 # ─── Expected vs actual (status view) ────────────────────────────────────────
-
-def expected_vs_actual(db: sqlite3.Connection) -> list[dict[str, Any]]:
-    """Left-join inventory → latest heartbeat, so EXPECTED-but-silent bots are visible.
-
-    Returns one row per enabled inventory entry.  last_ts is NULL when no heartbeat was
-    ever received (today such a bot is simply invisible).  `kind='service'` rows are
-    included but callers should judge their liveness via systemctl, not last_ts.
-    """
-    rows = db.execute(
-        """
-        SELECT i.account, i.bot_name, i.kind, i.bot_type, i.service_unit,
-               i.is_live, h.last_ts, h.version, h.status
-        FROM inventory AS i
-        LEFT JOIN (
-            SELECT account, bot_name, max(ts) AS last_ts, version, status
-            FROM heartbeats GROUP BY account, bot_name
-        ) AS h ON h.account = i.account AND h.bot_name = i.bot_name
-        WHERE i.enabled = 1
-        ORDER BY i.account, i.bot_name
-        """
-    ).fetchall()
-    cols = ("account", "bot_name", "kind", "bot_type", "service_unit",
-            "is_live", "last_ts", "version", "status")
-    return [dict(zip(cols, r)) for r in rows]
-
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 

@@ -1,6 +1,11 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════
-#  TRADINEBOTTE — Technical indicator service
+#  TRADINEBOTTE — Technical indicator service — DEBUG / MANUAL LAUNCH
+#
+#  ⚠ This is the hand-run path, kept for debugging (e.g. testing one
+#  stream in isolation). Production installs and manages indicators
+#  NATIVELY via the deploy engine (scripts/deploy.py, infra target
+#  `indicators`) — do NOT use this on a deployed account, use systemd.
 #
 #  Starts indicators.py with the chosen JSON config file.
 #  Each account uses its own config file and its own ZMQ port.
@@ -22,7 +27,12 @@
 
 INSTALL_DIR="${TRADINEBOTTE_DIR:-$HOME/tradinebotte}"
 INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
-VENV="$INSTALL_DIR/venv"
+# Prefer .venv (what install.sh creates fleet-wide); fall back to a legacy venv/.
+if [ -d "$INSTALL_DIR/.venv" ]; then
+    VENV="$INSTALL_DIR/.venv"
+else
+    VENV="$INSTALL_DIR/venv"
+fi
 BOT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IND_LOG="$INSTALL_DIR/indicators.log"
 IND_PID_FILE="$INSTALL_DIR/indicators.pid"
@@ -31,7 +41,7 @@ IND_PID_FILE="$INSTALL_DIR/indicators.pid"
 CONFIG="${TRADINEBOTTE_INDICATORS_CONFIG:-$BOT_ROOT/strategies/indicators_4h_bitcoin.json}"
 
 if [ ! -d "$VENV" ]; then
-    echo "ERROR: venv not found in $INSTALL_DIR"
+    echo "ERROR: venv not found in $INSTALL_DIR (looked for .venv and venv)"
     echo "Run first: bash scripts/install.sh"
     exit 1
 fi

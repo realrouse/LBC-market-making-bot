@@ -2,6 +2,9 @@
     "_comment": "BTC accumulation v1.0 deep-dip — no initial stake, waits for strong OBI dips (thresh=0.70, confirm=40), $250 tranches, holds long (bands 15/30/50/75/100%), minimal selling (8%/band). Backtest 2024-2026: +41% vs HODL +59% (alpha -18%). Outperforms v1.5 standard by +3pp alpha and +21pp peak. Fear&Greed and L/S-ratio gates disabled to avoid missing strong OBI dips in greed regime.",
     "_version": "1.0-deepdip",
 
+    "strategy_type":        "accumulation",
+    "connector":            "binance",
+
     "symbol":               "BTCUSDT",
     "capital_usdt":         1000.0,
     "initial_stake_usdt":   0.0,

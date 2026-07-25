@@ -116,8 +116,13 @@ echo '{\"ok\": false, \"msg\": \"no venv found for ctl_client\"}'; exit 9"
 
 echo -e "${YELLOW}▶ $CMD → $BOT (acct idx $ACC_IDX) @ $INSTALL_DIR${NC}"
 set +e
+mkdir -p ~/.ssh/cm-sockets && chmod 700 ~/.ssh/cm-sockets
+# ControlMaster: a single botctl.sh call is one ssh round trip, but repeated invocations
+# (scripted, checking several bots on the same account back-to-back) reuse the persisted
+# socket instead of each paying the ~13s password-auth cost measured on apollo.
 REPLY_JSON="$(SSHPASS="$ACC_PASS" /usr/bin/sshpass -e \
     ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o PreferredAuthentications=password \
+    -o ControlMaster=auto -o "ControlPath=$HOME/.ssh/cm-sockets/%C" -o ControlPersist=10m \
     -p "$PORT" "$ACC_USER@$SERVER" "$REMOTE_CMD" 2>&1)"
 RC=$?
 set -e

@@ -25,7 +25,8 @@ import os
 import time
 import uuid
 import aiohttp
-from api_common import book_snapshot, hmac_sign as _sign, parse_levels
+from api_common import (book_snapshot, decimals_of, fmt_price, fmt_qty,
+                        hmac_sign as _sign, parse_levels)
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,39 @@ WS_BATCH_SIZE = 10  # max depth streams per WebSocket connection
 
 DEFAULT_SYMBOL = "BTCUSDT"
 
+# Per-symbol (price_decimals, qty_decimals), fetched once from exchangeInfo. Binance
+# reports the price tick as PRICE_FILTER.tickSize and the lot step as LOT_SIZE.stepSize
+# (both stringy step sizes, e.g. "0.01000000" / "0.00001000"). Cache is process-lived.
+_SYMBOL_PRECISION: dict = {}
+
+
+async def get_symbol_precision(session, symbol):
+    """Return (price_decimals, qty_decimals) for `symbol` from Binance exchangeInfo, cached.
+
+    exchangeInfo is PUBLIC (works in sim). Returns None on failure so callers FAIL
+    CLOSED — a real order must never be formatted with a guessed precision.
+    """
+    sym = str(symbol).split(":", maxsplit=1)[0]
+    cached = _SYMBOL_PRECISION.get(sym)
+    if cached is not None:
+        return cached
+    try:
+        async with session.get(
+            f"{BASE_URL}/api/v3/exchangeInfo",
+            params={"symbol": sym},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            data = await resp.json(content_type=None)
+        filters = {f["filterType"]: f for f in data["symbols"][0]["filters"]}
+        prec = (decimals_of(filters["PRICE_FILTER"]["tickSize"]),
+                decimals_of(filters["LOT_SIZE"]["stepSize"]))
+        _SYMBOL_PRECISION[sym] = prec
+        logger.info("Binance precision [%s]: price=%ddp qty=%ddp", sym, prec[0], prec[1])
+        return prec
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        logger.error("Binance get_symbol_precision failed [%s]: %s", sym, e)
+        return None
+
 # Binance taker fee: 0.1% standard. Drop to 0.075% when paying fees in BNB.
 FEE_RATE = 0.001
 
@@ -54,40 +88,6 @@ FEE_RATE = 0.001
 def compute_fee(price, quantity):
     """Binance taker fee: 0.1% of notional (price × quantity in USDT)."""
     return FEE_RATE * price * quantity
-
-
-# ─── MARKET METADATA ─────────────────────────────────────────────────────────
-# These helpers mirror api_polymarket's interface so live_bot.py can call them
-# without modification. For spot markets, "UP token" = BUY side, "DOWN" = SELL.
-
-def get_market_id(market):
-    """Return the trading symbol as the market identifier."""
-    return market.get("symbol", "")
-
-
-def get_market_question(market):
-    """Return a human-readable market description (falls back to symbol)."""
-    return market.get("question", market.get("symbol", ""))
-
-
-def get_market_end_ts_ms(_market):
-    """Return 0 — spot markets have no scheduled expiry."""
-    return 0.0
-
-
-def get_market_start_ts_ms(_market):
-    """Return 0 — start time is not applicable to spot markets."""
-    return 0.0
-
-
-def get_up_token_id(market):
-    """BUY side maps to the UP direction."""
-    return market.get("symbol", "")
-
-
-def get_down_token_id(market):
-    """SELL side maps to the DOWN direction."""
-    return market.get("symbol", "") + ":SELL"
 
 
 # ─── WEBSOCKET ────────────────────────────────────────────────────────────────
@@ -189,7 +189,7 @@ async def post_order(session, symbol, price, size_usdc, *,
 
     Args:
         symbol    : trading pair, e.g. "BTCUSDT". Append ":SELL" to force
-                    the SELL side (mirrors get_down_token_id convention).
+                    the SELL side (the ':SELL' suffix convention).
         price     : limit price in USDT
         size_usdc : notional USDT amount (BUY) or proceeds target (SELL)
         api_key   : Binance API key (falls back to BINANCE_API_KEY env var)
@@ -209,16 +209,21 @@ async def post_order(session, symbol, price, size_usdc, *,
         logger.warning("Binance — simulated order (BINANCE_API_KEY/SECRET not set)")
         return f"sim_{uuid.uuid4().hex[:12]}"
 
+    prec = await get_symbol_precision(session, _sym)
+    if prec is None:
+        logger.error("Binance — no precision for %s, refusing order (fail-closed)", _sym)
+        return None
+    price_dec, qty_dec = prec
+
     try:
-        # 6 decimal places = Binance BTC lot size precision (1e-6 BTC minimum step)
-        quantity = round(size_usdc / price, 6)
+        quantity = size_usdc / price          # base-asset amount, floored to lot step below
         params = {
             "symbol":      _sym,
             "side":        _side,
             "type":        "LIMIT",
             "timeInForce": "GTC",       # Good Till Cancelled — mandatory for LIMIT orders
-            "quantity":    f"{quantity:.6f}",  # string, 6dp per lot size filter
-            "price":       f"{price:.2f}",     # string, 2dp = cent precision in USDT
+            "quantity":    fmt_qty(quantity, qty_dec),   # floored to LOT_SIZE stepSize
+            "price":       fmt_price(price, price_dec),   # rounded to PRICE_FILTER tickSize
             "timestamp":   int(time.time() * 1000),
         }
         params["signature"] = _sign(params, _secret)
@@ -231,14 +236,16 @@ async def post_order(session, symbol, price, size_usdc, *,
         ) as resp:
             data = await resp.json(content_type=None)  # bypass MIME check
             if resp.status != 200:
-                logger.error("Binance order error %d [%s %s qty=%.6f @ %.2f]: code=%s msg=%s",
-                             resp.status, _side, _sym, quantity, price,
+                logger.error("Binance order error %d [%s %s qty=%s @ %s]: code=%s msg=%s",
+                             resp.status, _side, _sym,
+                             fmt_qty(quantity, qty_dec), fmt_price(price, price_dec),
                              data.get("code"), data.get("msg", str(data)[:200]))
                 return None
             oid = str(data.get("orderId", ""))
             return oid or None
     except Exception as e:  # pylint: disable=broad-exception-caught
-        logger.error("Binance post_order error [%s %s @ %.2f]: %s", _side, _sym, price, e)
+        logger.error("Binance post_order error [%s %s @ %s]: %s",
+                     _side, _sym, fmt_price(price, price_dec), e)
         return None
 
 
@@ -262,12 +269,18 @@ async def post_market_order(session, symbol, quantity, *, side="SELL",
         logger.warning("Binance — simulated market order (BINANCE_API_KEY/SECRET not set)")
         return f"sim_{uuid.uuid4().hex[:12]}"
 
+    prec = await get_symbol_precision(session, _sym)
+    if prec is None:
+        logger.error("Binance — no precision for %s, refusing market order (fail-closed)", _sym)
+        return None
+    qty_dec = prec[1]
+
     try:
         params = {
             "symbol":    _sym,
             "side":      _side,
             "type":      "MARKET",
-            "quantity":  f"{quantity:.6f}",
+            "quantity":  fmt_qty(quantity, qty_dec),   # floored to LOT_SIZE stepSize
             "timestamp": int(time.time() * 1000),
         }
         params["signature"] = _sign(params, _secret)

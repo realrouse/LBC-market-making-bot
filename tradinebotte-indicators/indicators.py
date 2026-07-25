@@ -76,10 +76,10 @@ from typing import Any, NamedTuple
 
 import aiohttp, websockets, zmq, zmq.asyncio
 
-from tradinetools import heartbeat_loop, control_loop
+from tradinetools import heartbeat_loop, control_loop, resolve_bot_id
 from tradinetools.zmq import make_pub, make_sub, make_rep, default_ipc_addr, PORT_CEX_FEED
 from tradinetools.math import (atr_last, bollinger_last, vwap_last,
-                                vol_zscore_last, rolling_max_last)
+                                vol_zscore_last, rolling_max_last, ichimoku_last)
 from tradinetools.logging import setup_logger
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────
@@ -290,6 +290,16 @@ class OHLCVSeries:
         result: dict[str, float | None] = {}
         _bb: dict[int, tuple] = {}       # cache per period to avoid triple computation
         for spec in specs:
+            # Ichimoku is a multi-line group (fixed 9/26/52/26 periods) → emit its
+            # own named keys and skip the generic "<abbrev>_<period>" key format.
+            if spec.type == "ichimoku":
+                ichi = ichimoku_last(highs, lows, closes)
+                result["ichi_tenkan"]       = ichi["tenkan"]
+                result["ichi_kijun"]        = ichi["kijun"]
+                result["ichi_cloud_top"]    = ichi["cloud_top"]
+                result["ichi_cloud_bottom"] = ichi["cloud_bottom"]
+                result["ichi_chikou"]       = ichi["chikou"]
+                continue
             key = f"{self._ABBREV[spec.type]}_{spec.period}"
             if spec.type == "rsi":
                 result[key] = compute_rsi(closes, spec.period)
@@ -328,7 +338,7 @@ class OHLCVSeries:
 
 _OHLCV_INDICATOR_TYPES      = frozenset({
     "atr", "bollinger_upper", "bollinger_mid", "bollinger_lower",
-    "vwap", "vol_zscore", "rolling_max",
+    "vwap", "vol_zscore", "rolling_max", "ichimoku",
 })
 _VALID_INDICATOR_TYPES      = frozenset({"rsi", "sma", "ema", "volatility"}) | _OHLCV_INDICATOR_TYPES
 _VALID_SOURCES              = frozenset({
@@ -373,7 +383,10 @@ class IndicatorSpec:
                 f"Unknown indicator type {d.get('type')!r}. "
                 f"Valid: {sorted(_VALID_INDICATOR_TYPES)}"
             )
-        period = int(d.get("period", 0))
+        # Ichimoku uses fixed conventional periods (9/26/52/26) computed inside the
+        # helper; `period` is not meaningful for it, so default to the kijun (26).
+        default_period = 26 if ind_type == "ichimoku" else 0
+        period = int(d.get("period", default_period))
         if period < 2:
             raise ValueError(f"Indicator period must be >= 2, got {period}")
         return cls(type=ind_type, period=period)
@@ -516,26 +529,6 @@ def parse_subscribe_request(req: dict[str, Any]) -> tuple[str, StreamSpec]:
 
 
 # ─── DATA SOURCES ────────────────────────────────────────────────────────────
-
-async def _seed_series(symbol: str, timeframe: str,
-                       n: int, series: PriceSeries) -> None:
-    """Seed PriceSeries with the last n closed candle closes from Binance REST."""
-    params = {"symbol": symbol.upper(), "interval": timeframe, "limit": n + 1}
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                _BINANCE_REST_URL, params=params,
-                timeout=aiohttp.ClientTimeout(total=15)
-            ) as resp:
-                data = await resp.json(content_type=None)
-        for candle in data[:-1]:          # skip last (still open)
-            series.push(float(candle[4])) # index 4 = close price
-        logger.info("[seed] %s/%s: %d closed candles loaded",
-                    symbol, timeframe, len(data) - 1)
-    except Exception as exc:              # pylint: disable=broad-except
-        logger.warning("[seed] %s/%s: REST seed failed (%s) — continuing without history",
-                       symbol, timeframe, exc)
-
 
 async def _seed_ohlcv_series(symbol: str, timeframe: str,
                               n: int, series: OHLCVSeries) -> None:
@@ -2025,12 +2018,16 @@ async def run(feed_addr: str, ind_addr: str, reg_addr: str,
         name="registration",
     ))
 
+    # Fleet join key. Resolved here, not at import: resolve_bot_id PERSISTS a generated
+    # id, so doing it at module level makes merely importing this file write a stray
+    # bot_id into the source tree (or the cwd) of anyone who imports it.
+    bot_id = resolve_bot_id(_INSTALL_DIR, "indicators", "infra", "indicators")
     tasks.append(asyncio.create_task(
-        heartbeat_loop("indicators", _INSTALL_DIR, lambda: {"last_pub_ts": _last_pub_ts}),
+        heartbeat_loop(bot_id, _INSTALL_DIR, lambda: {"last_pub_ts": _last_pub_ts}),
         name="heartbeat",
     ))
     # Infra service: control surface for ping/status only (no destructive commands).
-    tasks.append(asyncio.create_task(control_loop("indicators"), name="control"))
+    tasks.append(asyncio.create_task(control_loop(bot_id), name="control"))
 
     try:
         await asyncio.gather(*tasks)

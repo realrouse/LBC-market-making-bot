@@ -30,7 +30,7 @@ import zmq.asyncio
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "tradinetools"))
 from tradinetools import control_loop
 from tradinetools.zmq import default_status_addr, make_pull
-from tradinetools.db import open_db
+from tradinetools.db import open_db, store_trade
 
 logger = logging.getLogger("status_collector")
 
@@ -55,6 +55,24 @@ def store_heartbeat(db: sqlite3.Connection, payload: dict[str, Any]) -> None:
         (ts, account, bot_name, version, status, bounds_ok, json.dumps(payload)),
     )
     db.commit()
+
+
+def _ingest(db: sqlite3.Connection, payload: dict[str, Any]) -> str:
+    """Route one received message to the right table. One PULL socket carries two kinds:
+    trades (type="trade") land in the durable bot_trades log; everything else is a heartbeat
+    (no type → unchanged path). Returns a short tag for logging/tests."""
+    if payload.get("type") == "trade":
+        inserted = store_trade(db, payload)
+        tag = "trade-stored" if inserted else "trade-dup"
+        logger.info("%s: account=%s bot=%s %s %s@%s", tag,
+                    payload.get("account"), payload.get("bot_name"),
+                    payload.get("side"), payload.get("qty"), payload.get("price"))
+        return tag
+    store_heartbeat(db, payload)
+    logger.info("heartbeat stored: account=%s bot=%s version=%s status=%s",
+                payload.get("account"), payload.get("bot_name"),
+                payload.get("version"), payload.get("status"))
+    return "heartbeat"
 
 
 def _prune_old_heartbeats(db: sqlite3.Connection) -> int:
@@ -101,16 +119,9 @@ async def _recv_loop(
             logger.warning("Malformed heartbeat (expected dict, got %s): %r", type(payload).__name__, payload)
             continue
         try:
-            store_heartbeat(db, payload)
+            _ingest(db, payload)
             _db_fail_streak = 0
-            logger.info(
-                "heartbeat stored: account=%s bot=%s version=%s status=%s",
-                payload.get("account"),
-                payload.get("bot_name"),
-                payload.get("version"),
-                payload.get("status"),
-            )
-        except sqlite3.Error as exc:
+        except (sqlite3.Error, KeyError, ValueError, TypeError) as exc:
             _db_fail_streak += 1
             if _db_fail_streak <= _DB_FAIL_SUPPRESS:
                 logger.error("DB write failed: %s", exc)

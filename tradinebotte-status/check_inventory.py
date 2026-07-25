@@ -31,23 +31,33 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import subprocess
 import sys
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python < 3.11 (tomllib is stdlib only in 3.11+)
+    import tomli as tomllib
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO = os.path.dirname(_HERE)
 DEFAULT_INVENTORY = os.path.join(_REPO, "inventory.toml")
-DEPLOY_ALL = os.path.join(_REPO, "tradinebotte-cex", "scripts", "deploy_all.sh")
-# Scripts excluded from the inventory<->deploy_all set-compare (both directions):
-#   deploy_status_service.sh — in inventory, deployed independently (not via deploy_all)
-#   heartbeat_status.sh      — invoked by deploy_all as a status snapshot, not a bot deploy
-#   setup_data_plane.sh      — installs the shared feeds (feed5m/cex_feed) independently
-_PIPELINE_EXCEPTIONS = {"deploy_status_service.sh", "heartbeat_status.sh",
-                        "setup_data_plane.sh"}
-
 _REQUIRED = ("account_idx", "bot_name", "kind")
+
+# Reuse one authenticated connection per account across this run's ssh calls (mirrors
+# scripts/deploy_actions.py's Host.SSH_OPTS — same ~13s-per-connection cost measured on apollo
+# with password auth). Directory created lazily by _ssh_opts(), not at import: this module is
+# imported SSH-free by test_check_inventory.py.
+_CONTROL_DIR = os.path.expanduser("~/.ssh/cm-sockets")
+
+
+def _ssh_opts() -> list[str]:
+    os.makedirs(_CONTROL_DIR, mode=0o700, exist_ok=True)
+    return ["-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=10",
+            "-o", "PreferredAuthentications=password",
+            "-o", "ControlMaster=auto", "-o", f"ControlPath={_CONTROL_DIR}/%C",
+            "-o", "ControlPersist=10m"]
+
+
 _KINDS = {"bot", "service"}
 
 # Shared state DB on the collector account — read for the heartbeat-key drift check.
@@ -83,33 +93,180 @@ def check_offline(rows: list[dict]) -> list[str]:
         ds = r.get("deploy_script")
         if ds and not os.path.isfile(os.path.join(_REPO, ds)):
             problems.append(f"{tag}: deploy_script not found in repo: {ds}")
+        dep = r.get("deployer")           # Phase 2: generic engine + deploy_env preset
+        if dep and not os.path.isfile(os.path.join(_REPO, dep)):
+            problems.append(f"{tag}: deployer not found in repo: {dep}")
+        if not isinstance(r.get("deploy_env", {}), dict):
+            problems.append(f"{tag}: deploy_env must be a table")
+    # Global bot_name uniqueness: the join key is a generated-unique bot_id, so no two rows
+    # (ANY account) may share a bot_name — a collision means two bots writing the same
+    # heartbeat/deploy/control key. (status_collector etc. are also inherently unique.)
+    _seen_name: dict[str, int] = {}
+    for r in rows:
+        _seen_name[r.get("bot_name", "")] = _seen_name.get(r.get("bot_name", ""), 0) + 1
+    for name, cnt in _seen_name.items():
+        if name and cnt > 1:
+            problems.append(f"bot_name {name!r} appears {cnt}× — the bot_id join key must be "
+                            f"globally unique across the fleet")
     return problems
 
 
-# ─── Deploy-pipeline drift (offline, repo-only) ──────────────────────────────
+# ─── Deploy-pipeline check (offline, repo-only) ──────────────────────────────
 
 def check_deploy_pipeline(rows: list[dict]) -> list[str]:
-    """Bidirectional set-compare: inventory deploy_scripts vs scripts deploy_all.sh invokes.
+    """Every deployable bot must be reachable by the plan deploy.py derives from inventory,
+    and no two bots may collapse to the same deploy step.
 
-    Catches "added a bot to inventory but forgot the pipeline" and the reverse, without
-    parsing deploy_all's orchestration.  Scripts in _PIPELINE_EXCEPTIONS are deployed
-    independently and are not expected in deploy_all.sh.
+    The plan is DERIVED from this file (deploy_all.sh is a thin shim over scripts/deploy.py),
+    so the old inventory<->deploy_all.sh set-compare is obsolete. What still matters as the
+    inventory scales (a family added on every account): (1) no 'bot' row is silently
+    undeployable, and (2) no two distinct bots share the same deployer+deploy_env — that
+    dedups to ONE step, silently dropping one (the fix is a distinct account index in each
+    row's deploy_env). Rows run by the account-1 bespoke block are exempt from (1).
     """
     problems: list[str] = []
-    if not os.path.isfile(DEPLOY_ALL):
-        return [f"deploy_all.sh not found at {DEPLOY_ALL}"]
-    with open(DEPLOY_ALL, encoding="utf-8") as fh:
-        src = fh.read()
+    try:
+        sys.path.insert(0, os.path.join(_REPO, "scripts"))
+        import deploy as _deploy  # noqa: PLC0415
+    except Exception as e:                                    # pragma: no cover
+        return [f"deploy.py not importable for pipeline check: {e}"]
 
-    inv_scripts = {os.path.basename(r["deploy_script"])
-                   for r in rows if r.get("deploy_script")}
-    # deploy_all invokes scripts as "$PM/foo.sh" / "$CEX/foo.sh" / "$STATUS/foo.sh"
-    invoked = set(re.findall(r'\$(?:PM|CEX|STATUS)/([a-z0-9_]+\.sh)', src))
+    plan_scripts = {s.script for s in _deploy.build_plan(rows, restart_infra=False)}
+    by_step: dict[tuple, list] = {}
+    for r in rows:
+        if r.get("kind", "bot") != "bot":
+            continue
+        tag = f"{r.get('bot_name')!r} (idx {r.get('account_idx')})"
+        step = _deploy._row_step(r)          # the SAME per-row step build_plan derives
+        if step is None:
+            # None = no deployer/deploy_script (undeployable) OR run by the account-1 bespoke block
+            target = r.get("deployer") or r.get("deploy_script")
+            if not target:
+                problems.append(f"{tag}: no deployer/deploy_script — undeployable")
+            continue                         # bespoke → run by the account-1 block, skip
+        if step.script not in plan_scripts:
+            problems.append(f"{tag}: deploy target {step.script} absent from derived plan")
+        # Collision = two DISTINCT bots collapsing to ONE plan step. Key on the FULL step identity
+        # (_step_key: interpreter+script+env+args) — the exact rule build_plan dedups on — so two
+        # native rows on one account differing only by family/strategy are NOT a false collision,
+        # and a genuine same-engine/same-preset clash still surfaces.
+        by_step.setdefault(_deploy._step_key(step), []).append(
+            (r.get("account_idx"), r.get("bot_name"), step.script))
+    for _key, members in by_step.items():
+        if len(members) > 1:
+            script = os.path.basename(members[0][2])
+            who = sorted((idx, name) for idx, name, _ in members)
+            problems.append(
+                f"deploy collision: {who} share {script} with identical args/env → only one will "
+                f"deploy (give each row a distinct account index in deploy_env, or strategy)")
+    return problems
 
-    for s in sorted(inv_scripts - _PIPELINE_EXCEPTIONS - invoked):
-        problems.append(f"inventory deploy_script not invoked by deploy_all.sh: {s}")
-    for s in sorted(invoked - _PIPELINE_EXCEPTIONS - inv_scripts):
-        problems.append(f"deploy_all.sh invokes a script absent from inventory: {s}")
+
+# ─── Native-engine coverage + depends_on DAG (Phase E) ───────────────────────
+
+def check_native_coverage(rows: list[dict]) -> list[str]:
+    """Phase-E readiness of the native engine, offline:
+      (1) every bot_type resolves to a native deploy target (deploy_actions.native_target) —
+          an unmapped type means the engine's --native path silently falls back to bash for it,
+          so a new family/service added without a native deployer is surfaced here; and
+      (2) the depends_on graph (when rows populate it) is ACYCLIC — the scheduler's DAG can't
+          resolve a cycle. Both are pure/offline (no SSH)."""
+    problems: list[str] = []
+    try:
+        sys.path.insert(0, os.path.join(_REPO, "scripts"))
+        import deploy_actions as _da  # noqa: PLC0415
+    except Exception as e:                                    # pragma: no cover
+        return [f"deploy_actions.py not importable for native-coverage check: {e}"]
+
+    bash_only = getattr(_da, "_NATIVE_BASH_ONLY", ())
+    for r in rows:
+        if r.get("kind", "bot") not in ("bot", "infra", "service"):
+            continue
+        bt = (r.get("bot_type", "") or "")
+        # A DELIBERATE bash-only bot_type (listed in _NATIVE_BASH_ONLY, e.g. the divergent binance
+        # grid) is intentional, not an accidental gap — don't fail the check on it. Only an
+        # UNMAPPED-and-not-deliberately-bash type is a real coverage gap.
+        if bt.startswith(tuple(bash_only)):
+            continue
+        if _da.native_target(bt) is None:
+            problems.append(f"{r.get('bot_name')!r}: bot_type {bt!r} has no native deploy target "
+                            f"(add a rule to deploy_actions._NATIVE_TARGET_RULES or _NATIVE_BASH_ONLY)")
+        # A row that opts into native dispatch (deployer=deploy_actions.py) for a bot family must
+        # carry a `strategy` — deploy_actions rejects an empty --strategy for every family, so an
+        # unset strategy would fail the deploy at runtime. Caught offline here. (FAMILIES entries
+        # have no "config_mode" key — every family takes a strategy JSON, so there's no read/write
+        # split to gate on any more.)
+        if os.path.basename(r.get("deployer", "") or "") == "deploy_actions.py":
+            tgt = _da.native_target(bt)
+            if tgt and tgt[0] == "family" and not r.get("strategy"):
+                problems.append(f"{r.get('bot_name')!r}: native write family {tgt[1]!r} needs a "
+                                f"non-empty `strategy` field (deploy_actions --strategy is required)")
+
+    # depends_on DAG: bot_name → its dependency bot_names. Cheap DFS cycle detection.
+    graph: dict[str, list[str]] = {}
+    names = {r.get("bot_name", "") for r in rows}
+    for r in rows:
+        dep = r.get("depends_on") or []
+        if isinstance(dep, str):
+            dep = [dep]
+        graph[r.get("bot_name", "")] = list(dep)
+        for d in dep:
+            if d not in names:
+                problems.append(f"{r.get('bot_name')!r}: depends_on {d!r} is not a known bot_name")
+    WHITE, GREY, BLACK = 0, 1, 2
+    color: dict[str, int] = {n: WHITE for n in graph}
+
+    def _visit(n: str, stack: list[str]) -> bool:
+        color[n] = GREY
+        for d in graph.get(n, []):
+            if color.get(d) == GREY:
+                problems.append(f"depends_on cycle: {' → '.join(stack + [n, d])}")
+                return True
+            if color.get(d) == WHITE and _visit(d, stack + [n]):
+                return True
+        color[n] = BLACK
+        return False
+
+    for n in graph:
+        if color[n] == WHITE:
+            _visit(n, [])
+    return problems
+
+
+def check_single_tree_instances(rows: list[dict]) -> list[str]:
+    """Single-tree invariant: on any one account, no two bots may resolve to the same
+    single-tree instance (= the deploy family's role). Under single-tree all of an account's
+    bots share ONE ~/tradinebotte, their files suffixed by that role (config_<role>.json /
+    live_<role>.db / bot_id_<role>); two bots with the same role would collide on all three
+    and silently clobber each other's state. The dangerous latent case is two DIFFERENT grid
+    families on one account: deploy_actions maps both 'grid' and 'grid_binance' to role
+    'grid' (distinct units/legacy dirs but the SAME single-tree instance), so they cohabit
+    safely on separate accounts but NOT together. This makes that a loud FAIL instead of
+    silent data corruption. Infra/service rows are single-instance per account → skipped;
+    unmapped bot_types are check_native_coverage's concern, not this one."""
+    problems: list[str] = []
+    try:
+        sys.path.insert(0, os.path.join(_REPO, "scripts"))
+        import deploy_actions as _da  # noqa: PLC0415
+    except Exception as e:                                    # pragma: no cover
+        return [f"deploy_actions.py not importable for single-tree-instance check: {e}"]
+
+    by_acct: dict = {}   # account_idx -> {role -> [bot_name, ...]}
+    for r in rows:
+        tgt = _da.native_target(r.get("bot_type", "") or "")
+        if not tgt or tgt[0] != "family":
+            continue
+        role = _da.FAMILIES[tgt[1]]["role"]
+        by_acct.setdefault(r.get("account_idx"), {}).setdefault(role, []).append(
+            r.get("bot_name", "?"))
+
+    for idx, roles in sorted(by_acct.items(), key=lambda kv: (kv[0] is None, kv[0])):
+        for role, names in sorted(roles.items()):
+            if len(names) > 1:
+                problems.append(
+                    f"account_idx {idx}: {len(names)} bots resolve to the same single-tree "
+                    f"instance {role!r} ({', '.join(sorted(names))}) — they would collide on "
+                    f"config_{role}.json / live_{role}.db in ~/tradinebotte")
     return problems
 
 
@@ -119,7 +276,7 @@ def _conf_array(conf: str, var: str) -> list[str]:
     """Read a bash array from the conf by sourcing it in a subshell."""
     out = subprocess.run(
         ["bash", "-c", f'source "{conf}"; printf "%s\\n" "${{{var}[@]}}"'],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
     return [x for x in out.stdout.splitlines() if x]
 
@@ -127,7 +284,7 @@ def _conf_array(conf: str, var: str) -> list[str]:
 def _conf_scalar(conf: str, var: str) -> str:
     out = subprocess.run(
         ["bash", "-c", f'source "{conf}"; printf "%s" "${{{var}}}"'],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
     return out.stdout.strip()
 
@@ -221,10 +378,9 @@ def _remote_heartbeat_modes(server, port, user, password, db_path) -> dict | Non
     )
     env = dict(os.environ, SSHPASS=password)
     out = subprocess.run(
-        ["sshpass", "-e", "ssh", "-o", "StrictHostKeyChecking=yes",
-         "-o", "ConnectTimeout=10", "-o", "PreferredAuthentications=password",
+        ["sshpass", "-e", "ssh", *_ssh_opts(),
          "-p", port, f"{user}@{server}", f"python3 -c \"{py}\""],
-        capture_output=True, text=True, env=env,
+        capture_output=True, text=True, env=env, check=False,
     )
     if out.returncode != 0:
         return None
@@ -268,10 +424,9 @@ def _remote_units(server: str, port: str, user: str, password: str) -> set[str] 
     )
     env = dict(os.environ, SSHPASS=password)
     out = subprocess.run(
-        ["sshpass", "-e", "ssh", "-o", "StrictHostKeyChecking=yes",
-         "-o", "ConnectTimeout=10", "-o", "PreferredAuthentications=password",
+        ["sshpass", "-e", "ssh", *_ssh_opts(),
          "-p", port, f"{user}@{server}", cmd],
-        capture_output=True, text=True, env=env,
+        capture_output=True, text=True, env=env, check=False,
     )
     if out.returncode != 0:
         return None
@@ -287,10 +442,9 @@ def _remote_heartbeat_keys(server, port, user, password, db_path) -> set | None:
     )
     env = dict(os.environ, SSHPASS=password)
     out = subprocess.run(
-        ["sshpass", "-e", "ssh", "-o", "StrictHostKeyChecking=yes",
-         "-o", "ConnectTimeout=10", "-o", "PreferredAuthentications=password",
+        ["sshpass", "-e", "ssh", *_ssh_opts(),
          "-p", port, f"{user}@{server}", f"python3 -c \"{py}\""],
-        capture_output=True, text=True, env=env,
+        capture_output=True, text=True, env=env, check=False,
     )
     if out.returncode != 0:
         return None
@@ -309,12 +463,18 @@ def main() -> None:
     p.add_argument("--conf", default=os.path.expanduser("~/.tradinebotte-test.conf"))
     args = p.parse_args()
 
+    if not os.path.isfile(args.inventory):
+        print(f"FAIL: {args.inventory} not found — inventory.toml is local/git-ignored.\n"
+              f"  Fix: cp inventory.toml.example inventory.toml   (then edit it for your fleet)")
+        sys.exit(1)
+
     rows = load_rows(args.inventory)
     if not rows:
         print(f"FAIL: no [[bot]] entries in {args.inventory}")
         sys.exit(1)
 
-    problems = check_offline(rows) + check_deploy_pipeline(rows)
+    problems = (check_offline(rows) + check_deploy_pipeline(rows)
+                + check_native_coverage(rows) + check_single_tree_instances(rows))
     if args.live:
         problems += check_live(rows, args.conf)
 

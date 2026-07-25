@@ -10,24 +10,31 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock
 
 # ── Inject fake connectors module BEFORE importing strategy modules ─────────
-_fake_api = MagicMock()
+# Reuse an already-registered fake "connectors" (another test module may have won the
+# import-order race under `discover`) so this file's per-test reconfiguration (FEE_RATE,
+# post_order return) reaches the object the strategies actually load; else register ours.
+_existing = sys.modules.get("connectors")
+if _existing is not None and hasattr(_existing, "load"):
+    _fake_api = _existing.load.return_value
+else:
+    _fake_api = MagicMock()
+    _connectors_mod = types.ModuleType("connectors")
+    _connectors_mod.load = MagicMock(return_value=_fake_api)
+    sys.modules["connectors"] = _connectors_mod
 _fake_api.compute_fee = MagicMock(return_value=0.0)
 _fake_api.FEE_RATE = 0.0   # engines now compute round-trip PnL via FEE_RATE (round_trip_pnl)
 _fake_api.post_order = AsyncMock(return_value="sim_001")
 _fake_api.get_open_orders = AsyncMock(return_value=[])
 _fake_api.cancel_order = AsyncMock(return_value=None)
 _fake_api.post_market_order = AsyncMock(return_value="sim_mkt_001")
-
-_connectors_mod = types.ModuleType("connectors")
-_connectors_mod.load = MagicMock(return_value=_fake_api)
-sys.modules.setdefault("connectors", _connectors_mod)
+_fake_api.get_symbol_precision = AsyncMock(return_value=(2, 6))  # BTC-scale default; precision tests override per-test
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from strategy_engines.swing     import SwingStrategy      # pylint: disable=wrong-import-position
 from strategy_engines.dca       import DCAStrategy        # pylint: disable=wrong-import-position
 from strategy_engines.swinghold import SwingHoldStrategy  # pylint: disable=wrong-import-position
-from strategy_engines.grid      import GridStrategy, GridLevel  # pylint: disable=wrong-import-position
+from strategy_engines.grid      import GridStrategy  # pylint: disable=wrong-import-position
 
 
 # ── Minimal config fixtures ──────────────────────────────────────────────────
@@ -247,6 +254,36 @@ class TestSwingTrendOk(unittest.TestCase):
         self.s._ema200_filter = False
         self.s.sw.last_rsi    = 99.0
         self.s.sw.last_ind_ts = time.time()
+        self.assertTrue(self.s._trend_ok(75000.0))
+
+    # ── Ichimoku cloud filter (rsi/ema left None → those bypass, isolating cloud) ──
+
+    def test_ichimoku_enabled_by_default(self):
+        self.assertTrue(self.s._ichimoku_filter)
+
+    def test_price_below_cloud_blocks_entry(self):
+        self.s.sw.last_ichi_bottom = 80000.0
+        self.s.sw.last_ichi_ts     = time.time()
+        self.assertFalse(self.s._trend_ok(75000.0))   # 75000 < cloud_bottom 80000
+
+    def test_price_above_cloud_allows_entry(self):
+        self.s.sw.last_ichi_bottom = 70000.0
+        self.s.sw.last_ichi_ts     = time.time()
+        self.assertTrue(self.s._trend_ok(75000.0))
+
+    def test_no_cloud_data_bypasses_filter(self):
+        self.s.sw.last_ichi_bottom = None            # fail-open when unknown
+        self.assertTrue(self.s._trend_ok(1.0))
+
+    def test_stale_cloud_bypasses_filter(self):
+        self.s.sw.last_ichi_bottom = 99999.0         # would block if fresh
+        self.s.sw.last_ichi_ts     = 0.0             # stale → bypass
+        self.assertTrue(self.s._trend_ok(75000.0))
+
+    def test_ichimoku_disabled_ignores_cloud(self):
+        self.s._ichimoku_filter    = False
+        self.s.sw.last_ichi_bottom = 99999.0
+        self.s.sw.last_ichi_ts     = time.time()
         self.assertTrue(self.s._trend_ok(75000.0))
 
 

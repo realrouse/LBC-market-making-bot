@@ -1,0 +1,113 @@
+{
+    "_comment": "LBC/USDT accumulation (MEXC spot) — ⚠ REAL MONEY, the only live bot in the fleet; see _live_note. Same v2.0 accumulation engine as btc_accumulation_mexc, adapted for the sub-cent alt LBCUSDT. Price/OBI come from a dedicated MEXC-spot scalping stream (lbc_scalping_mexc, sourced from the shared cex_feed mexc:LBCUSDT) that the bot self-registers with the indicators service over TCP 5561 (proven to work cross-account, same host). The BTC-specific macro gates (liquidations, L/S ratio, 4h-RSI, macro-OBI, Fear&Greed) are DISABLED — they are Bitcoin-market signals that do not apply to LBC; accumulation is driven by LBC's own OBI + VWAP only.",
+    "_version": "2.0-mexc-lbc",
+    "_band_note": "The requested 0.001–0.0025 range is not a hard bound (the accumulation engine has no lower/upper band like the grid). It emerges from behaviour: dip-buying pulls entries down toward ~0.001 and the profit bands (+5..+50% from a ~0.0021 avg entry, i.e. up to ~0.00253) take profit as price rises toward 0.0025.",
+
+    "strategy_type":        "bamm",
+    "_bamm_note": "BAMM = Bullish Accumulating Market Maker: fixed-rung two-sided maker, downside-weighted, floored at 0.001, keeps 10% of every buy as permanent stash. grid_top pinned for stable rungs across restarts. grid_budget_usdt is only the SIZING split across the geometric ladder — placement is gated by the bot's own free_usdt (persisted, not this file), which by 2026-07-25 already covers every geometric rung (confirmed: real MEXC balance free=$92.62 well beyond the resting book). The '$150 top-up' framing is stale — treat grid_budget_usdt as sizing-only, not a live funding gate.",
+    "_extra_rungs_note": "extra_buy_rungs (2026-07-25, operator request): two manual $10 fixed rungs placed OUTSIDE the geometric lattice, at operator-chosen prices in the gap between the resting 0.0022806 bid and the 0.0024007 ask — NOT derived from grid_step_pct (0.00237/0.00247 are ~4.05% apart, not the ladder's 5%). Funded by a $20 USDT deposit (capital_usdt 100->120). Same bid->ask->rebuy cycle as any other rung once added.",
+    "grid_top":             0.0028,
+    "grid_floor":           0.001,
+    "grid_step_pct":        5.0,
+    "grid_budget_usdt":     150.0,
+    "grid_sizing_power":    0.5,
+    "grid_stash_pct":       0.10,
+    "connector":            "mexc",
+
+    "symbol":               "LBCUSDT",
+
+    "extra_buy_rungs": [
+        { "price": 0.00247, "usdt": 10.0 },
+        { "price": 0.00237, "usdt": 10.0 }
+    ],
+
+    "capital_usdt":         120.0,
+    "initial_stake_usdt":   10.0,
+    "scale_in_usdt":        5.0,
+    "scale_in_dip_factor":  0.5,
+    "scale_in_max_mult":    2.0,
+    "max_invested_pct":     1.00,
+    "max_avg_entry_mult":   1.20,
+
+    "_live_note": "REAL MONEY, ARMED. Buy-only accumulation (Option B): live_execution routes buys to real MEXC maker resting bids, credited only on actual fill. Clips are tiny ($10 initial / $5 dip-adds; both validated via order/test — minNotional is 1 USDT) vs the thin book. Exposure is capped at ONE resting clip at a time (the pending_buy guard), budget $100 tracked internally. Requires EnvironmentFile=~/.config/tradinebotte/mexc7.env + TRADINEBOTTE_IPV4_ONLY=1 on the unit; without the key the connector fail-safes to paper. Buy-only: profit-band sells + rebuys are skipped when live_execution=true — we never sell into the ~$27/10% bid book. Set shadow=true to disarm back to logging-only.",
+    "live_execution":       true,
+    "shadow":               false,
+    "maker_bid_offset_pct": 0.5,
+    "rebid_stale_pct":      2.0,
+    "rebid_max_age_s":      3600,
+
+    "_ladder_note": "Ratchet ladder: resting post-only SELLs at +5%/+10% ABOVE AVG_ENTRY (not per-tranche — per-tranche anchoring sells the cheapest coins first and ratchets the cost basis up). 30%+30% of holdings, floored at 40% of peak (min_holdings_pct) so a core position is never sold. Each sell FILL mints a rebuy obligation 3% under the fill price, so every round trip returns MORE coins than it sold — that is the ratchet. Ceiling 0.02: above it we stop trimming and let the breakout run. Sells are LIMIT_MAKER (post-only): MEXC auto-cancels rather than let us cross, so a fill is always 0-fee maker.",
+    "sell_ladder": [
+        { "band_pct":  5.0, "fraction": 0.30 },
+        { "band_pct": 10.0, "fraction": 0.30 }
+    ],
+    "sell_ceiling_price":   0.02,
+    "sell_rearm_tol_pct":   0.5,
+    "sell_breakout_gate":   true,
+    "sell_breakout_pct":    25.0,
+    "drift_check_every_s":  300,
+    "drift_tolerance":      0.01,
+
+    "obi_levels":           10,
+    "obi_ema_alpha":        0.05,
+    "obi_entry_thresh":     0.50,
+    "obi_confirm_n":        20,
+    "min_scale_interval_s": 3600,
+
+    "_paper_bands_note": "profit_bands_pct/sell_fraction drive the PAPER reactive path only; live uses sell_ladder above. min_holdings_pct is shared and load-bearing for both: it is the ratchet floor. 0.40 = the ladder's 30%+30% can sell at most 60% of peak holdings, and the last 40% is never sold by any path.",
+    "profit_bands_pct":     [5.0, 10.0, 20.0, 30.0, 50.0],
+    "sell_fraction":        0.10,
+    "min_holdings_pct":     0.40,
+    "rebuy_discount_min_pct": 3.0,
+    "rebuy_discount_max_pct": 10.0,
+    "rebuy_spread_mult":    3.0,
+
+    "fee_spot":             0.0004,
+    "maker_fee_spot":       0.0,
+    "use_limit_orders":     true,
+
+    "snapshot_every_n":     20,
+
+    "spread_ema_alpha":     0.1,
+    "buy_dust_tolerance_usdt": 0.01,
+
+    "indicators_addr":      "tcp://127.0.0.1:5559",
+    "indicators_reg_addr":  "tcp://127.0.0.1:5561",
+    "register_interval_s":  120,
+    "indicators_streams": [
+        {
+            "id":         "lbc_scalping_mexc",
+            "stream_id":  "lbc_scalping_mexc",
+            "asset":      "LBCUSDT",
+            "source":     "cex_scalping",
+            "timeframe":  "tick",
+            "indicators": [],
+            "params": {
+                "exchange":        "mexc",
+                "symbol":          "LBCUSDT",
+                "cex_feed_addr":   "tcp://127.0.0.1:5563",
+                "obi_ema_alpha":   0.05,
+                "publish_every_n": 5
+            }
+        }
+    ],
+    "scalping_stream_id":   "lbc_scalping_mexc",
+    "vwap_gate":            true,
+    "vwap_gate_initial":    false,
+
+    "macro_obi_gate":       false,
+
+    "scale_in_cooldown_min_s":    900,
+    "scale_in_obi_strong_thresh": 0.80,
+
+    "rebuy_max_age_days": 60,
+    "rebuy_trail_pct":    0.005,
+
+    "earn_enabled":         false,
+    "earn_min_liquid_usdt": 20.0,
+
+    "fear_greed_gate":      false,
+    "liq_gate":             false,
+    "ls_ratio_gate":        false,
+    "rsi4h_gate":           false
+}

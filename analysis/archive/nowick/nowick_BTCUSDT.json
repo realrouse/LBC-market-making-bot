@@ -1,0 +1,40 @@
+{
+    "_name": "No-Wick — BTCUSDT 15m",
+    "_description": "Long-only momentum: enter market on a wickless bullish signal candle (upper wick < 10% of range) confirmed by RVOL >= 1.5, a level breakout, and a bullish 4h context. Initial stop below the signal candle low, then a trailing ATR stop.",
+    "_signal": "close>open AND (high-close)/(high-low) < 0.10 AND body/range >= 0.50 AND volume/SMA(vol,20) >= 1.5 AND close > rolling_max(high, prior 96 bars) AND last completed 4h candle bullish",
+    "_cost_model": "fee 0.1%/side + slippage 0.05%/side = 0.31% round-trip; exit is a trailing ATR stop (no fixed TP).",
+    "_archived": "Phase-0 FAIL — no edge on BTC 15m spot (long & fade both flat at zero cost). Not deployed. See README.md.",
+    "_run": "python3 analysis/archive/nowick/backtest_nowick.py --strategy analysis/archive/nowick/nowick_BTCUSDT.json --regimes",
+
+    "strategy_type":        "nowick",
+    "connector":            "binance",
+    "symbol":               "BTCUSDT",
+
+    "signal_timeframe":     "15m",
+    "htf_timeframe":        "4h",
+
+    "max_upper_wick_pct":   0.10,
+    "min_body_ratio":       0.50,
+    "rvol_window":          20,
+    "rvol_min":             1.5,
+    "require_4h_alignment":  true,
+    "require_level_break":   true,
+    "breakout_lookback":     96,
+
+    "capital":              10000.0,
+    "fee_rate":             0.001,
+    "slippage_pct":         0.0005,
+    "stake_frac":           0.20,
+
+    "atr_period":           14,
+    "atr_trail_multiplier":  2.0,
+    "sl_buffer_pct":        0.001,
+    "max_hold_minutes":     1440,
+
+    "session_filter_enabled": false,
+
+    "indicators_addr":        "tcp://127.0.0.1:5559",
+    "indicators_stream_id":   "btc_15m",
+    "indicators_stream_id_htf":"btc_4h",
+    "poll_interval":          2.0
+}

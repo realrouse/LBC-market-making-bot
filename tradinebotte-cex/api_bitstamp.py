@@ -28,7 +28,7 @@ import uuid
 from urllib.parse import urlencode
 
 import aiohttp
-from api_common import book_snapshot, parse_levels
+from api_common import book_snapshot, decimals_for_price, fmt_price, fmt_qty, parse_levels
 
 logger = logging.getLogger(__name__)
 
@@ -94,37 +94,6 @@ def _auth_headers(method: str, path: str, body: str = "") -> dict:
     if content_type:
         headers["Content-Type"] = content_type
     return headers
-
-
-# ─── MARKET METADATA ─────────────────────────────────────────────────────────
-def get_market_id(market):
-    """Return the trading symbol as the market identifier."""
-    return market.get("symbol", "")
-
-
-def get_market_question(market):
-    """Return a human-readable market description (falls back to symbol)."""
-    return market.get("description", market.get("symbol", ""))
-
-
-def get_market_end_ts_ms(_market):
-    """Return 0 — spot markets have no scheduled expiry."""
-    return 0.0
-
-
-def get_market_start_ts_ms(_market):
-    """Return 0 — start time is not applicable to spot markets."""
-    return 0.0
-
-
-def get_up_token_id(market):
-    """BUY side maps to the UP direction."""
-    return market.get("symbol", "")
-
-
-def get_down_token_id(market):
-    """SELL side maps to the DOWN direction."""
-    return market.get("symbol", "") + ":SELL"
 
 
 # ─── WEBSOCKET ────────────────────────────────────────────────────────────────
@@ -249,7 +218,11 @@ async def post_order(session, symbol, price, size_usdc, *, side="BUY", **_):
 
     clean    = symbol.lower().split(":")[0]
     endpoint = f"/api/v2/{bs_side}/{clean}/"
-    body_dict = {"amount": f"{quantity:.6f}", "price": f"{price:.2f}"}
+    # Magnitude-based precision (no per-pair fetch): this connector is registered but on
+    # no deployed bot. If it is ever put live, add a get_symbol_precision from Bitstamp's
+    # /api/v2/trading-pairs-info/ (counter_decimals / base_decimals) like the spot connectors.
+    body_dict = {"amount": fmt_qty(quantity, 8),
+                 "price":  fmt_price(price, decimals_for_price(price))}
     body = urlencode(body_dict)
     headers = _auth_headers("POST", endpoint, body)
 

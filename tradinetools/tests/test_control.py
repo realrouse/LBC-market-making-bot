@@ -80,7 +80,6 @@ class TestDispatchBuiltins(unittest.TestCase):
 class TestDispatchHandlers(unittest.IsolatedAsyncioTestCase):
 
     async def test_non_destructive_runs(self):
-        calls = []
         cmds = {"info": Command(lambda a: {"echo": a.get("x")})}
         r = await _ctl_dispatch(cmds, "sim", False, "g", '{"cmd":"info","args":{"x":7}}')
         self.assertTrue(r["ok"])
@@ -161,7 +160,6 @@ class TestControlLoopOverSocket(unittest.IsolatedAsyncioTestCase):
             ctx.term()
 
     async def test_roundtrip_and_lockstep(self):
-        import os, asyncio
         addr = f"ipc:///tmp/tbnt-test-ctl-{os.getpid()}.sock"
         hit = {"n": 0}
         cmds = {
@@ -188,6 +186,36 @@ class TestControlLoopOverSocket(unittest.IsolatedAsyncioTestCase):
                 await task
             except asyncio.CancelledError:
                 pass
+
+
+class TestInfraTasks(unittest.IsolatedAsyncioTestCase):
+    """The shared host lifecycle context-manager: starts hb/health/ctl and cancels on exit."""
+
+    async def test_starts_and_cancels_three_tasks(self):
+        started, cancelled = [], []
+
+        def _make(name):
+            async def _loop(*_a, **_k):
+                started.append(name)
+                try:
+                    await asyncio.sleep(3600)
+                except asyncio.CancelledError:
+                    cancelled.append(name)
+                    raise
+            return _loop(*(), **{})   # coroutine object, like the real loops
+
+        orig = (_mod.heartbeat_loop, _mod.health_server, _mod.control_loop)
+        _mod.heartbeat_loop = lambda *a, **k: _make("hb")
+        _mod.health_server = lambda *a, **k: _make("health")
+        _mod.control_loop = lambda *a, **k: _make("ctl")
+        try:
+            async with _mod.infra_tasks("bot", "/tmp", lambda: {}, mode="sim",
+                                        is_live=False, capital_start=100.0):
+                await asyncio.sleep(0.02)          # let the three tasks reach their await
+            self.assertEqual(set(started), {"hb", "health", "ctl"})
+            self.assertEqual(set(cancelled), {"hb", "health", "ctl"})   # cancelled on exit
+        finally:
+            _mod.heartbeat_loop, _mod.health_server, _mod.control_loop = orig
 
 
 if __name__ == "__main__":

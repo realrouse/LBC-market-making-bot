@@ -62,8 +62,8 @@ Bull 2024    :  +$2  (+0.1%)    5 cycles  25% in-grid  exit_high
 ### Run
 
 ```bash
-python3 scripts/backtest_grid.py --all
-python3 scripts/backtest_grid.py --all --sweep          # parameter search
+python3 analysis/backtest_grid.py --all
+python3 analysis/backtest_grid.py --all --sweep          # parameter search
 ```
 
 ---
@@ -150,9 +150,9 @@ trail=bear on 2022 bear:   +$31  (+2.0%)   2 re-centers  $20 unrealized BTC loss
 ### Run
 
 ```bash
-python3 scripts/backtest_grid.py --all --trail bear
-python3 scripts/backtest_grid.py --all --trail bear --compare   # vs static
-python3 scripts/backtest_grid.py --all --trail bear --sweep     # parameter search
+python3 analysis/backtest_grid.py --all --trail bear
+python3 analysis/backtest_grid.py --all --trail bear --compare   # vs static
+python3 analysis/backtest_grid.py --all --trail bear --sweep     # parameter search
 ```
 
 ### Strategy JSON
@@ -226,9 +226,9 @@ On the lateral 2026 period, the bull strategy performs marginally better than st
 ### Run
 
 ```bash
-python3 scripts/backtest_grid.py --all --trail bull
-python3 scripts/backtest_grid.py --all --trail bull --compare   # vs static
-python3 scripts/backtest_grid.py --all --trail bull --sweep     # parameter search
+python3 analysis/backtest_grid.py --all --trail bull
+python3 analysis/backtest_grid.py --all --trail bull --compare   # vs static
+python3 analysis/backtest_grid.py --all --trail bull --sweep     # parameter search
 ```
 
 ### Strategy JSON
@@ -244,16 +244,16 @@ Recalibrate `grid_lower` / `grid_upper` to ±15% of current BTC price.
 Market assessment
 ├── Consolidation / ranging expected?
 │     └── Static or bull trailing (nearly identical)
-│           python3 scripts/backtest_grid.py --all
-│           python3 scripts/backtest_grid.py --all --trail bull
+│           python3 analysis/backtest_grid.py --all
+│           python3 analysis/backtest_grid.py --all --trail bull
 │
 ├── Downtrend / bear market expected?
 │     └── Bear trailing
-│           python3 scripts/backtest_grid.py --all --trail bear
+│           python3 analysis/backtest_grid.py --all --trail bear
 │
 ├── Uptrend / bull run expected?
 │     └── Bull trailing
-│           python3 scripts/backtest_grid.py --all --trail bull
+│           python3 analysis/backtest_grid.py --all --trail bull
 │
 └── Uncertain?
       └── Bear trailing (asymmetric: profits from downside oscillations,
@@ -310,19 +310,19 @@ All three regimes, three strategies, ±15%, 30 levels, $50/order, $1,500 capital
 
 ```bash
 # Static — default
-python3 scripts/backtest_grid.py --all --range 15 --levels 30 --size 50
+python3 analysis/backtest_grid.py --all --range 15 --levels 30 --size 50
 
 # Bear-adapted trailing — recommended
-python3 scripts/backtest_grid.py --all --range 15 --levels 30 --trail bear --compare
+python3 analysis/backtest_grid.py --all --range 15 --levels 30 --trail bear --compare
 
 # Bull-adapted trailing — recommended
-python3 scripts/backtest_grid.py --all --range 15 --levels 30 --trail bull --compare
+python3 analysis/backtest_grid.py --all --range 15 --levels 30 --trail bull --compare
 
 # Full sweep — bear mode
-python3 scripts/backtest_grid.py --all --trail bear --sweep --sort pnl
+python3 analysis/backtest_grid.py --all --trail bear --sweep --sort pnl
 
 # Full sweep — bull mode
-python3 scripts/backtest_grid.py --all --trail bull --sweep --sort pnl
+python3 analysis/backtest_grid.py --all --trail bull --sweep --sort pnl
 ```
 
 ---
@@ -331,8 +331,8 @@ python3 scripts/backtest_grid.py --all --trail bull --sweep --sort pnl
 
 | File | Role |
 |---|---|
-| `scripts/backtest_grid.py` | Backtest engine (static + trailing) |
-| `scripts/download_btc_history.py` | Download OHLCV data from Binance |
+| `analysis/backtest_grid.py` | Backtest engine (static + trailing) |
+| `analysis/download_btc_history.py` | Download OHLCV data from Binance |
 | `strategies/grid/grid_BTCUSDT_tight.json` | Static ±15% config |
 | `strategies/grid/grid_BTCUSDT_moderate.json` | Static ±20% config |
 | `strategies/grid/grid_BTCUSDT_bear_trailing.json` | Bear trailing config |

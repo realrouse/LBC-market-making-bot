@@ -22,6 +22,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tradinetools"))
+from tradinetools.math import ichimoku_last
+
 # ── CLI ────────────────────────────────────────────────────────────────────
 ap = argparse.ArgumentParser(description="Accumulation strategy backtest")
 ap.add_argument("--start",   default="2024-09-01", help="Start date YYYY-MM-DD")
@@ -34,6 +37,12 @@ ap.add_argument("--proxy",   default="dip",         choices=["obi","dip"],
                 help="Scale-in signal proxy: obi=taker-buy EMA, dip=price drop from N-candle high (default: dip)")
 ap.add_argument("--dip-pct",      type=float, default=4.0,  help="Dip proxy: pct drop from recent high to trigger (default 4.0)")
 ap.add_argument("--dip-lookback", type=int,   default=72,   help="Dip proxy: rolling high lookback in candles (default 72)")
+ap.add_argument("--cloud",   default="off",   choices=["off","4h","1d","1w"],
+                help="Ichimoku trend gate on scale-in: skip when price < cloud_bottom (4h/daily/weekly cloud)")
+ap.add_argument("--warmup-days", type=int, default=0,
+                help="Fetch this many extra days BEFORE --start to pre-warm the cloud/proxies "
+                     "(mirrors the live service seeding history); trading still begins at --start. "
+                     "Use >=560 for a weekly cloud (78 weeks), >=80 for daily.")
 args = ap.parse_args()
 
 # ── Load strategy params ───────────────────────────────────────────────────
@@ -97,7 +106,45 @@ def fetch_klines(symbol: str, interval: str, start_ms: int, end_ms: int):
 
 start_ms = ts_ms(args.start)
 end_ms   = ts_ms(args.end) if args.end else int(datetime.now(timezone.utc).timestamp() * 1000)
-raw = fetch_klines(SYMBOL, args.tf, start_ms, end_ms)
+TRADE_START_MS = start_ms                                   # trading begins here…
+fetch_start_ms = start_ms - args.warmup_days * 86_400_000   # …but data (for warmup) starts earlier
+raw = fetch_klines(SYMBOL, args.tf, fetch_start_ms, end_ms)
+
+# ── Ichimoku cloud gate — precompute per-candle last-CLOSED HTF cloud_bottom ──
+# No-lookahead: at candle i the cloud is the value AS OF the last HTF bar closed at
+# or before i's timestamp (mirrors the live service publishing only on candle close).
+# Daily needs 78 days of warm-up → cloud stays None early; only valid on long history.
+def _cloud_bottoms(rawk, tf_ms, offset=0):
+    bars = []; cur = None
+    for k in rawk:
+        t = int(k[0]); h = float(k[2]); l = float(k[3]); c = float(k[4])
+        b = ((t - offset) // tf_ms) * tf_ms + offset
+        if cur is None or b != cur["ts"]:
+            if cur is not None: bars.append(cur)
+            cur = {"ts": b, "h": h, "l": l, "c": c, "close_ms": b + tf_ms}
+        else:
+            cur["h"] = max(cur["h"], h); cur["l"] = min(cur["l"], l); cur["c"] = c
+    if cur is not None: bars.append(cur)
+    H = [b["h"] for b in bars]; L = [b["l"] for b in bars]; C = [b["c"] for b in bars]
+    bot = []
+    for j in range(len(bars)):
+        lo = max(0, j - 79)
+        bot.append(ichimoku_last(H[lo:j + 1], L[lo:j + 1], C[lo:j + 1])["cloud_bottom"])
+    close_ms = [b["close_ms"] for b in bars]
+    out = [None] * len(rawk); j = -1
+    for i, k in enumerate(rawk):
+        t = int(k[0])
+        while j + 1 < len(close_ms) and close_ms[j + 1] <= t:
+            j += 1
+        out[i] = bot[j] if j >= 0 else None
+    return out
+
+_TF_MS = {"4h": 14_400_000, "1d": 86_400_000, "1w": 604_800_000}
+_WEEK_OFF = 345_600_000    # epoch is a Thursday → shift weekly buckets to Monday (Binance weekly)
+CLOUD = (_cloud_bottoms(raw, _TF_MS[args.cloud], _WEEK_OFF if args.cloud == "1w" else 0)
+         if args.cloud != "off" else None)
+_gate = {"attempts": 0, "blocks": 0, "warm": 0, "above_cloud": 0}
+_cur_cloud = [None]
 
 # ── State ──────────────────────────────────────────────────────────────────
 @dataclass
@@ -233,6 +280,14 @@ def check_scale_in(price: float, ts_s: int):
     amount   = _scale_in_amount(price)
     if (invested + amount) / CAPITAL > MAX_INV_PCT:
         return
+    # Ichimoku trend gate consultation point (reachability = attempts; effect = blocks).
+    _gate["attempts"] += 1
+    if args.cloud != "off" and _cur_cloud[0] is not None:
+        _gate["warm"] += 1
+        _gate["above_cloud"] += 1 if price >= _cur_cloud[0] else 0
+        if 0 < price < _cur_cloud[0]:
+            _gate["blocks"] += 1
+            return
     if _buy(price, amount, "obi_dip", ts_s):
         state.last_buy_ts_s = ts_s
         # Reset bands for new avg_entry but keep pending rebuys
@@ -246,7 +301,7 @@ DIP_PCT      = args.dip_pct / 100
 DIP_LOOKBACK = args.dip_lookback
 recent_highs: list[float] = []   # rolling window for dip proxy
 
-for k in raw:
+for _ci, k in enumerate(raw):
     open_t_ms    = int(k[0])
     o, h, l, c   = float(k[1]), float(k[2]), float(k[3]), float(k[4])
     volume        = float(k[5])
@@ -274,6 +329,11 @@ for k in raw:
     spread = (h - l) / c if c > 0 else 0.002
     state.spread_ema += 0.05 * (spread - state.spread_ema)
 
+    # Warmup buffer: keep proxies/cloud advancing but do not trade before --start
+    # (mirrors the live bot booting with pre-seeded indicators, warm from candle 1).
+    if open_t_ms < TRADE_START_MS:
+        continue
+
     # Initial buy
     if not state.initial_done:
         usdt = min(INIT_USDT, state.free_usdt)
@@ -289,7 +349,8 @@ for k in raw:
         check_profit_bands(h, l, ts_s)
         check_rebuys(l, ts_s)
 
-    # OBI scale-in on candle open price
+    # OBI scale-in on candle open price (set the no-lookahead cloud for this candle first)
+    _cur_cloud[0] = CLOUD[_ci] if CLOUD is not None else None
     check_scale_in(o, ts_s)
 
     # Equity snapshot (hourly)
@@ -340,6 +401,7 @@ print(f"""
 ║    Total buys       : {len(buys):>4}  (${sum(t.usdt for t in buys):,.0f} deployed)
 ║      Initial buy    : {len(buys)-len(obi_buys)-len(rebuys):>4}
 ║      OBI scale-ins  : {len(obi_buys):>4}
+║      Ichi gate [{args.cloud:>3}] : attempts={_gate['attempts']:>4}  warm={_gate['warm']:>4}  above_cloud={_gate['above_cloud']:>4}  blocked={_gate['blocks']:>4}
 ║      Rebuys         : {len(rebuys):>4}
 ║    Total sells      : {len(sells):>4}  (${sum(t.usdt for t in sells):,.0f} received)
 ║      Band sells     : {len(band_sells):>4}

@@ -5,18 +5,23 @@
 ## Prerequisites
 
 - Python 3.8+ on Linux/Mac (dedicated server or local machine)
-- Polygon EOA wallet — MATIC > 0.1 (gas) and USDC.e > $10
-- **No wallet yet?** Press Enter at the `setup.py` prompt → simulation mode, no real orders
+- Per strategy family, real trading needs exchange credentials (see
+  [docs/going-live.md](docs/going-live.md)) — Polymarket needs a Polygon EOA
+  wallet (MATIC > 0.1 for gas, USDC.e > $10); CEX strategies (grid/swing/DCA/
+  accumulation) need a Binance/MEXC/Bitstamp API key instead.
+- **No credentials yet?** Every strategy family runs in **simulation mode**
+  by default (no key = paper trading, no real orders) — nothing here is
+  Polymarket-specific.
 
 ---
 
 ## Install from official release (tar.gz)
 
 ```bash
-# Download the latest release (replace v0.63 with the current version)
-wget https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.63.tar.gz
-tar -xzf v0.63.tar.gz
-cd tradinebotte-0.63
+# Download the latest release (replace v0.90 with the current version)
+wget https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.90.tar.gz
+tar -xzf v0.90.tar.gz
+cd tradinebotte-0.90
 bash scripts/install.sh        # detects missing system packages; prompts for language (E/F)
 python3 scripts/setup.py       # prompts for language (saved to config.json); Enter = simulation mode
 ~/tradinebotte/run.sh
@@ -36,26 +41,21 @@ Auto-restart on reboot: see [INSTALL.md — systemd setup](INSTALL.md#auto-start
 See [INSTALL.md](INSTALL.md) for:
 - **git clone** — recommended when GitHub is accessible from the target machine
 - **rsync** — recommended for servers without git (deploy from a local dev machine)
-- Full details on multi-account setup (Option B — ZeroMQ three-service architecture)
 
-### Multi-account setup (Option B) — summary
+## Running more than one bot (multi-account / multi-strategy)
 
-Option B runs three systemd user services per deployment: **indicators**, **feed**, and **account_bot**.
-All three communicate over IPC sockets in `/run/user/$UID/` — no TCP port conflicts between Linux users.
-
-One-time admin step per VPS user (root required):
-
-```bash
-sudo loginctl enable-linger <bot_username>
-```
-
-Then as the bot user (no sudo needed):
+Every trading bot — whatever the strategy family, across as many accounts
+as needed — deploys natively into a single shared `~/tradinebotte/` tree,
+driven by `inventory.toml` (one `[[bot]]` row per bot, the fleet's single
+source of truth — local and git-ignored, since it describes your own
+accounts/bots):
 
 ```bash
-export XDG_RUNTIME_DIR=/run/user/$(id -u)
-systemctl --user enable --now tradinebotte-indicators.service
-systemctl --user enable --now tradinebotte-feed.service
-systemctl --user enable --now tradinebotte-account.service
+cp inventory.toml.example inventory.toml                 # once, then edit it for your fleet
+bash tradinebotte-cex/scripts/deploy_all.sh              # deploy/redeploy the whole fleet
+bash tradinebotte-cex/scripts/deploy_all.sh --only <tok>  # target one account/bot
 ```
 
-Full procedure (unit file templates, tradinetools install, config): [INSTALL.md — Multi-bot WebSocket sharing](INSTALL.md#multi-bot-websocket-sharing-option-b--zeromq)
+Add a bot by adding a `[[bot]]` row to `inventory.toml`, then redeploy. See
+[INSTALL.md — Multi-bot / multi-account deployment](INSTALL.md#multi-bot--multi-account-deployment)
+for the full schema and the retired "Option B" architecture this replaced.

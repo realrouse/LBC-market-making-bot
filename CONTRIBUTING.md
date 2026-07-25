@@ -28,9 +28,6 @@
 git clone https://github.com/neofutur/tradinebotte.git
 cd tradinebotte
 
-# Install the shared library as an editable package (required by all subsystems)
-pip install -e tradinetools/
-
 # Install dev dependencies (pylint, mypy, pip-audit)
 pip install -r requirements-dev.txt
 ```
@@ -41,7 +38,21 @@ Preferred: use `uv` for a faster isolated virtualenv:
 uv venv .venv
 source .venv/bin/activate
 uv pip install -r requirements-dev.txt
-pip install -e tradinetools/
+```
+
+`tradinetools` (the shared library used by every subsystem) is **not**
+pip-installed — production deploys wire it in via a source `.pth` file
+(`scripts/install.sh`) rather than an editable install, because `pip
+install -e` used to shadow the sibling `tradinetools/` directory and drift
+from source, causing live bots to crash-loop on restart. Reproduce the
+same thing for your dev `.venv`:
+
+```bash
+python3 - <<'PY'
+import pathlib, sysconfig
+sp = pathlib.Path(sysconfig.get_paths()["purelib"])
+(sp / "tradinetools-source.pth").write_text(str(pathlib.Path("tradinetools").resolve()) + "\n")
+PY
 ```
 
 The test runner (`scripts/run_tests.sh`) auto-detects `.venv` at the project root.
@@ -59,8 +70,7 @@ git config core.hooksPath .git-hooks
 ```
 tradinebotte/
 ├── tradinebotte-cex/            # CEX trading bots and strategy engines
-│   ├── accumulation_bot.py      # OBI dip-buy bot (v1.5)
-│   ├── orderbook_bot.py         # OBI scalping bot (v2.12)
+│   ├── cex_consumer.py          # CEX glue: feeds strategy_engines from cex_feed / indicators
 │   ├── api_binance.py           # Binance spot adapter
 │   ├── api_mexc.py              # MEXC spot adapter
 │   ├── api_mexc_futures.py      # MEXC Futures perpetual adapter
@@ -73,7 +83,9 @@ tradinebotte/
 │   │   ├── grid.py              # Grid (static / trail=bear / trail=bull)
 │   │   ├── swing.py             # Swing with EMA200 + ATR + RSI filters
 │   │   ├── swinghold.py         # SwingHold — fractional sells, long-term hold
-│   │   └── dca.py               # Timed DCA with TP/SL
+│   │   ├── dca.py               # Timed DCA with TP/SL
+│   │   ├── accumulation.py      # Maker accumulation ladder (ratchet), hosts BAMM's live/shadow gate
+│   │   └── bamm.py              # BAMM: fixed-rung, floor-anchored accumulating maker grid
 │   ├── strategies/              # JSON config files per strategy
 │   └── tests/                   # CEX-specific unit tests
 │
@@ -83,18 +95,24 @@ tradinebotte/
 │   └── tests/
 │
 ├── tradinebotte-polymarket/     # Polymarket prediction-market connector
-│   ├── live_bot.py              # Async state machine bot
+│   ├── live_bot.py              # Shared host process: async state machine, dispatches to a
+│   │                             # strategy/connector plugin (pm_strategy for Polymarket, or a
+│   │                             # tradinebotte-cex strategy_engine for grid/swing/dca/accumulation)
+│   ├── pm_*.py                  # Polymarket plugin (pm_types/pm_calendar/pm_strategy/pm_data)
 │   ├── feed.py                  # WebSocket feed (ZMQ PUB)
-│   ├── account_bot.py           # Per-account bot (ZMQ SUB)
 │   ├── api_polymarket.py        # Polymarket CLOB adapter
 │   ├── strategies/              # JSON strategy files
 │   └── tests/
 │
+├── tradinebotte-core/            # Neutral core (botcore/): Strategy protocol, connector
+│   └── botcore/                  # registry, persistence, base schema — no exchange-specific code
+│
 ├── tradinebotte-status/         # Health monitoring
 │   ├── status_collector.py      # Heartbeat collector (ZMQ → SQLite)
-│   └── generate_status.py       # HTML dashboard generator
+│   ├── inventory_labels.py      # Derives account labels / live-bot set from inventory.toml
+│   └── generate_status.py       # HTML dashboard generator (DB-only, no per-account SSH)
 │
-├── tradinetools/                # Shared library (pip install -e tradinetools/)
+├── tradinetools/                # Shared library (wired via source .pth, see Development setup)
 │   └── tradinetools/
 │       ├── math.py              # sma_last, ema_last, atr_last, bollinger_last, ...
 │       ├── zmq.py               # ZMQ socket factories
@@ -103,8 +121,12 @@ tradinebotte/
 │
 ├── analysis/                    # Backtesting and analysis scripts
 ├── scripts/                     # Install, deploy, test, release scripts
+├── systemd/                     # Canonical systemd unit templates (one dir, all services)
 ├── tests/                       # Core test suite (CEX strategies, API adapters, ...)
 ├── docs/                        # Documentation (see docs/ reference below)
+├── inventory.toml.example       # Fleet topology TEMPLATE — copy to inventory.toml (local,
+│                                 # git-ignored) and edit; drives deploy_all.sh, generate_status.py,
+│                                 # bot_status.sh
 ├── requirements.txt             # Runtime dependencies
 ├── requirements-dev.txt         # Dev dependencies (pylint, mypy, pip-audit)
 └── version.py                   # Single source of truth for version number
@@ -334,8 +356,8 @@ not just the one you are working on. When you bypass a shared function, re-check
 Checklist for any new or changed data-consumer path / shared hot-path function:
 
 - [ ] **Snapshots persisted?** Route the write through the shared step
-      (`_persist_snapshot` in `botcore.persistence`, `_record_accum_snapshot` in
-      `accumulation_bot.py`) — do not inline a bare `INSERT`. The 2026-06-16 bug above
+      (`_persist_snapshot` in `botcore.persistence`, `_record_snapshot` in
+      `strategy_engines/accumulation.py`) — do not inline a bare `INSERT`. The 2026-06-16 bug above
       is fixed: `cex_feed_consumer_loop` now calls `save_cex_snapshot` (`cex_consumer.py`).
 - [ ] **Data-freshness clock advanced?** Set `last_write_ts` on every persisted row.
       The status page `⚠data` badge depends on it — a bot that records but never updates

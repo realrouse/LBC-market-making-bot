@@ -2,6 +2,9 @@
     "_comment": "BTC accumulation (MEXC spot sim) — same v2.0 strategy as btc_accumulation, but price/OBI come from the shared MEXC SPOT scalping stream (btc_scalping_mexc, sourced from cex_feed mexc spot BTCUSDT via the protobuf WS on wbs-api.mexc.com). Macro gates (F&G, liquidations, L/S, RSI, macro-OBI) stay on the shared Binance-derived streams (no MEXC equivalent). MEXC spot fee schedule; Binance Simple Earn disabled. Simulation only.",
     "_version": "2.0-mexc",
 
+    "strategy_type":        "accumulation",
+    "connector":            "mexc",
+
     "symbol":               "BTCUSDT",
 
     "capital_usdt":         1000.0,
@@ -25,7 +28,7 @@
     "rebuy_discount_max_pct": 10.0,
     "rebuy_spread_mult":    3.0,
 
-    "fee_spot":             0.002,
+    "fee_spot":             0.0004,
     "maker_fee_spot":       0.0,
     "use_limit_orders":     true,
 

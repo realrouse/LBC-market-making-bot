@@ -2,6 +2,14 @@
 # ═══════════════════════════════════════════════════════════════════
 #  schedule_collect.sh — Manage the weekly data-collection cron job
 #
+#  ⚠ DORMANT since 2026-05 — this pipeline is not currently deployed.
+#  The collector account holds no ~/tradinebotte-collector directory and no
+#  cron entry is installed; the newest archive is data/live_2026_W19.db.
+#  Kept intentionally: this is the tooling that produces the backtest
+#  datasets, and it is expected to be reactivated for a future collection
+#  campaign. Re-read the usage notes below before relying on it.
+#
+#
 #  Installs, removes, or shows a crontab entry that runs collect_db.sh
 #  automatically every week (Sunday 03:00 UTC by default).
 #

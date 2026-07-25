@@ -5,18 +5,24 @@
 ## Prérequis
 
 - Python 3.8+ sur Linux/Mac (serveur dédié ou machine locale)
-- Wallet Polygon EOA — MATIC > 0,1 (gas) et USDC.e > 10 $
-- **Pas encore de wallet ?** Appuyer sur Entrée au prompt `setup.py` → mode simulation, aucun ordre réel
+- Selon la famille de stratégie, le trading réel nécessite des credentials
+  exchange (voir [docs/going-live.md](docs/going-live.md)) — Polymarket
+  nécessite un wallet Polygon EOA (MATIC > 0,1 pour le gas, USDC.e > 10 $) ;
+  les stratégies CEX (grid/swing/DCA/accumulation) nécessitent une clé API
+  Binance/MEXC/Bitstamp à la place.
+- **Pas encore de credentials ?** Chaque famille de stratégie tourne en
+  **mode simulation** par défaut (pas de clé = paper trading, aucun ordre
+  réel) — rien ici n'est spécifique à Polymarket.
 
 ---
 
 ## Installer depuis une release officielle (tar.gz)
 
 ```bash
-# Télécharger la dernière release (remplacer v0.63 par la version actuelle)
-wget https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.63.tar.gz
-tar -xzf v0.63.tar.gz
-cd tradinebotte-0.63
+# Télécharger la dernière release (remplacer v0.90 par la version actuelle)
+wget https://github.com/neofutur/tradinebotte/archive/refs/tags/v0.90.tar.gz
+tar -xzf v0.90.tar.gz
+cd tradinebotte-0.90
 bash scripts/install.sh        # détecte les paquets manquants ; demande la langue (E/F)
 python3 scripts/setup.py       # demande la langue (sauvegardée dans config.json) ; Entrée = mode simulation
 ~/tradinebotte/run.sh
@@ -36,26 +42,23 @@ Redémarrage automatique au reboot : voir [INSTALL.fr.md — configuration syste
 Voir [INSTALL.fr.md](INSTALL.fr.md) pour :
 - **git clone** — recommandé si GitHub est accessible depuis la machine cible
 - **rsync** — recommandé pour les serveurs sans git (déploiement depuis une machine de développement locale)
-- Détails complets sur la configuration multi-compte (Option B — architecture trois services ZeroMQ)
 
-### Configuration multi-compte (Option B) — résumé
+## Faire tourner plusieurs bots (multi-compte / multi-stratégie)
 
-L'Option B exécute trois services systemd utilisateur par déploiement : **indicators**, **feed** et **account_bot**.
-Les trois communiquent via des sockets IPC dans `/run/user/$UID/` — aucun conflit de port TCP entre utilisateurs Linux.
-
-Étape admin unique par utilisateur VPS (root requis) :
-
-```bash
-sudo loginctl enable-linger <nom_utilisateur_bot>
-```
-
-Puis en tant qu'utilisateur bot (sans sudo) :
+Chaque bot de trading — quelle que soit la famille de stratégie, sur
+autant de comptes que nécessaire — se déploie nativement dans une
+arborescence partagée unique `~/tradinebotte/`, pilotée par
+`inventory.toml` (une ligne `[[bot]]` par bot, source unique de vérité de
+la flotte — locale et ignorée par git, puisqu'elle décrit vos propres
+comptes/bots) :
 
 ```bash
-export XDG_RUNTIME_DIR=/run/user/$(id -u)
-systemctl --user enable --now tradinebotte-indicators.service
-systemctl --user enable --now tradinebotte-feed.service
-systemctl --user enable --now tradinebotte-account.service
+cp inventory.toml.example inventory.toml                 # une fois, puis éditer pour votre flotte
+bash tradinebotte-cex/scripts/deploy_all.sh              # déployer/redéployer toute la flotte
+bash tradinebotte-cex/scripts/deploy_all.sh --only <jeton>  # cibler un compte/bot
 ```
 
-Procédure complète (modèles de fichiers d'unité, installation de tradinetools, configuration) : [INSTALL.fr.md — Partage WebSocket multi-bot](INSTALL.fr.md#partage-websocket-multi-bot-option-b--zeromq)
+Ajouter un bot en ajoutant une ligne `[[bot]]` dans `inventory.toml`, puis
+redéployer. Voir
+[INSTALL.fr.md — Multi-bot / multi-compte : déploiement](INSTALL.fr.md#multi-bot--multi-compte--déploiement)
+pour le schéma complet et l'architecture "Option B" retirée qu'il remplace.

@@ -39,6 +39,14 @@ CLAUDE.md
 # Integration test configuration — contains server addresses and passwords
 scripts/test_multibot.conf
 
+# Fleet topology — describes THIS deployment's real accounts/bots/real-money flags, keep
+# local only. Committed: inventory.toml.example — copy it to inventory.toml and edit it.
+inventory.toml
+
+# Generated bot identities — runtime state, one per deployed instance, never commit
+# (a committed bot_id would be adopted by every account and collide across the fleet)
+bot_id_*
+
 # Local notes — may contain infrastructure details (server names, IPs), never commit
 *.txt
 !docs/*.txt
@@ -58,4 +66,10 @@ scripts/test_multibot.conf
 *.db
 .coverage
 notes/audit170526.md
-tradinetools.egg-info/
+# Python build artifacts (a `pip install <pkg>/` from the repo drops these in the source tree)
+build/
+*.egg-info/
+
+# backtest / analysis databases + generated reports (runtime artifacts, never source)
+data/
+reports/

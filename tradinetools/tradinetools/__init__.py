@@ -1,12 +1,14 @@
 """tradinetools — shared utilities for the tradinebotte ecosystem."""
 
 import asyncio
+import contextlib
 import inspect
 import json
 import logging
 import os
 import shutil
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -49,6 +51,45 @@ def read_version_stamp(install_dir: str | None = None) -> str:
             continue
 
     return "unknown"
+
+
+def resolve_bot_id(data_dir: str | None, role: str, *prefix_parts: Any) -> str:
+    """Return this bot's stable, globally-unique id — the fleet join key (heartbeat /
+    inventory / deploy journal / control socket).
+
+    Read from ``<data_dir>/bot_id_<role>``; if absent, generate ``<prefix>-<6hex>`` and
+    persist it, so the id is STABLE across restarts and only (re)generated for a genuinely
+    new bot. ``prefix`` is the non-empty ``prefix_parts`` lowercased and joined with '-'
+    (e.g. connector-strategy-symbol → ``mexc-grid-lbcusdt``). ``role`` keys the filename so
+    several services sharing one data_dir (the infra account) never collide. The random
+    suffix guarantees uniqueness: two bots may share a readable prefix yet never an id.
+
+    The deploy is normally the generator (it writes the file BEFORE starting the bot so the
+    heartbeat, inventory and deploy journal all agree); this in-process read-or-generate is
+    the safety net for hand-runs.
+    """
+    role = (str(role or "bot").strip().lower().replace("/", "_")) or "bot"
+    path = None
+    if data_dir:
+        path = os.path.join(os.path.expanduser(data_dir), f"bot_id_{role}")
+        try:
+            with open(path, encoding="utf-8") as f:
+                bid = f.read().strip()
+            if bid:
+                return bid
+        except OSError:
+            pass
+    prefix = "-".join(str(p).strip().lower() for p in prefix_parts
+                      if p is not None and str(p).strip())
+    bid = f"{prefix}-{uuid.uuid4().hex[:6]}" if prefix else f"bot-{uuid.uuid4().hex[:12]}"
+    if path:
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(bid + "\n")
+        except OSError:
+            pass
+    return bid
 
 
 def build_heartbeat(
@@ -136,6 +177,42 @@ async def heartbeat_loop(
     finally:
         sock.close(linger=0)
         ctx.term()
+
+
+# A lazily-created, reused PUSH socket for trade pushes. Kept warm across fills so the
+# ZMQ slow-joiner drop only ever risks the very first send (loopback connect completes in
+# microseconds, and bot_trades ingestion is idempotent + backfillable, so a rare first-send
+# drop is harmless). Plain (non-asyncio) socket so push_trade is safe to call from sync code.
+_trade_push: dict[str, Any] = {"sock": None}
+
+
+def push_trade(payload: dict[str, Any], *, addr: str | None = None) -> None:
+    """Fire-and-forget: push one fill to the status collector for the durable bot_trades log.
+
+    Synchronous and non-blocking — safe to call from sync OR async code — and NEVER raises:
+    a collector outage or a full send queue must not disturb trading. Tags the message
+    type="trade" so the collector routes it to store_trade (heartbeats have no type).
+
+    `payload` must carry the store_trade keys: account, bot_name, ts_ms, side, price, qty
+    (+ optional reason/quote/fee/order_id/maker/*_after)."""
+    try:
+        import zmq  # noqa: PLC0415
+        from tradinetools.zmq import default_status_addr  # noqa: PLC0415
+    except ImportError:
+        return
+    try:
+        sock = _trade_push["sock"]
+        if sock is None:
+            a = addr or os.environ.get("TRADINEBOTTE_STATUS_ADDR") or default_status_addr()
+            sock = zmq.Context.instance().socket(zmq.PUSH)
+            sock.setsockopt(zmq.LINGER, 0)
+            sock.connect(a)
+            _trade_push["sock"] = sock
+        msg = dict(payload)
+        msg["type"] = "trade"
+        sock.send(json.dumps(msg).encode(), flags=zmq.NOBLOCK)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        _hb_logger.warning("trade push failed (dropped, non-fatal): %s", exc)
 
 
 # ─── HEALTH CHECK (HTTP, opt-in, loopback) ────────────────────────────────────
@@ -463,3 +540,43 @@ def consume_reset_marker(
     os.remove(path)
     _ctl_logger.info("reset: state wiped, new starting capital=%s", capital)
     return float(capital) if capital is not None else None
+
+
+# ─── Host infra tasks (shared lifecycle) ─────────────────────────────────────
+
+@contextlib.asynccontextmanager
+async def infra_tasks(bot_id: str, install_dir: str, get_payload: Callable[[], dict],
+                      *, mode: str | None, is_live: bool, capital_start: float):
+    """Run a bot host's three background tasks — heartbeat, opt-in HTTP /health, and the
+    control plane (with the standard sim-only 'reset' command) — and cancel them cleanly on
+    exit. Factors out the identical setup+teardown that account_bot and live_bot both carried.
+
+    Usage:
+        async with infra_tasks(bot_id, cfg.install_dir, _hb_payload,
+                               mode=_mode, is_live=_is_live, capital_start=cfg.capital_start):
+            await _run(state)
+    """
+    def _reset_handler(cmd_args: dict) -> dict:
+        cap = float(cmd_args.get("capital", capital_start))
+        if cap <= 0:
+            raise ValueError("capital must be > 0")
+        write_reset_marker(install_dir, bot_id, cap)
+        _hb_logger.warning("RESET requested via control plane — capital=$%.2f, "
+                           "exiting for systemd restart", cap)
+        # exit AFTER the reply is sent; non-zero trips Restart=on-failure.
+        asyncio.get_running_loop().call_later(0.5, os._exit, 1)
+        return {"capital": cap, "wiped_on_restart": True, "restart_in_s": 30}
+
+    hb_task = asyncio.create_task(heartbeat_loop(bot_id, install_dir, get_payload, mode=mode))
+    health_task = asyncio.create_task(health_server(bot_id, install_dir, get_payload, mode=mode))
+    ctl_task = asyncio.create_task(control_loop(
+        bot_id,
+        {"reset": Command(_reset_handler, destructive=True,
+                          help="wipe state + restart with given --capital (sim only)")},
+        mode=mode, is_live=is_live))
+    try:
+        yield
+    finally:
+        for _t in (hb_task, ctl_task, health_task):
+            _t.cancel()
+        await asyncio.gather(hb_task, ctl_task, health_task, return_exceptions=True)

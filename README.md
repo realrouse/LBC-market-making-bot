@@ -1,3 +1,9 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="graphics/logo-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="graphics/logo-light.svg">
+  <img src="graphics/logo-dark.svg" alt="tradinebotte" height="56">
+</picture>
+
 # tradinebotte
 
 > 🇫🇷 [Version française](README.fr.md)
@@ -24,7 +30,7 @@ See [docs/design.md](docs/design.md) for the full process architecture and ZMQ m
 
 ### Accumulation bot v1.5
 
-[`tradinebotte-cex/accumulation_bot.py`] — OBI dip-buy with profit-ladder ratchet. Monitors real-time order book imbalance via ZMQ; enters BTC/USDT on configurable dip thresholds with adaptive scale-in and rebuy trailing stop. Four optional signal gates: Fear & Greed (`fear_greed_gate`), Liquidations (`liq_gate`), Long/Short Ratio (`ls_ratio_gate`), RSI 4h (`rsi4h_gate`). Earn buffer via `earn_buffer_usd`; VWAP gate on initial buy only. Configured via `tradinebotte-cex/strategies/accumulation/btc_accumulation.json`. A MEXC-spot variant (`btc_accumulation_mexc.json`) runs the same strategy on genuine MEXC spot price/OBI (registered on demand from the shared feed as `btc_scalping_mexc`), with MEXC fees and Earn disabled. See [docs/accumulation.md](docs/accumulation.md) for the full strategy design document.
+[`tradinebotte-cex/strategy_engines/accumulation.py`] — OBI dip-buy with profit-ladder ratchet. A `live_bot.py`-hosted strategy engine (`strategy_type="accumulation"`): the indicators service feeds its `on_book_update` (scalping stream) and `on_indicator` (macro-gate streams). Monitors real-time order book imbalance via ZMQ; enters BTC/USDT on configurable dip thresholds with adaptive scale-in and rebuy trailing stop. Four optional signal gates: Fear & Greed (`fear_greed_gate`), Liquidations (`liq_gate`), Long/Short Ratio (`ls_ratio_gate`), RSI 4h (`rsi4h_gate`). Earn buffer via `earn_buffer_usd`; VWAP gate on initial buy only. Configured via `tradinebotte-cex/strategies/accumulation/btc_accumulation.json`. A MEXC-spot variant (`btc_accumulation_mexc.json`) runs the same strategy on genuine MEXC spot price/OBI (registered on demand from the shared feed as `btc_scalping_mexc`), with MEXC fees and Earn disabled. See [docs/accumulation.md](docs/accumulation.md) for the full strategy design document.
 
 ### OBI Scalping bot v2.12
 
@@ -152,7 +158,7 @@ sqlite3 live.db "SELECT id, direction, outcome, pnl_net, capital_after FROM trad
 sqlite3 live.db "SELECT COUNT(*) total, SUM(CASE WHEN outcome='WIN' THEN 1 END) wins, ROUND(SUM(pnl_net),2) net_pnl FROM trades WHERE resolved=1;"
 ```
 
-**Data collection** (simulate mode, 1-second snapshots):
+**Data collection** (simulate mode, 1-second snapshots) — ⚠ dormant since 2026-05, not currently deployed:
 
 ```bash
 bash tradinebotte-polymarket/scripts/start_collector.sh           # deploy + launch

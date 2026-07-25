@@ -1,3 +1,9 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="graphics/logo-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="graphics/logo-light.svg">
+  <img src="graphics/logo-dark.svg" alt="tradinebotte" height="56">
+</picture>
+
 # tradinebotte
 
 > 🇬🇧 [English version](README.md)
@@ -24,7 +30,7 @@ Voir [docs/design.fr.md](docs/design.fr.md) pour la référence complète de l'a
 
 ### Bot d'accumulation v1.5
 
-[`tradinebotte-cex/accumulation_bot.py`] — Achat sur creux OBI avec ratchet de profit progressif. Surveille le déséquilibre du carnet d'ordres en temps réel via ZMQ ; entre sur BTC/USDT à des seuils de creux configurables avec scale-in adaptatif et trailing stop de rebuy. Quatre gates de signal optionnelles : Fear & Greed (`fear_greed_gate`), Liquidations (`liq_gate`), Ratio Long/Short (`ls_ratio_gate`), RSI 4h (`rsi4h_gate`). Buffer Earn via `earn_buffer_usd` ; gate VWAP sur l'achat initial uniquement. Configuré via `tradinebotte-cex/strategies/accumulation/btc_accumulation.json`. Une variante MEXC spot (`btc_accumulation_mexc.json`) exécute la même stratégie sur le prix/OBI MEXC spot réel (enregistré à la demande depuis le flux partagé sous `btc_scalping_mexc`), avec les frais MEXC et Earn désactivé. Voir [docs/accumulation.md](docs/accumulation.md) pour le document de conception complet de la stratégie.
+[`tradinebotte-cex/strategy_engines/accumulation.py`] — Achat sur creux OBI avec ratchet de profit progressif. Un moteur de stratégie hébergé par `live_bot.py` (`strategy_type="accumulation"`) : le service d'indicateurs alimente son `on_book_update` (flux scalping) et son `on_indicator` (flux de gates macro). Surveille le déséquilibre du carnet d'ordres en temps réel via ZMQ ; entre sur BTC/USDT à des seuils de creux configurables avec scale-in adaptatif et trailing stop de rebuy. Quatre gates de signal optionnelles : Fear & Greed (`fear_greed_gate`), Liquidations (`liq_gate`), Ratio Long/Short (`ls_ratio_gate`), RSI 4h (`rsi4h_gate`). Buffer Earn via `earn_buffer_usd` ; gate VWAP sur l'achat initial uniquement. Configuré via `tradinebotte-cex/strategies/accumulation/btc_accumulation.json`. Une variante MEXC spot (`btc_accumulation_mexc.json`) exécute la même stratégie sur le prix/OBI MEXC spot réel (enregistré à la demande depuis le flux partagé sous `btc_scalping_mexc`), avec les frais MEXC et Earn désactivé. Voir [docs/accumulation.md](docs/accumulation.md) pour le document de conception complet de la stratégie.
 
 ### Bot de scalping OBI v2.12
 
@@ -152,7 +158,7 @@ sqlite3 live.db "SELECT id, direction, outcome, pnl_net, capital_after FROM trad
 sqlite3 live.db "SELECT COUNT(*) total, SUM(CASE WHEN outcome='WIN' THEN 1 END) wins, ROUND(SUM(pnl_net),2) net_pnl FROM trades WHERE resolved=1;"
 ```
 
-**Collecte de données** (mode simulation, snapshots à 1 seconde) :
+**Collecte de données** (mode simulation, snapshots à 1 seconde) — ⚠ en sommeil depuis 2026-05, non déployée actuellement :
 
 ```bash
 bash tradinebotte-polymarket/scripts/start_collector.sh           # déploiement + lancement

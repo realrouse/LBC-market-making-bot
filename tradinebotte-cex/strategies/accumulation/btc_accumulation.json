@@ -2,6 +2,9 @@
     "_comment": "BTC long-term accumulation v2.0 — Fear&Greed gate, Liquidations gate, L/S Ratio gate, RSI 4h gate, macro OBI gate, VWAP gate, adaptive cooldown, rebuy trailing+expiry, configurable Earn buffer; capital management tightened (max_inv 0.65, avg_entry guard 1.20, sell_frac 0.10)",
     "_version": "2.0",
 
+    "strategy_type":        "accumulation",
+    "connector":            "binance",
+
     "symbol":               "BTCUSDT",
 
     "capital_usdt":         1000.0,
@@ -71,5 +74,10 @@
     "rsi4h_gate":           true,
     "rsi4h_stream_id":      "btc_4h",
     "rsi4h_block_high":     70.0,
-    "rsi4h_relax_vwap_low": 35.0
+    "rsi4h_relax_vwap_low": 35.0,
+
+    "_ichimoku_note": "Ichimoku 4h-cloud trend gate — blocks scale-in when price is below the cloud. DEFAULT OFF: it fights the deep-dip accumulation thesis (rsi4h_relax_vwap_low buys MORE when oversold). Uses the 4h cloud (more responsive than daily). The btc_4h_ichimoku stream is provided by the service's static indicators_all.json (received via SUB, like every other gate stream) — no self-registration (the reg socket is a per-user IPC, unreachable cross-account). Flip ichimoku_gate to true to activate.",
+    "ichimoku_gate":        false,
+    "ichimoku_stream_id":   "btc_4h_ichimoku",
+    "ichi_stale_secs":      172800
 }

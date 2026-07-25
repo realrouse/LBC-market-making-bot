@@ -11,9 +11,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from tradinetools.db import (
-    open_db, upsert_inventory, record_deploy, expected_vs_actual,
-)
+from tradinetools.db import open_db, upsert_inventory, record_deploy
 
 
 def _columns(db, table):
@@ -108,6 +106,35 @@ class TestInventory(unittest.TestCase):
             "SELECT bot_type FROM inventory WHERE bot_name='grid_bot'").fetchone()[0]
         self.assertEqual(val, "cex-grid-binance-LIVE")
 
+    def test_strategy_type_roundtrips(self):
+        rows = self._rows()
+        rows[0]["strategy_type"] = "grid"        # trading bot carries a strategy_type
+        upsert_inventory(self.db, rows)           # the service row leaves it unset → NULL
+        self.assertEqual(self.db.execute(
+            "SELECT strategy_type FROM inventory WHERE bot_name='grid_bot'").fetchone()[0], "grid")
+        self.assertIsNone(self.db.execute(
+            "SELECT strategy_type FROM inventory WHERE bot_name='feed'").fetchone()[0])
+
+
+class TestMigration(unittest.TestCase):
+    def test_open_db_adds_strategy_type_to_legacy_inventory(self):
+        """A shared DB whose inventory table predates strategy_type must gain the column on
+        open_db (idempotent ALTER) — generate_status reads via raw SELECT, so if the column
+        were missing the strategy_type query would blank the inventory."""
+        import sqlite3
+        path = os.path.join(tempfile.mkdtemp(), "legacy.db")
+        con = sqlite3.connect(path)
+        con.execute("CREATE TABLE inventory (account TEXT NOT NULL, bot_name TEXT NOT NULL, "
+                    "kind TEXT, bot_type TEXT, enabled INTEGER DEFAULT 1, updated_ts INTEGER, "
+                    "PRIMARY KEY(account, bot_name))")
+        con.commit()
+        con.close()
+        db = open_db(path)
+        cols = {r[1] for r in db.execute("PRAGMA table_info(inventory)")}
+        self.assertIn("strategy_type", cols)
+        db.close()
+        open_db(path).close()   # second open: duplicate-column ALTER is ignored, no raise
+
 
 class TestDeploys(unittest.TestCase):
     def setUp(self):
@@ -133,39 +160,6 @@ class TestDeploys(unittest.TestCase):
         record_deploy(self.db, account="acct2", bot_name="live_bot")
         ts = self.db.execute("SELECT ts FROM deploys").fetchone()[0]
         self.assertGreaterEqual(ts, before)
-
-
-class TestExpectedVsActual(unittest.TestCase):
-    def setUp(self):
-        self.dir = tempfile.mkdtemp()
-        self.db = open_db(os.path.join(self.dir, "t.db"))
-        upsert_inventory(self.db, [
-            {"account": "acct2", "bot_name": "live_bot", "kind": "bot"},
-            {"account": "acct9", "bot_name": "ghost_bot", "kind": "bot"},
-        ])
-
-    def tearDown(self):
-        self.db.close()
-
-    def test_silent_bot_has_null_last_ts(self):
-        rows = {(r["account"], r["bot_name"]): r for r in expected_vs_actual(self.db)}
-        # never sent a heartbeat → visible but last_ts None (today it would be invisible)
-        self.assertIsNone(rows[("acct9", "ghost_bot")]["last_ts"])
-
-    def test_reporting_bot_has_last_ts(self):
-        self.db.execute(
-            "INSERT INTO heartbeats (ts, account, bot_name, version, status)"
-            " VALUES (?, 'acct2', 'live_bot', 'v1', 'ok')", (1234567890,))
-        self.db.commit()
-        rows = {(r["account"], r["bot_name"]): r for r in expected_vs_actual(self.db)}
-        self.assertEqual(rows[("acct2", "live_bot")]["last_ts"], 1234567890)
-
-    def test_disabled_row_excluded(self):
-        upsert_inventory(self.db, [
-            {"account": "acct2", "bot_name": "live_bot", "kind": "bot", "enabled": False},
-        ])
-        keys = {(r["account"], r["bot_name"]) for r in expected_vs_actual(self.db)}
-        self.assertNotIn(("acct2", "live_bot"), keys)
 
 
 if __name__ == "__main__":

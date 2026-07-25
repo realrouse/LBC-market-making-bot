@@ -31,7 +31,7 @@ import zmq
 import zmq.asyncio
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from tradinetools import heartbeat_loop, control_loop  # noqa: E402
+from tradinetools import heartbeat_loop, control_loop, resolve_bot_id  # noqa: E402
 from tradinetools.zmq import make_pub, PORT_CEX_FEED     # noqa: E402
 from tradinetools.logging import setup_logger            # noqa: E402
 
@@ -44,7 +44,7 @@ FEED_ADDR = os.environ.get("TRADINEBOTTE_CEX_FEED_ADDR", f"tcp://127.0.0.1:{PORT
 # mexc = MEXC spot (protobuf WS, binary frames — see api_mexc.WS_BINARY),
 # mexc_futures = MEXC perp (JSON WS).
 _FEEDS_ENV = os.environ.get(
-    "TRADINEBOTTE_CEX_FEEDS", "binance:BTCUSDT,mexc:BTCUSDT,mexc_futures:BTC_USDT")
+    "TRADINEBOTTE_CEX_FEEDS", "binance:BTCUSDT,mexc:BTCUSDT,mexc:LBCUSDT,mexc_futures:BTC_USDT")
 FEEDS = [tuple(s.split(":", 1)) for s in _FEEDS_ENV.split(",") if ":" in s]
 
 logger = setup_logger("cex_feed", os.path.join(_INSTALL_DIR, "cex_feed.log"))
@@ -127,11 +127,15 @@ async def main() -> None:
     pub = make_pub(ctx, FEED_ADDR, "CEX_FEED")
     logger.info("cex_feed PUB on %s — feeds: %s", FEED_ADDR, FEEDS)
     tasks = [asyncio.create_task(_exchange_task(pub, c, s)) for c, s in FEEDS]
+    # Fleet join key: generated unique bot_id (readable prefix + suffix), persisted per-role.
+    # Resolved here, not at import: resolve_bot_id PERSISTS a generated id, so doing it at
+    # module level makes merely importing this file write a stray bot_id into the cwd.
+    bot_id = resolve_bot_id(_INSTALL_DIR, "cexfeed", "infra", "cexfeed")
     tasks.append(asyncio.create_task(
-        heartbeat_loop("cex_feed", _INSTALL_DIR,
+        heartbeat_loop(bot_id, _INSTALL_DIR,
                        lambda: {"exchanges": list(_last_pub.keys()),
                                 "last_pub_ts": max(_last_pub.values(), default=0.0)})))
-    tasks.append(asyncio.create_task(control_loop("cex_feed")))
+    tasks.append(asyncio.create_task(control_loop(bot_id)))
     try:
         await asyncio.gather(*tasks)
     finally:

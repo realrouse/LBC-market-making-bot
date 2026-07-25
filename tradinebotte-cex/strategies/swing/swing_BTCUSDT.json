@@ -24,5 +24,9 @@
     "indicators_addr":      "tcp://127.0.0.1:5559",
     "indicators_stream_id": "btc_4h",
 
+    "ichimoku_filter_enabled": true,
+    "ichimoku_stream_id":      "btc_1d_ichimoku",
+    "ichi_stale_secs":         172800,
+
     "poll_interval":        2.0
 }

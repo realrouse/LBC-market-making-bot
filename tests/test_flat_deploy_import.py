@@ -29,7 +29,7 @@ _CORE = os.path.join(_REPO, "tradinebotte-core")
 # The file set install.sh lays down flat in INSTALL_DIR (scripts/install.sh).
 _FLAT_FILES = [
     (_PM, "live_bot.py"), (_PM, "api_polymarket.py"), (_PM, "bot_utils.py"),
-    (_PM, "feed.py"), (_PM, "account_bot.py"),
+    (_PM, "feed.py"),
     (_PM, "pm_types.py"), (_PM, "pm_calendar.py"), (_PM, "pm_strategy.py"), (_PM, "pm_data.py"),
     (_CEX, "api_binance.py"), (_CEX, "api_mexc.py"),
 ]
@@ -69,9 +69,9 @@ class TestFlatDeployImport(unittest.TestCase):
                 "leaks = [p for p in sys.path if p.endswith("
                 "('tradinebotte-core','tradinebotte-cex','tradinebotte-polymarket'))]\n"
                 "assert not leaks, f'repo pkg dirs leaked onto sys.path: {leaks}'\n"
-                "import live_bot, account_bot, botcore, connectors\n"
+                "import live_bot, botcore, connectors\n"
                 "flat = os.path.realpath(os.getcwd())\n"
-                "for m in (live_bot, account_bot, botcore, connectors):\n"
+                "for m in (live_bot, botcore, connectors):\n"
                 "    f = os.path.realpath(m.__file__)\n"
                 "    assert f.startswith(flat), f'{m.__name__} resolved outside flat: {f}'\n"
                 "assert botcore.Strategy in live_bot.ThresholdStrategy.__mro__\n"
@@ -84,7 +84,7 @@ class TestFlatDeployImport(unittest.TestCase):
             env.pop("PYTHONPATH", None)  # don't leak the repo onto the child's path
             res = subprocess.run(
                 [sys.executable, "-c", probe],
-                cwd=flat, env=env, capture_output=True, text=True, timeout=120,
+                cwd=flat, env=env, capture_output=True, text=True, timeout=120, check=False,
             )
             self.assertEqual(
                 res.returncode, 0,
@@ -118,7 +118,7 @@ class TestCorePurity(unittest.TestCase):
         env = dict(os.environ)
         env.pop("PYTHONPATH", None)
         res = subprocess.run([sys.executable, "-c", probe],
-                             env=env, capture_output=True, text=True, timeout=60)
+                             env=env, capture_output=True, text=True, timeout=60, check=False)
         self.assertEqual(res.returncode, 0,
                          f"core purity violated:\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}")
         self.assertIn("OK", res.stdout)

@@ -28,9 +28,6 @@
 git clone https://github.com/neofutur/tradinebotte.git
 cd tradinebotte
 
-# Installer la bibliothèque partagée comme package éditable (requis par tous les sous-systèmes)
-pip install -e tradinetools/
-
 # Installer les dépendances de développement (pylint, mypy, pip-audit)
 pip install -r requirements-dev.txt
 ```
@@ -41,7 +38,22 @@ Recommandé : utiliser `uv` pour un virtualenv isolé plus rapide :
 uv venv .venv
 source .venv/bin/activate
 uv pip install -r requirements-dev.txt
-pip install -e tradinetools/
+```
+
+`tradinetools` (la bibliothèque partagée utilisée par tous les
+sous-systèmes) n'est **pas** installée via pip — en production,
+`scripts/install.sh` la relie via un fichier `.pth` pointant sur le code
+source, plutôt qu'un `pip install -e`, car ce dernier masquait le
+répertoire voisin `tradinetools/` et divergeait de la source, causant des
+crash-loops au redémarrage des bots en prod. Reproduire la même chose pour
+votre `.venv` de dev :
+
+```bash
+python3 - <<'PY'
+import pathlib, sysconfig
+sp = pathlib.Path(sysconfig.get_paths()["purelib"])
+(sp / "tradinetools-source.pth").write_text(str(pathlib.Path("tradinetools").resolve()) + "\n")
+PY
 ```
 
 Le lanceur de tests (`scripts/run_tests.sh`) détecte automatiquement `.venv` à la racine du projet.
@@ -59,8 +71,7 @@ git config core.hooksPath .git-hooks
 ```
 tradinebotte/
 ├── tradinebotte-cex/            # Bots CEX et moteurs de stratégie
-│   ├── accumulation_bot.py      # Bot d'accumulation OBI (v1.5)
-│   ├── orderbook_bot.py         # Bot de scalping OBI (v2.12)
+│   ├── cex_consumer.py          # Glue CEX : alimente strategy_engines depuis cex_feed / indicators
 │   ├── api_binance.py           # Adaptateur Binance spot
 │   ├── api_mexc.py              # Adaptateur MEXC spot
 │   ├── api_mexc_futures.py      # Adaptateur MEXC Futures perpétuel
@@ -73,7 +84,9 @@ tradinebotte/
 │   │   ├── grid.py              # Grid (static / trail=bear / trail=bull)
 │   │   ├── swing.py             # Swing avec filtres EMA200 + ATR + RSI
 │   │   ├── swinghold.py         # SwingHold — ventes fractionnées, accumulation long terme
-│   │   └── dca.py               # DCA cadencé avec TP/SL
+│   │   ├── dca.py               # DCA cadencé avec TP/SL
+│   │   ├── accumulation.py      # Échelle d'accumulation maker (ratchet), héberge le gate live/shadow de BAMM
+│   │   └── bamm.py              # BAMM : grid maker d'accumulation à rungs fixes, ancré sur un floor
 │   ├── strategies/              # Fichiers de config JSON par stratégie
 │   └── tests/                   # Tests unitaires spécifiques CEX
 │
@@ -83,18 +96,24 @@ tradinebotte/
 │   └── tests/
 │
 ├── tradinebotte-polymarket/     # Connecteur marchés de prédiction Polymarket
-│   ├── live_bot.py              # Machine d'état async
+│   ├── live_bot.py              # Processus hôte partagé : machine d'état async, dispatche vers
+│   │                             # un plugin stratégie/connecteur (pm_strategy pour Polymarket, ou
+│   │                             # un strategy_engine de tradinebotte-cex pour grid/swing/dca/accumulation)
+│   ├── pm_*.py                  # Plugin Polymarket (pm_types/pm_calendar/pm_strategy/pm_data)
 │   ├── feed.py                  # Feed WebSocket (ZMQ PUB)
-│   ├── account_bot.py           # Bot par compte (ZMQ SUB)
 │   ├── api_polymarket.py        # Adaptateur CLOB Polymarket
 │   ├── strategies/              # Fichiers de stratégie JSON
 │   └── tests/
 │
+├── tradinebotte-core/            # Cœur neutre (botcore/) : protocole Strategy, registre de
+│   └── botcore/                  # connecteurs, persistance, schéma de base — aucun code spécifique exchange
+│
 ├── tradinebotte-status/         # Monitoring de santé
 │   ├── status_collector.py      # Collecteur de heartbeats (ZMQ → SQLite)
-│   └── generate_status.py       # Générateur de tableau de bord HTML
+│   ├── inventory_labels.py      # Dérive labels de comptes / ensemble live depuis inventory.toml
+│   └── generate_status.py       # Générateur de tableau de bord HTML (DB seule, sans SSH par compte)
 │
-├── tradinetools/                # Bibliothèque partagée (pip install -e tradinetools/)
+├── tradinetools/                # Bibliothèque partagée (reliée via .pth source, voir Environnement de développement)
 │   └── tradinetools/
 │       ├── math.py              # sma_last, ema_last, atr_last, bollinger_last, ...
 │       ├── zmq.py               # Fabriques de sockets ZMQ
@@ -103,8 +122,12 @@ tradinebotte/
 │
 ├── analysis/                    # Scripts de backtest et d'analyse
 ├── scripts/                     # Scripts d'installation, déploiement, test, release
+├── systemd/                     # Templates d'unités systemd canoniques (un seul dossier, tous les services)
 ├── tests/                       # Suite de tests principale (stratégies CEX, adaptateurs API, ...)
 ├── docs/                        # Documentation (voir référence docs/ ci-dessous)
+├── inventory.toml.example       # MODÈLE de topologie de la flotte — copier vers inventory.toml
+│                                 # (local, ignoré par git) et éditer ; pilote deploy_all.sh,
+│                                 # generate_status.py, bot_status.sh
 ├── requirements.txt             # Dépendances runtime
 ├── requirements-dev.txt         # Dépendances dev (pylint, mypy, pip-audit)
 └── version.py                   # Source unique de vérité pour le numéro de version

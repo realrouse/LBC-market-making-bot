@@ -24,7 +24,7 @@ Launch:
   bash scripts/start_bot.sh     # starts the bot in the background
 """
 
-import argparse, asyncio, copy, json, logging, logging.handlers, os, queue, sqlite3, sys, time, uuid
+import argparse, asyncio, copy, json, logging, logging.handlers, os, queue, socket, sqlite3, sys, time, uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -72,10 +72,7 @@ from pm_data import (
 )
 # pylint: enable=unused-import
 import bot_utils
-from tradinetools import (
-    heartbeat_loop, control_loop, Command, health_server,
-    write_reset_marker, consume_reset_marker,
-)
+from tradinetools import infra_tasks, consume_reset_marker, resolve_bot_id
 from tradinetools.zmq import PORT_FEED, PORT_INDICATORS, PORT_IND_REG, default_ipc_addr
 
 # ─── STRATEGY DEFAULTS (module-level — tests reference these directly) ────────
@@ -243,6 +240,10 @@ class BotConfig:
     db_path:      str = ""
     log_path:     str = ""
     config_path:  str = ""
+    # Fleet join key (generated bot_id). Set by main() from resolve_bot_id before the
+    # strategy engine is loaded, so an engine can tag durable records (bot_trades) with the
+    # same identity the heartbeat/inventory use. Empty in a bare BotConfig() (tests).
+    bot_id:       str = ""
 
     # Strategy
     capital_start:      float = CAPITAL_START
@@ -372,12 +373,13 @@ class BotConfig:
             self.install_dir = os.path.expanduser(
                 os.environ.get("TRADINEBOTTE_DIR", "~/tradinebotte")
             )
+        _cfg, _db, _log = instance_paths(self.install_dir)   # TRADINEBOTTE_INSTANCE-aware (single-tree)
         if not self.db_path:
-            self.db_path = os.path.join(self.install_dir, "live.db")
+            self.db_path = _db
         if not self.log_path:
-            self.log_path = os.path.join(self.install_dir, "live.log")
+            self.log_path = _log
         if not self.config_path:
-            self.config_path = os.path.join(self.install_dir, "config.json")
+            self.config_path = _cfg
         if not self.webstatus_path:
             self.webstatus_path = os.path.expanduser("~/public_html/tradinebot_status.html")
         if self.no_snapshots:
@@ -385,6 +387,23 @@ class BotConfig:
 
 
 # ─── CONFIGURATION HELPERS ───────────────────────────────────────────────────
+
+def instance_paths(install_dir: str) -> tuple[str, str, str]:
+    """(config_path, db_path, log_path) under install_dir.
+
+    With TRADINEBOTTE_INSTANCE set (the single-tree layout — several bots share ~/tradinebotte),
+    the files are per-instance suffixed (config_<inst>.json / live_<inst>.db / <inst>.log) so two
+    bots in one dir never collide on the fixed names. Unset → the legacy config.json / live.db /
+    live.log, so a not-yet-migrated bot is byte-for-byte unchanged (this ships inert)."""
+    inst = os.environ.get("TRADINEBOTTE_INSTANCE", "").strip()
+    if inst:
+        return (os.path.join(install_dir, f"config_{inst}.json"),
+                os.path.join(install_dir, f"live_{inst}.db"),
+                os.path.join(install_dir, f"{inst}.log"))
+    return (os.path.join(install_dir, "config.json"),
+            os.path.join(install_dir, "live.db"),
+            os.path.join(install_dir, "live.log"))
+
 
 def load_config(config_path: str) -> dict[str, Any]:
     """Load config.json from the given path. Returns {} if the file is absent."""
@@ -433,9 +452,7 @@ def make_config(simulate: bool = False, no_log: bool = False,
     install_dir = os.path.expanduser(
         os.environ.get("TRADINEBOTTE_DIR", "~/tradinebotte")
     )
-    db_path     = os.path.join(install_dir, "live.db")
-    log_path    = os.path.join(install_dir, "live.log")
-    config_path = os.path.join(install_dir, "config.json")
+    config_path, db_path, log_path = instance_paths(install_dir)   # TRADINEBOTTE_INSTANCE-aware
 
     cfg   = load_config(config_path)
     strat_path = cfg.get("strategy",
@@ -451,6 +468,14 @@ def make_config(simulate: bool = False, no_log: bool = False,
     connector     = str(strat.get("connector",     CONNECTOR))
     strategy_type = str(strat.get("strategy_type", STRATEGY_TYPE))
 
+    # Accumulation keeps its own DB file (live_accum.db) so the cutover from the former
+    # standalone accumulation_bot preserves deployed holdings/avg_entry/realized (all on the
+    # status page). Every other strategy shares live.db. LEGACY layout only — under the single-tree
+    # layout (TRADINEBOTTE_INSTANCE set) instance_paths() already gave a per-instance live_<inst>.db,
+    # so accumulation gets live_accumulation.db and needs no special case.
+    if strategy_type == "accumulation" and not os.environ.get("TRADINEBOTTE_INSTANCE", "").strip():
+        db_path = os.path.join(install_dir, "live_accum.db")
+
     # Grid parameters (only used when strategy_type == "grid").
     grid_symbol          = str(strat.get("grid_symbol",          GRID_SYMBOL))
     grid_lower           = float(strat.get("grid_lower",           GRID_LOWER))
@@ -461,6 +486,10 @@ def make_config(simulate: bool = False, no_log: bool = False,
 
     # Strategy overrides from JSON (fall back to module-level defaults).
     capital_start      = float(strat.get("capital_start",      CAPITAL_START))
+    # Accumulation names its capital "capital_usdt" — map it so the reset default / equity base
+    # match the engine's own capital (the engine reads capital_usdt from strategy_cfg).
+    if strategy_type == "accumulation":
+        capital_start = float(strat.get("capital_usdt", capital_start))
     stake              = float(strat.get("stake",               STAKE))
     gas_fee_usd        = float(strat.get("gas_fee_usd",         GAS_FEE_USD))
     signal_threshold   = float(strat.get("signal_threshold",    SIGNAL_THRESHOLD))
@@ -1009,6 +1038,19 @@ _RUN_LOOPS: dict = {
     "cex_feed": (_CEX_CONNECTORS, "cex_consumer", "cex_feed_consumer_loop",
                  lambda state, config, session: (state, config.feed_addr,
                                                  _cex_symbol(config), config.connector)),
+    # accumulation: SUB the indicators service (not the cex_feed). Primary/scalping stream →
+    # on_book_update, gate streams → on_indicator (handled inside indicators_consumer_loop).
+    # The accumulation strategy JSON is self-contained (like the former standalone bot): prefer
+    # its indicators_addr/reg_addr/streams from strategy_cfg, falling back to the config.json-
+    # sourced BotConfig fields. data_source="indicators" itself still comes from config.json.
+    "indicators": (_CEX_CONNECTORS, "cex_consumer", "indicators_consumer_loop",
+                   lambda state, config, session: (
+                       state,
+                       config.strategy_cfg.get("indicators_addr") or config.indicators_addr,
+                       config.strategy_cfg.get("indicators_reg_addr") or config.indicators_reg_addr,
+                       config.strategy_cfg.get("indicators_streams") or config.indicators_streams,
+                       config.strategy_cfg.get("scalping_stream_id", "btc_scalping_spot"),
+                       config.strategy_cfg.get("register_interval_s", 120))),
 }
 # Fallback when no feed data_source matches the connector: the direct WS path.
 _DIRECT_WS = ("pm_data", "ws_loop", lambda state, config, session: (state, session))
@@ -1041,6 +1083,15 @@ async def main() -> None:
         snapshot_interval=args.snapshot_interval,
     )
     _setup_logging(config)
+    # IPv4-only egress pin for IP-whitelisted real accounts (e.g. a MEXC key locked to a
+    # single v4 address). Gated by env var so the sim accounts are untouched. Pins the
+    # whole process's DNS to A records — covers aiohttp (order plane) AND the websockets
+    # user-data stream; loopback/ZMQ + Binance/Polymarket all resolve v4, so it is safe
+    # process-wide. Belt-and-suspenders with family=AF_INET on the session connector below.
+    if os.environ.get("TRADINEBOTTE_IPV4_ONLY"):
+        _gai = socket.getaddrinfo
+        socket.getaddrinfo = lambda h, p, f=0, *a, **k: _gai(h, p, socket.AF_INET, *a, **k)
+        logger.info("IPv4-only egress pinned (TRADINEBOTTE_IPV4_ONLY)")
     connector = _load_connector_module(config.connector)
     logger.info("Connector loaded: %s (%s)", config.connector, connector.__name__)
     if config.strategy_type != "threshold":
@@ -1099,12 +1150,32 @@ async def main() -> None:
         logger.info("  POLY_PRIVATE_KEY not set — orders SIMULATED")
     logger.info("=" * 65)
 
-    # Self-reported mode (decided from config, never runtime order ids): threshold
-    # places real orders only with a private_key; CEX grid/swing are always sim.
-    _hb_mode = "live" if (config.strategy_type == "threshold" and config.private_key) else "sim"
+    # Self-reported mode (decided from config, never runtime order ids): threshold places
+    # real orders only with a private_key; accumulation manages its own real-vs-sim via
+    # live_execution/shadow in its strategy JSON; CEX grid/swing are always sim.
+    #   This is the CONSERVATIVE config-INTENT signal, computed before the engine loads so the
+    #   reset guard (below) protects a real-money bot. The accumulation engine additionally
+    #   reports its ACTUAL post-connector-load mode via heartbeat_payload["mode"], which
+    #   overrides this for the status page — a mismatch (declared live, reports sim) is the
+    #   intended alarm that a keyed bot fell back to paper.
+    _scfg = config.strategy_cfg or {}
+    if config.strategy_type == "threshold":
+        _hb_mode = "live" if config.private_key else "sim"
+    elif config.strategy_type == "accumulation" and _scfg.get("live_execution") and not _scfg.get("shadow"):
+        _hb_mode = "live"
+    else:
+        _hb_mode = "sim"
     _is_live = _hb_mode == "live"
-    _hb_bot_name = {"grid": "grid_bot", "swing": "swing_bot"}.get(
-        config.strategy_type, "live_bot")
+    # Fleet join key: a stable, globally-unique bot id (readable prefix + generated
+    # suffix), read from <install_dir>/bot_id_<role> or generated on first creation. The
+    # deploy writes this file before starting the bot; this call is the read/safety-net.
+    _pair = (config.grid_symbol if config.strategy_type == "grid"
+             else config.strategy_cfg.get("symbol", "")) or ""
+    _hb_bot_name = resolve_bot_id(config.install_dir, config.strategy_type,
+                                  config.connector, config.strategy_type, _pair)
+    # Thread the resolved bot_id into config so a strategy engine loaded below can tag durable
+    # records (bot_trades) with the same identity the heartbeat/inventory use.
+    config.bot_id = _hb_bot_name
 
     # Apply a pending operator reset BEFORE opening the DB so the wipe is atomic at
     # cold start. Sim-only: a live bot must never honour a reset marker.
@@ -1119,8 +1190,9 @@ async def main() -> None:
         state = BotState(conn, config, strategy=ThresholdStrategy(), connector=connector)
         restore_state_from_db(state)
 
+        _fam = socket.AF_INET if os.environ.get("TRADINEBOTTE_IPV4_ONLY") else socket.AF_UNSPEC
         async with aiohttp.ClientSession(
-            connector=aiohttp.TCPConnector(limit=10),
+            connector=aiohttp.TCPConnector(limit=10, family=_fam),
             timeout=aiohttp.ClientTimeout(total=30),
         ) as session:
             state.session = session   # available before ws_loop for strategy restore
@@ -1128,8 +1200,21 @@ async def main() -> None:
                 from strategy_engines import load as _load_strat
                 state.strategy = _load_strat(config.strategy_type, config)
                 logger.info("  Algorithm   : %s", config.strategy_type)
+                # Warm the connector's per-symbol precision cache at boot (before restore,
+                # which for the grid also relies on the exchange tick) so the first order
+                # never pays the exchangeInfo round-trip and an unreachable exchange
+                # surfaces here rather than as a fail-closed rejection mid-trade.
+                if hasattr(state.strategy, "warm_precision"):
+                    await state.strategy.warm_precision(state)
                 await state.strategy.restore_from_db(state)
             def _hb_payload() -> dict[str, Any]:
+                # An engine may own its heartbeat shape (accumulation reports holdings/avg_entry/
+                # realized, not the threshold/grid/swing fields cumulative_pnl assumes). When it
+                # provides heartbeat_payload(), that IS the payload — keeps acct-2/3/4's status
+                # page fields identical to the former standalone bot.
+                _strat = getattr(state, "strategy", None)
+                if _strat is not None and hasattr(_strat, "heartbeat_payload"):
+                    return _strat.heartbeat_payload()
                 pnl_total, trades_total = cumulative_pnl(state)
                 hb: dict[str, Any] = {
                     "bounds_ok":    state.daily_pnl >= -config.daily_stop_loss,
@@ -1155,63 +1240,17 @@ async def main() -> None:
             if config.enable_snapshots:
                 state.last_write_ts = time.time()
 
-            _hb_task = asyncio.create_task(
-                heartbeat_loop(
-                    _hb_bot_name,
-                    config.install_dir,
-                    _hb_payload,
-                    mode=_hb_mode,
-                )
-            )
-
-            # Opt-in HTTP /health (no-op unless TRADINEBOTTE_HEALTH_PORT is set);
-            # reuses _hb_payload so the pulled view matches the pushed heartbeat.
-            _health_task = asyncio.create_task(
-                health_server(
-                    _hb_bot_name,
-                    config.install_dir,
-                    _hb_payload,
-                    mode=_hb_mode,
-                )
-            )
-
-            def _reset_handler(cmd_args: dict[str, Any]) -> dict[str, Any]:
-                """Sim-only: record a reset and hard-exit so systemd restarts cold,
-                wiping state and starting from `capital`. Guarded by control_loop."""
-                cap = float(cmd_args.get("capital", config.capital_start))
-                if cap <= 0:
-                    raise ValueError("capital must be > 0")
-                write_reset_marker(config.install_dir, _hb_bot_name, cap)
-                logger.warning("RESET requested via control plane — capital=$%.2f, "
-                               "exiting for systemd restart", cap)
-                # exit AFTER the reply is sent; non-zero trips Restart=on-failure.
-                asyncio.get_running_loop().call_later(0.5, os._exit, 1)
-                return {"capital": cap, "wiped_on_restart": True, "restart_in_s": 30}
-
-            _ctl_task = asyncio.create_task(
-                control_loop(
-                    _hb_bot_name,
-                    {"reset": Command(_reset_handler, destructive=True,
-                                      help="wipe state + restart with given --capital (sim only)")},
-                    mode=_hb_mode,
-                    is_live=_is_live,
-                )
-            )
             import importlib  # noqa: PLC0415
             _mod, _loop, _args, _warn = _resolve_run_loop(config)
             if _warn:
                 logger.warning("data_source=%s ignored for connector=%s — using direct WS",
                                config.data_source, config.connector)
-            try:
+            async with infra_tasks(_hb_bot_name, config.install_dir, _hb_payload,
+                                    mode=_hb_mode, is_live=_is_live,
+                                    capital_start=config.capital_start):
                 # Lazy import keeps a polymarket-only account from loading the CEX consumer.
                 _run_loop = getattr(importlib.import_module(_mod), _loop)
                 await _run_loop(*_args(state, config, session))
-            finally:
-                _hb_task.cancel()
-                _ctl_task.cancel()
-                _health_task.cancel()
-                await asyncio.gather(_hb_task, _ctl_task, _health_task,
-                                     return_exceptions=True)
     finally:
         conn.close()
 

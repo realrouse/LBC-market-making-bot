@@ -702,7 +702,8 @@ def _run_sweep_dca(rows: list, db_label: str) -> None:
     print()
     print(f"{'DCA SWEEP':─^{w}}")
     print(f"  DB: {db_label}")
-    print(f"  {'tp_pct\\sl_pct':<18}", end="")
+    _hdr = "tp_pct\\sl_pct"
+    print(f"  {_hdr:<18}", end="")
     for sl in sl_pcts:
         print(f"  {'sl='+str(sl):<14}", end="")
     print()
@@ -728,7 +729,8 @@ def _run_sweep_swing(rows: list, db_label: str) -> None:
     print()
     print(f"{'SWING SWEEP':─^{w}}")
     print(f"  DB: {db_label}")
-    print(f"  {'sl_pct\\tp_fb':<18}", end="")
+    _hdr = "sl_pct\\tp_fb"
+    print(f"  {_hdr:<18}", end="")
     for tf in tp_fallbacks:
         print(f"  {'tp_fb='+str(tf):<14}", end="")
     print()
@@ -755,7 +757,8 @@ def _run_sweep_swinghold(rows: list, db_label: str) -> None:
     print()
     print(f"{'SWINGHOLD SWEEP':─^{w}}")
     print(f"  DB: {db_label}")
-    print(f"  {'sell_frac\\sl_pct':<18}", end="")
+    _hdr = "sell_frac\\sl_pct"
+    print(f"  {_hdr:<18}", end="")
     for sl in sl_pcts:
         print(f"  {'sl='+str(sl):<14}", end="")
     print()

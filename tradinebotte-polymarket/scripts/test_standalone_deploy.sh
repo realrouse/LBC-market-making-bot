@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # test_standalone_deploy.sh — Standalone (live_bot.py) integration test
 #
-# Verifies that the standalone deployment (Option A, no shared feed) works
+# Verifies that the standalone deployment (live_bot.py, no shared feed) works
 # correctly for the designated standalone user (TEST_STANDALONE_USER_IDX).
 #
 # Tested scenario:
@@ -94,6 +94,20 @@ deploy_code() {
         "$LOCAL_REPO/" "$SA_USER@$SERVER:$SRC_DIR/" 2>&1
 }
 
+# Purge the test account's rows from the shared state DB. During a run the bots PUSH
+# heartbeats to the PROD status collector, and after teardown those rows would linger as
+# DEAD and inflate every consumer's issue count (the status page, bot_status.sh). Runs
+# LOCALLY on the deployer (has /data1); the helper REFUSES any inventory/prod account, so a
+# clobbered TEST_STANDALONE_USER_IDX cannot nuke a live bot's history. Idempotent — safe to
+# call at both start (clears a prior crashed run) and teardown.
+purge_test_db_rows() {
+    local helper="$LOCAL_REPO/tradinebotte-status/purge_account_state.py"
+    [ -f "$helper" ] || return 0
+    # Run under the `claudes` group (setgid shared dir + group-writable WAL) — same rule
+    # the status collector follows so shared-DB writes keep the right group/perms.
+    sg claudes -c "umask 002; python3 '$helper' --account '$SA_USER'" 2>&1 | sed 's/^/  /' || true
+}
+
 # ─── Pre-flight ─────────────────────────────────────────────────────────────────
 section "PRE-FLIGHT"
 
@@ -133,6 +147,7 @@ run "
     rm -rf \"\${HOME}/tmp/tradinebotte-standalone-test\"
     exit 0
 " && ok "$SA_USER: cleaned up" || warn "$SA_USER: partial cleanup"
+purge_test_db_rows   # clear any residue left by a prior crashed run
 
 # ─── Phase 2: Deploy ───────────────────────────────────────────────────────────
 if [[ "$SKIP_DEPLOY" == "false" ]]; then
@@ -201,6 +216,40 @@ ERROR_COUNT=$(run "grep -ciE '\[(ERROR|CRITICAL)\]' $LOG 2>/dev/null || true")
 [[ "$ERROR_COUNT" -eq 0 ]] && ok "$SA_USER: no critical errors" \
     || err "$SA_USER: $ERROR_COUNT ERROR/CRITICAL line(s) in log"
 
+# ─── Phase 4b: Restart ─────────────────────────────────────────────────────────
+# tradinetools is imported from source via a plain .pth (no vendored copy, no dist-info).
+# The failure mode that dist-info installs caused was a broken RESTART, so prove explicitly
+# that the bot re-imports tradinetools and reconnects after a stop+start. The import check
+# runs from $INSTALL_DIR — the cwd where the same-named source `tradinetools/` dir would
+# shadow the package if the .pth path did not win.
+section "PHASE 4b — RESTART"
+info "stopping bot..."
+run "
+    PID_FILE=$INSTALL_DIR/live.pid
+    if [ -f \"\$PID_FILE\" ]; then kill \"\$(cat \"\$PID_FILE\")\" 2>/dev/null || true; rm -f \"\$PID_FILE\"; fi
+    pkill -u \$(id -u) -f '[l]ive_bot.py' 2>/dev/null || true
+    sleep 2
+"
+info "verifying tradinetools imports from source .pth (from install dir)..."
+IMPORT_OUT=$(run "cd $INSTALL_DIR && .venv/bin/python3 -c 'from tradinetools import heartbeat_loop, infra_tasks, resolve_bot_id; print(\"tt-import-ok\")'")
+if echo "$IMPORT_OUT" | grep -q "tt-import-ok"; then
+    ok "$SA_USER: tradinetools imports after restart (source .pth resolves)"
+else
+    err "$SA_USER: tradinetools import FAILED after restart"; echo "$IMPORT_OUT"
+fi
+info "restarting bot via run.sh..."
+run "cd $INSTALL_DIR && rm -f $LOG; TRADINEBOTTE_DIR=$INSTALL_DIR bash run.sh" >/dev/null
+WS2_OK=false
+for _i in $(seq 1 20); do
+    if run "grep -q 'WebSocket connected' $LOG 2>/dev/null"; then WS2_OK=true; break; fi
+    sleep 3
+done
+[[ "$WS2_OK" == "true" ]] && ok "$SA_USER: WebSocket reconnected after restart" \
+    || err "$SA_USER: WebSocket not connected after restart"
+RESTART_ERRS=$(run "grep -ciE '\[(ERROR|CRITICAL)\]' $LOG 2>/dev/null || true")
+[[ "$RESTART_ERRS" -eq 0 ]] && ok "$SA_USER: no critical errors after restart" \
+    || err "$SA_USER: $RESTART_ERRS ERROR/CRITICAL line(s) after restart"
+
 # ─── Phase 5: Teardown ─────────────────────────────────────────────────────────
 section "PHASE 5 — TEARDOWN"
 run "
@@ -218,6 +267,8 @@ run "
     exit 0
 "
 ok "$SA_USER: bot stopped + test dirs removed"
+purge_test_db_rows   # remove this run's heartbeat/deploy rows from the shared state DB
+ok "$SA_USER: shared-DB rows purged"
 
 # ─── Final report ──────────────────────────────────────────────────────────────
 ELAPSED=$(( $(date +%s) - START_TS ))

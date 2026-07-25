@@ -1150,8 +1150,8 @@ class TestOHLCVSeriesBollinger(unittest.TestCase):
         ]
         ind1 = s.compute_indicators(specs)
         ind2 = s.compute_indicators(specs)
-        for k in ind1:
-            self.assertAlmostEqual(ind1[k], ind2[k])
+        for k, v1 in ind1.items():
+            self.assertAlmostEqual(v1, ind2[k])
 
 
 class TestOHLCVSeriesVWAP(unittest.TestCase):

@@ -1,0 +1,44 @@
+# pyproject.toml — tool configuration only (no [project]/[build-system]: the repo is run
+# from source with requirements.txt, not pip-installed).
+#
+# Purpose: make the exclusion of non-source directories EXPLICIT and centralized, so no
+# directory-scanning dev tool ever wanders into the local `.venv/` (a 543 MB gitignored
+# virtualenv that lives in the working tree by the project's own `.venv` standardization).
+#
+# Note on scans: `.venv/` is already skipped by the real tooling — pytest ignores dot-dirs
+# by default, CI runs `unittest discover -s <dir>` (scoped) and `pylint $(git ls-files)`
+# (gitignore-aware). Ad-hoc repo scans should likewise use `git ls-files` / `rg` (both
+# honour .gitignore) rather than raw `find`/`grep -r`, which do NOT.
+
+[tool.pytest.ini_options]
+# The project's canonical runner is scripts/run_tests.sh (pytest per dir, so each subproject's
+# conftest.py isolation always applies); these options also make an occasional `pytest` from the
+# repo root deterministic and venv-safe.
+addopts = "-q"
+norecursedirs = [
+  ".venv", "venv", ".git", "__pycache__", ".mypy_cache", ".pytest_cache",
+  "build", "dist", "*.egg-info", "reports", "data", "node_modules",
+]
+
+[tool.ruff]
+# Future-proofing (ruff not in CI today): same non-source exclusions.
+extend-exclude = [
+  ".venv", "venv", "build", "dist", "reports", "data", "__pycache__",
+  ".mypy_cache", ".pytest_cache",
+]
+
+[tool.coverage.run]
+omit = [
+  "*/.venv/*", "*/venv/*", "*/tests/*", "*/__pycache__/*",
+  "*/analysis/*", "*/reports/*", "*/data/*",
+]
+
+[tool.mypy]
+# Light type smoke-test on the entrypoints (see .github/workflows/mypy.yml). tradinetools is
+# imported as a source package via a .pth at runtime, but from the repo root its outer dir has no
+# __init__.py, so a plain `import tradinetools` looks like a namespace with no attributes — treat it
+# as Any here rather than chasing its source (which pulls in unrelated modules).
+[[tool.mypy.overrides]]
+module = "tradinetools.*"
+follow_imports = "skip"
+ignore_missing_imports = true

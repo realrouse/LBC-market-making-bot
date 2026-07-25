@@ -5,7 +5,7 @@ Polymarket-side services (`live_bot.py`, `feed.py`, `account_bot.py`,
 log parsers and alerting rules can match on a stable token rather than on a
 fragile substring of the human-readable message.
 
-CEX-side services (`accumulation_bot.py`, `orderbook_bot.py`) use a different
+CEX-side services (the `accumulation` strategy engine, `orderbook_bot.py`) use a different
 prose-based convention described in their own sections below.
 
 Two Polymarket exceptions use visual-marker format instead of brackets (see
@@ -91,8 +91,9 @@ specific to that stream.
 
 ---
 
-### `accumulation_bot.py`
+### `accumulation` strategy engine (`strategy_engines/accumulation.py`, hosted by `live_bot.py`)
 
+Logs to the host's `live.log` (in `~/tradinebotte-accum/`) under the `accumulation` logger.
 Uses fixed-width prose lines without `[TAG]` brackets. Key grep patterns:
 
 | Pattern | Level | Description |

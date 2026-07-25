@@ -26,15 +26,36 @@ cd "$PROJECT_DIR"
 # Redirect bot I/O to ~/tmp so tests never touch /opt or write credentials.
 export TRADINEBOTTE_DIR="${HOME}/tmp/tradinebotte-test"
 
+# Isolation floor: point the status channel at a dead loopback port so no test can push a
+# heartbeat/trade to the PROD collector on 5562 and pollute the shared state DB. The cex
+# conftest.py sets the same thing, but it only covers the cex suite — this line is the
+# project-wide floor for the other subprojects (poly/status/indicators/tradinetools), which
+# have no conftest, in case any grows a pushing path. push_trade caches its socket from this
+# env on first use, so setting it here covers every test regardless of subproject.
+export TRADINEBOTTE_STATUS_ADDR="tcp://127.0.0.1:5599"
+
+# The runner uses pytest (so conftest isolation applies). pytest is a dev dep, not runtime —
+# fail with a clear pointer rather than a raw ModuleNotFoundError if this is a runtime-only venv.
+if ! "$PYTHON" -c "import pytest" 2>/dev/null; then
+    echo "ERROR: pytest not found in $PYTHON"
+    echo "Install the dev dependencies:  pip install -r requirements-dev.txt"
+    exit 1
+fi
+
 echo "Python : $PYTHON ($("$PYTHON" --version))"
 echo "Tests  : $PROJECT_DIR/tests/ + tradinebotte-*/tests/"
 echo ""
-"$PYTHON" -W ignore::ResourceWarning -m unittest discover -s tests/ -p "test_*.py" -v
+# pytest (not `unittest discover`) so the per-subproject conftest.py isolation ALWAYS applies —
+# unittest never loads conftest, which let a test's push_trade reach the prod collector. Run one
+# invocation per directory (as the old runner did) to keep each subproject's sys.path/module
+# resolution and its own conftest scoped to its own tree. pytest runs the unittest.TestCase
+# suites unchanged. -p no:cacheprovider keeps .pytest_cache out of every test dir.
+"$PYTHON" -W ignore::ResourceWarning -m pytest tests/ -p no:cacheprovider
 for _svc_tests in tradinebotte-*/tests/ tradinetools/tests/; do
     if [ -d "$_svc_tests" ] && ls "$_svc_tests"test_*.py >/dev/null 2>&1; then
         echo ""
         echo "=== Tests: $_svc_tests ==="
-        "$PYTHON" -W ignore::ResourceWarning -m unittest discover -s "$_svc_tests" -p "test_*.py" -v
+        "$PYTHON" -W ignore::ResourceWarning -m pytest "$_svc_tests" -p no:cacheprovider
     fi
 done
 
@@ -58,6 +79,32 @@ if ls "$PROJECT_DIR"/data/*.db >/dev/null 2>&1; then
 else
     echo ""
     echo "ℹ️  No data/*.db files found — multi-DB backtest skipped"
+fi
+
+# ── CEX engine fidelity harness ───────────────────────────────────
+# Drives the REAL strategy_engines (grid/swing) on replayed klines and prints the delta vs the
+# re-implemented backtest — the delta IS the drift (docs/backtest-fidelity.md §3). Runs only where
+# a kline dataset is present; data DBs are not in git, so this skips in CI, where the in-memory
+# test_backtest_engine_parity already guards the engine. Non-blocking.
+_kline_db=""
+for _db in "$PROJECT_DIR"/data/*.db; do
+    [ -e "$_db" ] || continue
+    if "$PYTHON" -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); \
+        sys.exit(0 if 'klines' in [r[0] for r in c.execute(\"SELECT name FROM sqlite_master WHERE type='table'\")] else 1)" \
+        "$_db" 2>/dev/null; then
+        _kline_db="$_db"; break
+    fi
+done
+if [ -n "$_kline_db" ]; then
+    echo ""
+    echo "=== CEX engine fidelity harness ($(basename "$_kline_db")) ==="
+    for _strat in grid swing; do
+        "$PYTHON" analysis/backtest_engine.py "$_kline_db" --strategy "$_strat" \
+            || { echo "⚠️  Engine harness ($_strat) non-blocking — check manually"; true; }
+    done
+else
+    echo ""
+    echo "ℹ️  No kline data/*.db found — CEX engine fidelity harness skipped"
 fi
 
 # ── Documentation audit ───────────────────────────────────────────

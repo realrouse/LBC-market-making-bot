@@ -124,7 +124,7 @@ class TestIndicators(unittest.TestCase):
 
     def test_bollinger_flat_series_upper_equals_mid(self):
         closes = [50_000.0] * 30
-        upper, mid, lower = bs.bollinger(closes, 20, 2.0)
+        upper, mid, _lower = bs.bollinger(closes, 20, 2.0)
         for u, m in zip(upper[19:], mid[19:]):
             self.assertAlmostEqual(u, m, places=4)
 

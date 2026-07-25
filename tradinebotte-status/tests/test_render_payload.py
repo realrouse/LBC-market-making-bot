@@ -20,14 +20,14 @@ class TestRenderPayloadSummary(unittest.TestCase):
     def test_old_heartbeat_without_pnl_total_shows_daily_as_pnl(self):
         """Old bots emit daily_pnl but no pnl_total — must not crash, daily → pnl=."""
         out = g._render_payload_summary(
-            "swing_bot", {"daily_pnl": -5.0, "capital": 100}, _NOW)
+            "grid", {"daily_pnl": -5.0, "capital": 100}, _NOW)
         self.assertIn("pnl=$-5.00", out)
         self.assertNotIn("day=", out)
         self.assertNotIn("None", out)
 
     def test_new_heartbeat_shows_cumulative_as_headline_and_daily_separately(self):
         out = g._render_payload_summary(
-            "swing_bot",
+            "grid",
             {"daily_pnl": -5.0, "pnl_total": 57.17, "trades_total": 10, "capital": 100},
             _NOW)
         self.assertIn("pnl=$+57.17", out)   # cumulative is the headline
@@ -36,30 +36,41 @@ class TestRenderPayloadSummary(unittest.TestCase):
 
     def test_grid_zero_cumulative_still_renders(self):
         out = g._render_payload_summary(
-            "grid_bot",
+            "grid",
             {"daily_pnl": 0.0, "pnl_total": 0.0, "trades_total": 0, "capital": 2000},
             _NOW)
         self.assertIn("pnl=$+0.00", out)
         self.assertNotIn("None", out)
 
 
-class TestOrderbookBotRendering(unittest.TestCase):
-    """orderbook_bot has its own payload shape (total_pnl / open_positions / last_price)."""
+class TestPnlStrategyRendering(unittest.TestCase):
+    """PnL-strategy families (polymarket/grid/swing) tooltip labels: pnl=/day=/trades= are
+    cumulative/daily/total, NOT daily/open (a pre-fix branch mislabelled them)."""
 
-    def test_payload_summary_shows_pnl_positions_price(self):
-        out = g._render_payload_summary(
-            "orderbook_bot",
-            {"total_pnl": -2.5, "open_positions": 3, "last_price": 64200.0, "bounds_ok": True},
-            _NOW)
-        self.assertIn("pnl=$-2.50", out)
-        self.assertIn("pos=3", out)
-        self.assertIn("px=$64,200", out)
+    _PAYLOAD = {"pnl_total": 64.77, "daily_pnl": 0.79, "trades_total": 513,
+                "capital": 1064.77, "open_trades": 2,
+                "last_book_ts": _NOW - 30}
+
+    def test_pnl_is_cumulative_not_daily(self):
+        out = g._render_payload_summary("grid", self._PAYLOAD, _NOW)
+        self.assertIn("pnl=$+64.77", out)   # cumulative headline, matches alltime span
+        self.assertIn("day=$+0.79", out)    # daily shown separately
+        self.assertNotIn("pnl=$+0.79", out)  # regression: daily must NOT be labelled pnl=
+
+    def test_trades_is_total_not_open(self):
+        out = g._render_payload_summary("grid", self._PAYLOAD, _NOW)
+        self.assertIn("trades=513", out)    # total, not open_trades (2)
+        self.assertIn("open=2", out)
+        self.assertIn("cap=$1065", out)
+        self.assertIn("book=", out)
         self.assertNotIn("None", out)
 
-    def test_key_metric_uses_total_pnl_with_sign(self):
-        self.assertEqual(g._key_metric("orderbook_bot", {"total_pnl": 12.3}), "+$12.30")
-        self.assertEqual(g._key_metric("orderbook_bot", {"total_pnl": -4.0}), "-$4.00")
-        self.assertEqual(g._key_metric("orderbook_bot", {}), "")
+    def test_old_heartbeat_without_pnl_total_falls_back_to_daily(self):
+        out = g._render_payload_summary(
+            "grid", {"daily_pnl": 1.5, "open_trades": 0}, _NOW)
+        self.assertIn("pnl=$+1.50", out)    # no pnl_total → daily shown as pnl=
+        self.assertNotIn("day=", out)
+        self.assertNotIn("None", out)
 
 
 class TestDataFreshness(unittest.TestCase):
@@ -85,7 +96,7 @@ class TestDataFreshness(unittest.TestCase):
 
     def test_summary_marks_stale_data_for_recording_bots(self):
         out = g._render_payload_summary(
-            "swing_bot",
+            "grid",
             {"pnl_total": 1.0, "last_book_ts": _NOW - 5,
              "last_write_ts": _NOW - (g._DATA_STALE_AFTER + 100)},
             _NOW)
@@ -95,7 +106,7 @@ class TestDataFreshness(unittest.TestCase):
 
     def test_summary_fresh_data_has_no_warning(self):
         out = g._render_payload_summary(
-            "grid_bot",
+            "grid",
             {"pnl_total": 1.0, "last_write_ts": _NOW - 30}, _NOW)
         self.assertIn("data=", out)
         self.assertNotIn("⚠", out)

@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
 """generate_status.py — Generate a full HTML status page for all tradinebotte accounts.
 
-Collects data via one sequential SSH per account (6 total):
-  - systemd service states + version stamp (all accounts)
-  - live.db trade stats (accounts 1, 2, 3, 4)
-  - live_accum.db accumulation stats (accounts 3, 4)
-  - shared state DB: heartbeats + inventory + deploys (account 1 — the status collector)
+Reads EVERYTHING from the shared state DB (no SSH). The status collector already receives
+one heartbeat per bot per interval and persists the full payload, so every value the page
+needs — liveness, capital/PnL, accumulation portfolio, grid PnL/bounds flag, version — is
+in `/data1/tradinebotte-shared/database/tradinebotte.db`:
+  - heartbeats  : per-bot liveness + payload (the single source of truth)
+  - inventory   : desired-state topology + display names
+  - deploys     : last deploy per bot (expected-vs-actual)
+  - pnl_windows : windowed PnL derived from heartbeat history
 
-No dependency on heartbeat_query.py — reads the shared state DB directly.
+No per-account SSH: the previous design read each bot's live.db/live_accum.db/grid_state
+over SSH at FIXED paths, which broke the moment the single-tree cutover renamed those
+files (live_accum.db → live_accumulation.db, ~/tradinebotte-grid/live.db → live_grid.db)
+and made the collection slow + flag phantom "service down" issues. Sourcing from the DB
+removes that whole fragile layer. The exact grid bounds/cycles and the Polymarket
+per-trade tables are the only detail not in the DB; they are omitted (a follow-up can add
+them to the heartbeat payload if wanted).
 
 Usage:
   python3 tradinebotte-status/generate_status.py > status.html
@@ -15,8 +24,7 @@ Usage:
   python3 tradinebotte-status/generate_status.py --conf ~/.tradinebotte-test.conf
 
 Config: ~/.tradinebotte-test.conf  (same file as bot_status.sh)
-  Required keys: TEST_SERVER, TEST_PORT, TEST_USERS (array), TEST_PASSWORDS (array)
-  Optional key:  TEST_REMOTE_INSTALL_DIR (default ~/tradinebotte)
+  Used only for TEST_USERS (account order + "acct-N" labels); no passwords are needed.
 """
 
 import json
@@ -24,185 +32,74 @@ import os
 import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 from html import escape
 
-
-def _fetch_btc_24h(symbol: str = "BTCUSDT") -> dict:
-    """Fetch 24h ticker stats from Binance public REST API. Returns {} on any error."""
-    url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}"
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "tradinebotte-status/1.0"})
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            return json.loads(resp.read())
-    except Exception:
-        return {}
-
-# ─── Remote data-collection snippet (runs via SSH on each account) ────────────
-
-_REMOTE_COLLECT = r"""
-import sqlite3, json, os, subprocess, glob
-
-data = {"version": "?", "services": [], "live": None, "grids": [],
-        "accum": None, "heartbeats": None}
-
-try:
-    data["version"] = open(os.path.expanduser("~/tradinebotte/version.stamp")).read().strip()
-except Exception:
-    pass
-
-try:
-    env = {**os.environ, "XDG_RUNTIME_DIR": f"/run/user/{os.getuid()}"}
-    r = subprocess.run(
-        ["systemctl", "--user", "list-units", "tradinebotte-*", "--no-legend", "--plain"],
-        capture_output=True, text=True, env=env, timeout=5,
-    )
-    for line in r.stdout.strip().splitlines():
-        parts = line.split()
-        if len(parts) >= 3:
-            unit = parts[0].replace("tradinebotte-", "").replace(".service", "")
-            if unit.startswith("account-"):
-                unit = "account_bot"
-            data["services"].append({
-                "unit":   unit,
-                "active": parts[2] == "active",
-                "sub":    parts[3] if len(parts) > 3 else "",
-            })
-except Exception:
-    pass
+# Pure DB loaders live in status_data (split out of this module); re-exported here so
+# `generate_status.<fn>` and the tests keep resolving them, and render/main call them directly.
+# Several are pure re-exports (used by the moved code / tests, not this module) — pylint can't
+# tell those from the locally-used ones, so unused-import is disabled for the block.
+from status_data import (  # noqa: E402  pylint: disable=unused-import
+    _fetch_btc_24h, _qdb, _compute_pnl_windows, _downsample, _load_pnl_series,
+    _fleet_series, _load_trades, _SERIES_MAX_POINTS, _TRADES_SQL,
+)
 
 
-def _qdb(path, queries):
-    path = os.path.expanduser(path)
-    if not os.path.exists(path):
-        return None
-    db = sqlite3.connect(path)
-    db.row_factory = sqlite3.Row
-    result = {}
-    for key, sql in queries.items():
-        try:
-            result[key] = [dict(row) for row in db.execute(sql).fetchall()]
-        except Exception:
-            result[key] = []
-    db.close()
-    return result
+# ─── Shared-DB data layer (no SSH — the collector already has everything) ─────
+
+SHARED_DB = "/data1/tradinebotte-shared/database/tradinebotte.db"
+
+_HEARTBEAT_SQL = (
+    "SELECT account, bot_name, max(ts) as last_ts, status, bounds_ok, version, payload"
+    " FROM heartbeats GROUP BY account, bot_name ORDER BY account, bot_name"
+)
+# Two forms: the full query selects strategy_type; the base one omits it. generate_status
+# reads via _qdb (raw SELECT), NOT open_db, so it never runs the strategy_type ALTER — if the
+# code ships before sync_inventory has migrated the prod DB, the full SELECT would error and
+# _qdb returns [] for that key, which would blank the whole inventory (→ the real-money bot
+# rendered as SIM, the is_live=0-for-months failure). So run both and take whichever returns
+# rows; the family derivation falls back to bot_type when strategy_type is absent.
+_INVENTORY_COLS_BASE = "account, bot_name, display_name, kind, bot_type, is_live"
+_INVENTORY_SQL = (
+    f"SELECT {_INVENTORY_COLS_BASE}, strategy_type"
+    " FROM inventory WHERE enabled=1 ORDER BY account, bot_name"
+)
+_INVENTORY_SQL_BASE = (
+    f"SELECT {_INVENTORY_COLS_BASE}"
+    " FROM inventory WHERE enabled=1 ORDER BY account, bot_name"
+)
+_DEPLOYS_SQL = (
+    "SELECT account, bot_name, max(ts) as last_ts, git_hash, result"
+    " FROM deploys GROUP BY account, bot_name"
+)
+# Durable per-fill log (real-money bots push here). Newest first; the renderer caps how many
+# rows it shows. Only live bots ever push, so every row belongs on the real-money page.
 
 
-# live.db: Polymarket bot. PnL/capital now come from the heartbeat payload (the single
-# source of truth shared with the pills + fleet headline); live.db is queried only for
-# the win-rate counts and the recent/open trade tables that payloads don't carry.
-_LIVE_QUERIES = {
-    "totals": (
-        "SELECT count(*) t,"
-        " sum(CASE WHEN outcome='WIN'  THEN 1 ELSE 0 END) w,"
-        " sum(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) l,"
-        " sum(CASE WHEN resolved=0    THEN 1 ELSE 0 END) o"
-        " FROM trades"
-    ),
-    "recent": (
-        "SELECT id, entry_ts_ms/1000 entry_ts, direction,"
-        " outcome result, entry_price, pnl_net pnl, capital_after capital,"
-        " substr(question,1,42) q"
-        " FROM trades WHERE resolved=1 ORDER BY id DESC LIMIT 8"
-    ),
-    "open": (
-        "SELECT id, entry_ts_ms/1000 entry_ts, direction, entry_price,"
-        " substr(question,1,42) q FROM trades WHERE resolved=0"
-    ),
-}
-data["live"] = _qdb("~/tradinebotte/live.db", _LIVE_QUERIES)
+def _build_accounts_from_db(users: list, heartbeats: list) -> list:
+    """One card-data dict per account (aligned with `users`), derived entirely from the
+    shared-DB heartbeats — the replacement for the old per-account SSH `_collect_account`.
 
-# Grid bots keep aggregate state (bounds / cycles / level fills / halted) in grid_state
-# + grid_levels rather than a per-trade log, so the Polymarket trade queries above find
-# nothing for them. Collect that aggregate from every candidate db: the standard path
-# (an account running only a grid) and any alternate data dir
-# (TRADINEBOTTE_DIR=~/tradinebotte-grid). The heartbeat carries only PnL — bounds, level
-# fills, and the halted flag are otherwise absent from the page.
-_GRID_QUERIES = {
-    "state": (
-        "SELECT symbol, grid_lower, grid_upper, grid_step, order_size_usdt,"
-        " total_cycles, total_profit_usd, halted FROM grid_state LIMIT 1"
-    ),
-    "levels": "SELECT status, count(*) n FROM grid_levels GROUP BY status",
-}
-data["grids"] = []
-for _p in [os.path.expanduser("~/tradinebotte/live.db")] + sorted(
-        glob.glob(os.path.expanduser("~/tradinebotte-*/live.db"))):
-    _g = _qdb(_p, _GRID_QUERIES)
-    if _g and _g.get("state"):
-        data["grids"].append({"dir": os.path.basename(os.path.dirname(_p)), **_g})
-
-# live_accum.db: accumulation bot — table accum_trades
-data["accum"] = _qdb("~/tradinebotte/live_accum.db", {
-    "totals": "SELECT count(*) t FROM accum_trades",
-    "portfolio": (
-        "SELECT holdings_after holdings_btc, free_usdt_after free_usdt,"
-        " avg_entry_after avg_entry FROM accum_trades ORDER BY id DESC LIMIT 1"
-    ),
-})
-
-# Heartbeats now live in the shared state DB (read on the collector account, account-1).
-data["heartbeats"] = _qdb("/data1/tradinebotte-shared/database/tradinebotte.db", {
-    "rows": (
-        "SELECT account, bot_name, max(ts) as last_ts,"
-        " status, bounds_ok, version, payload"
-        " FROM heartbeats GROUP BY account, bot_name ORDER BY account, bot_name"
-    ),
-})
-
-# Desired-state inventory + latest deploy per bot (same shared DB, account-1 only).
-data["inventory"] = _qdb("/data1/tradinebotte-shared/database/tradinebotte.db", {
-    "rows": (
-        "SELECT account, bot_name, kind, bot_type, is_live"
-        " FROM inventory WHERE enabled=1 ORDER BY account, bot_name"
-    ),
-})
-data["deploys"] = _qdb("/data1/tradinebotte-shared/database/tradinebotte.db", {
-    "rows": (
-        "SELECT account, bot_name, max(ts) as last_ts, git_hash, result"
-        " FROM deploys GROUP BY account, bot_name"
-    ),
-})
-
-print(json.dumps(data))
-"""
-
-# ─── SSH helper ──────────────────────────────────────────────────────────────
-
-def _ssh(user: str, password: str, server: str, port: int, cmd: str) -> tuple[str, int]:
-    env = {**os.environ, "SSHPASS": password}
-    result = subprocess.run(
-        [
-            "/usr/bin/sshpass", "-e",
-            "ssh",
-            "-o", "StrictHostKeyChecking=yes",
-            "-o", "ConnectTimeout=15",
-            "-o", "BatchMode=no",
-            "-o", "PreferredAuthentications=password",
-            "-o", "ServerAliveInterval=10",
-            "-o", "ServerAliveCountMax=3",
-            "-p", str(port),
-            f"{user}@{server}",
-            cmd,
-        ],
-        capture_output=True, text=True, env=env, check=False,
-    )
-    return result.stdout, result.returncode
-
-
-def _collect_account(user: str, password: str, server: str, port: int) -> dict:
-    cmd = f"python3 - <<'__PYEOF__'\n{_REMOTE_COLLECT}\n__PYEOF__"
-    stdout, _ = _ssh(user, password, server, port, cmd)
-    if not stdout.strip():
-        return {"version": "?", "services": [], "live": None, "accum": None,
-                "heartbeats": None, "error": "unreachable"}
-    try:
-        return json.loads(stdout.strip())
-    except json.JSONDecodeError:
-        return {"version": "?", "services": [], "live": None, "accum": None,
-                "heartbeats": None, "error": "parse_error"}
+    `version` is the account's newest bot payload version. `services` is intentionally
+    empty: heartbeats are the single liveness source (the per-bot section + family view
+    already show it), so the header no longer paints phantom systemd dots (a stopped unit
+    goes STALE/DEAD in its heartbeat). The grid/accumulation detail lines are derived in
+    `_render_account_card` straight from each bot's payload, so nothing else is needed here.
+    """
+    by_acct: dict = {}
+    for h in heartbeats:
+        by_acct.setdefault(h.get("account"), []).append(h)
+    out = []
+    for u in users:
+        rows = by_acct.get(u, [])
+        newest = max(rows, key=lambda r: r.get("last_ts", 0), default=None)
+        ver = "?"
+        if newest:
+            ver = ((newest.get("payload") or {}).get("version")
+                   or newest.get("version") or "?")
+        out.append({"version": ver, "services": [], "live": None,
+                    "grids": [], "accum": None, "error": None})
+    return out
 
 
 # ─── Heartbeat classification ────────────────────────────────────────────────
@@ -295,6 +192,14 @@ def _load_conf(path: str) -> dict:
 
 
 # ─── HTML rendering ──────────────────────────────────────────────────────────
+
+# Inline copy of graphics/favicon.svg (base64) — self-contained so the
+# generated single-file HTML needs no companion asset deployed alongside it.
+# pylint: disable=line-too-long
+_FAVICON_B64 = (
+    "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+CiAgPHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTQiIGZpbGw9IiMxNjE4MjYiPjwvcmVjdD4KICA8ZyBmaWxsPSJub25lIiBzdHJva2U9IiM5MTg0ZDkiIHN0cm9rZS13aWR0aD0iMi42IiBzdHJva2UtbGluZWNhcD0icm91bmQiPgogICAgPGxpbmUgeDE9IjIwIiB5MT0iNDQiIHgyPSIyMCIgeTI9IjIwIj48L2xpbmU+CiAgICA8bGluZSB4MT0iMjAiIHkxPSIyMCIgeDI9IjQ0IiB5Mj0iNDQiPjwvbGluZT4KICAgIDxsaW5lIHgxPSI0NCIgeTE9IjQ0IiB4Mj0iNDQiIHkyPSIyMCI+PC9saW5lPgogIDwvZz4KICA8Y2lyY2xlIGN4PSIyMCIgY3k9IjIwIiByPSI0LjUiIGZpbGw9IiMxNjE4MjYiIHN0cm9rZT0iIzkxODRkOSIgc3Ryb2tlLXdpZHRoPSIyLjYiPjwvY2lyY2xlPgogIDxjaXJjbGUgY3g9IjIwIiBjeT0iNDQiIHI9IjQuNSIgZmlsbD0iIzE2MTgyNiIgc3Ryb2tlPSIjOTE4NGQ5IiBzdHJva2Utd2lkdGg9IjIuNiI+PC9jaXJjbGU+CiAgPGNpcmNsZSBjeD0iNDQiIGN5PSIyMCIgcj0iNC41IiBmaWxsPSIjMTYxODI2IiBzdHJva2U9IiM5MTg0ZDkiIHN0cm9rZS13aWR0aD0iMi42Ij48L2NpcmNsZT4KICA8Y2lyY2xlIGN4PSI0NCIgY3k9IjQ0IiByPSI1LjUiIGZpbGw9IiM5MTg0ZDkiPjwvY2lyY2xlPgo8L3N2Zz4="
+)
+# pylint: enable=line-too-long
 
 _CSS = """
 *{box-sizing:border-box;margin:0;padding:0}
@@ -419,7 +324,7 @@ details summary:hover{color:#c9d1d9}
 .pnl-pos{color:#3fb950}.pnl-neg{color:#f85149}
 
 /* ── BTC price in header ──────────────────────────────── */
-.btc-price{font-size:.78em;color:#8b949e;margin-left:auto;display:flex;
+.btc-price{font-size:.78em;color:#8b949e;display:flex;
             align-items:center;gap:6px;white-space:nowrap}
 .btc-price .price{color:#e6a817;font-weight:700;font-size:1.05em}
 .btc-price .chg.up{color:#3fb950}.btc-price .chg.dn{color:#f85149}
@@ -427,25 +332,267 @@ details summary:hover{color:#c9d1d9}
 /* ── Open trade badges ────────────────────────────────── */
 .open-trades{margin:4px 0;font-size:.8em}
 
+/* ── Header right-hand group (BTC · timestamp · language switch, top-right) ── */
+.h1-right{margin-left:auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+
+/* ── Language switch (one .langbox per language, toggled by a body class) ── */
+.langbox{display:none}
+.lang-sel{display:inline-flex;gap:4px;align-self:center}
+.lbtn{background:#161b22;border:1px solid #30363d;color:#8b949e;border-radius:5px;
+      padding:3px 9px;font:inherit;font-size:.6em;cursor:pointer;transition:all .12s}
+.lbtn:hover{border-color:#58a6ff55;color:#c9d1d9}
+
+/* ── Window toggle (daily / weekly / monthly / alltime) ─ */
+.win-toggle{display:flex;align-items:center;gap:6px;margin:14px 0 4px;flex-wrap:wrap}
+.win-toggle .wt-lbl{color:#8b949e;font-size:.78em;text-transform:uppercase;letter-spacing:1px}
+.wbtn{background:#161b22;border:1px solid #30363d;color:#8b949e;border-radius:6px;
+      padding:5px 13px;font:inherit;font-size:.82em;cursor:pointer;transition:all .12s}
+.wbtn:hover{border-color:#58a6ff55;color:#c9d1d9}
+body.win-daily .wbtn-daily,body.win-weekly .wbtn-weekly,
+body.win-monthly .wbtn-monthly,body.win-alltime .wbtn-alltime{
+  background:#1f6feb;border-color:#1f6feb;color:#fff;font-weight:600}
+/* Windowed PnL values: every value is rendered as 4 spans; only the active shows. */
+.pw{display:none}
+body.win-daily .pw-daily,body.win-weekly .pw-weekly,
+body.win-monthly .pw-monthly,body.win-alltime .pw-alltime{display:inline}
+.rst{color:#d29922;cursor:help;font-size:.9em}
+
+/* ── Bot family sections (primary "by bot" view) ──────── */
+.families{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;
+          margin-top:8px;align-items:start}
+@media (max-width:700px){.families{grid-template-columns:1fr}}
+.fam{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px 14px}
+.fam-head{display:flex;align-items:center;gap:10px;margin-bottom:6px;
+          border-bottom:1px solid #21262d;padding-bottom:6px;flex-wrap:wrap}
+.fam-name{font-weight:700;color:#c9d1d9;font-size:.95em}
+.fam-count{font-size:.78em;font-weight:600}
+.fam-pnl{margin-left:auto;font-size:1.05em;font-weight:700}
+.fam-row{display:flex;align-items:center;gap:7px;padding:4px 2px;
+         border-bottom:1px solid #1c2029;font-size:.83em}
+.fam-row:last-child{border-bottom:none}
+.fam-row:hover{background:#1c2029;border-radius:4px}
+.fam-acct{color:#8b949e;min-width:118px;flex-shrink:0}
+.fam-val{font-weight:700;min-width:82px}
+.fam-val.stale-val{opacity:.45}
+.fam-cap{color:#8b949e;font-size:.9em;margin-left:8px}
+.fam-detail{color:#8b949e;font-size:.92em;flex:1;min-width:0;overflow:hidden;
+            text-overflow:ellipsis;white-space:nowrap}
+
 /* ── Footer ───────────────────────────────────────────── */
 .footer{margin-top:28px;font-size:.72em;color:#484f58;border-top:1px solid #21262d;
          padding-top:10px}
 .no-data{color:#484f58;font-style:italic;font-size:.82em;padding:4px 0}
+
+/* ── Real-money (live) page ───────────────────────────── */
+.nav-link{font-size:.62em;font-weight:600;color:#d29922;text-decoration:none;
+          border:1px solid #d29922;border-radius:6px;padding:2px 8px;margin-right:10px;
+          vertical-align:middle}
+.nav-link:hover{background:#d29922;color:#0d1117}
+.live-panel{margin:14px 0 26px;padding:14px 16px;border:1px solid #30363d;border-radius:10px;
+            background:#0d1117}
+.live-panel h3{margin:0 0 10px;font-size:1.02em}
+.dim{color:#8b949e;font-size:.82em;font-weight:400}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.82em;color:#8b949e;
+      max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;
+      vertical-align:bottom}
+.badge.live-b{background:#238636;color:#fff;border-radius:5px;padding:1px 7px;font-size:.9em}
+table.trades{width:100%;border-collapse:collapse;margin-top:10px;font-size:.82em}
+table.trades th{text-align:left;color:#8b949e;font-weight:600;border-bottom:1px solid #21262d;
+                padding:5px 8px;white-space:nowrap}
+table.trades td{padding:5px 8px;border-bottom:1px solid #161b22;white-space:nowrap}
+table.trades tr:hover td{background:#161b22}
+/* Freshness stamp above the open-orders table (title is on the toggle button) */
+.oo-asof{margin:8px 0 4px;font-size:.8em}
+/* An open-orders table sourced from a STALE/DEAD heartbeat: the snapshot may be out of date */
+table.trades.stale-tbl{opacity:.5}
+
+/* ── Open-orders / executed-trades selector (mirrors the chart PnL/Assets toggle) ── */
+.live-tables{margin-top:14px}
+.lt-toggle{display:inline-flex;gap:2px;margin-bottom:2px}
+.lt-btn{background:#161b22;border:1px solid #30363d;color:#8b949e;border-radius:5px;
+        padding:3px 11px;font:inherit;font-size:.8em;cursor:pointer;transition:all .12s}
+.lt-btn:hover{border-color:#58a6ff55;color:#c9d1d9}
+.live-tables[data-tab='open'] .lt-open-btn,
+.live-tables[data-tab='exec'] .lt-exec-btn{background:#1f6feb;border-color:#1f6feb;
+        color:#fff;font-weight:600}
+.lt-pane{display:none}
+.live-tables[data-tab='open'] .lt-pane-open{display:block}
+.live-tables[data-tab='exec'] .lt-pane-exec{display:block}
+
+/* ── Evolution charts (PnL / asset value over time) ───── */
+.tbchart{margin:10px 0;background:#0d1117;border:1px solid #21262d;border-radius:8px;padding:8px 10px}
+.tbchart.mini{margin:6px 0 2px;padding:6px 8px}
+.tbc-head{display:flex;align-items:center;gap:10px;font-size:.8em;margin-bottom:4px}
+.tbc-title{color:#8b949e;font-weight:600}
+.tbc-toggle{display:inline-flex;gap:2px}
+.tbc-btn{background:#161b22;border:1px solid #30363d;color:#8b949e;border-radius:5px;
+         padding:1px 7px;font-size:.9em;cursor:pointer}
+.tbc-btn.active{color:#fff}
+.tbc-btn.tbc-pnl.active{background:#1f6feb;border-color:#1f6feb}
+.tbc-btn.tbc-asset.active{background:#9e6a1b;border-color:#9e6a1b}
+.tbc-readout{margin-left:auto;color:#c9d1d9;font-variant-numeric:tabular-nums}
+.tbc-readout .t{color:#6e7681;margin-right:6px}
+.tbc-plot{position:relative;width:100%}
+.tbchart svg{display:block;width:100%;height:110px}
+.tbchart.mini svg{height:60px}
+.tbc-grid{stroke:#21262d;stroke-width:1}
+.tbc-base{stroke:#484f58;stroke-width:1;stroke-dasharray:3 3}
+.tbc-line{fill:none;stroke-width:2;vector-effect:non-scaling-stroke}
+.tbc-cross{stroke:#6e7681;stroke-width:1;vector-effect:non-scaling-stroke;visibility:hidden}
+.tbc-tip{position:absolute;pointer-events:none;background:#161b22;border:1px solid #30363d;
+         border-radius:6px;padding:3px 7px;font-size:.74em;color:#c9d1d9;white-space:nowrap;
+         transform:translate(-50%,-115%);visibility:hidden;z-index:5;font-variant-numeric:tabular-nums}
+.tbc-tip .v{font-weight:600}
+.tbc-empty{color:#484f58;font-size:.78em;font-style:italic;padding:16px 4px}
 """
 
-_ACCOUNT_LABELS = [
-    "acct-1 [poly+cex+status]",
-    "acct-2 [poly]",
-    "acct-3 [poly+accum]",
-    "acct-4 [poly+accum]",
-    "acct-5 [swing]",
-    "acct-6 [grid-mexc-sim]",
-]
+# Evolution-chart client script. A PLAIN string (not the f-string body) so its many braces stay
+# literal — the page interpolates it with {_CHART_JS} and the series JSON separately. Hand-rolled,
+# zero external deps: one <svg> line + area per chart, PnL⇄Asset toggle, crosshair+tooltip hover,
+# and range clipping synced to the page's daily/weekly/monthly/alltime window (setWin body class).
+_CHART_JS = r"""
+var TBWIN={daily:86400,weekly:604800,monthly:2592000,alltime:1e12};
+function tbCurWin(){var m=document.body.className.match(/win-(\w+)/);return TBWIN[m?m[1]:'alltime']||1e12;}
+function tbFmt(metric,v){var s=v<0?'-':(metric==='pnl'?'+':'');return s+'$'+Math.abs(v).toFixed(2);}
+function tbDate(sec){var d=new Date(sec*1000);function p(n){return(n<10?'0':'')+n;}
+  return p(d.getUTCMonth()+1)+'/'+p(d.getUTCDate())+' '+p(d.getUTCHours())+':'+p(d.getUTCMinutes());}
+function tbRender(el){
+  var s=window.TBSERIES&&TBSERIES[el.getAttribute('data-key')];
+  var metric=el.getAttribute('data-metric')||'pnl';
+  var plot=el.querySelector('.tbc-plot'),read=el.querySelector('.tbc-readout');
+  var empty=el.getAttribute('data-empty')||'—';
+  if(!s||!s.ts||!s.ts.length){plot.innerHTML="<div class='tbc-empty'>"+empty+"</div>";if(read)read.textContent='';return;}
+  var now=s.ts[s.ts.length-1],cut=now-tbCurWin(),T=[],V=[],col=s[metric]||[];
+  for(var i=0;i<s.ts.length;i++){var v=col[i];if(s.ts[i]>=cut&&v!=null){T.push(s.ts[i]);V.push(v);}}
+  if(V.length<2){plot.innerHTML="<div class='tbc-empty'>"+empty+"</div>";if(read)read.textContent='';return;}
+  var W=600,H=el.classList.contains('mini')?60:110,PX=3,PY=8;
+  var t0=T[0],t1=T[T.length-1],vmin=Math.min.apply(null,V),vmax=Math.max.apply(null,V);
+  if(metric==='pnl'){vmin=Math.min(vmin,0);vmax=Math.max(vmax,0);}
+  var vspan=(vmax-vmin)||1,tspan=(t1-t0)||1,color=metric==='pnl'?'#58a6ff':'#d29922';
+  function X(t){return PX+(t-t0)/tspan*(W-2*PX);}
+  function Y(v){return PY+(1-(v-vmin)/vspan)*(H-2*PY);}
+  var xs=[],d='';
+  for(var i=0;i<T.length;i++){var x=X(T[i]);xs.push(x);d+=(i?'L':'M')+x.toFixed(1)+','+Y(V[i]).toFixed(1)+' ';}
+  var baseY=Y(metric==='pnl'?0:vmin);
+  var area='M'+xs[0].toFixed(1)+','+baseY.toFixed(1)+' '+d.slice(1)+'L'+xs[xs.length-1].toFixed(1)+','+baseY.toFixed(1)+'Z';
+  var grid='';for(var g=1;g<3;g++){var gy=PY+g/3*(H-2*PY);grid+="<line class='tbc-grid' x1='0' y1='"+gy.toFixed(1)+"' x2='"+W+"' y2='"+gy.toFixed(1)+"'/>";}
+  var base=metric==='pnl'?"<line class='tbc-base' x1='0' y1='"+baseY.toFixed(1)+"' x2='"+W+"' y2='"+baseY.toFixed(1)+"'/>":'';
+  var uid='g'+Math.random().toString(36).slice(2,7);
+  var svg="<svg viewBox='0 0 "+W+" "+H+"' preserveAspectRatio='none'>"
+    +"<defs><linearGradient id='"+uid+"' x1='0' x2='0' y1='0' y2='1'>"
+    +"<stop offset='0' stop-color='"+color+"' stop-opacity='0.28'/><stop offset='1' stop-color='"+color+"' stop-opacity='0'/></linearGradient></defs>"
+    +grid+base+"<path d='"+area+"' fill='url(#"+uid+")' stroke='none'/>"
+    +"<path class='tbc-line' d='"+d+"' stroke='"+color+"'/>"
+    +"<line class='tbc-cross' x1='0' y1='0' x2='0' y2='"+H+"'/></svg>"
+    +"<div class='tbc-tip'></div>";
+  plot.innerHTML=svg;
+  if(read)read.innerHTML="<span class='t'>"+(metric==='pnl'?'PnL':'$')+"</span>"+tbFmt(metric,V[V.length-1]);
+  var cross=plot.querySelector('.tbc-cross'),tip=plot.querySelector('.tbc-tip'),svgEl=plot.querySelector('svg');
+  function move(ev){
+    var r=svgEl.getBoundingClientRect(),cx=ev.touches?ev.touches[0].clientX:ev.clientX;
+    var vx=(cx-r.left)/r.width*W,best=0,bd=1e9;
+    for(var i=0;i<xs.length;i++){var dd=Math.abs(xs[i]-vx);if(dd<bd){bd=dd;best=i;}}
+    cross.setAttribute('x1',xs[best]);cross.setAttribute('x2',xs[best]);cross.style.visibility='visible';
+    tip.style.visibility='visible';tip.style.left=(xs[best]/W*100)+'%';tip.style.top=(Y(V[best])/H*100)+'%';
+    tip.innerHTML="<span class='v'>"+tbFmt(metric,V[best])+"</span> · "+tbDate(T[best]);
+  }
+  function leave(){cross.style.visibility='hidden';tip.style.visibility='hidden';}
+  svgEl.addEventListener('mousemove',move);svgEl.addEventListener('mouseleave',leave);
+  svgEl.addEventListener('touchmove',move);svgEl.addEventListener('touchend',leave);
+}
+function tbToggle(btn,metric){
+  var el=btn.closest('.tbchart');el.setAttribute('data-metric',metric);
+  var bs=el.querySelectorAll('.tbc-btn');for(var i=0;i<bs.length;i++)bs[i].classList.remove('active');
+  btn.classList.add('active');tbRender(el);
+}
+function tbRenderAll(){var els=document.querySelectorAll('.tbchart');
+  for(var i=0;i<els.length;i++){if(els[i].offsetParent!==null)tbRender(els[i]);}}
+"""
 
-# Bots running with REAL money — all others default to SIM.
-# Key: (acct_short_label, bot_name) — acct_short = first word of _ACCOUNT_LABELS entry.
-# Add an entry here when a bot receives real credentials on the remote.
-_LIVE_BOTS: set[tuple[str, str]] = set()
+# ─── i18n ────────────────────────────────────────────────────────────────────
+# External per-language dictionaries in i18n/<lang>.json. Add a file to add a language;
+# the selector top-right lists whatever is present. The body is rendered once per language
+# (with _CUR_LANG switched) and the versions are toggled client-side via a body class, so
+# t() stays a plain lookup and every string is naturally contiguous (no per-token spans).
+_I18N_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "i18n")
+
+
+def _load_i18n() -> dict:
+    langs: dict[str, dict] = {}
+    try:
+        for fn in sorted(os.listdir(_I18N_DIR)):
+            if fn.endswith(".json"):
+                with open(os.path.join(_I18N_DIR, fn), encoding="utf-8") as f:
+                    langs[fn[:-5]] = json.load(f)
+    except FileNotFoundError:
+        pass
+    return langs
+
+
+_I18N = _load_i18n()
+_DEFAULT_LANG = os.environ.get("TRADINEBOTTE_STATUS_LANG", "en")
+_CUR_LANG = _DEFAULT_LANG if _DEFAULT_LANG in _I18N else ("en" if "en" in _I18N else
+            (next(iter(_I18N), "en")))
+
+
+def _langs_ordered() -> list[str]:
+    """Available languages, default first."""
+    if not _I18N:
+        return ["en"]
+    rest = sorted(l for l in _I18N if l != _CUR_LANG)
+    return ([_CUR_LANG] if _CUR_LANG in _I18N else []) + rest
+
+
+def t(key: str, **kw) -> str:
+    """Translate `key` for the current language (_CUR_LANG). Returns plain text; falls back
+    to English then to the key itself so a missing string never crashes the page."""
+    d = _I18N.get(_CUR_LANG) or {}
+    s = d.get(key)
+    if s is None:
+        s = (_I18N.get("en") or {}).get(key, key)
+    if not kw:
+        return s
+    # A stray/misnamed brace in a translation must degrade, never blank the whole page.
+    try:
+        return s.format(**kw)
+    except (KeyError, IndexError, ValueError):
+        return s
+
+
+# Account labels + the real-money (_LIVE_BOTS) set are DERIVED from inventory.toml (the
+# single source of truth), not hand-maintained here. Fail-soft: if the inventory can't be
+# read/parsed, degrade to plain acct-N labels + no live bots so the 60s status page never
+# crashes over a label. The account COUNT/ORDER stays anchored to the collected users (the
+# min() clamp in main()); inventory only enriches label text + the is_live flag.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_inv = None
+try:
+    import inventory_labels as _inv  # noqa: E402
+    _INV_ROWS = _inv.load_rows()
+    _family_of = _inv.family_of      # canonical bot_type/bot_name → family key
+except Exception:
+    _INV_ROWS = []
+    def _family_of(bot_type: str = "", bot_name: str = ""):  # fail-soft: no derivation
+        return None
+
+if not _INV_ROWS and not (_inv and os.path.isfile(_inv.DEFAULT_INVENTORY)):
+    # inventory.toml is local/git-ignored (see docs/going-live.md) — a missing file here means
+    # the fail-soft path below silently drops every LIVE badge, incl. real-money bots. Loud on
+    # purpose: this runs on every 60s regen, so a quiet skip would hide it indefinitely.
+    _inv_path = _inv.DEFAULT_INVENTORY if _inv else "inventory.toml"
+    print(f"WARNING: {_inv_path} not found — status page has NO account labels "
+          f"and NO real-money LIVE badges until it exists. Fix: cp inventory.toml.example "
+          f"inventory.toml", file=sys.stderr)
+
+if _INV_ROWS:
+    _ACCOUNT_LABELS = _inv.account_labels(_INV_ROWS)
+    # Bots running with REAL money (is_live=true) — all others default to SIM. Keyed
+    # (acct_short, bot_name) to match _mode_badge. Empty today (all sim); auto-tracks
+    # inventory the day a bot goes live.
+    _LIVE_BOTS: set[tuple[str, str]] = _inv.live_bots(_INV_ROWS)
+else:
+    _ACCOUNT_LABELS = [f"acct-{i + 1}" for i in range(12)]   # fail-soft plain labels
+    _LIVE_BOTS = set()
 
 
 def _fmt_pnl(v) -> str:
@@ -459,7 +606,9 @@ def _fmt_pnl(v) -> str:
 def _fmt_ts(ts) -> str:
     if not ts:
         return "—"
-    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%H:%M:%S")
+    # Full UTC date + time for the trade tables — a bare HH:MM:SS is ambiguous across days
+    # (the live per-trade log spans weeks).
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _wr(w: int, l: int) -> str:
@@ -471,93 +620,75 @@ def _wr(w: int, l: int) -> str:
     return f"<span class='{cls}'>{pct:.1f}%</span>"
 
 
-def _render_payload_summary(bot_name: str, payload: dict, now: int) -> str:
+def _render_payload_summary(family: str, payload: dict, now: int) -> str:
+    """Per-bot heartbeat summary, keyed on the canonical family (strategy or infra category),
+    NOT the generated bot_id — the id is unique per bot and matches no branch."""
     if not payload:
         return "—"
 
     def _ago(ts):
         if not ts:
-            return "never"
+            return t("ago_never")
         age = now - int(ts)
         if age < 120:
-            return f"{age}s ago"
+            return t("ago_s", n=age)
         if age < 7200:
-            return f"{age // 60}min ago"
+            return t("ago_min", n=age // 60)
         if age < 172800:
-            return f"{age // 3600}h ago"
-        return f"{age // 86400}d ago"
+            return t("ago_h", n=age // 3600)
+        return t("ago_d", n=age // 86400)
 
     parts = []
-    if bot_name in ("live_bot", "grid_bot", "swing_bot"):
-        # Cumulative realized PnL is the headline; daily shown alongside.
+    if family in ("polymarket", "grid", "swing"):
+        # PnL strategies: cumulative realized PnL is the headline; daily shown alongside.
         # Fall back to daily_pnl for heartbeats from bots predating pnl_total.
         pt = payload.get("pnl_total")
         if pt is not None:
-            parts.append(f"pnl=${pt:+.2f}")
+            parts.append(f"{t('k_pnl')}${pt:+.2f}")
         dp = payload.get("daily_pnl")
         if dp is not None:
             # When pnl_total is present it is the headline (pnl=); daily becomes day=.
             # For old heartbeats without pnl_total, daily is shown as pnl=.
-            parts.append(f"day=${dp:+.2f}" if pt is not None else f"pnl=${dp:+.2f}")
+            parts.append(f"{t('k_day')}${dp:+.2f}" if pt is not None else f"{t('k_pnl')}${dp:+.2f}")
         tt = payload.get("trades_total")
         if tt is not None:
-            parts.append(f"trades={tt}")
+            parts.append(f"{t('k_trades')}{tt}")
         cap = payload.get("capital")
         if cap is not None:
-            parts.append(f"cap=${cap:.0f}")
+            parts.append(f"{t('k_cap')}${cap:.0f}")
         ot = payload.get("open_trades")
         if ot is not None:
-            parts.append(f"open={ot}")
+            parts.append(f"{t('k_open')}{ot}")
         ts = payload.get("last_book_ts")
         if ts:
-            parts.append(f"book={_ago(ts)}")
-    elif bot_name == "account_bot":
-        pnl = payload.get("daily_pnl")
-        if pnl is not None:
-            parts.append(f"pnl=${pnl:+.2f}")
-        ot = payload.get("open_trades")
-        if ot is not None:
-            parts.append(f"trades={ot}")
-        ts = payload.get("last_feed_msg_ts")
-        if ts:
-            parts.append(f"feed={_ago(ts)}")
-    elif bot_name == "accumulation_bot":
+            parts.append(f"{t('k_book')}{_ago(ts)}")
+    elif family == "accumulation":
         h = payload.get("holdings_btc")
         if h is not None:
-            parts.append(f"btc={h:.4f}")
+            parts.append(f"{t('k_btc')}{h:.4f}")
         u = payload.get("free_usdt")
         if u is not None:
-            parts.append(f"usdt=${u:.0f}")
+            parts.append(f"{t('k_usdt')}${u:.0f}")
         e = payload.get("avg_entry")
         if e is not None:
-            parts.append(f"entry={e:.0f}")
+            parts.append(f"{t('k_entry')}{e:.0f}")
         r = payload.get("total_realized")
         if r is not None:
-            parts.append(f"pnl=${r:+.2f}")
-    elif bot_name == "orderbook_bot":
-        tp = payload.get("total_pnl")
-        if tp is not None:
-            parts.append(f"pnl=${tp:+.2f}")
-        op = payload.get("open_positions")
-        if op is not None:
-            parts.append(f"pos={op}")
-        lp = payload.get("last_price")
-        if lp:
-            parts.append(f"px=${lp:,.0f}")
-    elif bot_name == "feed":
+            parts.append(f"{t('k_pnl')}${r:+.2f}")
+    elif family in ("feed", "feed5m", "cex_feed"):
         ws = payload.get("ws_connected")
         if ws is not None:
-            parts.append("ws=✓" if ws else "ws=✗")
+            parts.append(t("k_ws_on") if ws else t("k_ws_off"))
         mt = payload.get("msgs_total")
         if mt is not None:
-            parts.append(f"msgs={mt}")
+            parts.append(f"{t('k_msgs')}{mt}")
         ts = payload.get("last_book_ts")
         if ts:
-            parts.append(f"book={_ago(ts)}")
-    elif bot_name == "indicators":
+            parts.append(f"{t('k_book')}{_ago(ts)}")
+    elif family == "indicators":
         ts = payload.get("last_pub_ts")
         if ts:
-            parts.append(f"pub={_ago(ts)}")
+            parts.append(f"{t('k_pub')}{_ago(ts)}")
 
     # Data-recording freshness — uniform across every family that persists a
     # time-series table (snapshots / accum_snapshots / …). ⚠ when the table has
@@ -565,106 +696,184 @@ def _render_payload_summary(bot_name: str, payload: dict, now: int) -> str:
     wts = payload.get("last_write_ts")
     if wts is not None:
         mark = " ⚠" if now - int(wts) > _DATA_STALE_AFTER else ""
-        parts.append(f"data={_ago(wts)}{mark}")
+        parts.append(f"{t('k_data')}{_ago(wts)}{mark}")
 
     return " · ".join(parts) if parts else "—"
 
 
 def _mode_badge(acct_short: str, bot_name: str) -> str:
     if (acct_short, bot_name) in _LIVE_BOTS:
-        return "<span class='badge live-mode'>LIVE</span>"
-    return "<span class='badge sim'>SIM</span>"
+        return f"<span class='badge live-mode'>{t('badge_live')}</span>"
+    return f"<span class='badge sim'>{t('badge_sim')}</span>"
 
 
-def _key_metric(bot_name: str, payload: dict) -> str:
-    """Return the single most important display value for a bot heartbeat pill."""
-    if bot_name in ("live_bot", "grid_bot", "swing_bot", "account_bot"):
+_FLAG_KEYS = {"ALIVE": "badge_alive", "STALE": "badge_stale", "DEAD": "badge_dead",
+              "MISSING": "flag_missing"}
+
+
+def _flag_label(flag: str) -> str:
+    """Translated status-badge text; the CSS class still uses the English flag.lower()."""
+    return t(_FLAG_KEYS[flag]) if flag in _FLAG_KEYS else flag
+
+
+def _key_metric(family: str, payload: dict) -> str:
+    """Return the single most important display value for a bot heartbeat pill, keyed on the
+    canonical family (strategy/infra category), NOT the generated bot_id."""
+    if family in ("polymarket", "grid", "swing"):
         pnl = payload.get("daily_pnl")
         if pnl is not None:
             sign = "+" if pnl >= 0 else "-"
             return f"{sign}${abs(pnl):.2f}"
-    elif bot_name == "accumulation_bot":
+    elif family == "accumulation":
         btc = payload.get("holdings_btc")
         if btc is not None:
             return f"{btc:.4f} BTC"
-    elif bot_name == "orderbook_bot":
-        # No daily window in the payload; cumulative realized PnL is the headline.
-        pnl = payload.get("total_pnl")
-        if pnl is not None:
-            sign = "+" if pnl >= 0 else "-"
-            return f"{sign}${abs(pnl):.2f}"
     return ""
 
 
-def _render_heartbeat_pills(hb_rows: list) -> str:
-    """Compact pill-grid: status+mode+name always visible; full details on hover."""
-    if not hb_rows:
-        return "<p class='no-data'>No heartbeat data available</p>"
-    now = int(time.time())
-    pills = ""
-    for r in hb_rows:
-        flag = r["flag"].lower()
-        acct_label = r.get("_label") or r["account"]
-        acct_short = acct_label.split()[0]
-        bot = r["bot_name"]
-        age_min = r["age_s"] // 60
-        age_str = f"{age_min}min" if age_min < 120 else f"{age_min//60}h{age_min%60:02d}m"
-        detail = _render_payload_summary(bot, r.get("payload", {}), now)
-        km = _key_metric(bot, r.get("payload", {}))
-        bounds_ok = r["bounds_ok"]
-        bounds_warn = bounds_ok not in ("ok", "-", "")
-        mode = _mode_badge(acct_short, bot)
-        data_warn = _data_flag(r.get("payload", {}), now)
-        data_badge = (
-            "<span class='badge stale' style='font-size:.63em' "
-            "title='data table not growing — bot heartbeats but stopped recording'>"
-            "⚠data</span>" if data_warn else ""
+# ─── Bot-family view (primary "by bot, not by account" layout) ───────────────
+
+# Strategy families that carry a comparable cumulative PnL (pnl_total) — these get windowed
+# PnL rolled up across instances. accumulation heartbeats holdings/realized (its pnl_total is
+# a flat 0), so it is a detail family: its rows show the payload summary, not a misleading $0.
+_PNL_STRATEGIES = {"polymarket", "grid", "swing"}
+_FAMILY_ORDER = ["polymarket", "grid", "swing", "accumulation",
+                 "feed", "feed5m", "cex_feed", "indicators", "status"]
+def _family_title(fam: str) -> str:
+    """"<bot_name> · <translated descriptor>". The bot name is a literal identifier; only
+    the descriptor is translated (i18n key fam_<bot_name>)."""
+    desc = t(f"fam_{fam}")
+    return f"{fam} · {desc}" if desc != f"fam_{fam}" else fam
+def _reset_mark() -> str:
+    return f"<span class='rst' title='{escape(t('reset_title'))}'>⚠</span>"
+
+
+_WINS = ("daily", "weekly", "monthly", "alltime")
+
+
+def _fmt_pnl_val(v) -> str:
+    if not isinstance(v, (int, float)):
+        return "<span class='no-data'>—</span>"
+    cls = "pnl-pos" if v >= 0 else "pnl-neg"
+    return f"<span class='{cls}'>{'+' if v >= 0 else '-'}${abs(v):.2f}</span>"
+
+
+def _win_spans(rec: dict) -> str:
+    """The four window spans for one bot's PnL record; CSS shows only the active one."""
+    return "".join(
+        f"<span class='pw pw-{w}'>{_fmt_pnl_val(rec.get(w))}"
+        f"{_reset_mark() if rec.get(w + '_reset') else ''}</span>"
+        for w in _WINS
+    )
+
+
+def _sum_windows(recs: list) -> dict:
+    """Aggregate several bots' window records into one {window: (sum|None, reset)}."""
+    agg = {}
+    for w in _WINS:
+        vals = [r.get(w) for r in recs if isinstance(r.get(w), (int, float))]
+        reset = any(r.get(w + "_reset") for r in recs)
+        agg[w] = (sum(vals), reset) if vals else (None, False)
+    return agg
+
+
+def _win_spans_agg(agg: dict) -> str:
+    return "".join(
+        f"<span class='pw pw-{w}'>{_fmt_pnl_val(agg[w][0])}"
+        f"{_reset_mark() if agg[w][1] else ''}</span>"
+        for w in _WINS
+    )
+
+
+def _render_bot_families(heartbeats: list, pnl_windows: dict, now: int) -> str:
+    """Group every bot by family (not by account); windowed PnL toggled via the buttons.
+
+    Each family is a section; its instances (one per account) are the rows. PnL families
+    show windowed PnL + capital; detail families (feeds, accumulation) show the payload
+    summary. The account is demoted to a per-row label.
+    """
+    if not heartbeats:
+        return f"<p class='no-data'>{escape(t('no_hb_data'))}</p>"
+    pw = pnl_windows or {}
+    by_family: dict[str, list] = {}
+    for r in heartbeats:
+        # Group by the canonical family (attached in main()); derive-if-missing keeps a
+        # heartbeat with no inventory row grouping sensibly instead of vanishing.
+        fam_key = r.get("_family") or _family_of("", r["bot_name"]) or r["bot_name"]
+        by_family.setdefault(fam_key, []).append(r)
+    ordered = [f for f in _FAMILY_ORDER if f in by_family]
+    ordered += sorted(f for f in by_family if f not in _FAMILY_ORDER)
+
+    sections = ""
+    for fam in ordered:
+        rows = sorted(by_family[fam], key=lambda r: (r.get("_label") or r["account"]))
+        is_pnl = fam in _PNL_STRATEGIES
+        # Windowed PnL is keyed account|bot_name (per instance) — NOT the family; _sum_windows
+        # then rolls the per-instance recs up into the family head.
+        recs = [pw.get(f"{r['account']}|{r['bot_name']}", {}) for r in rows]
+        alive = sum(1 for r in rows if r["flag"] == "ALIVE")
+        alive_cls = "alive" if alive == len(rows) else ("dead" if alive == 0 else "stale")
+        title = escape(_family_title(fam))
+        head_pnl = (f"<span class='fam-pnl'>{_win_spans_agg(_sum_windows(recs))}</span>"
+                    if is_pnl else "")
+
+        irows = ""
+        for r, rec in zip(rows, recs):
+            flag = r["flag"]
+            acct_short = r.get("_label") or r["account"]
+            payload = r.get("payload", {}) or {}
+            mode = _mode_badge(acct_short, r["bot_name"])
+            data_badge = (f"<span class='badge stale' style='font-size:.6em' "
+                          f"title='{escape(t('badge_data_title'))}'>{t('badge_data')}</span>"
+                          if _data_flag(payload, now) else "")
+            detail = escape(_render_payload_summary(fam, payload, now))
+            if is_pnl:
+                vcls = " stale-val" if flag != "ALIVE" else ""
+                cap = payload.get("capital")
+                cap_str = (f"<span class='fam-cap'>cap ${cap:,.0f}</span>"
+                           if isinstance(cap, (int, float)) else "")
+                val_cell = f"<span class='fam-val{vcls}'>{_win_spans(rec)}</span>{cap_str}"
+            else:
+                val_cell = f"<span class='fam-detail'>{detail}</span>"
+            age_min = r["age_s"] // 60
+            age_str = f"{age_min}min" if age_min < 120 else f"{age_min // 60}h{age_min % 60:02d}m"
+            irows += (
+                f"<div class='fam-row tt'>"
+                f"<span class='badge {flag.lower()}' style='font-size:.6em'>{_flag_label(flag)}</span>"
+                f"{data_badge}{mode}"
+                f"<span class='fam-acct'>{escape(acct_short)}</span>"
+                f"{val_cell}"
+                f"<div class='tip tip-up'>"
+                f"<div class='tip-row'>{detail}</div>"
+                f"<div class='tip-dim'>{escape(t('age', a=age_str))} · v={escape(r['version'])}</div>"
+                f"</div></div>"
+            )
+        sections += (
+            f"<div class='fam'>"
+            f"<div class='fam-head'>"
+            f"<span class='fam-name'>{title}</span>"
+            f"<span class='fam-count {alive_cls}'>{alive}/{len(rows)}</span>"
+            f"{head_pnl}"
+            f"</div>{irows}</div>"
         )
-        km_cls = ""
-        if km.startswith("+"):
-            km_cls = " pnl-pos"
-        elif km.startswith("-"):
-            km_cls = " pnl-neg"
-        km_html = (
-            f"<span class='pill-metric{km_cls}'>{escape(km)}</span>" if km else ""
-        )
-        tip_content = (
-            f"<span class='tip-label'>{escape(acct_short)} · {escape(bot)}</span>"
-            f"<div class='tip-row'>{escape(detail)}</div>"
-            f"<div class='tip-dim'>"
-            f"age {age_str}"
-            + (f" · <span style='color:#f85149'>bounds {escape(bounds_ok)}</span>" if bounds_warn
-               else f" · bounds {escape(bounds_ok)}")
-            + f" · v={escape(r['version'])}"
-            f"</div>"
-        )
-        pills += (
-            f"<div class='bot-pill tt'>"
-            f"<span class='badge {flag}' style='font-size:.63em'>{r['flag']}</span>"
-            f"{data_badge}"
-            f"{mode}"
-            f"<span class='pill-name'>{escape(bot)}</span>"
-            f"<span class='pill-acct'>{escape(acct_short)}</span>"
-            f"{km_html}"
-            f"<div class='tip'>{tip_content}</div>"
-            f"</div>"
-        )
-    return f"<div class='hb-pills'>{pills}</div>"
+    return f"<div class='families'>{sections}</div>"
 
 
 def _render_trade_table(rows: list, db_type: str = "live") -> str:
     if not rows:
-        return "<p class='no-data'>No trades</p>"
-    head_extra = "<th>Market</th>" if db_type == "live" else ""
+        return f"<p class='no-data'>{escape(t('no_trades'))}</p>"
+    head_extra = f"<th>{t('th_market')}</th>" if db_type == "live" else ""
     html = (
         "<table class='tr-table'><thead><tr>"
-        "<th>#</th><th>Time</th><th>Dir</th><th>Result</th>"
-        f"<th>Entry</th><th>PnL</th><th>Capital</th>{head_extra}"
+        f"<th>{t('th_num')}</th><th>{t('th_time')}</th><th>{t('th_dir')}</th><th>{t('th_result')}</th>"
+        f"<th>{t('th_entry')}</th><th>{t('th_pnl')}</th><th>{t('th_capital')}</th>{head_extra}"
         "</tr></thead><tbody>"
     )
     for r in rows:
         result = r.get("result", "")
         cls = "win" if result == "WIN" else ("loss" if result == "LOSS" else "open-t")
+        result_disp = (t("res_win") if result == "WIN"
+                       else t("res_loss") if result == "LOSS" else result)
         pnl = r.get("pnl")
         cap = r.get("capital")
         ep  = r.get("entry_price")
@@ -675,7 +884,7 @@ def _render_trade_table(rows: list, db_type: str = "live") -> str:
             f"<td class='{cls}'>#{r.get('id','?')}</td>"
             f"<td>{_fmt_ts(r.get('entry_ts'))}</td>"
             f"<td>{escape(r.get('direction',''))}</td>"
-            f"<td class='{cls}'>{escape(result)}</td>"
+            f"<td class='{cls}'>{escape(result_disp)}</td>"
             f"<td>{ep_str}</td>"
             f"<td>{_fmt_pnl(pnl)}</td>"
             f"<td>{cap_str}</td>"
@@ -697,22 +906,23 @@ def _render_bot_section(hb_rows: list, now: int) -> str:
         flag = r["flag"].lower()
         acct_short = (r.get("_label") or "").split()[0]
         bot = r["bot_name"]
+        fam = r.get("_family") or _family_of("", bot) or bot
         age_min = r["age_s"] // 60
         age_str = f"{age_min}min" if age_min < 120 else f"{age_min//60}h{age_min%60:02d}m"
-        detail = _render_payload_summary(bot, r.get("payload", {}), now)
+        detail = _render_payload_summary(fam, r.get("payload", {}), now)
         mode_cell = _mode_badge(acct_short, bot)
-        km = _key_metric(bot, r.get("payload", {}))
+        km = _key_metric(fam, r.get("payload", {}))
         km_cls = " pnl-pos" if km.startswith("+") else (" pnl-neg" if km.startswith("-") else "")
         km_html = f"<span class='bot-metric{km_cls}'>{escape(km)}</span>" if km else ""
         tip_content = (
             f"<div class='tip-row'>{escape(detail)}</div>"
-            f"<div class='tip-dim'>age {age_str} · v={escape(r['version'])}</div>"
+            f"<div class='tip-dim'>{escape(t('age', a=age_str))} · v={escape(r['version'])}</div>"
         )
         rows_html += (
             f"<div class='bot-row tt'>"
-            f"<span class='badge {flag}' style='font-size:.62em'>{r['flag']}</span>"
+            f"<span class='badge {flag}' style='font-size:.62em'>{_flag_label(r['flag'])}</span>"
             f"{mode_cell}"
-            f"<span class='bot-name'>{escape(bot)}</span>"
+            f"<span class='bot-name'>{escape(r.get('_display') or bot)}</span>"
             f"{km_html}"
             f"<div class='tip tip-up'>{tip_content}</div>"
             f"</div>"
@@ -742,7 +952,7 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
             f"<div class='tt svc-dots'>"
             f"{dots}"
             f"<div class='tip tip-up'>"
-            f"<span class='tip-label'>Services</span>{svc_tip_rows}"
+            f"<span class='tip-label'>{escape(t('services'))}</span>{svc_tip_rows}"
             f"</div>"
             f"</div>"
         )
@@ -760,12 +970,13 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
     )
 
     if error:
-        _msg = "unreachable" if error == "unreachable" else f"collect failed ({escape(str(error))})"
+        _msg = (t("card_unreachable") if error == "unreachable"
+                else t("card_collect_failed", err=escape(str(error))))
         return f"<div class='account'>{header}<p class='no-data'>⚠ {_msg}</p></div>"
 
-    # Determine whether this account runs Polymarket bots (live_bot / account_bot).
-    _POLY_BOT_NAMES = {"live_bot", "account_bot"}
-    has_poly = any(r["bot_name"] in _POLY_BOT_NAMES for r in (hb_rows or []))
+    # Determine whether this account runs Polymarket bots (drives the poly-only win-rate +
+    # trade tables below). Keyed on the canonical family, not the generated bot_id.
+    has_poly = any(r.get("_family") == "polymarket" for r in (hb_rows or []))
 
     live = data.get("live")
     stats_html = ""
@@ -776,8 +987,8 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
     # the single source of truth shared with the pills and the fleet headline. live.db
     # is used only for the Polymarket win-rate and the trade tables further below.
     primary = None
-    for _name in ("live_bot", "account_bot", "grid_bot", "swing_bot"):
-        primary = next((r for r in (hb_rows or []) if r["bot_name"] == _name), None)
+    for _fam in ("polymarket", "grid", "swing"):
+        primary = next((r for r in (hb_rows or []) if r.get("_family") == _fam), None)
         if primary:
             break
     if primary:
@@ -806,44 +1017,46 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
             resolved = w + l
             total_all = trades_tot if trades_tot is not None else (totals.get("t", 0) or 0)
             cap_sub = f"{_wr(w, l)} · {resolved}T"
-            open_extra = f" · {open_n} open" if open_n else ""
-            wr_tip = (f"<div class='tip-row'>Win rate {_wr(w, l)} ({w}W / {l}L)</div>"
-                      f"<div class='tip-row'>Resolved {resolved} · Total {total_all}{open_extra}</div>")
+            open_extra = t("tip_open_suffix", n=open_n) if open_n else ""
+            wr_tip = (f"<div class='tip-row'>{t('tip_win_rate', wr=_wr(w, l), w=w, l=l)}</div>"
+                      f"<div class='tip-row'>{t('tip_resolved_total', r=resolved, t=total_all, open=open_extra)}</div>")
         # Age-gate: when the source heartbeat is STALE/DEAD, dim the values and show a
         # badge so last-known payload numbers aren't read as current.
         is_stale   = bool(flag) and flag != "ALIVE"
         vcls       = " stale-val" if is_stale else ""
-        flag_badge = (f" <span class='badge {flag.lower()}'>{escape(flag)}</span>"
+        flag_badge = (f" <span class='badge {flag.lower()}'>{_flag_label(flag)}</span>"
                       if is_stale else "")
         stale_note = (
             f"<div class='tip-row'><span class='{flag.lower()}'>"
-            f"heartbeat {escape(flag)} — last-known values</span></div>"
+            f"{escape(t('hb_lastknown', flag=_flag_label(flag)))}</span></div>"
             if is_stale else ""
         )
         open_tip = (f"<div class='tip-row'><span style='color:#8b949e;min-width:64px;"
-                    f"display:inline-block'>Open</span> {open_n}</div>"
+                    f"display:inline-block'>{escape(t('lbl_open'))}</span> {open_n}</div>"
                     if open_n is not None else "")
         stats_html = (
             f"<div class='big-metrics'>"
             f"<div class='metric-big tt'>"
-            f"<div class='lbl'>Capital</div>"
+            f"<div class='lbl'>{escape(t('lbl_capital'))}</div>"
             f"<div class='val{vcls}'>{cap_str}</div>"
             f"<div class='metric-sub'>{cap_sub}{flag_badge}</div>"
             f"<div class='tip tip-up'>"
-            f"<span class='tip-label'>{escape(primary['bot_name'])} · from heartbeat</span>"
+            f"<span class='tip-label'>{escape(t('tip_from_heartbeat', bot=primary['bot_name']))}</span>"
             f"{wr_tip}"
-            f"<div class='tip-row'>Since reset {_fmt_pnl(life_pnl)}</div>"
+            f"<div class='tip-row'>{escape(t('lbl_since_reset'))} {_fmt_pnl(life_pnl)}</div>"
             f"{stale_note}"
             f"</div></div>"
             f"<div class='metric-big tt'>"
-            f"<div class='lbl'>Today PnL</div>"
+            f"<div class='lbl'>{escape(t('lbl_today_pnl'))}</div>"
             f"<div class='val {pnl_cls}{vcls}'>{pnl_str}</div>"
             f"<div class='metric-sub'>{mode_badge}{flag_badge}</div>"
             f"<div class='tip tip-up'>"
-            f"<span class='tip-label'>PnL (from heartbeat)</span>"
-            f"<div class='tip-row'><span style='color:#8b949e;min-width:64px;display:inline-block'>Today (UTC)</span>"
+            f"<span class='tip-label'>{escape(t('tip_pnl_from_hb'))}</span>"
+            f"<div class='tip-row'><span style='color:#8b949e;min-width:64px;"
+            f"display:inline-block'>{escape(t('lbl_today_utc'))}</span>"
             f" {_fmt_pnl(today_pnl)}</div>"
-            f"<div class='tip-row'><span style='color:#8b949e;min-width:64px;display:inline-block'>Since reset</span>"
+            f"<div class='tip-row'><span style='color:#8b949e;min-width:64px;"
+            f"display:inline-block'>{escape(t('lbl_since_reset'))}</span>"
             f" {_fmt_pnl(life_pnl)}</div>"
             f"{open_tip}{stale_note}"
             f"</div></div>"
@@ -862,85 +1075,85 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
                 f"#{r['id']} {r.get('direction','')} {_ep(r)}</span>"
                 for r in open_trades
             )
-            open_html = f"<div class='open-trades'><span style='color:#d29922'>▶ Open:</span> {badges}</div>"
+            open_html = (f"<div class='open-trades'><span style='color:#d29922'>"
+                        f"{escape(t('open_label'))}</span> {badges}</div>")
         recent = live.get("recent", [])
         if recent:
             trade_html = (
-                f"<details><summary>Last {len(recent)} trades ▾</summary>"
+                f"<details><summary>{escape(t('last_n_trades', n=len(recent)))}</summary>"
                 f"{_render_trade_table(recent, 'live')}"
                 f"</details>"
             )
 
-    # Grid bots track aggregate state (bounds / cycles / level fills / halted), not a
-    # per-trade log — surface it from grid_state + grid_levels. Covers both the standard
-    # path (an account running only a grid) and an alternate data dir (~/tradinebotte-grid).
+    # Grid bots: surface the lifetime grid PnL from the heartbeat payload. The exact grid
+    # bounds / cycles / level fills used to be read from grid_state over SSH — they are not
+    # in the shared DB, so they are omitted here (bounds health still shows per-bot in the
+    # section below, and windowed PnL in the family view). Match on the bot_id family tag.
     grid_html = ""
-    for gr in (data.get("grids") or []):
-        st = (gr.get("state") or [{}])[0]
-        if not st:
+    for r in (hb_rows or []):
+        if "grid" not in (r.get("bot_name") or "").lower():
             continue
-        lvls = {row.get("status"): row.get("n", 0) for row in (gr.get("levels") or [])}
-        total_lvls = sum(lvls.values())
-        holding    = lvls.get("sell_placed", 0)        # bought, waiting to sell
-        lo, hi     = st.get("grid_lower"), st.get("grid_upper")
-        bounds = (f"${lo/1000:.1f}k–${hi/1000:.1f}k"
-                  if isinstance(lo, (int, float)) and isinstance(hi, (int, float)) else "—")
-        cycles  = st.get("total_cycles")
-        profit  = st.get("total_profit_usd")
-        sym     = escape(str(st.get("symbol", "")))
-        halted_badge = ("<span class='badge dead' style='margin-left:5px'>HALTED</span>"
-                        if st.get("halted") else "")
+        p = r.get("payload") or {}
+        profit = p.get("pnl_total")
+        if profit is None:
+            continue
+        disp = escape(r.get("_display") or r.get("bot_name") or "grid")
         profit_cls = "pnl-pos" if (profit or 0) >= 0 else "pnl-neg"
         grid_html += (
             f"<div style='margin-top:4px;font-size:.8em'>"
             f"<span style='color:#8b949e;text-transform:uppercase;letter-spacing:.8px;"
-            f"font-size:.85em'>grid</span>"
-            f" {sym} · <span style='color:#58a6ff'>{bounds}</span>"
-            f" · {holding}/{total_lvls} holding"
-            f" · {cycles if cycles is not None else '?'} cycles"
+            f"font-size:.85em'>{escape(t('grid_label'))}</span>"
+            f" <span style='color:#58a6ff'>{disp}</span>"
             f" · <span class='{profit_cls}'>{_fmt_pnl(profit)}</span>"
-            f"{halted_badge}"
             f"</div>"
         )
 
+    # Accumulation bots: portfolio (holdings / free / avg entry / trade count) straight
+    # from the heartbeat payload — the single source of truth (was read from live_accum.db
+    # over SSH, which broke on the single-tree rename to live_accumulation.db).
     cex_html = ""
-    accum = data.get("accum")
-    if accum:
-        accum_port = (accum.get("portfolio") or [{}])[0]
-        accum_tot  = (accum.get("totals") or [{}])[0]
-        btc  = accum_port.get("holdings_btc")
-        usdt = accum_port.get("free_usdt")
-        avg  = accum_port.get("avg_entry")
-        btc_str  = f"{btc:.6f} BTC" if btc is not None else "—"
-        usdt_str = f" · ${usdt:.0f} free" if usdt is not None else ""
-        avg_str  = f" · avg ${avg:.0f}" if avg is not None else ""
+    for r in (hb_rows or []):
+        if "accumulation" not in (r.get("bot_name") or "").lower():
+            continue
+        p = r.get("payload") or {}
+        hold = p.get("holdings_btc")
+        usdt = p.get("free_usdt")
+        avg  = p.get("avg_entry")
+        tot  = p.get("trades_total")
+        if hold is None and usdt is None:
+            continue
+        disp = escape(r.get("_display") or r.get("bot_name") or "accum")
+        hold_str = f"{hold:.6f}" if isinstance(hold, (int, float)) else "—"
+        usdt_str = f" · {t('accum_free', u=f'{usdt:.0f}')}" if isinstance(usdt, (int, float)) else ""
+        avg_str  = f" · {t('accum_avg', a=f'{avg:g}')}" if isinstance(avg, (int, float)) else ""
+        tot_str  = f" · {tot}T" if tot is not None else ""
         cex_html += (
             f"<div style='margin-top:4px;font-size:.8em'>"
             f"<span style='color:#8b949e;text-transform:uppercase;letter-spacing:.8px;"
-            f"font-size:.85em'>accum_bot</span>"
-            f" — <span style='color:#58a6ff'>{btc_str}</span>{usdt_str}{avg_str}"
-            f" · {accum_tot.get('t', 0)}T"
+            f"font-size:.85em'>{disp}</span>"
+            f" — <span style='color:#58a6ff'>{hold_str}</span>{usdt_str}{avg_str}{tot_str}"
             f"</div>"
         )
+
+    # Per-bot evolution charts (one per trading bot on this account; infra rows have no
+    # pnl_total and are skipped so they don't render an empty chart).
+    charts_html = ""
+    for r in (hb_rows or []):
+        if (r.get("payload") or {}).get("pnl_total") is None:
+            continue
+        charts_html += _chart_html(f"{r.get('account')}|{r.get('bot_name')}",
+                                   r.get("_display") or r.get("bot_name") or "bot",
+                                   t("chart_no_data"), mini=True)
 
     now = int(time.time())
     bot_section = _render_bot_section(hb_rows or [], now)
 
     return (
         f"<div class='account'>"
-        f"{header}{stats_html}{open_html}{trade_html}{grid_html}{cex_html}{bot_section}"
+        f"{header}{stats_html}{open_html}{trade_html}{grid_html}{cex_html}{charts_html}{bot_section}"
         f"</div>"
     )
 
-
-def _fmt_age(secs: int) -> str:
-    if secs < 0:
-        return "—"
-    if secs < 3600:
-        return f"{secs // 60}m"
-    if secs < 86400:
-        return f"{secs // 3600}h"
-    return f"{secs // 86400}d"
 
 
 # Status colours (matches the page's dark palette).
@@ -963,6 +1176,7 @@ def _render_expected_actual(inventory: list, deploys: list, heartbeats: list,
     body = []
     for inv in sorted(inventory, key=lambda r: (r.get("account", ""), r.get("bot_name", ""))):
         acct, bot = inv.get("account", ""), inv.get("bot_name", "")
+        bot_disp = inv.get("display_name") or bot   # readable label; bot_name stays the join key
         label = user_to_label.get(acct, acct)
         hb = hb_by.get((acct, bot))
 
@@ -972,13 +1186,14 @@ def _render_expected_actual(inventory: list, deploys: list, heartbeats: list,
             # a service that never reports is fine — its liveness is the systemctl section
             # below (the collector cannot heartbeat itself).
             if kind == "service":
-                flag, fcol = "n/a", _C_MUTE
+                flag, fcol, flag_disp = "n/a", _C_MUTE, t("flag_na")
             else:
-                flag, fcol = "MISSING", _C_BAD
+                flag, fcol, flag_disp = "MISSING", _C_BAD, t("flag_missing")
                 n_missing += 1
         else:
             flag = hb["flag"]
             fcol = {"ALIVE": _C_OK, "STALE": _C_WARN}.get(flag, _C_BAD)
+            flag_disp = _flag_label(flag)
 
         is_live  = inv.get("is_live")
         declared = "—" if is_live is None else ("live" if is_live else "sim")
@@ -998,24 +1213,26 @@ def _render_expected_actual(inventory: list, deploys: list, heartbeats: list,
             dep_cell = f"<span style='color:{_C_MUTE}'>—</span>"
 
         body.append(
-            f"<tr><td>{escape(label)}</td><td>{escape(bot)}</td>"
+            f"<tr><td>{escape(label)}</td><td>{escape(bot_disp)}</td>"
             f"<td style='color:{_C_MUTE}'>{escape(inv.get('kind','') or '')}</td>"
             f"<td>{mode_cell}</td>"
-            f"<td style='color:{fcol};font-weight:600'>{escape(flag)}</td>"
+            f"<td style='color:{fcol};font-weight:600'>{escape(flag_disp)}</td>"
             f"<td>{dep_cell}</td></tr>"
         )
 
     note = []
     if n_missing:
-        note.append(f"<span style='color:{_C_BAD}'>{n_missing} expected but silent</span>")
+        note.append(f"<span style='color:{_C_BAD}'>{escape(t('ea_silent', n=n_missing))}</span>")
     if n_mismatch:
-        note.append(f"<span style='color:{_C_BAD}'>{n_mismatch} mode mismatch</span>")
-    sub = "  ·  ".join(note) if note else f"<span style='color:{_C_OK}'>all expected bots present</span>"
+        note.append(f"<span style='color:{_C_BAD}'>{escape(t('ea_mismatch', n=n_mismatch))}</span>")
+    sub = ("  ·  ".join(note) if note
+           else f"<span style='color:{_C_OK}'>{escape(t('ea_all_present'))}</span>")
     return (
-        f"<h2>Expected vs Actual <span style='font-size:.5em;color:{_C_MUTE};font-weight:400'>"
-        f"{len(inventory)} declared · {sub}</span></h2>"
+        f"<h2>{escape(t('h_expected_actual'))} <span style='font-size:.5em;color:{_C_MUTE};font-weight:400'>"
+        f"{escape(t('ea_declared', n=len(inventory)))} · {sub}</span></h2>"
         "<table class='hb-table'><thead><tr>"
-        "<th>acct</th><th>bot</th><th>kind</th><th>mode</th><th>heartbeat</th><th>last deploy</th>"
+        f"<th>{t('th_acct')}</th><th>{t('th_bot')}</th><th>{t('th_kind')}</th>"
+        f"<th>{t('th_mode')}</th><th>{t('th_heartbeat')}</th><th>{t('th_last_deploy')}</th>"
         "</tr></thead><tbody>" + "".join(body) + "</tbody></table>"
     )
 
@@ -1035,16 +1252,10 @@ def _render_banners(accounts: list, heartbeats: list) -> str:
     coll_err = collector.get("error")
     if coll_err:
         banners.append(
-            f"<div class='banner bad'>⚠ <b>Collector account unreachable</b> "
-            f"(<code>{escape(str(coll_err))}</code>) — fleet heartbeats, inventory and "
-            f"deploy history are unavailable this cycle. Bot liveness shown below is "
-            f"<b>unknown</b>, not necessarily down.</div>"
+            f"<div class='banner bad'>{t('banner_collector_down', err=escape(str(coll_err)))}</div>"
         )
     elif not heartbeats:
-        banners.append(
-            "<div class='banner warn'>⚠ Collector reachable but the shared state DB "
-            "returned no heartbeats — fleet liveness is unknown this cycle.</div>"
-        )
+        banners.append(f"<div class='banner warn'>{t('banner_no_heartbeats')}</div>")
 
     # Per-account collect failures (the collector is handled above). Their own cards
     # show '⚠ unreachable'; surface the set so the partial page is obviously partial.
@@ -1055,11 +1266,184 @@ def _render_banners(accounts: list, heartbeats: list) -> str:
     ]
     if failed:
         banners.append(
-            f"<div class='banner warn'>⚠ {len(failed)} account(s) unreachable this cycle: "
-            f"<code>{escape(', '.join(failed))}</code> — their service/trade cards are "
-            f"missing data; the rest of the fleet is unaffected.</div>"
+            f"<div class='banner warn'>"
+            f"{t('banner_partial', n=len(failed), accts=escape(', '.join(failed)))}</div>"
         )
     return "".join(banners)
+
+
+# Executed-fill log: only the most recent N shown per bot (full history stays in bot_trades).
+# Open orders are NOT capped — the resting book is small and bounded, and the operator wants to
+# see every order in flight.
+_EXEC_ROW_CAP = 20
+
+
+def _fmt_age(age_s) -> str:
+    """Compact age string ("12min", "3h07m", "2d") for a heartbeat's freshness."""
+    try:
+        a = int(age_s)
+    except (TypeError, ValueError):
+        return "—"
+    if a < 0:
+        return "—"
+    m = a // 60
+    if m < 120:
+        return f"{m}min"
+    if m < 2880:
+        return f"{m // 60}h{m % 60:02d}m"
+    return f"{a // 86400}d"
+
+
+def _render_open_orders_table(open_orders, hb: dict) -> str:
+    """The "orders in flight" table for one live bot — the resting book the bot currently holds
+    on the exchange (from the heartbeat payload's `open_orders`), kept SEPARATE from the executed
+    fills because its truth semantics differ: fills are immutable history, open orders are a
+    snapshot that decays. So the table is stamped "as of <ts> (age)" and dimmed when the source
+    heartbeat is not ALIVE (the orders may have filled/canceled since).
+
+    `open_orders is None` → the bot predates this field (or shadow) → "awaiting next heartbeat",
+    NOT "zero orders". `[]` → the bot reports it holds no resting order."""
+    # Title lives on the toggle button now; this caption carries only the freshness stamp — an
+    # open-orders snapshot decays, so "as of <ts> (age)" + a flag badge when the source is stale.
+    flag  = hb.get("flag", "")
+    stale = bool(flag) and flag != "ALIVE"
+    asof  = t("oo_asof", ts=_fmt_ts(hb.get("last_ts")), age=_fmt_age(hb.get("age_s")))
+    flag_badge = (f" <span class='badge {flag.lower()}'>{_flag_label(flag)}</span>"
+                  if stale else "")
+    caption = f"<div class='oo-asof'><span class='dim'>{escape(asof)}</span>{flag_badge}</div>"
+
+    if open_orders is None:
+        return caption + f"<div class='dim'>{escape(t('oo_unknown'))}</div>"
+    if not open_orders:
+        return caption + f"<div class='dim'>{escape(t('oo_none'))}</div>"
+
+    head = (f"<tr><th>{escape(t('tt_side'))}</th><th>{escape(t('tt_price'))}</th>"
+            f"<th>{escape(t('tt_qty'))}</th><th>{escape(t('oo_notional'))}</th>"
+            f"<th>{escape(t('oo_placed'))}</th><th>{escape(t('tt_order'))}</th></tr>")
+    body = []
+    for o in open_orders:                          # ALL resting orders — no cap
+        side = o.get("side") or ""
+        side_cls = "pnl-pos" if side == "sell" else "pnl-neg"
+        oid = o.get("order_id") or "—"
+        body.append(
+            f"<tr><td class='{side_cls}'>{escape(side)}</td>"
+            f"<td>{float(o.get('price') or 0):.6f}</td>"
+            f"<td>{float(o.get('qty') or 0):.2f}</td>"
+            f"<td>${float(o.get('notional') or 0):.4f}</td>"
+            f"<td>{_fmt_ts(o.get('placed_ts'))}</td>"
+            f"<td class='mono' title='{escape(str(oid))}'>{escape(str(oid))}</td></tr>")
+    dim_cls = " stale-tbl" if stale else ""
+    return caption + f"<table class='trades{dim_cls}'>{head}{''.join(body)}</table>"
+
+
+def _render_live_trades(live_heartbeats: list, trades_by_bot: dict) -> str:
+    """The real-money page's rich section: per live bot, a stats strip (holdings, avg entry,
+    realized PnL, fill/volume/fee tallies from the durable trade log) + TWO separate tables — the
+    resting orders currently in flight (from the heartbeat payload) and the executed-fill log
+    (order IDs included — the live page shows full detail). Reuses _fmt_pnl / _fmt_ts."""
+    panels = []
+    for hb in live_heartbeats:
+        acct, bot = hb.get("account"), hb.get("bot_name")
+        pl = hb.get("payload") or {}
+        name = escape(hb.get("_display") or bot or "?")
+        trades = trades_by_bot.get((acct, bot), [])
+
+        buys  = [x for x in trades if x.get("side") == "buy"]
+        sells = [x for x in trades if x.get("side") == "sell"]
+        bought_qty = sum(float(x.get("qty") or 0) for x in buys)
+        sold_qty   = sum(float(x.get("qty") or 0) for x in sells)
+        fees_total = sum(float(x.get("fee") or 0) for x in trades)
+        # None (key absent → old bot / shadow) is deliberately kept distinct from [] (bot
+        # reports zero resting orders) — _render_open_orders_table renders them differently.
+        open_orders = pl.get("open_orders")
+        n_open = len(open_orders) if isinstance(open_orders, list) else 0
+
+        def _stat(lbl, val):
+            return (f"<div class='sb-item'><div class='lbl'>{escape(lbl)}</div>"
+                    f"<div class='val'>{val}</div></div>")
+
+        stats = (
+            "<div class='summary-bar'>"
+            + _stat(t("lt_mode"), f"<span class='badge live-b'>{escape(str(pl.get('mode', '?')).upper())}</span>")
+            + _stat(t("lt_holdings"), f"{float(pl.get('holdings_btc') or 0):.4f}")
+            + _stat(t("lt_avg_entry"), f"{float(pl.get('avg_entry') or 0):.6f}")
+            + _stat(t("lt_free"), f"${float(pl.get('free_usdt') or 0):.2f}")
+            + _stat(t("lt_realized"), _fmt_pnl(pl.get("pnl_total")))
+            + _stat(t("lt_open"), f"{n_open}")
+            + _stat(t("lt_fills"), f"{len(trades)} <span class='dim'>({len(buys)}B/{len(sells)}S)</span>")
+            + _stat(t("lt_bought"), f"{bought_qty:.2f}")
+            + _stat(t("lt_sold"), f"{sold_qty:.2f}")
+            + _stat(t("lt_fees"), f"${fees_total:.4f}")
+            + "</div>"
+        )
+
+        open_table = _render_open_orders_table(open_orders, hb)
+
+        if trades:
+            head = (f"<tr><th>{escape(t('tt_time'))}</th><th>{escape(t('tt_side'))}</th>"
+                    f"<th>{escape(t('tt_reason'))}</th><th>{escape(t('tt_price'))}</th>"
+                    f"<th>{escape(t('tt_qty'))}</th><th>{escape(t('tt_quote'))}</th>"
+                    f"<th>{escape(t('tt_fee'))}</th><th>{escape(t('tt_order'))}</th></tr>")
+            body = []
+            for x in trades[:_EXEC_ROW_CAP]:
+                side = x.get("side") or ""
+                side_cls = "pnl-pos" if side == "sell" else "pnl-neg"
+                oid = x.get("order_id") or "—"
+                body.append(
+                    f"<tr><td>{_fmt_ts((x.get('ts_ms') or 0) / 1000)}</td>"
+                    f"<td class='{side_cls}'>{escape(side)}</td>"
+                    f"<td>{escape(str(x.get('reason') or ''))}</td>"
+                    f"<td>{float(x.get('price') or 0):.6f}</td>"
+                    f"<td>{float(x.get('qty') or 0):.2f}</td>"
+                    f"<td>${float(x.get('quote') or 0):.4f}</td>"
+                    f"<td>${float(x.get('fee') or 0):.4f}</td>"
+                    f"<td class='mono' title='{escape(str(oid))}'>{escape(str(oid))}</td></tr>")
+            cap_note = ("" if len(trades) <= _EXEC_ROW_CAP else
+                        f"<div class='dim'>{escape(t('lt_capped', n=_EXEC_ROW_CAP, total=len(trades)))}</div>")
+            exec_table = (f"<table class='trades'>{head}{''.join(body)}</table>{cap_note}")
+        else:
+            exec_table = f"<div class='dim'>{escape(t('lt_no_trades'))}</div>"
+
+        # Selector (same idea as the chart's PnL/Assets toggle): the two tables share one region,
+        # one shown at a time via data-tab on the wrapper. Buttons carry the section title + count.
+        open_lbl = escape(t("oo_title")) + (f" ({n_open})" if isinstance(open_orders, list) else "")
+        exec_lbl = escape(t("lt_executed_title")) + f" ({len(trades)})"
+        tables = (
+            "<div class='live-tables' data-tab='open'>"
+            "<div class='lt-toggle'>"
+            f"<button class='lt-btn lt-open-btn' onclick=\"ltTab(this,'open')\">{open_lbl}</button>"
+            f"<button class='lt-btn lt-exec-btn' onclick=\"ltTab(this,'exec')\">{exec_lbl}</button>"
+            "</div>"
+            f"<div class='lt-pane lt-pane-open'>{open_table}</div>"
+            f"<div class='lt-pane lt-pane-exec'>{exec_table}</div>"
+            "</div>"
+        )
+
+        chart = _chart_html(f"{acct}|{bot}", t("chart_bot"), t("chart_no_data"), mini=True)
+        panels.append(
+            f"<div class='live-panel'><h3>{name} "
+            f"<span class='dim'>{escape(acct or '')}</span></h3>{stats}{chart}{tables}</div>"
+        )
+
+    if not panels:
+        return f"<div class='dim'>{escape(t('lt_none'))}</div>"
+    return "".join(panels)
+
+
+def _chart_html(key: str, title: str, empty_label: str, mini: bool = False) -> str:
+    """Container for one evolution chart; the client JS (tbRender) fills .tbc-plot from
+    TBSERIES[key]. Defaults to the PnL metric with an Asset toggle."""
+    cls = "tbchart mini" if mini else "tbchart"
+    return (
+        f"<div class='{cls}' data-key='{escape(key)}' data-metric='pnl' "
+        f"data-empty='{escape(empty_label)}'>"
+        f"<div class='tbc-head'><span class='tbc-title'>{escape(title)}</span>"
+        f"<span class='tbc-toggle'>"
+        f"<button class='tbc-btn tbc-pnl active' onclick=\"tbToggle(this,'pnl')\">{escape(t('chart_pnl'))}</button>"
+        f"<button class='tbc-btn tbc-asset' onclick=\"tbToggle(this,'asset')\">{escape(t('chart_asset'))}</button>"
+        f"</span><span class='tbc-readout'></span></div>"
+        f"<div class='tbc-plot'></div></div>"
+    )
 
 
 def _render_html(
@@ -1070,7 +1454,22 @@ def _render_html(
     inventory: list | None = None,
     deploys: list | None = None,
     user_to_label: dict | None = None,
+    pnl_windows: dict | None = None,
+    scope: str = "overview",
+    trades_by_bot: dict | None = None,
+    nav_href: str = "",
+    audit_heartbeats: list | None = None,
+    series: dict | None = None,
 ) -> str:
+    # The expected-vs-actual audit is fleet-wide: it must see EVERY bot's heartbeat, not the
+    # scope-filtered subset, or a live bot (filtered off the overview) would falsely read as
+    # "expected but silent". Falls back to the page's own heartbeats when not supplied.
+    audit_heartbeats = audit_heartbeats if audit_heartbeats is not None else heartbeats
+    pnl_windows = pnl_windows or {}
+    global _CUR_LANG
+    _saved_lang = _CUR_LANG
+
+    # ── Language-independent data prep (computed once) ───────────────────────
     # The collector account (index 0) is the sole source of fleet heartbeat data — if it
     # failed, an empty `heartbeats` means "unknown", not "nothing wrong".
     collector_down = bool(accounts and accounts[0].get("error"))
@@ -1078,14 +1477,8 @@ def _render_html(
     svc_issues = sum(1 for acc in accounts for svc in acc.get("services", []) if not svc["active"])
     unreachable = sum(1 for a in accounts if a.get("error"))
     total_issues = hb_issues + svc_issues + unreachable
-
-    if collector_down:
-        dot_cls, status_text = "bad", "collector unreachable — fleet status unknown"
-    elif total_issues == 0:
-        dot_cls, status_text = "ok", "All systems nominal"
-    else:
-        dot_cls = "warn" if hb_issues == 0 else "bad"
-        status_text = f"{total_issues} issue(s)"
+    dot_cls = "bad" if collector_down else ("ok" if total_issues == 0
+                                            else ("warn" if hb_issues == 0 else "bad"))
     ts_str = generated_at.strftime("%Y-%m-%d %H:%M UTC")
 
     total_bots = len(heartbeats)
@@ -1096,14 +1489,11 @@ def _render_html(
     else:
         alive_cls = "alive" if alive_bots == total_bots else "stale"
         alive_display = f"{alive_bots}/{total_bots}"
-    hb_cls     = "alive" if hb_issues == 0 else "dead"
-    svc_cls    = "alive" if svc_issues == 0 else "dead"
-    unr_cls    = "alive" if unreachable == 0 else "dead"
+    hb_cls  = "alive" if hb_issues == 0 else "dead"
+    svc_cls = "alive" if svc_issues == 0 else "dead"
+    unr_cls = "alive" if unreachable == 0 else "dead"
 
-    # Fleet PnL — single source of truth: the heartbeat payload every bot emits
-    # (Polymarket AND CEX), so the totals cover the whole fleet, not just live.db
-    # accounts. Only Today + Lifetime are available fleet-wide (payloads carry
-    # daily_pnl + pnl_total; they don't carry 7d/30d windows).
+    # Fleet PnL — Today + Lifetime from the payloads; weekly/monthly from pnl_windows.
     today_pnl_total = life_pnl_total = 0.0
     for _hb in heartbeats:
         _pl = _hb.get("payload") or {}
@@ -1111,34 +1501,8 @@ def _render_html(
             today_pnl_total += _pl["daily_pnl"]
         if isinstance(_pl.get("pnl_total"), (int, float)):
             life_pnl_total += _pl["pnl_total"]
-    pnl_sign    = "+" if today_pnl_total >= 0 else ""
-    pnl_val_cls = "pnl-pos" if today_pnl_total >= 0 else "pnl-neg"
 
-    summary_bar = (
-        f"<div class='summary-bar'>"
-        f"<div class='sb-item'><div class='lbl'>Bots alive</div>"
-        f"<div class='val {alive_cls}'>{alive_display}</div></div>"
-        f"<div class='sb-item tt'>"
-        f"<div class='lbl'>Today PnL</div>"
-        f"<div class='val {pnl_val_cls}'>{pnl_sign}${today_pnl_total:.2f}</div>"
-        f"<div class='tip'>"
-        f"<span class='tip-label'>PnL — all bots (from heartbeats)</span>"
-        f"<div class='tip-row'><span style='color:#8b949e;min-width:74px;display:inline-block'>Today (UTC)</span>"
-        f" {_fmt_pnl(today_pnl_total)}</div>"
-        f"<div class='tip-row'><span style='color:#8b949e;min-width:74px;display:inline-block'>Since reset</span>"
-        f" {_fmt_pnl(life_pnl_total)}</div>"
-        f"</div>"
-        f"</div>"
-        f"<div class='sb-item'><div class='lbl'>HB issues</div>"
-        f"<div class='val {hb_cls}'>{hb_issues}</div></div>"
-        f"<div class='sb-item'><div class='lbl'>Svc issues</div>"
-        f"<div class='val {svc_cls}'>{svc_issues}</div></div>"
-        f"<div class='sb-item'><div class='lbl'>Unreachable</div>"
-        f"<div class='val {unr_cls}'>{unreachable}</div></div>"
-        f"</div>"
-    )
-
-    # BTC 24h from the Binance API.
+    # BTC 24h (Binance) — labels are neutral (BTC/H/L), so this is language-independent.
     btc_24h   = _fetch_btc_24h()
     btc_price = float(btc_24h.get("lastPrice") or 0)
     btc_chg   = float(btc_24h.get("priceChangePercent") or 0)
@@ -1147,75 +1511,190 @@ def _render_html(
     if btc_price:
         chg_cls  = "up" if btc_chg >= 0 else "dn"
         chg_sign = "+" if btc_chg >= 0 else ""
-        chg_html = (
-            f"<span class='chg {chg_cls}'>{chg_sign}{btc_chg:.2f}%</span>"
-            if btc_24h else ""
-        )
-        range_html = (
-            f"<span style='color:#484f58;font-size:.88em'>H&thinsp;${btc_high:,.0f}"
-            f" &nbsp; L&thinsp;${btc_low:,.0f}</span>"
-            if btc_high else ""
-        )
-        btc_price_html = (
-            f"<div class='btc-price'>"
-            f"<span>BTC</span>"
-            f"<span class='price'>${btc_price:,.0f}</span>"
-            f"{chg_html}{range_html}"
-            f"</div>"
-        )
+        chg_html = (f"<span class='chg {chg_cls}'>{chg_sign}{btc_chg:.2f}%</span>"
+                    if btc_24h else "")
+        range_html = (f"<span style='color:#484f58;font-size:.88em'>H&thinsp;${btc_high:,.0f}"
+                      f" &nbsp; L&thinsp;${btc_low:,.0f}</span>" if btc_high else "")
+        btc_price_html = (f"<div class='btc-price'><span>BTC</span>"
+                          f"<span class='price'>${btc_price:,.0f}</span>{chg_html}{range_html}</div>")
     else:
         btc_price_html = ""
 
-    hb_html    = _render_heartbeat_pills(heartbeats)
+    now = int(time.time())
 
-    # Build per-account heartbeat rows (acct_short = first word of label, e.g. "acct-3")
     def _acct_hb(label: str) -> list:
         short = label.split()[0]
         return [r for r in heartbeats if (r.get("_label") or "").split()[0] == short]
 
-    cards_html = "".join(
-        _render_account_card(label, data, _acct_hb(label))
-        for label, data in zip(_ACCOUNT_LABELS, accounts)
-    )
+    langs = _langs_ordered()
 
-    banners_html  = _render_banners(accounts, heartbeats)
+    # ── Render the whole body once per language (t() reads _CUR_LANG) ────────
+    # Each language version is wrapped in a .langbox toggled client-side by a body class,
+    # so every string is contiguous and even native title= attributes are per-language.
+    langboxes = []
+    titles = {}
+    lang_sel = ("<span class='lang-sel'>" + "".join(
+        f"<button class='lbtn lbtn-{L}' onclick=\"setLang('{L}')\">{escape(L.upper())}</button>"
+        for L in langs) + "</span>")
+    for lang in langs:
+        _CUR_LANG = lang
+        _scope_label = t("scope_live") if scope == "live" else t("scope_sim")
+        titles[lang] = f"{t('title')} — {_scope_label}"
+        # Cross-link to the other page, labelled with the OTHER scope (translated per-language).
+        nav_html = ""
+        if nav_href:
+            _other = t("scope_sim") if scope == "live" else t("scope_live")
+            nav_html = f"<a class='nav-link' href='{escape(nav_href)}'>{escape(_other)} →</a>"
 
-    expected_html = _render_expected_actual(
-        inventory or [], deploys or [], heartbeats, user_to_label or {})
+        status_text = (t("status_collector_down") if collector_down
+                       else t("status_nominal") if total_issues == 0
+                       else t("status_issues", n=total_issues))
+
+        if pnl_windows:
+            fleet_pnl_html = _win_spans_agg(_sum_windows(list(pnl_windows.values())))
+        else:
+            _s = "+" if today_pnl_total >= 0 else ""
+            _c = "pnl-pos" if today_pnl_total >= 0 else "pnl-neg"
+            fleet_pnl_html = f"<span class='{_c}'>{_s}${today_pnl_total:.2f}</span>"
+
+        summary_bar = (
+            f"<div class='summary-bar'>"
+            f"<div class='sb-item'><div class='lbl'>{escape(t('sb_bots_alive'))}</div>"
+            f"<div class='val {alive_cls}'>{alive_display}</div></div>"
+            f"<div class='sb-item tt'>"
+            f"<div class='lbl'>{escape(t('sb_pnl_window'))}</div>"
+            f"<div class='val'>{fleet_pnl_html}</div>"
+            f"<div class='tip'>"
+            f"<span class='tip-label'>{escape(t('sb_tip_title'))}</span>"
+            f"<div class='tip-row'><span style='color:#8b949e;min-width:74px;"
+            f"display:inline-block'>{escape(t('lbl_today_utc'))}</span>"
+            f" {_fmt_pnl(today_pnl_total)}</div>"
+            f"<div class='tip-row'><span style='color:#8b949e;min-width:74px;"
+            f"display:inline-block'>{escape(t('lbl_since_reset'))}</span>"
+            f" {_fmt_pnl(life_pnl_total)}</div>"
+            f"</div></div>"
+            f"<div class='sb-item'><div class='lbl'>{escape(t('sb_hb_issues'))}</div>"
+            f"<div class='val {hb_cls}'>{hb_issues}</div></div>"
+            f"<div class='sb-item'><div class='lbl'>{escape(t('sb_svc_issues'))}</div>"
+            f"<div class='val {svc_cls}'>{svc_issues}</div></div>"
+            f"<div class='sb-item'><div class='lbl'>{escape(t('sb_unreachable'))}</div>"
+            f"<div class='val {unr_cls}'>{unreachable}</div></div>"
+            f"</div>"
+        )
+
+        win_toggle = (
+            f"<div class='win-toggle'>"
+            f"<span class='wt-lbl tt'>{escape(t('win_lbl'))}"
+            f"<div class='tip tip-up'>"
+            f"<span class='tip-label'>{escape(t('win_tip_title'))}</span>"
+            f"<div class='tip-row'>{escape(t('win_tip_daily'))}</div>"
+            f"<div class='tip-row'>{escape(t('win_tip_weekmonth'))}</div>"
+            f"<div class='tip-row'>{escape(t('win_tip_sincereset'))}</div>"
+            f"<div class='tip-dim'>{escape(t('win_tip_note'))}</div>"
+            f"</div></span>"
+            f"<button class='wbtn wbtn-daily' onclick=\"setWin('daily')\">{escape(t('win_daily'))}</button>"
+            f"<button class='wbtn wbtn-weekly' onclick=\"setWin('weekly')\">{escape(t('win_weekly'))}</button>"
+            f"<button class='wbtn wbtn-monthly' onclick=\"setWin('monthly')\">{escape(t('win_monthly'))}</button>"
+            f"<button class='wbtn wbtn-alltime' onclick=\"setWin('alltime')\">{escape(t('win_alltime'))}</button>"
+            f"</div>"
+        )
+
+        banners_html = _render_banners(accounts, heartbeats)
+
+        # Real-money page: the rich per-trade section IS the body — the family roll-up,
+        # expected-vs-actual and per-account cards are the overview page's job, so they are
+        # skipped here (and skipping them sidesteps the account-card positional alignment).
+        if scope == "live":
+            mid_html = (f"<h2>{escape(t('h_live_trades'))}</h2>"
+                        + _render_live_trades(heartbeats, trades_by_bot or {}))
+        else:
+            families_html = _render_bot_families(heartbeats, pnl_windows, now)
+            cards_html = "".join(_render_account_card(label, data, _acct_hb(label))
+                                 for label, data in zip(_ACCOUNT_LABELS, accounts))
+            expected_html = _render_expected_actual(
+                inventory or [], deploys or [], audit_heartbeats, user_to_label or {})
+            mid_html = (f"<h2>{escape(t('h_bots_family'))}</h2>{families_html}"
+                        f"{expected_html}"
+                        f"<h2>{escape(t('h_accounts'))}</h2>"
+                        f"<div class='accounts'>{cards_html}</div>")
+
+        # The refresh countdown number is a live span JS updates; inject it as the {n} of
+        # the (already-translated) "refresh in {n}s" phrase, so word order stays correct.
+        _rf_span = "<span class='rf-ct'>60</span>"
+        footer = (
+            f"<div class='footer'>{escape(t('footer_generated', ts=ts_str))} · "
+            f"{escape(t('footer_collection', s=f'{collection_s:.1f}'))} · "
+            f"{t('footer_refresh', n=_rf_span)}</div>"
+        )
+
+        # Fleet-level evolution chart (this page's scope) right under the summary bar.
+        fleet_chart = _chart_html("__fleet__", t("chart_fleet"), t("chart_no_data"))
+
+        body_inner = (
+            f"<h1><span class='dot {dot_cls}'></span>"
+            f" {escape('tradinebotte')} · {escape(_scope_label)} — {escape(status_text)}"
+            f"<span class='h1-right'>{nav_html}{btc_price_html}"
+            f"<span style='font-size:.6em;color:#8b949e;font-weight:400'>{ts_str}</span>"
+            f"{lang_sel}</span></h1>"
+            f"{banners_html}{win_toggle}{summary_bar}"
+            f"{fleet_chart}"
+            f"{mid_html}"
+            f"{footer}"
+        )
+        langboxes.append(f"<div class='langbox i18-{lang}'>{body_inner}</div>")
+
+    _CUR_LANG = _saved_lang
+    default_lang = langs[0]
+    series_json = json.dumps(series or {}, separators=(",", ":"))
+    title_attrs = " ".join(f'data-title-{L}="{escape(titles[L])}"' for L in langs)
+    # Per-language display rules + active-selector highlight (static CSS only knows en/fr).
+    lang_css = "".join(
+        f"body.lang-{L} .i18-{L}{{display:block}}"
+        f"body.lang-{L} .lbtn-{L}{{background:#1f6feb;border-color:#1f6feb;color:#fff;font-weight:600}}"
+        for L in langs)
 
     return f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="{default_lang}">
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="refresh" content="60">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>tradinebotte — status</title>
-<style>{_CSS}</style>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,{_FAVICON_B64}">
+<title>{escape(titles[default_lang])}</title>
+<style>{_CSS}{lang_css}</style>
 </head>
-<body>
-<h1>
-  <span class="dot {dot_cls}"></span>
-  tradinebotte — {escape(status_text)}
-  {btc_price_html}
-  <span style="font-size:.6em;color:#8b949e;font-weight:400">{ts_str}</span>
-</h1>
-{banners_html}
-{summary_bar}
-{expected_html}
-<h2>Infrastructure — Heartbeats</h2>
-{hb_html}
-<h2>Accounts — Services &amp; Trades</h2>
-<div class="accounts">
-{cards_html}
-</div>
-<div class="footer">
-  Generated {ts_str} · collection {collection_s:.1f}s
-  · <span id="rf-ct">refresh in 60s</span>
-</div>
+<body class="win-daily lang-{default_lang}" {title_attrs}>
+{''.join(langboxes)}
+<script>window.TBSERIES={series_json};</script>
 <script>
+{_CHART_JS}
+</script>
+<script>
+function setWin(w){{
+  var b=document.body,c=b.className.replace(/\\bwin-\\w+\\b/g,'').trim();
+  b.className=(c?c+' ':'')+'win-'+w;
+  try{{localStorage.setItem('tbwin',w);}}catch(e){{}}
+  if(window.tbRenderAll)tbRenderAll();
+}}
+function setLang(l){{
+  var b=document.body,c=b.className.replace(/\\blang-\\w+\\b/g,'').trim();
+  b.className=(c?c+' ':'')+'lang-'+l;
+  try{{localStorage.setItem('tblang',l);}}catch(e){{}}
+  var tt=b.getAttribute('data-title-'+l);if(tt)document.title=tt;
+  if(window.tbRenderAll)tbRenderAll();
+}}
+function ltTab(btn,which){{
+  var c=btn.closest('.live-tables');if(c)c.setAttribute('data-tab',which);
+}}
 (function(){{
-  var t=60,el=document.getElementById('rf-ct');
-  setInterval(function(){{t--;if(t<=0)t=60;el&&(el.textContent='refresh in '+t+'s');}},1000);
+  var w='daily';try{{w=localStorage.getItem('tbwin')||'daily';}}catch(e){{}}
+  setWin(w);
+  var l='{default_lang}';try{{l=localStorage.getItem('tblang')||'{default_lang}';}}catch(e){{}}
+  if(document.querySelector('.i18-'+l)) setLang(l); else setLang('{default_lang}');
+  var t=60;
+  setInterval(function(){{t--;if(t<=0)t=60;
+    var els=document.getElementsByClassName('rf-ct');
+    for(var i=0;i<els.length;i++) els[i].textContent=t;}},1000);
 }})();
 </script>
 </body>
@@ -1237,17 +1716,48 @@ def main() -> None:
         default=_default_out,
         help="Output file (default: ~/public_html/tradinebottestatus.html or $TRADINEBOTTE_STATUS_OUT)",
     )
+    parser.add_argument(
+        "--lang",
+        default=None,
+        choices=sorted(_I18N) or None,
+        help=("Default UI language (the language shown before the visitor picks another; "
+              "the page always ships every language and a switcher). "
+              "Default: $TRADINEBOTTE_STATUS_LANG or en."),
+    )
+    parser.add_argument(
+        "--scope",
+        choices=("overview", "live", "both"),
+        default="both",
+        help=("Which page(s) to emit: 'overview' = simulation bots + infra + fleet health "
+              "(the current URL); 'live' = real-money bots only, with per-trade detail "
+              "(written next to --out as *-live.html); 'both' (default) writes both."),
+    )
     args = parser.parse_args()
+
+    if args.lang:
+        global _CUR_LANG
+        _CUR_LANG = args.lang
 
     if not os.path.exists(args.conf):
         print(f"Config not found: {args.conf}", file=sys.stderr)
         sys.exit(1)
 
     conf      = _load_conf(args.conf)
-    server    = conf["server"]
-    port      = conf["port"]
     users     = conf["users"]
-    passwords = conf["passwords"]
+    passwords = conf["passwords"]   # kept only for the len()-lockstep account filter below
+
+    # Render only accounts that host a bot in inventory. A TEST_USERS entry with no
+    # inventory row (the ephemeral clean-install test account) must not appear as an empty
+    # card on the production page. Filter users/passwords/labels in lockstep so the
+    # renderer's positional alignment holds; acct-N stays = idx+1 (heartbeats/live_bots
+    # are keyed by it), so an excluded index just leaves a numbering gap (no acct-7).
+    global _ACCOUNT_LABELS
+    _keep = [i for i in (_inv.active_account_idxs(_INV_ROWS) if _INV_ROWS else [])
+             if i < len(users) and i < len(passwords) and i < len(_ACCOUNT_LABELS)]
+    if _keep:
+        users           = [users[i] for i in _keep]
+        passwords       = [passwords[i] for i in _keep]
+        _ACCOUNT_LABELS = [_ACCOUNT_LABELS[i] for i in _keep]
 
     n_accounts = min(len(users), len(passwords), len(_ACCOUNT_LABELS))
     if n_accounts == 0:
@@ -1256,56 +1766,122 @@ def main() -> None:
 
     t0 = time.monotonic()
 
-    subprocess.run(
-        ["bash", "-c",
-         f"mkdir -p ~/.ssh && chmod 700 ~/.ssh && "
-         f"ssh-keygen -F '[{server}]:{port}' &>/dev/null || "
-         f"ssh-keyscan -p {port} -H {server} >> ~/.ssh/known_hosts 2>/dev/null"],
-        check=False,
-    )
-
-    # One SSH per account, sequentially
-    accounts_data = []
-    for idx in range(n_accounts):
-        print(f"Collecting account {idx+1}/{n_accounts}…", file=sys.stderr)
-        data = _collect_account(users[idx], passwords[idx], server, port)
-        accounts_data.append(data)
-
-    elapsed = time.monotonic() - t0
-    print(f"Collected in {elapsed:.1f}s", file=sys.stderr)
-
-    # Heartbeat rows come from account-1 (the status collector)
-    hb_data  = accounts_data[0].get("heartbeats") or {}
-    raw_rows = hb_data.get("rows", []) if isinstance(hb_data, dict) else []
+    # Everything comes from the shared state DB — one local read, no SSH per account.
+    hb_blob  = _qdb(SHARED_DB, {"rows": _HEARTBEAT_SQL}) or {}
+    raw_rows = hb_blob.get("rows", [])
+    inv_blob = _qdb(SHARED_DB, {"rows": _INVENTORY_SQL, "base": _INVENTORY_SQL_BASE}) or {}
+    dep_blob = _qdb(SHARED_DB, {"rows": _DEPLOYS_SQL}) or {}
+    # Prefer the strategy_type form; fall back to the base one if that column isn't migrated
+    # yet (see _INVENTORY_SQL) so the inventory is never silently blanked.
+    inventory_rows = inv_blob.get("rows") or inv_blob.get("base") or []
+    deploy_rows    = dep_blob.get("rows", [])
 
     # Map OS usernames to "acct-N" labels (avoids exposing real usernames in HTML)
     user_to_label = {u: lbl.split()[0] for u, lbl in zip(users, _ACCOUNT_LABELS)}
+    # Fleet rollup counts only inventory accounts. The ephemeral standalone test account
+    # (resolved from TEST_STANDALONE_USER_IDX) is excluded from the rendered cards but its
+    # bots still heartbeat into the shared DB; left unfiltered, their DEAD test rows inflate
+    # the issue count / fleet PnL / family view with problems no card ever shows. Drop any
+    # heartbeat from a non-kept account.
+    _kept_accounts = set(user_to_label)
+    raw_rows = [r for r in raw_rows if r.get("account") in _kept_accounts]
+    # Same guard on deploys (feeds the expected-vs-actual view): a test-account deploy row
+    # must never leak a non-inventory account into the page.
+    deploy_rows = [r for r in deploy_rows if r.get("account") in _kept_accounts]
     heartbeats = _classify_heartbeats(raw_rows, user_to_label)
 
-    # Inventory + latest deploys also come from account-1 (the shared state DB)
-    def _rows(key: str) -> list:
-        blob = accounts_data[0].get(key) or {}
-        return blob.get("rows", []) if isinstance(blob, dict) else []
-    inventory_rows = _rows("inventory")
-    deploy_rows    = _rows("deploys")
+    # Attach the readable display_name AND the canonical family (from inventory) onto each
+    # heartbeat so the account cards show the name (not the raw bot_id) and the family view
+    # groups by strategy. bot_name stays the join key. _family precedence: the inventory
+    # strategy_type column (authoritative) → derived from bot_type → derived from bot_name →
+    # the raw bot_name (never vanish). Same fail-soft path when a heartbeat has no inventory row.
+    _inv_by_key = {(r.get("account"), r.get("bot_name")): r for r in inventory_rows}
+    for _h in heartbeats:
+        _invrow = _inv_by_key.get((_h.get("account"), _h.get("bot_name"))) or {}
+        _h["_display"] = _invrow.get("display_name")
+        _h["_family"] = (_invrow.get("strategy_type")
+                         or _family_of(_invrow.get("bot_type", ""), _h.get("bot_name", ""))
+                         or _h.get("bot_name"))
 
-    html = _render_html(
-        heartbeats=heartbeats,
-        accounts=accounts_data,
-        generated_at=datetime.now(tz=timezone.utc),
-        collection_s=elapsed,
-        inventory=inventory_rows,
-        deploys=deploy_rows,
-        user_to_label=user_to_label,
-    )
+    # Per-account card data, derived from the heartbeats (was: one SSH per account).
+    accounts_data = _build_accounts_from_db(users, heartbeats)
+    # If the shared DB is unreadable there are no heartbeats — surface it as "collector
+    # down" (banner reads accounts[0].error) rather than a falsely-green empty page.
+    if not raw_rows and accounts_data:
+        accounts_data[0]["error"] = "unreachable"
 
-    if args.out:
-        os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
-        with open(args.out, "w", encoding="utf-8") as f:
+    pnl_windows = _compute_pnl_windows(SHARED_DB)
+
+    elapsed = time.monotonic() - t0
+    print(f"Collected from shared DB in {elapsed:.2f}s", file=sys.stderr)
+
+    # Split key = inventory.is_live: real-money bots to the live page, everything else
+    # (sim bots + infra) to the overview page. Trades come from the durable bot_trades log.
+    live_keys   = {(r.get("account"), r.get("bot_name"))
+                   for r in inventory_rows if r.get("is_live") == 1}
+    live_hb     = [h for h in heartbeats if (h.get("account"), h.get("bot_name")) in live_keys]
+    overview_hb = [h for h in heartbeats if (h.get("account"), h.get("bot_name")) not in live_keys]
+    trades_by_bot = _load_trades(SHARED_DB, live_keys)
+    _now = datetime.now(tz=timezone.utc)
+
+    # Scope the windowed PnL to each page's bots (keys are "account|bot_name"). Without this the
+    # real-money page's summary bar would aggregate the WHOLE fleet (sim bots included) — e.g. a
+    # meaningless alltime of the paper bots' PnL, not the live bot's real result.
+    live_pnl_windows     = {k: v for k, v in pnl_windows.items()
+                            if tuple(k.split("|", 1)) in live_keys}
+    overview_pnl_windows = {k: v for k, v in pnl_windows.items()
+                            if tuple(k.split("|", 1)) not in live_keys}
+
+    # Time-series for the evolution charts, scoped per page + a fleet aggregate ("__fleet__").
+    all_series = _load_pnl_series(SHARED_DB)
+
+    def _scoped_series(want_live: bool) -> dict:
+        sub = {k: v for k, v in all_series.items()
+               if (tuple(k.split("|", 1)) in live_keys) == want_live}
+        sub["__fleet__"] = _fleet_series(sub)
+        return sub
+
+    live_series, overview_series = _scoped_series(True), _scoped_series(False)
+
+    def _render(scope_name, hb_subset, nav_href):
+        return _render_html(
+            heartbeats=hb_subset,
+            accounts=accounts_data,
+            generated_at=_now,
+            collection_s=elapsed,
+            inventory=inventory_rows,
+            deploys=deploy_rows,
+            user_to_label=user_to_label,
+            pnl_windows=(live_pnl_windows if scope_name == "live" else overview_pnl_windows),
+            scope=scope_name,
+            trades_by_bot=trades_by_bot,
+            series=(live_series if scope_name == "live" else overview_series),
+            nav_href=nav_href,
+            audit_heartbeats=heartbeats,
+        )
+
+    def _live_path(p):   # …/x.html → …/x-live.html
+        base, ext = os.path.splitext(p)
+        return f"{base}-live{ext or '.html'}"
+
+    if not args.out:
+        # stdout: single page (default the overview; 'live' if explicitly asked).
+        _sc = "live" if args.scope == "live" else "overview"
+        print(_render(_sc, live_hb if _sc == "live" else overview_hb, ""))
+        return
+
+    ov_path, lv_path = args.out, _live_path(args.out)
+    ov_base, lv_base = os.path.basename(ov_path), os.path.basename(lv_path)
+    outputs = []
+    if args.scope in ("overview", "both"):
+        outputs.append((ov_path, _render("overview", overview_hb, lv_base)))
+    if args.scope in ("live", "both"):
+        outputs.append((lv_path, _render("live", live_hb, ov_base)))
+    for path, html in outputs:
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
             f.write(html)
-        print(f"Written to {args.out}", file=sys.stderr)
-    else:
-        print(html)
+        print(f"Written to {path}", file=sys.stderr)
 
 
 if __name__ == "__main__":

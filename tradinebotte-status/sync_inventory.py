@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""sync_inventory.py — upsert the git-tracked inventory.toml into the shared DB.
+"""sync_inventory.py — upsert the local inventory.toml into the shared DB.
 
-Reads the desired-state topology from inventory.toml (the single source of truth),
-resolves each account_idx to the real account name via TEST_USERS in the (untracked)
-conf, and upserts into the `inventory` table.  Idempotent: re-running changes nothing
-but updated_ts.  Run after editing inventory.toml, and as a deploy step so the DB
-always matches the committed topology.
+Reads the desired-state topology from inventory.toml (the single source of truth;
+local/git-ignored — see inventory.toml.example), resolves each account_idx to the real
+account name via TEST_USERS in the (untracked) conf, and upserts into the `inventory`
+table.  Idempotent: re-running changes nothing but updated_ts.  Run after editing
+inventory.toml, and as a deploy step so the DB always matches the local topology.
 
 Account names are deliberately NOT in inventory.toml (infra identifiers stay out of
 git); they are resolved here so the DB `inventory.account` matches `heartbeats.account`.
@@ -26,7 +26,10 @@ import argparse
 import os
 import subprocess
 import sys
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python < 3.11 (tomllib is stdlib only in 3.11+)
+    import tomli as tomllib
 
 # Make `tradinetools` importable whether run from the repo or a deployed install dir.
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -35,6 +38,9 @@ for _cand in (os.path.join(_HERE, "tradinetools"),                       # deplo
     if os.path.isdir(_cand):
         sys.path.insert(0, _cand)
         break
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from inventory_labels import strategy_type_of  # noqa: E402
 from tradinetools.db import open_db, upsert_inventory  # noqa: E402
 
 DEFAULT_DB = os.environ.get(
@@ -50,7 +56,7 @@ def conf_users(conf: str) -> list[str]:
     """Read the TEST_USERS bash array by sourcing the conf in a subshell."""
     out = subprocess.run(
         ["bash", "-c", f'source "{conf}"; printf "%s\\n" "${{TEST_USERS[@]}}"'],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
     return [x for x in out.stdout.splitlines() if x]
 
@@ -80,6 +86,12 @@ def resolve(rows: list[dict], users: list[str]) -> list[dict]:
         out["account"] = account
         if out.get("service_unit"):
             out["service_unit"] = out["service_unit"].replace("{account}", account)
+        # strategy_type is authoritative from the toml; derive it from bot_type when a
+        # trading-bot row omits it, so the DB column is never silently NULL for a bot.
+        if not out.get("strategy_type"):
+            derived = strategy_type_of(out)
+            if derived:
+                out["strategy_type"] = derived
         resolved.append(out)
     return resolved
 

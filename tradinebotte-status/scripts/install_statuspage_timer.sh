@@ -29,7 +29,7 @@ NO_START=false
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-UNIT_SRC="$SCRIPT_DIR/systemd"
+UNIT_SRC="$(cd "$SCRIPT_DIR/../.." && pwd)/systemd"
 UNIT_DIR="$HOME/.config/systemd/user"
 
 echo -e "\n${BOLD}${YELLOW}═══ tradinebotte-statuspage timer install ═══${NC}"

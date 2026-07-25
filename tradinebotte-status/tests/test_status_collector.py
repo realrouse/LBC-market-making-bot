@@ -13,8 +13,39 @@ _TESTS_DIR = os.path.dirname(__file__)
 sys.path.insert(0, os.path.join(_TESTS_DIR, ".."))
 sys.path.insert(0, os.path.join(_TESTS_DIR, "../tradinetools"))
 
-from status_collector import open_db, store_heartbeat
+from status_collector import open_db, store_heartbeat, _ingest
 from tradinetools import build_heartbeat
+
+
+class TestIngestRouting(unittest.TestCase):
+    """One PULL socket, two message kinds: _ingest must route by the `type` field."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.db = open_db(os.path.join(self.d, "s.db"))
+
+    def _counts(self):
+        hb = self.db.execute("SELECT count(*) FROM heartbeats").fetchone()[0]
+        tr = self.db.execute("SELECT count(*) FROM bot_trades").fetchone()[0]
+        return hb, tr
+
+    def test_trade_message_routes_to_bot_trades(self):
+        tag = _ingest(self.db, {"type": "trade", "account": "acct-a", "bot_name": "b",
+                                "ts_ms": 1, "side": "buy", "price": 1.0, "qty": 2.0})
+        self.assertEqual(tag, "trade-stored")
+        self.assertEqual(self._counts(), (0, 1))
+
+    def test_trade_duplicate_ignored(self):
+        msg = {"type": "trade", "account": "acct-a", "bot_name": "b", "ts_ms": 1,
+               "side": "buy", "price": 1.0, "qty": 2.0}
+        _ingest(self.db, msg)
+        self.assertEqual(_ingest(self.db, msg), "trade-dup")
+        self.assertEqual(self._counts(), (0, 1))
+
+    def test_heartbeat_message_routes_to_heartbeats(self):
+        tag = _ingest(self.db, {"account": "a", "bot_name": "b", "ts": 1})
+        self.assertEqual(tag, "heartbeat")
+        self.assertEqual(self._counts(), (1, 0))
 
 
 class TestOpenDb(unittest.TestCase):
@@ -230,7 +261,6 @@ class TestHeartbeatQueryRows(unittest.TestCase):
     def setUp(self):
         fd, self.db_path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
-        from status_collector import open_db
         self.db = open_db(self.db_path)
         from heartbeat_query import query_heartbeats
         self.query_heartbeats = query_heartbeats

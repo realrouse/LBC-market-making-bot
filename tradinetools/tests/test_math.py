@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from tradinetools.math import (
     sma_last, ema_last, atr_last, bollinger_last,
-    vwap_last, vol_zscore_last, rolling_max_last,
+    vwap_last, vol_zscore_last, rolling_max_last, ichimoku_last,
 )
 
 
@@ -208,6 +208,64 @@ class TestRollingMaxLast(unittest.TestCase):
     def test_exact_window(self):
         series = [float(i) for i in range(10)]
         self.assertAlmostEqual(rolling_max_last(series, 10), 9.0)
+
+
+class TestIchimokuLast(unittest.TestCase):
+
+    # Small custom periods make every line hand-verifiable.
+    #  idx:      0    1    2    3    4    5
+    H = [30.0, 12.0, 11.0, 15.0, 14.0, 13.0]
+    L = [25.0,  9.0,  7.0, 11.0, 10.0,  9.0]
+    C = [28.0, 11.0, 10.0, 13.0, 12.0, 11.0]
+    KW = dict(tenkan_n=2, kijun_n=3, senkou_b_n=4, displacement=2)
+
+    def test_tenkan_kijun_current(self):
+        r = ichimoku_last(self.H, self.L, self.C, **self.KW)
+        # tenkan(2): H[4:6]=[14,13]→14, L[4:6]=[10,9]→9 → (14+9)/2
+        self.assertAlmostEqual(r["tenkan"], 11.5)
+        # kijun(3): H[3:6]=[15,14,13]→15, L[3:6]=[11,10,9]→9 → (15+9)/2
+        self.assertAlmostEqual(r["kijun"], 12.0)
+
+    def test_cloud_uses_displaced_window_not_current(self):
+        # The crux: cloud must be the spans computed `displacement`(2) bars ago.
+        r = ichimoku_last(self.H, self.L, self.C, **self.KW)
+        # span_b(4, back=2): H[0:4]=[30,12,11,15]→30, L[0:4]=[25,9,7,11]→7 → 18.5
+        # tenkan_past(2,back2)=11, kijun_past(3,back2)=11 → span_a=11.0
+        self.assertAlmostEqual(r["cloud_top"], 18.5)     # max(18.5, 11.0)
+        self.assertAlmostEqual(r["cloud_bottom"], 11.0)  # min(18.5, 11.0)
+        # Sanity: cloud differs from the current tenkan/kijun (no look-at-now leak).
+        self.assertNotAlmostEqual(r["cloud_top"], r["kijun"])
+
+    def test_chikou_is_close_displacement_bars_ago(self):
+        r = ichimoku_last(self.H, self.L, self.C, **self.KW)
+        # chikou = C[n-1-displacement] = C[6-1-2] = C[3] = 13.0
+        self.assertAlmostEqual(r["chikou"], 13.0)
+
+    def test_cloud_none_when_insufficient_history(self):
+        # 5 bars < senkou_b_n(4)+displacement(2)=6 → cloud None, lines still present.
+        r = ichimoku_last(self.H[:5], self.L[:5], self.C[:5], **self.KW)
+        self.assertIsNone(r["cloud_top"])
+        self.assertIsNone(r["cloud_bottom"])
+        self.assertIsNotNone(r["tenkan"])
+        self.assertIsNotNone(r["kijun"])
+        self.assertAlmostEqual(r["chikou"], 10.0)  # C[5-1-2]=C[2]
+
+    def test_standard_periods_cloud_needs_78_bars(self):
+        # 60 bars: kijun/chikou defined, but cloud needs 52+26=78 → None.
+        h = [100.0] * 60; l = [99.0] * 60; c = [99.5] * 60
+        r = ichimoku_last(h, l, c)
+        self.assertIsNone(r["cloud_top"])
+        self.assertIsNone(r["cloud_bottom"])
+        self.assertIsNotNone(r["kijun"])
+        self.assertIsNotNone(r["chikou"])   # 60 > displacement(26)
+
+    def test_standard_periods_full_series(self):
+        # 80 flat-ish bars → every line defined; flat series → all lines equal price.
+        n = 80
+        h = [100.0] * n; l = [100.0] * n; c = [100.0] * n
+        r = ichimoku_last(h, l, c)
+        for k in ("tenkan", "kijun", "cloud_top", "cloud_bottom", "chikou"):
+            self.assertAlmostEqual(r[k], 100.0, msg=f"{k} should be 100.0 on flat series")
 
 
 if __name__ == "__main__":

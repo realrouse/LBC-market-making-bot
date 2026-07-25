@@ -264,6 +264,29 @@ Maximum high price over the last N bars. Useful for breakout detection.
 
 ---
 
+#### ichimoku — Ichimoku Kinko Hyo
+
+**Keys:** `ichi_tenkan`, `ichi_kijun`, `ichi_cloud_top`, `ichi_cloud_bottom`, `ichi_chikou`  
+**Config:** `{"type": "ichimoku"}` — no `period`; fixed conventional 9 / 26 / 52 / 26.  
+**Source requirement:** `binance_ws`
+
+A multi-line group emitting five values (one config entry → five keys):
+
+| Key | Meaning |
+| --- | --- |
+| `ichi_tenkan` | Conversion line, **current**: `(max(high,9) + min(low,9)) / 2` |
+| `ichi_kijun` | Base line, **current**: `(max(high,26) + min(low,26)) / 2` |
+| `ichi_cloud_top` / `ichi_cloud_bottom` | The Senkou Span A/B that **apply to the current bar** — the leading spans are computed 26 bars ago (displacement), so these are the cloud the live price is actually trading against. `top = max(A,B)`, `bottom = min(A,B)`. **Compare live price to these, never to a current forming span.** |
+| `ichi_chikou` | `close[t − 26]` — the price the lagging span is compared against; a consumer holding the current close derives the chikou signal as `sign(close_now − ichi_chikou)`. |
+
+**History requirement:** the applicable cloud needs 52 (Senkou B) + 26 (displacement)
+= **78 bars**. Because the publisher suppresses a stream's entire message while *any*
+of its indicators is still `None`, set `seed_periods >= 78` and prefer running
+ichimoku in **its own stream** so a warming-up cloud never blocks faster indicators.
+See `strategies/indicators_ichimoku_btc.json`.
+
+---
+
 ## 4. WebSocket-based sources
 
 These sources maintain a persistent Binance WebSocket connection and publish
@@ -730,14 +753,20 @@ Each file declares a single stream on a dedicated port pair.
 | `indicators_ls_ratio_bitcoin.json` | `binance_ls_ratio` | `btc_ls_ratio` | 5571 | 5572 | 300 s |
 | `indicators_liquidations_bitcoin.json` | `binance_liquidations` | `btc_liquidations` | 5573 | 5574 | 300 s |
 
-### Starting the unified production instance
+### Running indicators by hand (debug)
+
+In **production**, indicators runs the unified 14-stream config under the
+`tradinebotte-indicators` systemd unit, installed by the deploy engine
+(`scripts/deploy.py`). `start_indicators.sh` is the **debug / manual-launch**
+path — handy for running one stream in isolation while diagnosing it; do not
+use it on a deployed account.
 
 ```bash
-# Production: all 14 streams (managed by tradinebotte-indicators systemd service)
+# Debug: run the full unified config by hand
 TRADINEBOTTE_INDICATORS_CONFIG=tradinebotte-indicators/strategies/indicators_all.json \
   bash tradinebotte-indicators/scripts/start_indicators.sh
 
-# Testing a single stream in isolation
+# Debug: test a single stream in isolation
 TRADINEBOTTE_INDICATORS_CONFIG=tradinebotte-indicators/strategies/indicators_oi_bitcoin.json \
   bash tradinebotte-indicators/scripts/start_indicators.sh
 ```
