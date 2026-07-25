@@ -1,3 +1,5 @@
+<img src="../graphics/favicon-512.png" alt="tradinebotte logo" width="96">
+
 # Process Architecture & ZeroMQ Message Flow
 
 > 🇫🇷 [Version française](design.fr.md)

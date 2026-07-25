@@ -1,3 +1,5 @@
+<img src="../graphics/favicon-512.png" alt="logo tradinebotte" width="96">
+
 # Architecture multi-processus et flux de messages ZeroMQ
 
 > 🇬🇧 [English version](design.md)

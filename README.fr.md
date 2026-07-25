@@ -1,3 +1,5 @@
+<img src="graphics/favicon-512.png" alt="logo tradinebotte" width="96">
+
 # tradinebotte
 
 > 🇬🇧 [English version](README.md)

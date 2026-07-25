@@ -193,6 +193,12 @@ def _load_conf(path: str) -> dict:
 
 # ─── HTML rendering ──────────────────────────────────────────────────────────
 
+# Inline copy of graphics/favicon.svg (base64) — self-contained so the
+# generated single-file HTML needs no companion asset deployed alongside it.
+_FAVICON_B64 = (
+    "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+CiAgPHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTQiIGZpbGw9IiMxNjE4MjYiPjwvcmVjdD4KICA8ZyBmaWxsPSJub25lIiBzdHJva2U9IiM5MTg0ZDkiIHN0cm9rZS13aWR0aD0iMi42IiBzdHJva2UtbGluZWNhcD0icm91bmQiPgogICAgPGxpbmUgeDE9IjIwIiB5MT0iNDQiIHgyPSIyMCIgeTI9IjIwIj48L2xpbmU+CiAgICA8bGluZSB4MT0iMjAiIHkxPSIyMCIgeDI9IjQ0IiB5Mj0iNDQiPjwvbGluZT4KICAgIDxsaW5lIHgxPSI0NCIgeTE9IjQ0IiB4Mj0iNDQiIHkyPSIyMCI+PC9saW5lPgogIDwvZz4KICA8Y2lyY2xlIGN4PSIyMCIgY3k9IjIwIiByPSI0LjUiIGZpbGw9IiMxNjE4MjYiIHN0cm9rZT0iIzkxODRkOSIgc3Ryb2tlLXdpZHRoPSIyLjYiPjwvY2lyY2xlPgogIDxjaXJjbGUgY3g9IjIwIiBjeT0iNDQiIHI9IjQuNSIgZmlsbD0iIzE2MTgyNiIgc3Ryb2tlPSIjOTE4NGQ5IiBzdHJva2Utd2lkdGg9IjIuNiI+PC9jaXJjbGU+CiAgPGNpcmNsZSBjeD0iNDQiIGN5PSIyMCIgcj0iNC41IiBmaWxsPSIjMTYxODI2IiBzdHJva2U9IiM5MTg0ZDkiIHN0cm9rZS13aWR0aD0iMi42Ij48L2NpcmNsZT4KICA8Y2lyY2xlIGN4PSI0NCIgY3k9IjQ0IiByPSI1LjUiIGZpbGw9IiM5MTg0ZDkiPjwvY2lyY2xlPgo8L3N2Zz4="
+)
+
 _CSS = """
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'SF Mono',Menlo,monospace;background:#0d1117;color:#c9d1d9;
@@ -1643,6 +1649,7 @@ def _render_html(
 <meta charset="UTF-8">
 <meta http-equiv="refresh" content="60">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,{_FAVICON_B64}">
 <title>{escape(titles[default_lang])}</title>
 <style>{_CSS}{lang_css}</style>
 </head>
