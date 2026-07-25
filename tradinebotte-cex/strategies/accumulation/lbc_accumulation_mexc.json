@@ -4,7 +4,8 @@
     "_band_note": "The requested 0.001–0.0025 range is not a hard bound (the accumulation engine has no lower/upper band like the grid). It emerges from behaviour: dip-buying pulls entries down toward ~0.001 and the profit bands (+5..+50% from a ~0.0021 avg entry, i.e. up to ~0.00253) take profit as price rises toward 0.0025.",
 
     "strategy_type":        "bamm",
-    "_bamm_note": "BAMM = Bullish Accumulating Market Maker: fixed-rung two-sided maker, downside-weighted, floored at 0.001, keeps 10% of every buy as permanent stash. grid_top pinned for stable rungs across restarts; grid_budget_usdt is the ladder SIZING (placement gated by real free_usdt, so it under-fills until the $150 top-up).",
+    "_bamm_note": "BAMM = Bullish Accumulating Market Maker: fixed-rung two-sided maker, downside-weighted, floored at 0.001, keeps 10% of every buy as permanent stash. grid_top pinned for stable rungs across restarts. grid_budget_usdt is only the SIZING split across the geometric ladder — placement is gated by the bot's own free_usdt (persisted, not this file), which by 2026-07-25 already covers every geometric rung (confirmed: real MEXC balance free=$92.62 well beyond the resting book). The '$150 top-up' framing is stale — treat grid_budget_usdt as sizing-only, not a live funding gate.",
+    "_extra_rungs_note": "extra_buy_rungs (2026-07-25, operator request): two manual $10 fixed rungs placed OUTSIDE the geometric lattice, at operator-chosen prices in the gap between the resting 0.0022806 bid and the 0.0024007 ask — NOT derived from grid_step_pct (0.00237/0.00247 are ~4.05% apart, not the ladder's 5%). Funded by a $20 USDT deposit (capital_usdt 100->120). Same bid->ask->rebuy cycle as any other rung once added.",
     "grid_top":             0.0028,
     "grid_floor":           0.001,
     "grid_step_pct":        5.0,
@@ -15,7 +16,12 @@
 
     "symbol":               "LBCUSDT",
 
-    "capital_usdt":         100.0,
+    "extra_buy_rungs": [
+        { "price": 0.00247, "usdt": 10.0 },
+        { "price": 0.00237, "usdt": 10.0 }
+    ],
+
+    "capital_usdt":         120.0,
     "initial_stake_usdt":   10.0,
     "scale_in_usdt":        5.0,
     "scale_in_dip_factor":  0.5,

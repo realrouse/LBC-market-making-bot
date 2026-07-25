@@ -33,6 +33,14 @@ class Rung:
     price: float          # rung price (a fixed grid line)
     usdt:  float          # USDT to spend buying this rung
     coins: float          # coins that USDT buys at `price` (usdt / price)
+    seedable: bool = True # False = never let seed_holdings() claim this rung as pre-loaded (ask):
+                           # a manual extra_rung is a fresh buy the operator just funded, not part
+                           # of the pre-existing position — seed_holdings' greedy "nearest ask above
+                           # market" reconstruction otherwise treats ANY holdings as fair game for
+                           # ANY rung, and a newly-inserted low ask price can jump the queue ahead of
+                           # rungs that were genuinely already loaded, silently turning the intended
+                           # new buy into a resting sell of coins bought long ago (no new capital
+                           # spent, exposure unchanged, but not what the operator asked for).
 
 
 def _geometric_prices(top: float, floor: float, step_pct: float) -> list[float]:
@@ -57,7 +65,8 @@ def _geometric_prices(top: float, floor: float, step_pct: float) -> list[float]:
 
 def build_buy_grid(*, top: float, floor: float = 0.001, step_pct: float = 5.0,
                    budget_usdt: float = 80.0, sizing_power: float = 1.0,
-                   min_notional_usdt: float = 1.1) -> list[Rung]:
+                   min_notional_usdt: float = 1.1,
+                   extra_rungs: "list[tuple[float, float]] | None" = None) -> list[Rung]:
     """The buy ladder: fixed rungs from `top` down to `floor`, together spending the WHOLE
     `budget_usdt`, weighted so deeper rungs buy more.
 
@@ -65,27 +74,38 @@ def build_buy_grid(*, top: float, floor: float = 0.001, step_pct: float = 5.0,
     sizing_power = 1 ≈ "5% dip → ~5% of funds"; >1 tilts harder toward the floor. Any rung whose
     share falls under `min_notional_usdt` (MEXC rejects < ~1 USDT) is dropped and its budget
     re-spread over the survivors, so every returned rung is placeable and Σ usdt still equals the
-    budget (deploy-at-floor holds)."""
-    if budget_usdt <= 0:
-        return []
-    prices = _geometric_prices(top, floor, step_pct)
-    weights = [max(0.0, (top - p) / top) ** sizing_power for p in prices]
-    kept = list(range(len(prices)))
-    alloc: dict[int, float] = {}
-    while kept:
-        wsum = sum(weights[i] for i in kept)
-        if wsum <= 0:
-            return []
-        alloc = {i: budget_usdt * weights[i] / wsum for i in kept}
-        under = [i for i in kept if alloc[i] < min_notional_usdt]
-        if not under:
-            break
-        worst = min(under, key=lambda i: alloc[i])
-        kept.remove(worst)
-    rungs = []
-    for i in kept:
-        usdt = round(alloc[i], 4)                 # coins follow the ACTUAL rounded spend
-        rungs.append(Rung(price=prices[i], usdt=usdt, coins=usdt / prices[i]))
+    budget (deploy-at-floor holds).
+
+    `extra_rungs`: optional (price, usdt) pairs placed OUTSIDE the geometric lattice at an
+    operator-chosen price/size — e.g. a manual top-up meant to land at a specific level rather
+    than reshape the whole ladder. Independent of `budget_usdt`/the weighting above; each becomes
+    its own fixed rung (same bid→ask→rebuy cycle as any other)."""
+    rungs: list[Rung] = []
+    if budget_usdt > 0:
+        prices = _geometric_prices(top, floor, step_pct)
+        weights = [max(0.0, (top - p) / top) ** sizing_power for p in prices]
+        kept = list(range(len(prices)))
+        alloc: dict[int, float] = {}
+        while kept:
+            wsum = sum(weights[i] for i in kept)
+            if wsum <= 0:
+                kept = []
+                break
+            alloc = {i: budget_usdt * weights[i] / wsum for i in kept}
+            under = [i for i in kept if alloc[i] < min_notional_usdt]
+            if not under:
+                break
+            worst = min(under, key=lambda i: alloc[i])
+            kept.remove(worst)
+        for i in kept:
+            usdt = round(alloc[i], 4)              # coins follow the ACTUAL rounded spend
+            rungs.append(Rung(price=prices[i], usdt=usdt, coins=usdt / prices[i]))
+    for price, usdt in (extra_rungs or []):
+        if usdt <= 0 or usdt < min_notional_usdt:
+            continue
+        rungs.append(Rung(price=price, usdt=round(usdt, 4), coins=round(usdt, 4) / price,
+                         seedable=False))
+    rungs.sort(key=lambda r: r.price, reverse=True)   # keep top->floor order with extras merged in
     return rungs
 
 
@@ -147,8 +167,9 @@ class BammGrid:
         self.stash_pct = stash_pct
         self.maker_fee = maker_fee
         self.min_notional = min_notional_usdt
-        # rung i: dict(price, loop_coins, mode 'bid'|'ask'|'idle')
-        self.rungs = [{"price": r.price, "loop_coins": r.coins, "mode": "bid"} for r in rungs]
+        # rung i: dict(price, loop_coins, mode 'bid'|'ask'|'idle', seedable)
+        self.rungs = [{"price": r.price, "loop_coins": r.coins, "mode": "bid",
+                      "seedable": r.seedable} for r in rungs]
         self.free_usdt = float(free_usdt)
         self.holdings = 0.0        # all coins we hold (stash + coins parked in loaded rungs)
         self.stash = 0.0           # permanent accumulation, never offered for sale
@@ -164,11 +185,14 @@ class BammGrid:
         above first (so they sell on the way up, soonest). NEVER load a rung whose ask is at/below
         the market — that would dump the position at a loss. Coins that don't fit above the market
         (the common case for a bullish accumulator's existing bag) become permanent stash: held,
-        never force-sold."""
+        never force-sold. Rungs marked non-seedable (a manual extra_rung, just funded) are skipped
+        entirely — they always start as a fresh empty bid, never claimed by this reconstruction."""
         left = coins
         for i in sorted(range(len(self.rungs)), key=self._ask_price):   # lowest ask first
             if left <= 0:
                 break
+            if not self.rungs[i]["seedable"]:
+                continue
             ask = self._ask_price(i)
             if ask <= mid:
                 continue                                  # never rest a sell at/below market

@@ -764,10 +764,11 @@ class AccumulationStrategy:
         step  = float(p.get("grid_step_pct", 5.0))
         minn  = float(p.get("sell_min_notional_usdt", 1.1))
         budget = float(p.get("grid_budget_usdt", p.get("capital_usdt", 100.0)))
+        extra = [(float(r["price"]), float(r["usdt"])) for r in p.get("extra_buy_rungs", [])]
         rungs = bamm.build_buy_grid(top=top, floor=float(p.get("grid_floor", 0.001)),
                                     step_pct=step, budget_usdt=budget,
                                     sizing_power=float(p.get("grid_sizing_power", 0.5)),
-                                    min_notional_usdt=minn)
+                                    min_notional_usdt=minn, extra_rungs=extra)
         g = bamm.BammGrid(rungs, step_pct=step, stash_pct=float(p.get("grid_stash_pct", 0.10)),
                           free_usdt=budget, maker_fee=float(p.get("maker_fee_spot", 0.0)),
                           min_notional_usdt=minn)

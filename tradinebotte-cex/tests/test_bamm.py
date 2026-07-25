@@ -69,6 +69,72 @@ class TestBuildBuyGrid(unittest.TestCase):
         self.assertAlmostEqual(s["avg_cost"], s["usdt"] / s["coins"], places=6)
 
 
+class TestExtraRungs(unittest.TestCase):
+    """extra_rungs: manual fixed-price/fixed-usdt rungs bolted on alongside the geometric ladder
+    (2026-07-25 operator top-up — two $10 rungs at prices the 5% lattice never lands on)."""
+    KW = dict(top=0.00278, floor=0.001, step_pct=5.0, budget_usdt=80.0, min_notional_usdt=1.1)
+
+    def test_extra_rungs_are_added_at_exact_price_and_usdt(self):
+        rungs = bamm.build_buy_grid(**self.KW, extra_rungs=[(0.00247, 10.0), (0.00237, 10.0)])
+        extras = [r for r in rungs if r.price in (0.00247, 0.00237)]
+        self.assertEqual(len(extras), 2)
+        for r in extras:
+            self.assertAlmostEqual(r.usdt, 10.0)
+            self.assertAlmostEqual(r.coins, 10.0 / r.price, places=6)
+
+    def test_extra_rungs_dont_change_the_geometric_ladder(self):
+        base = bamm.build_buy_grid(**self.KW)
+        with_extra = bamm.build_buy_grid(**self.KW, extra_rungs=[(0.00247, 10.0)])
+        base_prices = {round(r.price, 9) for r in base}
+        kept = [r for r in with_extra if round(r.price, 9) in base_prices]
+        self.assertEqual(len(kept), len(base))
+        for r in kept:
+            match = next(b for b in base if round(b.price, 9) == round(r.price, 9))
+            self.assertAlmostEqual(r.usdt, match.usdt, places=6)
+
+    def test_extra_rung_below_min_notional_is_dropped(self):
+        rungs = bamm.build_buy_grid(**self.KW, extra_rungs=[(0.00247, 0.5)])
+        self.assertFalse(any(r.price == 0.00247 for r in rungs))
+
+    def test_extra_rungs_alone_work_with_zero_budget(self):
+        rungs = bamm.build_buy_grid(**{**self.KW, "budget_usdt": 0.0},
+                                    extra_rungs=[(0.00247, 10.0), (0.00237, 10.0)])
+        self.assertEqual(len(rungs), 2)
+        self.assertAlmostEqual(sum(r.usdt for r in rungs), 20.0)
+
+    def test_rungs_stay_top_to_floor_ordered_with_extras_merged_in(self):
+        rungs = bamm.build_buy_grid(**self.KW, extra_rungs=[(0.00247, 10.0), (0.00237, 10.0)])
+        prices = [r.price for r in rungs]
+        self.assertEqual(prices, sorted(prices, reverse=True))
+
+    def test_extra_rung_participates_in_the_normal_cycle(self):
+        rungs = bamm.build_buy_grid(**self.KW, extra_rungs=[(0.00247, 10.0)])
+        g = bamm.BammGrid(rungs, step_pct=5.0, stash_pct=0.10, free_usdt=100.0)
+        i = next(idx for idx, r in enumerate(g.rungs) if r["price"] == 0.00247)
+        coins = g.rungs[i]["loop_coins"]
+        g.on_buy_fill(i, coins)
+        self.assertEqual(g.rungs[i]["mode"], "ask")
+        self.assertAlmostEqual(g._ask_price(i), 0.00247 * 1.05)
+
+    def test_extra_rung_is_never_seeded_as_pre_loaded(self):
+        # Regression (2026-07-25 live incident): a restart's seed_holdings() reconstruction
+        # greedily claims ANY rung whose ask is above market for pre-existing holdings, in
+        # ascending-ask-price order. A newly added low-ask extra rung can jump that queue ahead of
+        # rungs that were genuinely already loaded — silently turning the intended NEW buy into a
+        # resting sell of coins bought long ago, with the fresh capital never spent. Extra rungs
+        # must be immune to this reconstruction: always a fresh empty bid after any restart.
+        rungs = bamm.build_buy_grid(**self.KW, extra_rungs=[(0.00237, 10.0)])
+        g = bamm.BammGrid(rungs, step_pct=5.0, stash_pct=0.10, free_usdt=100.0)
+        i = next(idx for idx, r in enumerate(g.rungs) if r["price"] == 0.00237)
+        g.seed_holdings(50000.0, mid=0.002)   # plenty of pre-existing holdings, market well below
+        self.assertEqual(g.rungs[i]["mode"], "bid")
+        self.assertAlmostEqual(g.rungs[i]["loop_coins"], 10.0 / 0.00237)
+
+    def test_seedable_defaults_true_for_geometric_rungs(self):
+        rungs = bamm.build_buy_grid(**self.KW)
+        self.assertTrue(all(r.seedable for r in rungs))
+
+
 class TestCycle(unittest.TestCase):
     def test_sell_after_buy_keeps_stash_and_sells_the_rest_one_rung_up(self):
         r = bamm.sell_after_buy(buy_price=0.0020, coins_bought=1000.0, step_pct=5.0, stash_pct=0.10)
