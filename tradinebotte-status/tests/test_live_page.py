@@ -92,6 +92,40 @@ class TestOpenOrdersTable(unittest.TestCase):
             _live_hb(open_orders=_open_orders()), {}))
 
 
+class TestLiveTablesToggle(unittest.TestCase):
+    """The open-orders / executed-trades selector (same mechanism as the chart PnL/Assets toggle):
+    one region, one table shown at a time via data-tab; open orders uncapped, executed capped."""
+
+    def _many_trades(self, n):
+        # _load_trades delivers newest-first (ORDER BY ts_ms DESC); mirror that: OID0 = newest.
+        return {("acct-a", _LIVE_BOT): [
+            {"account": "acct-a", "bot_name": _LIVE_BOT, "ts_ms": 1_700_000_000_000 - i,
+             "side": "buy", "reason": "bamm", "price": 0.001 + i * 1e-6, "qty": 100.0,
+             "quote": 0.1, "fee": 0.0, "order_id": f"OID{i}"} for i in range(n)]}
+
+    def test_toggle_markup_present_default_open(self):
+        html = g._render_live_trades(_live_hb(open_orders=_open_orders()), _trades())
+        self.assertIn("ltTab(this,'open')", html)
+        self.assertIn("ltTab(this,'exec')", html)
+        self.assertIn("data-tab='open'", html)          # open orders shown by default
+        self.assertIn("lt-pane-open", html)
+        self.assertIn("lt-pane-exec", html)
+
+    def test_executed_capped_at_20(self):
+        html = g._render_live_trades(_live_hb(open_orders=[]), self._many_trades(30))
+        self.assertIn("OID0", html)                     # newest 20 kept
+        self.assertIn("OID19", html)
+        self.assertNotIn("OID20", html)                 # 21st-newest dropped by the 20-cap
+        self.assertIn(g.t("lt_capped", n=20, total=30), html)
+
+    def test_open_orders_not_capped(self):
+        many_oo = [{"side": "buy", "price": 0.001 + i * 1e-6, "qty": 100.0, "notional": 0.1,
+                    "order_id": f"OO{i}", "placed_ts": 1_700_000_000 + i} for i in range(25)]
+        html = g._render_live_trades(_live_hb(open_orders=many_oo), {})
+        for i in range(25):
+            self.assertIn(f"OO{i}", html)               # every resting order shown, no cap
+
+
 class TestScopeSplit(unittest.TestCase):
     def _render(self, scope, hb, trades):
         return g._render_html(

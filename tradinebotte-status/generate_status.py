@@ -393,11 +393,23 @@ table.trades th{text-align:left;color:#8b949e;font-weight:600;border-bottom:1px 
                 padding:5px 8px;white-space:nowrap}
 table.trades td{padding:5px 8px;border-bottom:1px solid #161b22;white-space:nowrap}
 table.trades tr:hover td{background:#161b22}
-/* Sub-section caption above each of the two live tables (open orders / executed) */
-.live-sub{margin:14px 0 2px;font-size:.82em;font-weight:600;color:#c9d1d9;
-          text-transform:uppercase;letter-spacing:.8px}
+/* Freshness stamp above the open-orders table (title is on the toggle button) */
+.oo-asof{margin:8px 0 4px;font-size:.8em}
 /* An open-orders table sourced from a STALE/DEAD heartbeat: the snapshot may be out of date */
 table.trades.stale-tbl{opacity:.5}
+
+/* ── Open-orders / executed-trades selector (mirrors the chart PnL/Assets toggle) ── */
+.live-tables{margin-top:14px}
+.lt-toggle{display:inline-flex;gap:2px;margin-bottom:2px}
+.lt-btn{background:#161b22;border:1px solid #30363d;color:#8b949e;border-radius:5px;
+        padding:3px 11px;font:inherit;font-size:.8em;cursor:pointer;transition:all .12s}
+.lt-btn:hover{border-color:#58a6ff55;color:#c9d1d9}
+.live-tables[data-tab='open'] .lt-open-btn,
+.live-tables[data-tab='exec'] .lt-exec-btn{background:#1f6feb;border-color:#1f6feb;
+        color:#fff;font-weight:600}
+.lt-pane{display:none}
+.live-tables[data-tab='open'] .lt-pane-open{display:block}
+.live-tables[data-tab='exec'] .lt-pane-exec{display:block}
 
 /* ── Evolution charts (PnL / asset value over time) ───── */
 .tbchart{margin:10px 0;background:#0d1117;border:1px solid #21262d;border-radius:8px;padding:8px 10px}
@@ -1248,7 +1260,10 @@ def _render_banners(accounts: list, heartbeats: list) -> str:
     return "".join(banners)
 
 
-_TRADE_ROW_CAP = 100   # most recent fills shown per bot (full history stays in bot_trades)
+# Executed-fill log: only the most recent N shown per bot (full history stays in bot_trades).
+# Open orders are NOT capped — the resting book is small and bounded, and the operator wants to
+# see every order in flight.
+_EXEC_ROW_CAP = 20
 
 
 def _fmt_age(age_s) -> str:
@@ -1274,12 +1289,14 @@ def _render_open_orders_table(open_orders, hb: dict) -> str:
 
     `open_orders is None` → the bot predates this field (or shadow) → "awaiting next heartbeat",
     NOT "zero orders". `[]` → the bot reports it holds no resting order."""
+    # Title lives on the toggle button now; this caption carries only the freshness stamp — an
+    # open-orders snapshot decays, so "as of <ts> (age)" + a flag badge when the source is stale.
     flag  = hb.get("flag", "")
     stale = bool(flag) and flag != "ALIVE"
     asof  = t("oo_asof", ts=_fmt_ts(hb.get("last_ts")), age=_fmt_age(hb.get("age_s")))
     flag_badge = (f" <span class='badge {flag.lower()}'>{_flag_label(flag)}</span>"
                   if stale else "")
-    caption = f"<div class='live-sub'>{escape(t('oo_title'))} <span class='dim'>{escape(asof)}</span>{flag_badge}</div>"
+    caption = f"<div class='oo-asof'><span class='dim'>{escape(asof)}</span>{flag_badge}</div>"
 
     if open_orders is None:
         return caption + f"<div class='dim'>{escape(t('oo_unknown'))}</div>"
@@ -1290,7 +1307,7 @@ def _render_open_orders_table(open_orders, hb: dict) -> str:
             f"<th>{escape(t('tt_qty'))}</th><th>{escape(t('oo_notional'))}</th>"
             f"<th>{escape(t('oo_placed'))}</th><th>{escape(t('tt_order'))}</th></tr>")
     body = []
-    for o in open_orders[:_TRADE_ROW_CAP]:
+    for o in open_orders:                          # ALL resting orders — no cap
         side = o.get("side") or ""
         side_cls = "pnl-pos" if side == "sell" else "pnl-neg"
         oid = o.get("order_id") or "—"
@@ -1348,14 +1365,13 @@ def _render_live_trades(live_heartbeats: list, trades_by_bot: dict) -> str:
 
         open_table = _render_open_orders_table(open_orders, hb)
 
-        exec_caption = f"<div class='live-sub'>{escape(t('lt_executed_title'))}</div>"
         if trades:
             head = (f"<tr><th>{escape(t('tt_time'))}</th><th>{escape(t('tt_side'))}</th>"
                     f"<th>{escape(t('tt_reason'))}</th><th>{escape(t('tt_price'))}</th>"
                     f"<th>{escape(t('tt_qty'))}</th><th>{escape(t('tt_quote'))}</th>"
                     f"<th>{escape(t('tt_fee'))}</th><th>{escape(t('tt_order'))}</th></tr>")
             body = []
-            for x in trades[:_TRADE_ROW_CAP]:
+            for x in trades[:_EXEC_ROW_CAP]:
                 side = x.get("side") or ""
                 side_cls = "pnl-pos" if side == "sell" else "pnl-neg"
                 oid = x.get("order_id") or "—"
@@ -1368,17 +1384,31 @@ def _render_live_trades(live_heartbeats: list, trades_by_bot: dict) -> str:
                     f"<td>${float(x.get('quote') or 0):.4f}</td>"
                     f"<td>${float(x.get('fee') or 0):.4f}</td>"
                     f"<td class='mono' title='{escape(str(oid))}'>{escape(str(oid))}</td></tr>")
-            cap_note = ("" if len(trades) <= _TRADE_ROW_CAP else
-                        f"<div class='dim'>{escape(t('lt_capped', n=_TRADE_ROW_CAP, total=len(trades)))}</div>")
-            exec_table = (f"{exec_caption}<table class='trades'>{head}{''.join(body)}</table>{cap_note}")
+            cap_note = ("" if len(trades) <= _EXEC_ROW_CAP else
+                        f"<div class='dim'>{escape(t('lt_capped', n=_EXEC_ROW_CAP, total=len(trades)))}</div>")
+            exec_table = (f"<table class='trades'>{head}{''.join(body)}</table>{cap_note}")
         else:
-            exec_table = f"{exec_caption}<div class='dim'>{escape(t('lt_no_trades'))}</div>"
+            exec_table = f"<div class='dim'>{escape(t('lt_no_trades'))}</div>"
+
+        # Selector (same idea as the chart's PnL/Assets toggle): the two tables share one region,
+        # one shown at a time via data-tab on the wrapper. Buttons carry the section title + count.
+        open_lbl = escape(t("oo_title")) + (f" ({n_open})" if isinstance(open_orders, list) else "")
+        exec_lbl = escape(t("lt_executed_title")) + f" ({len(trades)})"
+        tables = (
+            "<div class='live-tables' data-tab='open'>"
+            "<div class='lt-toggle'>"
+            f"<button class='lt-btn lt-open-btn' onclick=\"ltTab(this,'open')\">{open_lbl}</button>"
+            f"<button class='lt-btn lt-exec-btn' onclick=\"ltTab(this,'exec')\">{exec_lbl}</button>"
+            "</div>"
+            f"<div class='lt-pane lt-pane-open'>{open_table}</div>"
+            f"<div class='lt-pane lt-pane-exec'>{exec_table}</div>"
+            "</div>"
+        )
 
         chart = _chart_html(f"{acct}|{bot}", t("chart_bot"), t("chart_no_data"), mini=True)
         panels.append(
             f"<div class='live-panel'><h3>{name} "
-            f"<span class='dim'>{escape(acct or '')}</span></h3>{stats}{chart}"
-            f"{open_table}{exec_table}</div>"
+            f"<span class='dim'>{escape(acct or '')}</span></h3>{stats}{chart}{tables}</div>"
         )
 
     if not panels:
@@ -1635,6 +1665,9 @@ function setLang(l){{
   try{{localStorage.setItem('tblang',l);}}catch(e){{}}
   var tt=b.getAttribute('data-title-'+l);if(tt)document.title=tt;
   if(window.tbRenderAll)tbRenderAll();
+}}
+function ltTab(btn,which){{
+  var c=btn.closest('.live-tables');if(c)c.setAttribute('data-tab',which);
 }}
 (function(){{
   var w='daily';try{{w=localStorage.getItem('tbwin')||'daily';}}catch(e){{}}
