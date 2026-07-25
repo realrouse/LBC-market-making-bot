@@ -14,12 +14,21 @@ import generate_status as g  # noqa: E402
 _LIVE_BOT = "mexc-bamm-lbcusdt-d83114"
 
 
-def _live_hb(mode="live"):
+def _live_hb(mode="live", open_orders="__unset__", flag="ALIVE"):
+    payload = {"mode": mode, "holdings_btc": 2949.27, "avg_entry": 0.00239,
+               "free_usdt": 93.4, "pnl_total": 0.53}
+    if open_orders != "__unset__":
+        payload["open_orders"] = open_orders
     return [{"account": "acct-a", "bot_name": _LIVE_BOT, "_display": "accum-lbc",
-             "_label": "acct-8", "flag": "ALIVE", "age_s": 10, "bounds_ok": "ok",
-             "version": "6b6b33d",
-             "payload": {"mode": mode, "holdings_btc": 2949.27, "avg_entry": 0.00239,
-                         "free_usdt": 93.4, "pnl_total": 0.53}}]
+             "_label": "acct-8", "flag": flag, "age_s": 10, "last_ts": 1784313000,
+             "bounds_ok": "ok", "version": "6b6b33d", "payload": payload}]
+
+
+def _open_orders():
+    return [{"side": "buy", "price": 0.0009, "qty": 500.0, "notional": 0.45,
+             "order_id": "OO__BUY9", "placed_ts": 1784310000},
+            {"side": "sell", "price": 0.0015, "qty": 300.0, "notional": 0.45,
+             "order_id": "OO__SELL5", "placed_ts": 1784311000}]
 
 
 def _trades():
@@ -49,6 +58,38 @@ class TestRenderLiveTrades(unittest.TestCase):
 
     def test_no_live_bots(self):
         self.assertIn(g.t("lt_none"), g._render_live_trades([], {}))
+
+
+class TestOpenOrdersTable(unittest.TestCase):
+    """The "orders in flight" table is separate from the executed-fill log, and its truth
+    semantics (a decaying snapshot) drive the None-vs-[] handling + the stale treatment."""
+
+    def test_open_orders_render_as_own_table(self):
+        html = g._render_live_trades(_live_hb(open_orders=_open_orders()), {})
+        self.assertIn(g.t("oo_title"), html)             # open-orders section caption
+        self.assertIn(g.t("lt_executed_title"), html)    # executed section caption
+        self.assertIn("OO__BUY9", html)                  # resting order ids shown
+        self.assertIn("OO__SELL5", html)
+        self.assertIn("0.000900", html)                  # resting price formatted
+
+    def test_absent_key_is_unknown_not_zero(self):
+        # Old bot / pre-deploy heartbeat: no open_orders key → "awaiting", NOT "no orders".
+        html = g._render_live_trades(_live_hb(), {})
+        self.assertIn(g.t("oo_unknown"), html)
+        self.assertNotIn(g.t("oo_none"), html)
+
+    def test_empty_list_is_zero_orders(self):
+        html = g._render_live_trades(_live_hb(open_orders=[]), {})
+        self.assertIn(g.t("oo_none"), html)
+        self.assertNotIn(g.t("oo_unknown"), html)
+
+    def test_stale_heartbeat_dims_open_orders(self):
+        # A DEAD heartbeat's resting book may be out of date → dimmed + flag badge.
+        html = g._render_live_trades(_live_hb(open_orders=_open_orders(), flag="DEAD"), {})
+        self.assertIn("stale-tbl", html)
+        # ALIVE heartbeat is NOT dimmed.
+        self.assertNotIn("stale-tbl", g._render_live_trades(
+            _live_hb(open_orders=_open_orders()), {}))
 
 
 class TestScopeSplit(unittest.TestCase):

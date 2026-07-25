@@ -393,6 +393,11 @@ table.trades th{text-align:left;color:#8b949e;font-weight:600;border-bottom:1px 
                 padding:5px 8px;white-space:nowrap}
 table.trades td{padding:5px 8px;border-bottom:1px solid #161b22;white-space:nowrap}
 table.trades tr:hover td{background:#161b22}
+/* Sub-section caption above each of the two live tables (open orders / executed) */
+.live-sub{margin:14px 0 2px;font-size:.82em;font-weight:600;color:#c9d1d9;
+          text-transform:uppercase;letter-spacing:.8px}
+/* An open-orders table sourced from a STALE/DEAD heartbeat: the snapshot may be out of date */
+table.trades.stale-tbl{opacity:.5}
 
 /* ── Evolution charts (PnL / asset value over time) ───── */
 .tbchart{margin:10px 0;background:#0d1117;border:1px solid #21262d;border-radius:8px;padding:8px 10px}
@@ -1246,9 +1251,64 @@ def _render_banners(accounts: list, heartbeats: list) -> str:
 _TRADE_ROW_CAP = 100   # most recent fills shown per bot (full history stays in bot_trades)
 
 
+def _fmt_age(age_s) -> str:
+    """Compact age string ("12min", "3h07m", "2d") for a heartbeat's freshness."""
+    try:
+        a = int(age_s)
+    except (TypeError, ValueError):
+        return "—"
+    m = a // 60
+    if m < 120:
+        return f"{m}min"
+    if m < 2880:
+        return f"{m // 60}h{m % 60:02d}m"
+    return f"{a // 86400}d"
+
+
+def _render_open_orders_table(open_orders, hb: dict) -> str:
+    """The "orders in flight" table for one live bot — the resting book the bot currently holds
+    on the exchange (from the heartbeat payload's `open_orders`), kept SEPARATE from the executed
+    fills because its truth semantics differ: fills are immutable history, open orders are a
+    snapshot that decays. So the table is stamped "as of <ts> (age)" and dimmed when the source
+    heartbeat is not ALIVE (the orders may have filled/canceled since).
+
+    `open_orders is None` → the bot predates this field (or shadow) → "awaiting next heartbeat",
+    NOT "zero orders". `[]` → the bot reports it holds no resting order."""
+    flag  = hb.get("flag", "")
+    stale = bool(flag) and flag != "ALIVE"
+    asof  = t("oo_asof", ts=_fmt_ts(hb.get("last_ts")), age=_fmt_age(hb.get("age_s")))
+    flag_badge = (f" <span class='badge {flag.lower()}'>{_flag_label(flag)}</span>"
+                  if stale else "")
+    caption = f"<div class='live-sub'>{escape(t('oo_title'))} <span class='dim'>{escape(asof)}</span>{flag_badge}</div>"
+
+    if open_orders is None:
+        return caption + f"<div class='dim'>{escape(t('oo_unknown'))}</div>"
+    if not open_orders:
+        return caption + f"<div class='dim'>{escape(t('oo_none'))}</div>"
+
+    head = (f"<tr><th>{escape(t('tt_side'))}</th><th>{escape(t('tt_price'))}</th>"
+            f"<th>{escape(t('tt_qty'))}</th><th>{escape(t('oo_notional'))}</th>"
+            f"<th>{escape(t('oo_placed'))}</th><th>{escape(t('tt_order'))}</th></tr>")
+    body = []
+    for o in open_orders[:_TRADE_ROW_CAP]:
+        side = o.get("side") or ""
+        side_cls = "pnl-pos" if side == "sell" else "pnl-neg"
+        oid = o.get("order_id") or "—"
+        body.append(
+            f"<tr><td class='{side_cls}'>{escape(side)}</td>"
+            f"<td>{float(o.get('price') or 0):.6f}</td>"
+            f"<td>{float(o.get('qty') or 0):.2f}</td>"
+            f"<td>${float(o.get('notional') or 0):.4f}</td>"
+            f"<td>{_fmt_ts(o.get('placed_ts'))}</td>"
+            f"<td class='mono' title='{escape(str(oid))}'>{escape(str(oid))}</td></tr>")
+    dim_cls = " stale-tbl" if stale else ""
+    return caption + f"<table class='trades{dim_cls}'>{head}{''.join(body)}</table>"
+
+
 def _render_live_trades(live_heartbeats: list, trades_by_bot: dict) -> str:
     """The real-money page's rich section: per live bot, a stats strip (holdings, avg entry,
-    realized PnL, fill/volume/fee tallies from the durable trade log) + a full per-trade table
+    realized PnL, fill/volume/fee tallies from the durable trade log) + TWO separate tables — the
+    resting orders currently in flight (from the heartbeat payload) and the executed-fill log
     (order IDs included — the live page shows full detail). Reuses _fmt_pnl / _fmt_ts."""
     panels = []
     for hb in live_heartbeats:
@@ -1262,6 +1322,10 @@ def _render_live_trades(live_heartbeats: list, trades_by_bot: dict) -> str:
         bought_qty = sum(float(x.get("qty") or 0) for x in buys)
         sold_qty   = sum(float(x.get("qty") or 0) for x in sells)
         fees_total = sum(float(x.get("fee") or 0) for x in trades)
+        # None (key absent → old bot / shadow) is deliberately kept distinct from [] (bot
+        # reports zero resting orders) — _render_open_orders_table renders them differently.
+        open_orders = pl.get("open_orders")
+        n_open = len(open_orders) if isinstance(open_orders, list) else 0
 
         def _stat(lbl, val):
             return (f"<div class='sb-item'><div class='lbl'>{escape(lbl)}</div>"
@@ -1274,6 +1338,7 @@ def _render_live_trades(live_heartbeats: list, trades_by_bot: dict) -> str:
             + _stat(t("lt_avg_entry"), f"{float(pl.get('avg_entry') or 0):.6f}")
             + _stat(t("lt_free"), f"${float(pl.get('free_usdt') or 0):.2f}")
             + _stat(t("lt_realized"), _fmt_pnl(pl.get("pnl_total")))
+            + _stat(t("lt_open"), f"{n_open}")
             + _stat(t("lt_fills"), f"{len(trades)} <span class='dim'>({len(buys)}B/{len(sells)}S)</span>")
             + _stat(t("lt_bought"), f"{bought_qty:.2f}")
             + _stat(t("lt_sold"), f"{sold_qty:.2f}")
@@ -1281,6 +1346,9 @@ def _render_live_trades(live_heartbeats: list, trades_by_bot: dict) -> str:
             + "</div>"
         )
 
+        open_table = _render_open_orders_table(open_orders, hb)
+
+        exec_caption = f"<div class='live-sub'>{escape(t('lt_executed_title'))}</div>"
         if trades:
             head = (f"<tr><th>{escape(t('tt_time'))}</th><th>{escape(t('tt_side'))}</th>"
                     f"<th>{escape(t('tt_reason'))}</th><th>{escape(t('tt_price'))}</th>"
@@ -1302,14 +1370,15 @@ def _render_live_trades(live_heartbeats: list, trades_by_bot: dict) -> str:
                     f"<td class='mono' title='{escape(str(oid))}'>{escape(str(oid))}</td></tr>")
             cap_note = ("" if len(trades) <= _TRADE_ROW_CAP else
                         f"<div class='dim'>{escape(t('lt_capped', n=_TRADE_ROW_CAP, total=len(trades)))}</div>")
-            table = (f"<table class='trades'>{head}{''.join(body)}</table>{cap_note}")
+            exec_table = (f"{exec_caption}<table class='trades'>{head}{''.join(body)}</table>{cap_note}")
         else:
-            table = f"<div class='dim'>{escape(t('lt_no_trades'))}</div>"
+            exec_table = f"{exec_caption}<div class='dim'>{escape(t('lt_no_trades'))}</div>"
 
         chart = _chart_html(f"{acct}|{bot}", t("chart_bot"), t("chart_no_data"), mini=True)
         panels.append(
             f"<div class='live-panel'><h3>{name} "
-            f"<span class='dim'>{escape(acct or '')}</span></h3>{stats}{chart}{table}</div>"
+            f"<span class='dim'>{escape(acct or '')}</span></h3>{stats}{chart}"
+            f"{open_table}{exec_table}</div>"
         )
 
     if not panels:

@@ -163,5 +163,69 @@ async def _noop_async(*_a, **_k):
     return None
 
 
+class TestBuildOpenOrders(unittest.TestCase):
+    """build_open_orders feeds the real-money status page's "orders in flight" table. It runs
+    inside the 120 s heartbeat of the money-holding bot, so above all it must NEVER raise."""
+
+    def _rec(self, **over):
+        r = {"order_id": "X1", "price": 0.001, "orig_qty": 1000.0,
+             "executed_qty_seen": 0.0, "placed_ts": 100.0}
+        r.update(over)
+        return r
+
+    def test_empty(self):
+        from accumulation import build_open_orders
+        self.assertEqual(build_open_orders(None, {}, {}), [])
+
+    def test_all_three_books_and_sort(self):
+        from accumulation import build_open_orders
+        out = build_open_orders(
+            self._rec(order_id="BID", price=0.0011),
+            {"a": self._rec(order_id="BUY", price=0.0009)},
+            {"b": self._rec(order_id="SELL", price=0.0015)})
+        self.assertEqual([o["order_id"] for o in out], ["BUY", "BID", "SELL"])  # sorted by price
+        self.assertEqual([o["side"] for o in out], ["buy", "buy", "sell"])
+
+    def test_remaining_qty_and_notional(self):
+        from accumulation import build_open_orders
+        out = build_open_orders(self._rec(orig_qty=1000.0, executed_qty_seen=400.0), {}, {})
+        self.assertAlmostEqual(out[0]["qty"], 600.0)                # what's STILL resting
+        self.assertAlmostEqual(out[0]["notional"], 600.0 * 0.001)
+
+    def test_malformed_record_never_raises(self):
+        from accumulation import build_open_orders
+        # A record missing keys / with junk types must be skipped, not crash the heartbeat.
+        out = build_open_orders(
+            {"nope": 1}, {"a": {"price": "notanum"}, "b": None}, {"c": self._rec()})
+        self.assertEqual(len(out), 1)                               # only the valid one survives
+        self.assertEqual(out[0]["order_id"], "X1")
+
+    def test_non_dict_books_tolerated(self):
+        from accumulation import build_open_orders
+        self.assertEqual(build_open_orders("junk", None, 42), [])
+
+
+class TestHeartbeatOpenOrdersGate(unittest.TestCase):
+    """heartbeat_payload gates open_orders on _adopted: until the startup reconcile has run the
+    in-memory books aren't a trustworthy view of the exchange, so it publishes None ("awaiting"),
+    NOT a partial book. This is the real-money-safety half of the feature."""
+
+    def test_none_until_adopted_then_list(self):
+        eng = _eng()
+        eng.acc.open_buys = {"B1": {"order_id": "B1", "rung": 3, "price": 0.0011,
+                                    "orig_qty": 1000.0, "executed_qty_seen": 0.0, "placed_ts": 1.0}}
+        eng._adopted = False
+        self.assertIsNone(eng.heartbeat_payload()["open_orders"])   # books not yet reconciled
+        eng._adopted = True
+        oo = eng.heartbeat_payload()["open_orders"]
+        self.assertEqual(len(oo), 1)
+        self.assertEqual(oo[0]["order_id"], "B1")
+
+    def test_key_always_present(self):
+        eng = _eng()
+        eng._adopted = True
+        self.assertIn("open_orders", eng.heartbeat_payload())        # never absent on a new bot
+
+
 if __name__ == "__main__":
     unittest.main()

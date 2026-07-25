@@ -428,6 +428,55 @@ def diff_sell_ladder(desired: list, tracked: list, *, tol_pct: float,
     return to_cancel, to_place
 
 
+def build_open_orders(pending_buy: "dict | None", open_buys: dict, open_sells: dict) -> list:
+    """The resting book to publish on the real-money status page: one entry per live order the
+    bot is TRACKING (carrying a real exchange order_id), not desired-but-unplaced rungs.
+
+    PURE + total: this runs inside the real-money bot's 120 s heartbeat, so it must never raise
+    on a malformed record — every field is fetched with .get and coerced with a fallback. Records
+    come from three tracked books that share a shape ({order_id, price, orig_qty,
+    executed_qty_seen, placed_ts, …}): the single resting bid (pending_buy), the BAMM buy ladder
+    (open_buys), and the sell ladder (open_sells). `qty` is what's STILL resting
+    (orig_qty − executed_qty_seen). Sorted by price so the ladder reads as a book."""
+    def _num(v, d=0.0):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return d
+
+    def _one(rec: "dict | None", side: str) -> "dict | None":
+        if not isinstance(rec, dict):
+            return None
+        orig = _num(rec.get("orig_qty"))
+        remaining = orig - _num(rec.get("executed_qty_seen"))
+        price = _num(rec.get("price"))
+        qty = remaining if remaining > 0 else orig
+        if price <= 0 or qty <= 0:      # not a real resting order (malformed/empty record)
+            return None
+        return {
+            "side":     side,
+            "price":    price,
+            "qty":      qty,
+            "notional": price * qty,
+            "order_id": str(rec.get("order_id") or "—"),
+            "placed_ts": _num(rec.get("placed_ts")),
+        }
+
+    out = []
+    for rec, side in [(pending_buy, "buy")]:
+        e = _one(rec, side)
+        if e is not None:
+            out.append(e)
+    for book, side in [(open_buys, "buy"), (open_sells, "sell")]:
+        if isinstance(book, dict):
+            for rec in book.values():
+                e = _one(rec, side)
+                if e is not None:
+                    out.append(e)
+    out.sort(key=lambda o: o["price"])
+    return out
+
+
 class AccumulationStrategy:
     """BTC long-term accumulation: OBI dip-buying + partial profit ladder + macro gates.
 
@@ -690,6 +739,17 @@ class AccumulationStrategy:
             **({"equity": round(a.holdings_btc * a.last_price + a.free_usdt, 2)}
                if a.last_price > 0 else {}),
             "last_write_ts":  a.last_write_ts,
+            # Resting orders currently on the exchange (real-money page: "orders in flight" table,
+            # separate from the executed-fill log). Tracked live orders only — never desired-but-
+            # unplaced rungs. Empty in shadow (nothing is placed). Gated on `_adopted`: until the
+            # startup reconcile has run, the in-memory books are NOT a trustworthy statement of the
+            # exchange — open_buys is never persisted (BAMM rebuilds via _bamm_adopt's cancel-all),
+            # and any restored open_sells is about to be wiped — so we publish None ("awaiting next
+            # heartbeat") rather than a partial/stale book. Once adopted (usually within seconds of
+            # the first tick) the books carry real order_ids and are authoritative. None vs [] lets
+            # the page tell "not yet known" from "zero resting orders".
+            "open_orders":    (build_open_orders(a.pending_buy, a.open_buys, a.open_sells)
+                               if self._adopted else None),
         }
 
     # ── BAMM shadow: fixed-rung grid, simulate fills off the live mid, LOG intended orders ──────
