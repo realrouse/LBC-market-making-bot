@@ -261,7 +261,6 @@ class TestHeartbeatQueryRows(unittest.TestCase):
     def setUp(self):
         fd, self.db_path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
-        from status_collector import open_db
         self.db = open_db(self.db_path)
         from heartbeat_query import query_heartbeats
         self.query_heartbeats = query_heartbeats

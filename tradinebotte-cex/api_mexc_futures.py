@@ -417,7 +417,7 @@ async def get_order_status(session, symbol, order_id, *,
     if str(order_id).startswith("sim_"):
         return None
 
-    _sym    = str(symbol).split(":")[0]
+    _sym    = str(symbol).split(":", maxsplit=1)[0]
     qs      = urlencode({"symbol": _sym})
     headers = _auth_headers(_key, _secret, qs)
     try:
@@ -456,7 +456,7 @@ async def cancel_order(session, symbol, order_id, *,
     if not _key or not _secret:
         return True
 
-    _sym    = str(symbol).split(":")[0]
+    _sym    = str(symbol).split(":", maxsplit=1)[0]
     qs      = urlencode({"symbol": _sym})
     headers = _auth_headers(_key, _secret, qs)
     try:
@@ -492,7 +492,7 @@ async def get_open_orders(session, symbol, *, api_key=None, api_secret=None):
     if not _key or not _secret:
         return []
 
-    _sym    = str(symbol).split(":")[0]
+    _sym    = str(symbol).split(":", maxsplit=1)[0]
     qs      = urlencode({"symbol": _sym})
     headers = _auth_headers(_key, _secret, qs)
     try:

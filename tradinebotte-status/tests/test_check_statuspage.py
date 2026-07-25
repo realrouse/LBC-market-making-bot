@@ -6,7 +6,6 @@ targeted mutations for each failure mode the checker is meant to catch.
 
 import os
 import sys
-import time
 import unittest
 from datetime import datetime, timezone
 

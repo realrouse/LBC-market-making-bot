@@ -21,7 +21,7 @@ import os
 import sqlite3
 import subprocess
 import time
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger("feed_watchdog")
 

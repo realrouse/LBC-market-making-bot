@@ -195,9 +195,11 @@ def _load_conf(path: str) -> dict:
 
 # Inline copy of graphics/favicon.svg (base64) — self-contained so the
 # generated single-file HTML needs no companion asset deployed alongside it.
+# pylint: disable=line-too-long
 _FAVICON_B64 = (
     "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+CiAgPHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTQiIGZpbGw9IiMxNjE4MjYiPjwvcmVjdD4KICA8ZyBmaWxsPSJub25lIiBzdHJva2U9IiM5MTg0ZDkiIHN0cm9rZS13aWR0aD0iMi42IiBzdHJva2UtbGluZWNhcD0icm91bmQiPgogICAgPGxpbmUgeDE9IjIwIiB5MT0iNDQiIHgyPSIyMCIgeTI9IjIwIj48L2xpbmU+CiAgICA8bGluZSB4MT0iMjAiIHkxPSIyMCIgeDI9IjQ0IiB5Mj0iNDQiPjwvbGluZT4KICAgIDxsaW5lIHgxPSI0NCIgeTE9IjQ0IiB4Mj0iNDQiIHkyPSIyMCI+PC9saW5lPgogIDwvZz4KICA8Y2lyY2xlIGN4PSIyMCIgY3k9IjIwIiByPSI0LjUiIGZpbGw9IiMxNjE4MjYiIHN0cm9rZT0iIzkxODRkOSIgc3Ryb2tlLXdpZHRoPSIyLjYiPjwvY2lyY2xlPgogIDxjaXJjbGUgY3g9IjIwIiBjeT0iNDQiIHI9IjQuNSIgZmlsbD0iIzE2MTgyNiIgc3Ryb2tlPSIjOTE4NGQ5IiBzdHJva2Utd2lkdGg9IjIuNiI+PC9jaXJjbGU+CiAgPGNpcmNsZSBjeD0iNDQiIGN5PSIyMCIgcj0iNC41IiBmaWxsPSIjMTYxODI2IiBzdHJva2U9IiM5MTg0ZDkiIHN0cm9rZS13aWR0aD0iMi42Ij48L2NpcmNsZT4KICA8Y2lyY2xlIGN4PSI0NCIgY3k9IjQ0IiByPSI1LjUiIGZpbGw9IiM5MTg0ZDkiPjwvY2lyY2xlPgo8L3N2Zz4="
 )
+# pylint: enable=line-too-long
 
 _CSS = """
 *{box-sizing:border-box;margin:0;padding:0}
@@ -1050,9 +1052,11 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
             f"<div class='metric-sub'>{mode_badge}{flag_badge}</div>"
             f"<div class='tip tip-up'>"
             f"<span class='tip-label'>{escape(t('tip_pnl_from_hb'))}</span>"
-            f"<div class='tip-row'><span style='color:#8b949e;min-width:64px;display:inline-block'>{escape(t('lbl_today_utc'))}</span>"
+            f"<div class='tip-row'><span style='color:#8b949e;min-width:64px;"
+            f"display:inline-block'>{escape(t('lbl_today_utc'))}</span>"
             f" {_fmt_pnl(today_pnl)}</div>"
-            f"<div class='tip-row'><span style='color:#8b949e;min-width:64px;display:inline-block'>{escape(t('lbl_since_reset'))}</span>"
+            f"<div class='tip-row'><span style='color:#8b949e;min-width:64px;"
+            f"display:inline-block'>{escape(t('lbl_since_reset'))}</span>"
             f" {_fmt_pnl(life_pnl)}</div>"
             f"{open_tip}{stale_note}"
             f"</div></div>"
@@ -1071,7 +1075,8 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
                 f"#{r['id']} {r.get('direction','')} {_ep(r)}</span>"
                 for r in open_trades
             )
-            open_html = f"<div class='open-trades'><span style='color:#d29922'>{escape(t('open_label'))}</span> {badges}</div>"
+            open_html = (f"<div class='open-trades'><span style='color:#d29922'>"
+                        f"{escape(t('open_label'))}</span> {badges}</div>")
         recent = live.get("recent", [])
         if recent:
             trade_html = (
@@ -1149,15 +1154,6 @@ def _render_account_card(label: str, data: dict, hb_rows: list | None = None) ->
         f"</div>"
     )
 
-
-def _fmt_age(secs: int) -> str:
-    if secs < 0:
-        return "—"
-    if secs < 3600:
-        return f"{secs // 60}m"
-    if secs < 86400:
-        return f"{secs // 3600}h"
-    return f"{secs // 86400}d"
 
 
 # Status colours (matches the page's dark palette).
@@ -1287,6 +1283,8 @@ def _fmt_age(age_s) -> str:
     try:
         a = int(age_s)
     except (TypeError, ValueError):
+        return "—"
+    if a < 0:
         return "—"
     m = a // 60
     if m < 120:
@@ -1568,9 +1566,11 @@ def _render_html(
             f"<div class='val'>{fleet_pnl_html}</div>"
             f"<div class='tip'>"
             f"<span class='tip-label'>{escape(t('sb_tip_title'))}</span>"
-            f"<div class='tip-row'><span style='color:#8b949e;min-width:74px;display:inline-block'>{escape(t('lbl_today_utc'))}</span>"
+            f"<div class='tip-row'><span style='color:#8b949e;min-width:74px;"
+            f"display:inline-block'>{escape(t('lbl_today_utc'))}</span>"
             f" {_fmt_pnl(today_pnl_total)}</div>"
-            f"<div class='tip-row'><span style='color:#8b949e;min-width:74px;display:inline-block'>{escape(t('lbl_since_reset'))}</span>"
+            f"<div class='tip-row'><span style='color:#8b949e;min-width:74px;"
+            f"display:inline-block'>{escape(t('lbl_since_reset'))}</span>"
             f" {_fmt_pnl(life_pnl_total)}</div>"
             f"</div></div>"
             f"<div class='sb-item'><div class='lbl'>{escape(t('sb_hb_issues'))}</div>"

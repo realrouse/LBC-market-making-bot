@@ -48,7 +48,7 @@ def _reconcile_shared_db(old_acct: str, new_acct: str, bot_name: str, dry: bool)
         print(f"  [DRY-RUN] shared-DB reconcile: {sql}")
         return
     cmd = ["sg", "claudes", "-c", f"umask 002; sqlite3 '{SHARED_DB}' \"{sql}\""]
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = subprocess.run(cmd, capture_output=True, text=True, check=False)
     print(f"  ▸ shared-DB reconciled (purged stale heartbeats on {old_acct}, re-accounted trades/deploys)"
           + (f"  [warn: {r.stderr.strip()}]" if r.returncode else ""))
 
@@ -59,7 +59,8 @@ def _rp(p: str) -> str:
 
 
 def _find_bot(bot_name: str) -> dict:
-    rows = tomllib.load(open(INVENTORY, "rb"))["bot"]
+    with open(INVENTORY, "rb") as f:
+        rows = tomllib.load(f)["bot"]
     for r in rows:
         if r.get("bot_name") == bot_name:
             return r
@@ -89,7 +90,7 @@ def _rsync(a: str, b: str, host: da.Host) -> None:
     cmd = ["/usr/bin/sshpass", "-e", "rsync", "-az",
            "-e", f"ssh -p {host.port} {' '.join(da.Host.SSH_OPTS)}", a, b]
     env = {**os.environ, "SSHPASS": host.password}
-    r = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    r = subprocess.run(cmd, capture_output=True, text=True, env=env, check=False)
     # rc 23/24 = "some files vanished / partial" — benign for optional -wal/-shm; only hard-fail on 1-12
     if r.returncode not in (0, 23, 24):
         sys.exit(f"rsync failed ({a} -> {b}): rc={r.returncode}\n{r.stderr}")
@@ -111,7 +112,8 @@ def main() -> int:
     if src_idx == a.to:
         sys.exit("source and target are the same account")
     if os.path.basename(row.get("deployer", "")) != "deploy_actions.py":
-        sys.exit(f"{a.bot} is not a native-deployer bot (deployer={row.get('deployer')!r}); transfer supports native only")
+        sys.exit(f"{a.bot} is not a native-deployer bot "
+                f"(deployer={row.get('deployer')!r}); transfer supports native only")
     if row.get("is_live") and not a.force:
         sys.exit(f"{a.bot} is is_live=true (real money). Re-run with --force to transfer it.")
 

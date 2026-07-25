@@ -276,7 +276,7 @@ def _conf_array(conf: str, var: str) -> list[str]:
     """Read a bash array from the conf by sourcing it in a subshell."""
     out = subprocess.run(
         ["bash", "-c", f'source "{conf}"; printf "%s\\n" "${{{var}[@]}}"'],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
     return [x for x in out.stdout.splitlines() if x]
 
@@ -284,7 +284,7 @@ def _conf_array(conf: str, var: str) -> list[str]:
 def _conf_scalar(conf: str, var: str) -> str:
     out = subprocess.run(
         ["bash", "-c", f'source "{conf}"; printf "%s" "${{{var}}}"'],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
     return out.stdout.strip()
 
@@ -380,7 +380,7 @@ def _remote_heartbeat_modes(server, port, user, password, db_path) -> dict | Non
     out = subprocess.run(
         ["sshpass", "-e", "ssh", *_ssh_opts(),
          "-p", port, f"{user}@{server}", f"python3 -c \"{py}\""],
-        capture_output=True, text=True, env=env,
+        capture_output=True, text=True, env=env, check=False,
     )
     if out.returncode != 0:
         return None
@@ -426,7 +426,7 @@ def _remote_units(server: str, port: str, user: str, password: str) -> set[str] 
     out = subprocess.run(
         ["sshpass", "-e", "ssh", *_ssh_opts(),
          "-p", port, f"{user}@{server}", cmd],
-        capture_output=True, text=True, env=env,
+        capture_output=True, text=True, env=env, check=False,
     )
     if out.returncode != 0:
         return None
@@ -444,7 +444,7 @@ def _remote_heartbeat_keys(server, port, user, password, db_path) -> set | None:
     out = subprocess.run(
         ["sshpass", "-e", "ssh", *_ssh_opts(),
          "-p", port, f"{user}@{server}", f"python3 -c \"{py}\""],
-        capture_output=True, text=True, env=env,
+        capture_output=True, text=True, env=env, check=False,
     )
     if out.returncode != 0:
         return None

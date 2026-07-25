@@ -331,7 +331,6 @@ class SwingHoldStrategy:
         for sup in reversed(self.sh.support):   # nearest first
             if sup >= price or sup in armed or slots <= 0:
                 continue
-            qty = self.sh.order_size_usdt / sup
             oid = await self._api.post_order(
                 state.session, self.sh.symbol, sup, self.sh.order_size_usdt, side="BUY",
             )
@@ -469,7 +468,6 @@ class SwingHoldStrategy:
         sup = closed_pos.level_price
         if sup in self._armed_levels():
             return
-        qty = self.sh.order_size_usdt / sup
         oid = await self._api.post_order(
             state.session, self.sh.symbol, sup, self.sh.order_size_usdt, side="BUY",
         )

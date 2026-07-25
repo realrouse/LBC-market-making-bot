@@ -53,7 +53,7 @@ class TestImportPersistsNoBotId(unittest.TestCase):
         try:
             res = subprocess.run(
                 [sys.executable, "-c", probe],
-                cwd=workdir, env=env, capture_output=True, text=True, timeout=120,
+                cwd=workdir, env=env, capture_output=True, text=True, timeout=120, check=False,
             )
             self.assertEqual(
                 res.returncode, 0,

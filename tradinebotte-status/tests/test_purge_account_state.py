@@ -26,9 +26,8 @@ def _db(path):
 class TestPurge(unittest.TestCase):
 
     def setUp(self):
-        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        self.tmp.close()
-        self.path = self.tmp.name
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            self.path = tmp.name
         db = _db(self.path)
         # prod account 'acctP' is in inventory + has rows; test account 'acctT' is NOT.
         db.execute("INSERT INTO inventory VALUES ('acctP','bot-p',1)")

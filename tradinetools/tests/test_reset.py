@@ -24,7 +24,9 @@ def _make_db(path, content=b"DBDATA"):
 class TestResetMarker(unittest.TestCase):
 
     def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory()
+        # Must outlive setUp() (used across the whole test method) — addCleanup below is the
+        # correct idiom here, not a `with` block, which would close it before the test runs.
+        self._tmp = tempfile.TemporaryDirectory()  # pylint: disable=consider-using-with
         self.dir = self._tmp.name
         self.db = os.path.join(self.dir, "live.db")
         self.addCleanup(self._tmp.cleanup)

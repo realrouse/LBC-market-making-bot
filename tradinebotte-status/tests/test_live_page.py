@@ -150,7 +150,6 @@ class TestScopeSplit(unittest.TestCase):
 
 class TestLoadTradesFilter(unittest.TestCase):
     def test_keys_filter(self):
-        import sqlite3
         import tempfile
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "tradinetools"))
         from tradinetools.db import open_db, store_trade

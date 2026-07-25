@@ -654,8 +654,7 @@ class TestMexcFuturesComputeFee(unittest.TestCase):
         """This assertion INVERTED once the spot rate was measured instead of assumed:
         futures taker is 0.06%, spot taker is 0.04% effective — so spot is the cheaper
         venue, not the dearer one. The old test encoded the fictional 0.2% spot fee."""
-        import api_mexc as _spot
-        spot_fee    = _spot.compute_fee(65000.0, 0.001)
+        spot_fee    = mexc.compute_fee(65000.0, 0.001)
         futures_fee = mexc_futures.compute_fee(65000.0, 0.001)
         self.assertGreater(futures_fee, spot_fee)
 

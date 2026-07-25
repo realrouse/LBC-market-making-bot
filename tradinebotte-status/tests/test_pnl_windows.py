@@ -47,7 +47,7 @@ class TestComputePnlWindows(unittest.TestCase):
 
     def setUp(self):
         self.fn = _extract_compute_pnl_windows()
-        self.path = "/tmp/_tw_test_%d.db" % os.getpid()
+        self.path = f"/tmp/_tw_test_{os.getpid()}.db"
         if os.path.exists(self.path):
             os.remove(self.path)
 

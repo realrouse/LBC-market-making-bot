@@ -136,7 +136,7 @@ class TestFamilyTaxonomy(unittest.TestCase):
         got = {r["bot_name"]: il.strategy_type_of(r) for r in il.load_rows()}
         self.assertEqual(got["binance-grid-btcusdt-df6dd9"], "grid")
         self.assertEqual(got["binance-swing-btcusdt-062cc5"], "swing")
-        self.assertEqual(got["mexc-bamm-lbcusdt-d83114"], "accumulation")   # LBC bot (now BAMM), family stays accumulation
+        self.assertEqual(got["mexc-bamm-lbcusdt-d83114"], "accumulation")   # LBC bot (BAMM), family unchanged
         self.assertEqual(got["polymarket-threshold-e100a8"], "polymarket")  # bot_type=polymarket-grid
         self.assertIsNone(got["infra-cexfeed-0e7b3a"])                       # service
 

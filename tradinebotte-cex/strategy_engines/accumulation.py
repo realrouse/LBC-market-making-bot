@@ -354,7 +354,7 @@ def plan_sell_ladder(*, holdings: float, avg_entry: float, peak_holdings: float,
     if holdings <= 0 or avg_entry <= 0 or best_ask <= 0 or not gate_open:
         return []
     ceiling = params.get("sell_ceiling_price", 0.0)
-    if ceiling > 0 and price >= ceiling:
+    if 0 < ceiling <= price:
         return []
     floor_btc = sell_floor_qty(peak_holdings, params)
     sellable  = max(0.0, holdings - floor_btc)
@@ -371,7 +371,7 @@ def plan_sell_ladder(*, holdings: float, avg_entry: float, peak_holdings: float,
             continue
         target   = band_target_price(avg_entry, band_pct)
         px       = max(target, best_ask)          # never cross → always maker
-        if ceiling > 0 and px >= ceiling:
+        if 0 < ceiling <= px:
             continue
         qty = min(holdings * step["fraction"], sellable - allocated)
         if qty <= 0:
@@ -1246,7 +1246,7 @@ class AccumulationStrategy:
             view = live.get(oid)
             if view is None:                          # gone from the book → settle it
                 view = await self._api.get_order(state.session, self.symbol, oid)
-            new_rec, dqty, dquote, action = reconcile_order(rec, view)
+            new_rec, dqty, dquote, _action = reconcile_order(rec, view)
             if dqty > 0:
                 self._credit_sell_fill(state, rec, dqty, dquote, ts_ms)
             if new_rec is None:

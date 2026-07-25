@@ -18,8 +18,8 @@ import os
 import time
 from typing import Any
 
-from tradinetools.zmq import make_sub
 from botcore.persistence import _persist_snapshot
+from tradinetools.zmq import make_sub
 
 logger = logging.getLogger("live")
 

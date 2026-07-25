@@ -16,8 +16,8 @@ import api_mexc  # noqa: E402
 _FIXTURE = os.path.join(os.path.dirname(__file__), "_mexc_spot_depth_frame.hex")
 
 try:
-    import google.protobuf  # noqa: F401
-    import mexc_spot_depth_pb2  # noqa: F401
+    import google.protobuf  # noqa: F401  pylint: disable=unused-import
+    import mexc_spot_depth_pb2  # noqa: F401  pylint: disable=unused-import
     _HAVE_PB = True
 except ImportError:
     _HAVE_PB = False

@@ -1,4 +1,8 @@
 """Unit tests for bamm.build_buy_grid — the BAMM buy-ladder planner (money-critical, pure)."""
+# pylint: disable=import-error
+# bamm.py is only importable once sys.path is patched below (it lives in
+# strategy_engines/, not on the normal path) — a real runtime import, but static analysis
+# can't see the sys.path.insert that makes it resolve.
 
 import os
 import sys
@@ -190,7 +194,8 @@ class TestBammGrid(unittest.TestCase):
         usdt0 = g.free_usdt
         g.on_buy_fill(i, coins)                    # buy
         g.on_sell_fill(i, g.rungs[i]["loop_coins"])  # its ask fills (0.9*coins)
-        self.assertGreater(g.free_usdt, usdt0 - coins * g.rungs[i]["price"] * 0.10 + 1e-9)  # net USDT ≥ before minus the stash's cost
+        # net USDT ≥ before minus the stash's cost
+        self.assertGreater(g.free_usdt, usdt0 - coins * g.rungs[i]["price"] * 0.10 + 1e-9)
         self.assertGreater(g.stash, 0)             # 10% kept
         self.assertGreater(g.realized_usdt, 0)     # sold higher than bought
         self.assertEqual(g.rungs[i]["mode"], "bid")  # re-armed as a rebuy

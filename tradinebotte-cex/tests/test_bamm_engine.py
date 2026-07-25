@@ -2,6 +2,10 @@
 
 The load-bearing assertions are the SAFETY ones: in shadow, BAMM must never mutate the engine's
 real holdings/free, so switching a real-money bot to bamm can only ever stop it and start a log."""
+# pylint: disable=import-error
+# accumulation.py is only importable once sys.path is patched below (it lives in
+# strategy_engines/, not on the normal path) — a real runtime import, but static analysis
+# can't see the sys.path.insert that makes it resolve.
 
 import asyncio
 import os
@@ -151,9 +155,9 @@ class TestBammLiveExec(unittest.TestCase):
     def test_sell_fill_books_realized_and_rebuys(self):
         eng = self._live_eng()
         self._tick(eng, 0.00250)
-        boid, brec = next(iter(eng.acc.open_buys.items()))
+        boid, _brec = next(iter(eng.acc.open_buys.items()))
         eng._api.fill(boid); self._tick(eng, 0.00250)          # buy fills → sell rests
-        soid, srec = next(iter(eng.acc.open_sells.items()))
+        soid, _srec = next(iter(eng.acc.open_sells.items()))
         eng._api.fill(soid); self._tick(eng, 0.00250)          # sell fills → rebuy rests
         self.assertGreater(eng.acc.total_realized, 0.0)        # grid profit booked
         self.assertNotIn(soid, eng.acc.open_sells)
@@ -164,11 +168,11 @@ class TestBammLiveExec(unittest.TestCase):
         # table showed BAMM rows blank. The real oid must now ride the push.
         import accumulation as _acc
         pushed = []
-        orig, _acc._push_trade = _acc._push_trade, lambda payload: pushed.append(payload)
+        orig, _acc._push_trade = _acc._push_trade, pushed.append
         try:
             eng = self._live_eng()
             self._tick(eng, 0.00250)
-            oid, rec = next(iter(eng.acc.open_buys.items()))
+            oid, _rec = next(iter(eng.acc.open_buys.items()))
             eng._api.fill(oid)
             self._tick(eng, 0.00250)
         finally:

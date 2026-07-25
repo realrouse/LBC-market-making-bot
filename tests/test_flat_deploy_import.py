@@ -84,7 +84,7 @@ class TestFlatDeployImport(unittest.TestCase):
             env.pop("PYTHONPATH", None)  # don't leak the repo onto the child's path
             res = subprocess.run(
                 [sys.executable, "-c", probe],
-                cwd=flat, env=env, capture_output=True, text=True, timeout=120,
+                cwd=flat, env=env, capture_output=True, text=True, timeout=120, check=False,
             )
             self.assertEqual(
                 res.returncode, 0,
@@ -118,7 +118,7 @@ class TestCorePurity(unittest.TestCase):
         env = dict(os.environ)
         env.pop("PYTHONPATH", None)
         res = subprocess.run([sys.executable, "-c", probe],
-                             env=env, capture_output=True, text=True, timeout=60)
+                             env=env, capture_output=True, text=True, timeout=60, check=False)
         self.assertEqual(res.returncode, 0,
                          f"core purity violated:\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}")
         self.assertIn("OK", res.stdout)

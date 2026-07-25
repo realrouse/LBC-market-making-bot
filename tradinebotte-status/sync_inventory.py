@@ -56,7 +56,7 @@ def conf_users(conf: str) -> list[str]:
     """Read the TEST_USERS bash array by sourcing the conf in a subshell."""
     out = subprocess.run(
         ["bash", "-c", f'source "{conf}"; printf "%s\\n" "${{TEST_USERS[@]}}"'],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
     return [x for x in out.stdout.splitlines() if x]
 

@@ -37,7 +37,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from api_common import (decimals_of, decimals_for_price, fmt_price, fmt_qty,  # noqa: E402
                         warm_symbol_precision)
-from strategy_engines.grid import GridStrategy, _derive_price_decimals  # noqa: E402
+from strategy_engines.grid import GridStrategy  # noqa: E402
 from strategy_engines.swing import SwingStrategy                # noqa: E402
 
 

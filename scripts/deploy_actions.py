@@ -201,11 +201,11 @@ def load_conf() -> dict:
     """(server, port, users[], passwords[]) from the untracked test conf via bash (arrays)."""
     def arr(var):
         out = subprocess.run(["bash", "-c", f'source "{CONF}"; printf "%s\\n" "${{{var}[@]}}"'],
-                             capture_output=True, text=True)
+                             capture_output=True, text=True, check=False)
         return [x for x in out.stdout.splitlines() if x]
     def sca(var):
         out = subprocess.run(["bash", "-c", f'source "{CONF}"; printf "%s" "${{{var}}}"'],
-                             capture_output=True, text=True)
+                             capture_output=True, text=True, check=False)
         return out.stdout.strip()
     sidx = sca("TEST_STANDALONE_USER_IDX")
     return {"server": sca("TEST_SERVER"), "port": sca("TEST_PORT") or "22",
@@ -242,7 +242,7 @@ class Host:
         cmd = ["/usr/bin/sshpass", "-e", "ssh", "-p", self.port, *self.SSH_OPTS,
                f"{self.user}@{self.server}",
                "export XDG_RUNTIME_DIR=/run/user/$(id -u); " + script]
-        return subprocess.run(cmd, capture_output=True, text=True, env=self._base_env())
+        return subprocess.run(cmd, capture_output=True, text=True, env=self._base_env(), check=False)
 
     def rsync(self, local: str, remote: str, excludes: list[str]) -> int:
         ex = []
@@ -254,10 +254,12 @@ class Host:
         # Retry once on failure: a transient SSH/network blip on the shared host otherwise fails the
         # whole act_sync (assert) and, mid-fleet, took down a step. rsync is idempotent, so a retry
         # is safe. (Root cause of the first prod native-infra run's transient status-sync failure.)
-        rc = subprocess.run(cmd, capture_output=True, text=True, env=self._base_env()).returncode
+        rc = subprocess.run(cmd, capture_output=True, text=True, env=self._base_env(),
+                           check=False).returncode
         if rc != 0:
             time.sleep(2)
-            rc = subprocess.run(cmd, capture_output=True, text=True, env=self._base_env()).returncode
+            rc = subprocess.run(cmd, capture_output=True, text=True, env=self._base_env(),
+                               check=False).returncode
         return rc
 
 
@@ -278,7 +280,8 @@ def act_sync(host: Host, install_dir: str, template: str) -> bool:
                          "-e", f"ssh -p {host.port} {' '.join(Host.SSH_OPTS)}",
                          os.path.join(REPO, "tradinebotte-cex/strategies/"),
                          f"{host.user}@{host.server}:{install_dir}/strategies/"],
-                        capture_output=True, text=True, env=host._base_env()).returncode
+                        capture_output=True, text=True, env=host._base_env(),
+                        check=False).returncode
     return ok and rc == 0
 
 
@@ -322,7 +325,8 @@ def act_deps_and_tradinetools(host: Host, install_dir: str) -> bool:
     # Import test with one retry: on the flaky shared host the test itself can transiently fail
     # even when tradinetools is intact (false negative → whole deploy step fails).
     "$V/bin/python3" -c 'from tradinetools import resolve_bot_id' 2>/dev/null && echo "tt:ok" || \
-        {{ sleep 1; "$V/bin/python3" -c 'from tradinetools import resolve_bot_id' 2>/dev/null && echo "tt:ok" || echo "tt:FAIL"; }}
+        {{ sleep 1; "$V/bin/python3" -c 'from tradinetools import resolve_bot_id' 2>/dev/null \
+        && echo "tt:ok" || echo "tt:FAIL"; }}
     """
     r = host.ssh(script)
     print("   ", r.stdout.strip().replace("\n", " | "))
@@ -332,7 +336,7 @@ def act_deps_and_tradinetools(host: Host, install_dir: str) -> bool:
 def act_service_restart(host: Host, install_dir: str, unit: str, template: str) -> bool:
     """Install the unit (from its template) if absent, write version.stamp, restart.
     systemd only — never the nohup fallback the bash engines carry."""
-    githash = subprocess.run(["git", "-C", REPO, "rev-parse", "--short", "HEAD"],
+    githash = subprocess.run(["git", "-C", REPO, "rev-parse", "--short", "HEAD"], check=False,
                              capture_output=True, text=True).stdout.strip() or "unknown"
     script = f"""
     echo '{githash}' > {_rp(install_dir)}/version.stamp
@@ -430,7 +434,7 @@ def act_migrate_single_tree(host: Host, legacy_dir: str, dest_dir: str, role: st
 
 
 def record_deploy(account: str, bot_id: str, ok: bool):
-    githash = subprocess.run(["git", "-C", REPO, "rev-parse", "--short", "HEAD"],
+    githash = subprocess.run(["git", "-C", REPO, "rev-parse", "--short", "HEAD"], check=False,
                              capture_output=True, text=True).stdout.strip() or "unknown"
     subprocess.run(["python3", os.path.join(REPO, "tradinebotte-status/record_deploy.py"),
                     "--account", account, "--bot", bot_id, "--git-hash", githash,

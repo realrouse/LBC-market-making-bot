@@ -3761,8 +3761,8 @@ class TestCoreShipsWithTheBot(unittest.TestCase):
     # Every script that installs/rsyncs the live_bot entrypoint (and hence needs the core).
     _BOT_DEPLOY_SCRIPTS = (
         "scripts/install.sh",
-        "scripts/deploy_actions.py",      # native deployer (all trading families single-tree) — ships botcore via _BASE_SYNC
-        "tradinebotte-polymarket/scripts/update_standalone.sh",   # still called by update_claude1.sh to rsync acct-1 infra code
+        "scripts/deploy_actions.py",      # native deployer (all families single-tree) — ships botcore via _BASE_SYNC
+        "tradinebotte-polymarket/scripts/update_standalone.sh",  # called by update_claude1.sh (acct-1 rsync)
         "tradinebotte-status/scripts/setup_data_plane.sh",
     )
 

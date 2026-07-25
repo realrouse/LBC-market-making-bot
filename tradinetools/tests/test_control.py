@@ -80,7 +80,6 @@ class TestDispatchBuiltins(unittest.TestCase):
 class TestDispatchHandlers(unittest.IsolatedAsyncioTestCase):
 
     async def test_non_destructive_runs(self):
-        calls = []
         cmds = {"info": Command(lambda a: {"echo": a.get("x")})}
         r = await _ctl_dispatch(cmds, "sim", False, "g", '{"cmd":"info","args":{"x":7}}')
         self.assertTrue(r["ok"])
@@ -161,7 +160,6 @@ class TestControlLoopOverSocket(unittest.IsolatedAsyncioTestCase):
             ctx.term()
 
     async def test_roundtrip_and_lockstep(self):
-        import os, asyncio
         addr = f"ipc:///tmp/tbnt-test-ctl-{os.getpid()}.sock"
         hit = {"n": 0}
         cmds = {

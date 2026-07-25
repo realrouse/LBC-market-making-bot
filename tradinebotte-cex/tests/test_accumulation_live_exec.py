@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from strategy_engines.accumulation import (  # noqa: E402
     AccumulationStrategy, PendingRebuy, band_target_price, diff_sell_ladder,
-    plan_sell_ladder, reconcile_order, reconcile_pending_buy, sell_floor_qty,
+    plan_sell_ladder, reconcile_pending_buy, sell_floor_qty,
     sell_ladder_spec)
 
 
@@ -69,7 +69,7 @@ class TestReconcilePendingBuy(unittest.TestCase):
                ("FILLED",           4000.0, 10.0)]
         tot_q = tot_c = 0.0
         for status, exq, quote in seq:
-            p, dq, dqu, act = reconcile_pending_buy(p, _order(status, exq, quote), **_KW)
+            p, dq, dqu, _act = reconcile_pending_buy(p, _order(status, exq, quote), **_KW)
             tot_q += dq
             tot_c += dqu
         self.assertIsNone(p)                        # filled → cleared
@@ -80,7 +80,7 @@ class TestReconcilePendingBuy(unittest.TestCase):
         # advisor's case: two partials at DIFFERENT prices. Crediting dqty × cumulative-avg
         # would misprice the 2nd tranche; crediting the QUOTE delta is exact.
         p = _pending()
-        p, dq1, dqu1, _ = reconcile_pending_buy(p, _order("PARTIALLY_FILLED", 1000.0, 2.0), **_KW)
+        p, _dq1, dqu1, _ = reconcile_pending_buy(p, _order("PARTIALLY_FILLED", 1000.0, 2.0), **_KW)
         self.assertAlmostEqual(dqu1, 2.0)           # 1000 @ 0.002
         p, dq2, dqu2, act = reconcile_pending_buy(p, _order("FILLED", 2000.0, 5.0), **_KW)
         self.assertEqual(act, "filled")
@@ -89,9 +89,9 @@ class TestReconcilePendingBuy(unittest.TestCase):
 
     def test_double_reconcile_same_result_credits_once(self):
         p = _pending()
-        p, dq1, dqu1, _ = reconcile_pending_buy(p, _order("PARTIALLY_FILLED", 1000.0, 2.5), **_KW)
+        p, _dq1, _dqu1, _ = reconcile_pending_buy(p, _order("PARTIALLY_FILLED", 1000.0, 2.5), **_KW)
         # same order state polled again (no new fill) → zero delta, no double credit
-        p2, dq2, dqu2, act = reconcile_pending_buy(p, _order("PARTIALLY_FILLED", 1000.0, 2.5), **_KW)
+        _p2, dq2, dqu2, act = reconcile_pending_buy(p, _order("PARTIALLY_FILLED", 1000.0, 2.5), **_KW)
         self.assertEqual((dq2, dqu2), (0.0, 0.0))
         self.assertEqual(act, "partial")
 
@@ -106,20 +106,20 @@ class TestReconcilePendingBuy(unittest.TestCase):
 
     def test_stale_by_price_signals_cancel(self):
         # current price rose > stale_pct above our resting bid → cancel & re-bid
-        np, dq, dqu, act = reconcile_pending_buy(
+        np, _dq, _dqu, act = reconcile_pending_buy(
             _pending(price=0.0025), _order("NEW"),
             now_ts=1000.0, price=0.0025 * 1.03, stale_pct=0.02, max_age_s=3600.0)
         self.assertEqual(act, "cancel")
         self.assertEqual(np, _pending(price=0.0025))   # unchanged until the cancel confirms
 
     def test_stale_by_age_signals_cancel(self):
-        np, dq, dqu, act = reconcile_pending_buy(
+        _np, _dq, _dqu, act = reconcile_pending_buy(
             _pending(placed_ts=0.0), _order("NEW"),
             now_ts=5000.0, price=0.0025, stale_pct=0.02, max_age_s=3600.0)
         self.assertEqual(act, "cancel")
 
     def test_not_stale_within_bounds_holds(self):
-        np, dq, dqu, act = reconcile_pending_buy(
+        _np, _dq, _dqu, act = reconcile_pending_buy(
             _pending(price=0.0025, placed_ts=0.0), _order("NEW"),
             now_ts=100.0, price=0.0025 * 1.01, stale_pct=0.02, max_age_s=3600.0)
         self.assertEqual(act, "hold")
@@ -961,7 +961,7 @@ class TestRebuyObligationLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertIn(5.0, {rb.band_pct for rb in eng.acc.pending_rebuys})  # still owed
 
     def test_restore_backfills_rids_on_state_written_before_they_existed(self):
-        eng, state = _ladder_engine()
+        _eng, state = _ladder_engine()
         # simulate legacy persisted state: obligations with no rid
         state.conn.execute(
             "INSERT OR REPLACE INTO accum_state (id, ts_ms, holdings_btc, avg_entry, "
@@ -1011,7 +1011,7 @@ class TestDurableTradePush(unittest.TestCase):
         self._mod = _mod
         self._orig_push = _mod._push_trade
         self.pushed = []
-        _mod._push_trade = lambda p: self.pushed.append(p)
+        _mod._push_trade = self.pushed.append
 
     def tearDown(self):
         self._mod._push_trade = self._orig_push
