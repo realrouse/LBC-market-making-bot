@@ -1,4 +1,8 @@
-<img src="../graphics/favicon-512.png" alt="logo tradinebotte" width="96">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../graphics/logo-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="../graphics/logo-light.svg">
+  <img src="../graphics/logo-dark.svg" alt="tradinebotte" height="56">
+</picture>
 
 # Architecture multi-processus et flux de messages ZeroMQ
 
