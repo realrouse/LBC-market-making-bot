@@ -6,20 +6,25 @@ All bots detect credentials at startup via environment variables. When the
 relevant variables are absent the bot runs in **simulation mode**: order
 functions return `sim_...` IDs, no real orders are placed, and no funds move.
 Switching to live is a three-step process: set credentials on the remote →
-wire them into the systemd service → update the status page.
+wire them into the systemd service → flip `is_live` for that bot in
+`inventory.toml`.
 
 ---
 
 ## 1. Credentials required per bot
 
-| Bot | Connector | Environment variables |
+Every strategy family runs inside the same host process, `live_bot.py`
+(native single-tree deploy — see `docs/plan_D_decoupling.md`); which
+connector it loads is config-driven (`strategy_type` / `connector` in the
+bot's strategy JSON), not a separate binary per strategy.
+
+| Strategy family | Connector | Environment variables |
 |-----|-----------|----------------------|
-| `live_bot` / `account_bot` (Polymarket) | `polymarket` | `POLY_PRIVATE_KEY`, `POLY_API_KEY`, `POLY_API_SECRET` |
-| `grid_bot` / `swing_bot` (Binance) | `binance` | `BINANCE_API_KEY`, `BINANCE_API_SECRET` |
-| `accumulation_bot` | `binance` | `BINANCE_API_KEY`, `BINANCE_API_SECRET` |
-| `orderbook_bot` | `binance` | `BINANCE_API_KEY`, `BINANCE_API_SECRET` |
-| `grid_bot` (MEXC Futures) | `mexc_futures` | `MEXC_FUTURES_API_KEY`, `MEXC_FUTURES_API_SECRET` |
-| `grid_bot` / `swing_bot` (MEXC spot) | `mexc` | `MEXC_API_KEY`, `MEXC_API_SECRET` |
+| Polymarket (`pm_strategy` plugin) | `polymarket` | `POLY_PRIVATE_KEY`, `POLY_API_KEY`, `POLY_API_SECRET` |
+| Grid / Swing / DCA (Binance) | `binance` | `BINANCE_API_KEY`, `BINANCE_API_SECRET` |
+| Grid / Swing (MEXC spot) | `mexc` | `MEXC_API_KEY`, `MEXC_API_SECRET` |
+| Grid (MEXC Futures) | `mexc_futures` | `MEXC_FUTURES_API_KEY`, `MEXC_FUTURES_API_SECRET` |
+| Accumulation / BAMM (MEXC or Binance) | `mexc` / `binance` | `MEXC_API_KEY`/`SECRET` or `BINANCE_API_KEY`/`SECRET` |
 
 **Polymarket note:** `POLY_API_KEY`, `POLY_API_SECRET`, and `POLY_API_PASSPHRASE`
 are derived from the wallet private key. Run `python3 scripts/setup.py` once
@@ -34,15 +39,15 @@ SSH into the target account and create `~/.tradinebotte-creds`:
 
 ```bash
 cat > ~/.tradinebotte-creds << 'EOF'
-# Binance — used by accumulation_bot, orderbook_bot, grid_bot (binance), swing_bot
+# Binance — used by live_bot.py for grid/swing/DCA/accumulation on the binance connector
 BINANCE_API_KEY=your_key_here
 BINANCE_API_SECRET=your_secret_here
 
-# MEXC Futures — used by grid_bot (mexc_futures connector)
+# MEXC Futures — used by live_bot.py for grid on the mexc_futures connector
 # MEXC_FUTURES_API_KEY=your_key_here
 # MEXC_FUTURES_API_SECRET=your_secret_here
 
-# Polymarket — used by live_bot / account_bot
+# Polymarket — used by live_bot.py via the pm_strategy plugin
 # POLY_PRIVATE_KEY=0x...
 # POLY_API_KEY=...
 # POLY_API_SECRET=...
@@ -84,7 +89,7 @@ systemctl --user restart tradinebotte-live.service
 ```
 
 Repeat for other service units if needed
-(`tradinebotte-accumulation.service`, `tradinebotte-orderbook.service`).
+(`tradinebotte-accumulation.service`, `tradinebotte-grid.service`).
 
 > **Why a drop-in?** The base service file is overwritten on every rsync
 > deploy. A drop-in under `service.d/` is never touched by rsync and merges
@@ -127,27 +132,39 @@ simulation notice. In simulation mode it prints:
 
 ---
 
-## 6. Update the status page
+## 6. Flip `is_live` in inventory.toml
 
-In `tradinebotte-status/generate_status.py`, add the bot to `_LIVE_BOTS`:
+The status page's LIVE/SIM badge is **not** hand-edited in
+`generate_status.py` — it's derived from `inventory.toml`, the fleet's
+single source of truth (`live_bots()` in
+`tradinebotte-status/inventory_labels.py`, keyed on each bot's `is_live`
+flag). Editing a `_LIVE_BOTS` set directly in `generate_status.py` has no
+effect; that set is computed fresh from `inventory.toml` on every run.
 
-```python
-# Default: all bots are SIM. Add entries here when a bot goes live.
-_LIVE_BOTS: set[tuple[str, str]] = {
-    ("acct-2", "live_bot"),           # example: acct-2 Polymarket bot now live
-    ("acct-4", "accumulation_bot"),   # example: acct-4 accumulation bot now live
-}
+`inventory.toml` itself is local and git-ignored (it describes your real
+accounts/bots — see `inventory.toml.example` if you haven't created yours
+yet: `cp inventory.toml.example inventory.toml`). If it's missing,
+`generate_status.py` prints a loud warning and fails soft to **no** LIVE
+badges at all — never assume "no warning printed" without checking the
+file exists.
+
+Find the bot's `[[bot]]` row (matched by `account_idx` + its generated
+`bot_name`/bot_id) and flip:
+
+```toml
+is_live       = true   # ⚠ real money — leave a comment: budget, connector, date armed
 ```
 
-`acct_short` is the first word of the matching `_ACCOUNT_LABELS` entry
-(e.g. `"acct-2"` from `"acct-2 [poly]"`). `bot_name` matches the heartbeat
-`bot_name` field exactly.
-
-Regenerate after editing:
+Regenerate, or wait for the next `statuspage.timer` tick (~2 min):
 
 ```bash
 python3 tradinebotte-status/generate_status.py
 ```
+
+`is_live` is load-bearing beyond the status page: it's also what makes
+`botctl.sh` refuse destructive commands (reset/wipe) against that bot. See
+the idx7 BAMM row in `inventory.toml` for the comment pattern this flag
+expects.
 
 ---
 

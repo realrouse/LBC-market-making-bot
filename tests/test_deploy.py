@@ -14,6 +14,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 import deploy  # noqa: E402
 
+# inventory.toml is local/git-ignored (it describes this deployment's real fleet — see
+# docs/going-live.md); a fresh clone/CI checkout has only inventory.toml.example. The tests
+# gated below assert against the REAL file's exact content (or drive deploy.main() with no
+# rows override, which reads it directly) — skip rather than fail where it isn't present.
+_skip_without_real_inventory = unittest.skipUnless(
+    os.path.isfile(deploy.INVENTORY), "inventory.toml is local-only (not present in this checkout)")
+
 
 def _rows():
     """Synthetic inventory: acct-1 infra (ignored in derivation) + acct-2/3 bots, with a
@@ -93,6 +100,7 @@ class TestDeployerEnv(unittest.TestCase):
         self.assertEqual(plan[1].script, "new.sh")
 
 
+@_skip_without_real_inventory
 class TestRealInventory(unittest.TestCase):
     """Regression guard: the shipped inventory.toml must reproduce the historical deploy
     order (the sequence deploy_all.sh used to hardcode)."""
@@ -281,6 +289,7 @@ class TestNativeDispatch(unittest.TestCase):
         self.assertEqual(step.args, [])
 
 
+@_skip_without_real_inventory
 class TestPostDeployInventorySync(unittest.TestCase):
     """Post-deploy inventory reconciliation (run_inventory_sync) + its gating in main().
     Prevents is_live (and the rest of the topology) drifting from the committed inventory.toml."""

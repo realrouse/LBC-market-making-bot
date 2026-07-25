@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""sync_inventory.py — upsert the git-tracked inventory.toml into the shared DB.
+"""sync_inventory.py — upsert the local inventory.toml into the shared DB.
 
-Reads the desired-state topology from inventory.toml (the single source of truth),
-resolves each account_idx to the real account name via TEST_USERS in the (untracked)
-conf, and upserts into the `inventory` table.  Idempotent: re-running changes nothing
-but updated_ts.  Run after editing inventory.toml, and as a deploy step so the DB
-always matches the committed topology.
+Reads the desired-state topology from inventory.toml (the single source of truth;
+local/git-ignored — see inventory.toml.example), resolves each account_idx to the real
+account name via TEST_USERS in the (untracked) conf, and upserts into the `inventory`
+table.  Idempotent: re-running changes nothing but updated_ts.  Run after editing
+inventory.toml, and as a deploy step so the DB always matches the local topology.
 
 Account names are deliberately NOT in inventory.toml (infra identifiers stay out of
 git); they are resolved here so the DB `inventory.account` matches `heartbeats.account`.

@@ -230,7 +230,9 @@ def main() -> int:
     args, forward = ap.parse_known_args()
 
     if not os.path.isfile(INVENTORY):
-        print(f"inventory not found: {INVENTORY}", file=sys.stderr)
+        print(f"inventory not found: {INVENTORY}\n"
+              f"  inventory.toml is local/git-ignored — fix: cp inventory.toml.example "
+              f"inventory.toml   (then edit it for your fleet)", file=sys.stderr)
         return 2
     rows = load_rows(INVENTORY)
     if not rows:

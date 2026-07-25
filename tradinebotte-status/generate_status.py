@@ -563,6 +563,7 @@ def t(key: str, **kw) -> str:
 # crashes over a label. The account COUNT/ORDER stays anchored to the collected users (the
 # min() clamp in main()); inventory only enriches label text + the is_live flag.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_inv = None
 try:
     import inventory_labels as _inv  # noqa: E402
     _INV_ROWS = _inv.load_rows()
@@ -571,6 +572,15 @@ except Exception:
     _INV_ROWS = []
     def _family_of(bot_type: str = "", bot_name: str = ""):  # fail-soft: no derivation
         return None
+
+if not _INV_ROWS and not (_inv and os.path.isfile(_inv.DEFAULT_INVENTORY)):
+    # inventory.toml is local/git-ignored (see docs/going-live.md) — a missing file here means
+    # the fail-soft path below silently drops every LIVE badge, incl. real-money bots. Loud on
+    # purpose: this runs on every 60s regen, so a quiet skip would hide it indefinitely.
+    _inv_path = _inv.DEFAULT_INVENTORY if _inv else "inventory.toml"
+    print(f"WARNING: {_inv_path} not found — status page has NO account labels "
+          f"and NO real-money LIVE badges until it exists. Fix: cp inventory.toml.example "
+          f"inventory.toml", file=sys.stderr)
 
 if _INV_ROWS:
     _ACCOUNT_LABELS = _inv.account_labels(_INV_ROWS)

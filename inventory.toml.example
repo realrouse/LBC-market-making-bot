@@ -1,0 +1,89 @@
+# inventory.toml.example — template for your fleet topology.
+#
+# inventory.toml is LOCAL and GIT-IGNORED: it describes YOUR accounts, bots, and (if any)
+# real-money flags — infrastructure details that don't belong in a public repo. Copy this
+# file, rename it, and edit it to match your own installation:
+#
+#   cp inventory.toml.example inventory.toml
+#   editor inventory.toml
+#   python3 tradinebotte-status/check_inventory.py     # validate before deploying
+#
+# All consumers read from inventory.toml, not from any hardcoded copy of the topology:
+#   - deploy pipeline : scripts/deploy.py derives the plan (deploy_all.sh is a thin shim),
+#                       running each row's `deployer` (or legacy `deploy_script`).
+#   - status page     : generate_status.py derives _ACCOUNT_LABELS (from the bots present)
+#                       and _LIVE_BOTS (from is_live), via tradinebotte-status/inventory_labels.py.
+#   - bot_status.sh   : LABELS derived via the same helper.
+#
+# Sync into the shared DB with:
+#
+#   python3 tradinebotte-status/sync_inventory.py --db <path>
+#
+# Accounts are referenced by INDEX (account_idx = position in TEST_USERS in your own
+# untracked ~/.tradinebotte-test.conf), never by OS username — this keeps infrastructure
+# identifiers (real usernames) out of both inventory.toml and git history.
+#
+# Fields:
+#   account_idx    0-based index into TEST_USERS (acct-1 = 0, acct-2 = 1, ...).
+#   bot_name       MUST equal the name the bot reports in its heartbeat (join key). For a
+#                  trading bot this is normally a generated bot_id
+#                  ({exchange}-{strategy}-{pair}-{6hex}); tradinetools.resolve_bot_id mints
+#                  one for you on first deploy — put a placeholder here and update it after.
+#   display_name   readable label for the status page (optional; falls back to bot_name).
+#   kind           "bot" (liveness via heartbeat) | "service" (infra; liveness via systemctl).
+#   bot_type       strategy/category label, free text (variant-level, e.g. "cex-grid-mexc-sim").
+#   strategy_type  canonical strategy family for the status-page grouping, one of
+#                  accumulation|grid|swing|polymarket. Trading bots only (omit for infra).
+#   service_unit   systemd --user unit name; {account} is replaced with the resolved name.
+#   install_dir    code/data dir on the remote (single-tree deploys all use "~/tradinebotte").
+#   port           listen port (infra services only; bots connect out, leave unset).
+#   is_live        true = real money, false = simulation, unset = n/a (infra). Leave every
+#                  bot `false` until you have deliberately wired real exchange credentials —
+#                  see docs/going-live.md. This flag also gates botctl.sh's destructive
+#                  commands, so keep it accurate.
+#   deployer       repo-relative path to the native deployer (scripts/deploy_actions.py).
+#   deploy_script  repo-relative path to a legacy bash deployer (only for bots not yet on
+#                  the native deployer; new bots should use `deployer` instead).
+#   single_tree    true for native single-tree deploys (the current, recommended model).
+#   strategy       repo-relative path to the bot's strategy JSON config.
+
+# ── acct-1 — shared infra (indicators/feed/status collector) ─────────────────
+[[bot]]
+account_idx   = 0
+bot_name      = "infra-indicators"
+kind          = "service"
+bot_type      = "infra-indicators"
+service_unit  = "tradinebotte-indicators.service"
+install_dir   = "~/tradinebotte"
+port          = 5559
+deploy_script = "tradinebotte-status/scripts/setup_data_plane.sh"
+
+# ── acct-2 — example CEX grid bot (simulation) ────────────────────────────────
+[[bot]]
+account_idx   = 1
+bot_name      = "mexc-grid-btcusdt-000000"            # placeholder — real deploy mints its own bot_id
+display_name  = "mexc-grid-btcusdt"
+kind          = "bot"
+bot_type      = "cex-grid-mexc-spot-sim"
+strategy_type = "grid"
+service_unit  = "tradinebotte-grid.service"
+install_dir   = "~/tradinebotte"
+is_live       = false                                 # simulation — no MEXC key wired in
+deployer      = "scripts/deploy_actions.py"
+single_tree   = true
+strategy      = "tradinebotte-cex/strategies/grid/grid_BTCUSDT.json"
+
+# ── acct-3 — example Polymarket bot (simulation) ──────────────────────────────
+[[bot]]
+account_idx   = 2
+bot_name      = "polymarket-threshold-000000"         # placeholder — real deploy mints its own bot_id
+display_name  = "polymarket-threshold"
+kind          = "bot"
+bot_type      = "polymarket-threshold"
+strategy_type = "polymarket"
+service_unit  = "tradinebotte-live.service"
+install_dir   = "~/tradinebotte"
+is_live       = false                                 # simulation — no POLY_PRIVATE_KEY wired in
+deployer      = "scripts/deploy_actions.py"
+single_tree   = true
+strategy      = "tradinebotte-polymarket/strategies/polymarket_BTC5M.json"

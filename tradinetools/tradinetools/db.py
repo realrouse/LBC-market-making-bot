@@ -7,8 +7,9 @@ ONE file on the always-on server (apollo), three tables:
                   DDL is intentionally identical to status_collector.py's historical
                   inline schema so the Phase-2 migration can copy rows column-for-column.
     inventory   — desired state ("what SHOULD run where"): the single source of truth,
-                  synced from inventory.toml (git-tracked).  Replaces the topology that
-                  is today duplicated across deploy_all.sh / bot_status.sh / generate_status.py.
+                  synced from inventory.toml (local/git-ignored — see inventory.toml.example).
+                  Replaces the topology that is today duplicated across
+                  deploy_all.sh / bot_status.sh / generate_status.py.
     deploys     — append-only deploy journal: when / how / which version, written by every
                   deploy_*.sh path (closes the gap left by the overwrite-only version.stamp).
 

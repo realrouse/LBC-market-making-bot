@@ -14,6 +14,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import inventory_labels as il  # noqa: E402
 
+# inventory.toml is local/git-ignored (it describes this deployment's real fleet — see
+# docs/going-live.md); a fresh clone has only inventory.toml.example. The tests below assert
+# against the REAL file's exact content, so they're meaningless (and would just fail on a
+# missing file) anywhere it isn't present — skip rather than fail on a clean checkout/CI.
+_HAS_REAL_INVENTORY = os.path.isfile(il.DEFAULT_INVENTORY)
+_skip_without_real_inventory = unittest.skipUnless(
+    _HAS_REAL_INVENTORY, "inventory.toml is local-only (not present in this checkout)")
+
 
 class TestAccountLabels(unittest.TestCase):
 
@@ -30,6 +38,7 @@ class TestAccountLabels(unittest.TestCase):
         self.assertEqual(labels[0], "acct-1 [poly+cex+status]")   # _TAG_ORDER, indicators omitted
         self.assertEqual(labels[1], "acct-2 [poly+accum]")
 
+    @_skip_without_real_inventory
     def test_real_inventory_labels(self):
         # Snapshot of the live inventory.toml labels. bot_names are now generated bot_ids
         # (mexc-grid-lbcusdt-…), so the tag comes from the keyword scan, not an exact _TAG
@@ -77,6 +86,7 @@ class TestLiveBots(unittest.TestCase):
             {("acct-2", "live_bot"), ("acct-4", "accumulation_bot")},
         )
 
+    @_skip_without_real_inventory
     def test_real_inventory_live_set_is_exactly_the_known_real_money_bot(self):
         """Pins the real-money set to the ONE bot we intend to be live (the LBCUSDT bot; it
         became BAMM on 2026-07-24, re-minting its bot_id → mexc-bamm-lbcusdt-d83114). This
@@ -120,6 +130,7 @@ class TestFamilyTaxonomy(unittest.TestCase):
         self.assertIsNone(il.strategy_type_of({"kind": "bot", "bot_type": "infra-status"}))  # not a strategy
         self.assertEqual(il.strategy_type_of({"kind": "bot", "bot_type": "cex-grid-mexc-sim"}), "grid")
 
+    @_skip_without_real_inventory
     def test_real_inventory_strategy_types(self):
         """Pins the strategy_type of every trading bot in inventory.toml (infra → None)."""
         got = {r["bot_name"]: il.strategy_type_of(r) for r in il.load_rows()}

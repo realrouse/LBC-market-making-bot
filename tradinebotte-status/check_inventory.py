@@ -175,13 +175,14 @@ def check_native_coverage(rows: list[dict]) -> list[str]:
         if _da.native_target(bt) is None:
             problems.append(f"{r.get('bot_name')!r}: bot_type {bt!r} has no native deploy target "
                             f"(add a rule to deploy_actions._NATIVE_TARGET_RULES or _NATIVE_BASH_ONLY)")
-        # A row that opts into native dispatch (deployer=deploy_actions.py) for a WRITE family must
-        # carry a `strategy` — deploy_actions rejects an empty --strategy for write families, so an
-        # unset strategy would fail the deploy at runtime. Caught offline here.
+        # A row that opts into native dispatch (deployer=deploy_actions.py) for a bot family must
+        # carry a `strategy` — deploy_actions rejects an empty --strategy for every family, so an
+        # unset strategy would fail the deploy at runtime. Caught offline here. (FAMILIES entries
+        # have no "config_mode" key — every family takes a strategy JSON, so there's no read/write
+        # split to gate on any more.)
         if os.path.basename(r.get("deployer", "") or "") == "deploy_actions.py":
             tgt = _da.native_target(bt)
-            if tgt and tgt[0] == "family" and _da.FAMILIES[tgt[1]]["config_mode"] == "write" \
-                    and not r.get("strategy"):
+            if tgt and tgt[0] == "family" and not r.get("strategy"):
                 problems.append(f"{r.get('bot_name')!r}: native write family {tgt[1]!r} needs a "
                                 f"non-empty `strategy` field (deploy_actions --strategy is required)")
 
@@ -448,6 +449,11 @@ def main() -> None:
     p.add_argument("--live", action="store_true", help="also check live systemctl per account")
     p.add_argument("--conf", default=os.path.expanduser("~/.tradinebotte-test.conf"))
     args = p.parse_args()
+
+    if not os.path.isfile(args.inventory):
+        print(f"FAIL: {args.inventory} not found — inventory.toml is local/git-ignored.\n"
+              f"  Fix: cp inventory.toml.example inventory.toml   (then edit it for your fleet)")
+        sys.exit(1)
 
     rows = load_rows(args.inventory)
     if not rows:

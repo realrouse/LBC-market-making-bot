@@ -64,8 +64,8 @@ Bull 2024    :  +2 $  (+0,1%)    5 cycles  25% dans la grille  exit_high
 ### Lancement
 
 ```bash
-python3 scripts/backtest_grid.py --all
-python3 scripts/backtest_grid.py --all --sweep          # recherche de paramètres
+python3 analysis/backtest_grid.py --all
+python3 analysis/backtest_grid.py --all --sweep          # recherche de paramètres
 ```
 
 ---
@@ -155,9 +155,9 @@ trail=bear sur bear 2022 :   +31 $  (+2,0%)   2 recentrages   20 $ de perte late
 ### Lancement
 
 ```bash
-python3 scripts/backtest_grid.py --all --trail bear
-python3 scripts/backtest_grid.py --all --trail bear --compare   # vs statique
-python3 scripts/backtest_grid.py --all --trail bear --sweep     # recherche de paramètres
+python3 analysis/backtest_grid.py --all --trail bear
+python3 analysis/backtest_grid.py --all --trail bear --compare   # vs statique
+python3 analysis/backtest_grid.py --all --trail bear --sweep     # recherche de paramètres
 ```
 
 ### Fichier de stratégie
@@ -233,9 +233,9 @@ $81 863).
 ### Lancement
 
 ```bash
-python3 scripts/backtest_grid.py --all --trail bull
-python3 scripts/backtest_grid.py --all --trail bull --compare   # vs statique
-python3 scripts/backtest_grid.py --all --trail bull --sweep     # recherche de paramètres
+python3 analysis/backtest_grid.py --all --trail bull
+python3 analysis/backtest_grid.py --all --trail bull --compare   # vs statique
+python3 analysis/backtest_grid.py --all --trail bull --sweep     # recherche de paramètres
 ```
 
 ### Fichier de stratégie
@@ -251,16 +251,16 @@ trailing. Recalibrer `grid_lower` / `grid_upper` à ±15% du prix BTC courant.
 Analyse du marché
 ├── Consolidation / range attendu ?
 │     └── Statique ou bull trailing (quasi identiques)
-│           python3 scripts/backtest_grid.py --all
-│           python3 scripts/backtest_grid.py --all --trail bull
+│           python3 analysis/backtest_grid.py --all
+│           python3 analysis/backtest_grid.py --all --trail bull
 │
 ├── Tendance baissière / bear market attendu ?
 │     └── Bear trailing
-│           python3 scripts/backtest_grid.py --all --trail bear
+│           python3 analysis/backtest_grid.py --all --trail bear
 │
 ├── Tendance haussière / bull run attendu ?
 │     └── Bull trailing
-│           python3 scripts/backtest_grid.py --all --trail bull
+│           python3 analysis/backtest_grid.py --all --trail bull
 │
 └── Incertain ?
       └── Bear trailing (asymétrique : profite des oscillations à la baisse,
@@ -317,19 +317,19 @@ Trois régimes, trois stratégies, ±15%, 30 niveaux, $50/ordre, $1 500 de capit
 
 ```bash
 # Statique — défaut
-python3 scripts/backtest_grid.py --all --range 15 --levels 30 --size 50
+python3 analysis/backtest_grid.py --all --range 15 --levels 30 --size 50
 
 # Bear trailing recommandé
-python3 scripts/backtest_grid.py --all --range 15 --levels 30 --trail bear --compare
+python3 analysis/backtest_grid.py --all --range 15 --levels 30 --trail bear --compare
 
 # Bull trailing recommandé
-python3 scripts/backtest_grid.py --all --range 15 --levels 30 --trail bull --compare
+python3 analysis/backtest_grid.py --all --range 15 --levels 30 --trail bull --compare
 
 # Sweep complet — mode bear
-python3 scripts/backtest_grid.py --all --trail bear --sweep --sort pnl
+python3 analysis/backtest_grid.py --all --trail bear --sweep --sort pnl
 
 # Sweep complet — mode bull
-python3 scripts/backtest_grid.py --all --trail bull --sweep --sort pnl
+python3 analysis/backtest_grid.py --all --trail bull --sweep --sort pnl
 ```
 
 ---
@@ -338,8 +338,8 @@ python3 scripts/backtest_grid.py --all --trail bull --sweep --sort pnl
 
 | Fichier | Rôle |
 |---|---|
-| `scripts/backtest_grid.py` | Moteur de backtest (statique + trailing) |
-| `scripts/download_btc_history.py` | Téléchargement OHLCV depuis Binance |
+| `analysis/backtest_grid.py` | Moteur de backtest (statique + trailing) |
+| `analysis/download_btc_history.py` | Téléchargement OHLCV depuis Binance |
 | `strategies/grid/grid_BTCUSDT_tight.json` | Config statique ±15% |
 | `strategies/grid/grid_BTCUSDT_moderate.json` | Config statique ±20% |
 | `strategies/grid/grid_BTCUSDT_bear_trailing.json` | Config bear trailing |
