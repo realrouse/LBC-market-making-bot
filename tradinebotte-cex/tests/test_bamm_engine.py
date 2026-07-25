@@ -158,6 +158,25 @@ class TestBammLiveExec(unittest.TestCase):
         self.assertGreater(eng.acc.total_realized, 0.0)        # grid profit booked
         self.assertNotIn(soid, eng.acc.open_sells)
 
+    def test_bamm_fill_records_the_exchange_order_id(self):
+        # Regression: BAMM live fills used to reach bot_trades with order_id=None (the credit
+        # helpers dropped the id the reconcile loop already had), so the status page's executed
+        # table showed BAMM rows blank. The real oid must now ride the push.
+        import accumulation as _acc
+        pushed = []
+        orig, _acc._push_trade = _acc._push_trade, lambda payload: pushed.append(payload)
+        try:
+            eng = self._live_eng()
+            self._tick(eng, 0.00250)
+            oid, rec = next(iter(eng.acc.open_buys.items()))
+            eng._api.fill(oid)
+            self._tick(eng, 0.00250)
+        finally:
+            _acc._push_trade = orig
+        bamm_buys = [p for p in pushed if p.get("reason") == "bamm" and p.get("side") == "buy"]
+        self.assertTrue(bamm_buys, "a credited BAMM buy must push a bot_trades row")
+        self.assertEqual(bamm_buys[-1]["order_id"], oid)       # the REAL resting-order id, not None
+
 
 async def _noop_async(*_a, **_k):
     return None

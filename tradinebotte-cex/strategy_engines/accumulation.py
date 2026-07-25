@@ -875,7 +875,7 @@ class AccumulationStrategy:
             view = live.get(oid) or await self._api.get_order(state.session, self.symbol, oid)
             new_rec, dqty, dquote, action = reconcile_order(rec, view)
             if dqty > 0:
-                self._bamm_credit_buy(state, dqty, dquote, ts_ms, rec["rung"])
+                self._bamm_credit_buy(state, dqty, dquote, ts_ms, rec["rung"], order_id=oid)
             if new_rec is None:
                 a.open_buys.pop(oid, None)
                 if action == "filled":
@@ -887,7 +887,7 @@ class AccumulationStrategy:
             view = live.get(oid) or await self._api.get_order(state.session, self.symbol, oid)
             new_rec, dqty, dquote, action = reconcile_order(rec, view)
             if dqty > 0:
-                self._bamm_credit_sell(state, dqty, dquote, ts_ms, rec["rung"])
+                self._bamm_credit_sell(state, dqty, dquote, ts_ms, rec["rung"], order_id=oid)
             if new_rec is None:
                 a.open_sells.pop(oid, None)
                 if action == "filled":
@@ -896,18 +896,21 @@ class AccumulationStrategy:
             else:
                 a.open_sells[oid] = new_rec
 
-    def _bamm_credit_buy(self, state: Any, dqty: float, dquote: float, ts_ms: int, rung: int) -> None:
+    def _bamm_credit_buy(self, state: Any, dqty: float, dquote: float, ts_ms: int, rung: int,
+                         order_id: Optional[str] = None) -> None:
         a = self.acc
         a.holdings_btc += dqty
         a.free_usdt    -= dquote
         a.peak_holdings_btc = max(a.peak_holdings_btc, a.holdings_btc)
         a.last_write_ts = time.time()
         self._record_accum_trade(state.conn, ts_ms=ts_ms, side="buy", reason="bamm",
-                                 price=(dquote / dqty if dqty else 0.0), qty=dqty, quote=dquote, fee=0.0)
+                                 price=(dquote / dqty if dqty else 0.0), qty=dqty, quote=dquote, fee=0.0,
+                                 order_id=order_id)
         logger.info("BAMM BUY fill +%.0f @ %.6f rung%d | held=%.0f free=$%.2f",
                     dqty, (dquote / dqty if dqty else 0.0), rung, a.holdings_btc, a.free_usdt)
 
-    def _bamm_credit_sell(self, state: Any, dqty: float, dquote: float, ts_ms: int, rung: int) -> None:
+    def _bamm_credit_sell(self, state: Any, dqty: float, dquote: float, ts_ms: int, rung: int,
+                          order_id: Optional[str] = None) -> None:
         a = self.acc
         fill_price = dquote / dqty if dqty > 0 else 0.0
         a.holdings_btc -= dqty
@@ -916,7 +919,8 @@ class AccumulationStrategy:
         a.total_realized += dqty * (fill_price - rprice)   # grid profit on the spread, not vs avg_entry
         a.last_write_ts = time.time()
         self._record_accum_trade(state.conn, ts_ms=ts_ms, side="sell", reason="bamm",
-                                 price=fill_price, qty=dqty, quote=dquote, fee=0.0)
+                                 price=fill_price, qty=dqty, quote=dquote, fee=0.0,
+                                 order_id=order_id)
         logger.info("BAMM SELL fill -%.0f @ %.6f rung%d | held=%.0f free=$%.2f realized=$%.2f",
                     dqty, fill_price, rung, a.holdings_btc, a.free_usdt, a.total_realized)
 
