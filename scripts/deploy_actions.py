@@ -28,6 +28,15 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONF = os.environ.get("TEST_MULTIBOT_CONF", os.path.expanduser("~/.tradinebotte-test.conf"))
 C = {"g": "\033[0;32m", "r": "\033[0;31m", "y": "\033[1;33m", "n": "\033[0m"}
 
+# One deploy_family/deploy_infra call makes ~13 sequential ssh/rsync round trips (6 rsyncs in
+# act_sync alone, plus config/deps/dropin/restart/sleep/read-bot-id/verify). Bare auth (password,
+# no key) measured ~13s PER connection on apollo — with no reuse that is ~3min of pure handshake
+# overhead before any real work. ControlMaster lets every call after the first multiplex through
+# one already-authenticated channel. Directory must pre-exist (ssh does not create it); 0700 since
+# the socket effectively holds a live authenticated session. Created lazily in Host.__init__, not
+# here at import time — this module is imported SSH-free by tests (test_deploy_actions.py).
+CONTROL_DIR = os.path.expanduser("~/.ssh/cm-sockets")
+
 
 def _c(k, s):  # colour if tty
     return f"{C[k]}{s}{C['n']}" if sys.stdout.isatty() else s
@@ -213,10 +222,18 @@ class Host:
                 # known_hosts can otherwise make ssh offer sk-* for the server, which the server has no
                 # matching host key for → "no matching host key type" preauth failure (seen in
                 # auth.log). '-sk-*' removes every sk-* variant, keeping ed25519/ecdsa/rsa.
-                "-o", "HostKeyAlgorithms=-sk-*"]
+                "-o", "HostKeyAlgorithms=-sk-*",
+                # Multiplex every ssh/rsync call in one deploy through a single authenticated
+                # connection (see CONTROL_DIR comment) — %C is a hash of local+remote+port+user,
+                # short enough to dodge the unix-socket path-length limit. 10m persistence covers
+                # one deploy's full sequence of steps and then closes itself; no manual cleanup.
+                "-o", "ControlMaster=auto",
+                "-o", f"ControlPath={CONTROL_DIR}/%C",
+                "-o", "ControlPersist=10m"]
 
     def __init__(self, user: str, password: str, server: str, port: str):
         self.user, self.password, self.server, self.port = user, password, server, port
+        os.makedirs(CONTROL_DIR, mode=0o700, exist_ok=True)
 
     def _base_env(self):
         return {**os.environ, "SSHPASS": self.password}
