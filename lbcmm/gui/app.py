@@ -321,10 +321,10 @@ def _apply_body(cfg: BotConfig, body: dict) -> None:
     if "lbc_budget" in body:
         cfg.lbc_budget = max(0.0, float(body["lbc_budget"]))
     if "bid_depth_pct" in body:
-        # Expert may set very wide bands (sells far above mid). Soft cap 10000% = 100× mid.
-        cfg.bid_depth_pct = max(0.1, min(10000.0, float(body["bid_depth_pct"])))
+        # Expert custom depth: no upper cap (user may place far sell rungs)
+        cfg.bid_depth_pct = max(1e-9, float(body["bid_depth_pct"]))
     if "ask_depth_pct" in body:
-        cfg.ask_depth_pct = max(0.1, min(10000.0, float(body["ask_depth_pct"])))
+        cfg.ask_depth_pct = max(1e-9, float(body["ask_depth_pct"]))
     if "n_levels" in body:
         # Expert steps limited in-engine by $1/order budget, not a hard 30
         cfg.n_levels = max(1, min(100_000, int(body["n_levels"])))
