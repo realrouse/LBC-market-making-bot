@@ -1,4 +1,4 @@
 # Minimal deps for standalone LBC-market-making-bot (lbcmm)
 aiohttp>=3.9
-websockets>=12
+websockets>=16.1.1
 protobuf>=5,<6
