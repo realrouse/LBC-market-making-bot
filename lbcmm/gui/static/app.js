@@ -20,6 +20,7 @@
     wizStep: 0,
     wizMode: "paper", // paper | live
     formSeeded: false, // after first force-apply, never stomp sliders from poll
+    public_depth_ladder: [],
   };
 
   const wizTitles = [
@@ -482,6 +483,73 @@
 
   // Strategy select is locked (disabled) to depth_provider.
 
+  // ── Public depth ladder panel ─────────────────────────────────────────
+  function openDepthPanel() {
+    const panel = $("depthPanel");
+    if (!panel) return;
+    panel.hidden = false;
+    renderDepthLadder();
+  }
+  function closeDepthPanel() {
+    const panel = $("depthPanel");
+    if (panel) panel.hidden = true;
+  }
+  function renderDepthLadder() {
+    const body = $("depthLadderBody");
+    const meta = $("depthPanelMeta");
+    if (!body) return;
+    const mid = state.mid;
+    if (meta) {
+      meta.textContent = mid
+        ? "mid " + mid.toFixed(6) + " · " + (state.symbol || "LBCUSDT")
+        : "Waiting for market…";
+    }
+    const ladder = state.public_depth_ladder || [];
+    if (!ladder.length) {
+      body.innerHTML =
+        '<tr><td colspan="4" class="muted">No ladder data yet — wait for the next market tick.</td></tr>';
+      return;
+    }
+    body.innerHTML = ladder
+      .map((row) => {
+        const pct = Number(row.pct);
+        const bid = Number(row.bid_usd) || 0;
+        const ask = Number(row.ask_usd) || 0;
+        const total = bid + ask;
+        const goal = Math.abs(pct - 2) < 0.01;
+        return (
+          '<tr class="' +
+          (goal ? "is-goal" : "") +
+          '">' +
+          "<td>" +
+          (goal ? "±" + pct + "% (goal)" : "±" + pct + "%") +
+          "</td>" +
+          '<td class="mono bid">' +
+          money(bid) +
+          "</td>" +
+          '<td class="mono ask">' +
+          money(ask) +
+          "</td>" +
+          '<td class="mono">' +
+          money(total) +
+          "</td>" +
+          "</tr>"
+        );
+      })
+      .join("");
+  }
+  if ($("btnDepthExpand")) $("btnDepthExpand").onclick = openDepthPanel;
+  if ($("btnDepthExpand2")) $("btnDepthExpand2").onclick = openDepthPanel;
+  if ($("depthPanelClose")) $("depthPanelClose").onclick = closeDepthPanel;
+  if ($("depthPanel")) {
+    $("depthPanel").addEventListener("click", (e) => {
+      if (e.target === $("depthPanel")) closeDepthPanel();
+    });
+  }
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeDepthPanel();
+  });
+
   document.querySelectorAll("[data-usdt]").forEach((el) => {
     el.onclick = () => {
       if (Number(el.dataset.usdt) > Number(usdt.max)) usdt.max = el.dataset.usdt;
@@ -632,8 +700,9 @@
 
     const pub = state.public_depth || {};
     const bot = state.bot_contribution || {};
-    $("pubBid").textContent = money(pub.bid_usd);
+      $("pubBid").textContent = money(pub.bid_usd);
     $("pubAsk").textContent = money(pub.ask_usd);
+    renderDepthLadder();
     $("botBid").textContent = money(bot.bid_usd);
     $("botAsk").textContent = money(bot.ask_usd);
     $("goalBidLbl").textContent = money(pub.bid_usd) + " / $100";
@@ -819,6 +888,7 @@
         state.best_bid = m.best_bid;
         state.best_ask = m.best_ask;
         state.public_depth = m.public_depth || {};
+        state.public_depth_ladder = m.public_depth_ladder || [];
         state.bot_contribution = m.bot_contribution || {};
         state.desired = m.desired || [];
         // Meta only (setup/mode/keys) — never force slider values on poll

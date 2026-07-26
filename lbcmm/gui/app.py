@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sys
@@ -66,6 +67,8 @@ def _print_gui_banner(host: str, port: int) -> None:
 
 
 def run_gui(cfg: BotConfig) -> int:
+    from lbcmm.engine import install_shutdown_handlers
+
     engine = get_engine(cfg)
     app = web.Application()
     app["engine"] = engine
@@ -78,6 +81,25 @@ def run_gui(cfg: BotConfig) -> int:
     app.router.add_post("/api/start", handle_start)
     app.router.add_post("/api/stop", handle_stop)
     app.router.add_static("/static/", STATIC_DIR, show_index=False)
+
+    async def _on_startup(_app: web.Application) -> None:
+        install_shutdown_handlers(asyncio.get_event_loop())
+
+    async def _on_cleanup(app_: web.Application) -> None:
+        """aiohttp shutdown / Ctrl+C — cancel open bot orders before exit."""
+        eng: Engine = app_["engine"]
+        logger.info("GUI cleanup — canceling open orders")
+        try:
+            await eng.stop()
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.error("GUI cleanup stop failed: %s", e)
+            try:
+                await eng.cleanup_orders(reason="gui-cleanup")
+            except Exception as e2:  # pylint: disable=broad-exception-caught
+                logger.error("GUI cleanup_orders failed: %s", e2)
+
+    app.on_startup.append(_on_startup)
+    app.on_cleanup.append(_on_cleanup)
 
     host = cfg.gui_host or "127.0.0.1"
     port = int(cfg.gui_port or 8787)
@@ -128,13 +150,15 @@ async def handle_market(request: web.Request) -> web.Response:
     cfg: BotConfig = request.app["cfg"]
     try:
         async with aiohttp.ClientSession() as session:
-            book = await mexc.get_depth(session, cfg.symbol, limit=100)
+            # Deeper book for multi-% ladder (2%…75%)
+            book = await mexc.get_depth(session, cfg.symbol, limit=1000)
     except Exception as e:  # pylint: disable=broad-exception-caught
         return web.json_response({"ok": False, "error": str(e)}, status=502)
     if not book:
         return web.json_response({"ok": False, "error": "book unavailable"}, status=502)
 
     pub = mexc.depth_within_pct(book, 2.0)
+    ladder = mexc.depth_ladder(book)
     mid = pub.get("mid") or 0.0
     desired = _plan_for_cfg(cfg, mid)
     bot = contribution_usd(desired, mid, 2.0)
@@ -145,6 +169,7 @@ async def handle_market(request: web.Request) -> web.Response:
         "best_bid": book.get("best_bid"),
         "best_ask": book.get("best_ask") if book.get("best_ask") != float("inf") else None,
         "public_depth": pub,
+        "public_depth_ladder": ladder,
         "bot_contribution": bot,
         "desired": [
             {

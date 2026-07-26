@@ -223,6 +223,87 @@ button { cursor: pointer; }
   margin-bottom: 0.2rem;
 }
 .tick-v { font-size: 1.05rem; font-weight: 600; }
+.tick-btn {
+  display: block; width: 100%; text-align: left;
+  font: inherit; color: inherit; cursor: pointer;
+  transition: border-color .12s, background .12s, box-shadow .12s;
+}
+.tick-btn:hover {
+  border-color: rgba(61,219,132,0.4);
+  background: rgba(61,219,132,0.08);
+  box-shadow: 0 0 0 1px rgba(61,219,132,0.15);
+}
+.tick-expand {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 600;
+  color: var(--accent);
+  opacity: 0.9;
+}
+
+/* Depth ladder panel */
+.depth-panel {
+  position: fixed; inset: 0; z-index: 60;
+  display: grid; place-items: center;
+  padding: 1rem;
+  background: rgba(0, 8, 6, 0.72);
+  backdrop-filter: blur(6px);
+  animation: fadeIn .2s ease;
+}
+.depth-panel-card {
+  width: min(34rem, 100%);
+  max-height: min(90vh, 40rem);
+  overflow: auto;
+  background: var(--card-solid);
+  border: 1px solid var(--line-strong);
+  border-radius: 1.15rem;
+  padding: 1.2rem 1.25rem 1.1rem;
+  box-shadow: var(--shadow);
+}
+.depth-panel-top {
+  display: flex; justify-content: space-between; align-items: flex-start; gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+.depth-panel-top h3 { margin: 0 0 0.25rem; font-size: 1.1rem; }
+.depth-panel-top p { margin: 0; }
+.depth-panel-x {
+  flex-shrink: 0;
+  width: 2.25rem; height: 2.25rem;
+  border-radius: 0.65rem;
+  border: 1px solid var(--line-strong);
+  background: rgba(255,255,255,0.04);
+  color: var(--text);
+  font-size: 1.5rem; line-height: 1;
+  cursor: pointer;
+  display: grid; place-items: center;
+}
+.depth-panel-x:hover {
+  background: rgba(255,107,107,0.15);
+  border-color: rgba(255,107,107,0.4);
+  color: var(--danger);
+}
+.depth-panel-meta {
+  font-size: 0.85rem; color: var(--muted);
+  margin-bottom: 0.75rem;
+}
+.depth-ladder-table {
+  width: 100%; border-collapse: collapse; font-size: 0.92rem;
+}
+.depth-ladder-table th,
+.depth-ladder-table td {
+  text-align: left; padding: 0.5rem 0.4rem;
+  border-bottom: 1px solid var(--line);
+}
+.depth-ladder-table th {
+  font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--muted); font-weight: 700;
+}
+.depth-ladder-table td.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.depth-ladder-table tr.is-goal {
+  background: rgba(61,219,132,0.08);
+}
+.depth-ladder-table tr.is-goal td:first-child { color: var(--accent); font-weight: 700; }
+.depth-panel-note { margin: 0.85rem 0 0; }
 
 /* Main grid */
 .shell-main {

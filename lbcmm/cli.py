@@ -181,7 +181,10 @@ async def cmd_run(cfg_path: Path | None, args) -> int:
             return 2
         print("*** LIVE TRADING — real money on MEXC ***")
 
-    engine = Engine(cfg)
+    from lbcmm.engine import get_engine, install_shutdown_handlers
+
+    engine = get_engine(cfg)
+    install_shutdown_handlers()
     if args.once:
         await engine.start()
         await asyncio.sleep(cfg.poll_interval_s + 1)
@@ -192,7 +195,7 @@ async def cmd_run(cfg_path: Path | None, args) -> int:
     await engine.start()
     print(
         f"Running ({'PAPER' if engine.state.paper else 'LIVE'}) "
-        f"strategy={cfg.strategy} — Ctrl+C to stop"
+        f"strategy={cfg.effective_strategy()} — Ctrl+C cancels orders & stops"
     )
     try:
         while engine.state.running:
@@ -207,9 +210,10 @@ async def cmd_run(cfg_path: Path | None, args) -> int:
                     f"bot±2% bid=${bc.get('bid_usd', 0):.1f} ask=${bc.get('ask_usd', 0):.1f}"
                 )
     except KeyboardInterrupt:
-        print("\nStopping…")
+        print("\nStopping — canceling open orders…")
     finally:
         await engine.stop()
+        print("Clean shutdown complete (orders canceled).")
     return 0
 
 

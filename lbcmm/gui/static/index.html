@@ -164,10 +164,44 @@
       <section class="ticker" aria-label="Live market">
         <div class="tick"><span class="tick-k">Mid price</span><span class="tick-v mono" id="mid">—</span></div>
         <div class="tick"><span class="tick-k">Spread</span><span class="tick-v mono" id="spread">—</span></div>
-        <div class="tick"><span class="tick-k">Public −2% depth</span><span class="tick-v mono bid" id="pubBid">—</span></div>
-        <div class="tick"><span class="tick-k">Public +2% depth</span><span class="tick-v mono ask" id="pubAsk">—</span></div>
+        <button type="button" class="tick tick-btn" id="btnDepthExpand" title="Show depth at more percentages">
+          <span class="tick-k">Public −2% depth <span class="tick-expand">▸ more</span></span>
+          <span class="tick-v mono bid" id="pubBid">—</span>
+        </button>
+        <button type="button" class="tick tick-btn" id="btnDepthExpand2" title="Show depth at more percentages">
+          <span class="tick-k">Public +2% depth <span class="tick-expand">▸ more</span></span>
+          <span class="tick-v mono ask" id="pubAsk">—</span>
+        </button>
         <div class="tick goal-tick"><span class="tick-k">Depth goal</span><span class="tick-v">$100 / side</span></div>
       </section>
+
+      <!-- Multi-depth public book panel (toggle from ±2% ticks) -->
+      <div id="depthPanel" class="depth-panel" hidden role="dialog" aria-labelledby="depthPanelTitle">
+        <div class="depth-panel-card">
+          <div class="depth-panel-top">
+            <div>
+              <h3 id="depthPanelTitle">Public book depth ladder</h3>
+              <p class="muted small">Sum of resting notional within ±% of mid (MEXC public book). Goal band is 2%.</p>
+            </div>
+            <button type="button" class="depth-panel-x" id="depthPanelClose" aria-label="Close">×</button>
+          </div>
+          <div class="depth-panel-meta mono" id="depthPanelMeta">mid —</div>
+          <table class="depth-ladder-table">
+            <thead>
+              <tr>
+                <th>Band</th>
+                <th class="bid">−% bid (USDT)</th>
+                <th class="ask">+% ask (USDT)</th>
+                <th>Total</th>
+              </tr>
+            </thead>
+            <tbody id="depthLadderBody">
+              <tr><td colspan="4" class="muted">Loading…</td></tr>
+            </tbody>
+          </table>
+          <p class="muted small depth-panel-note">Wider bands need a deeper order-book snapshot; very far levels may be incomplete on thin books.</p>
+        </div>
+      </div>
 
       <main class="shell-main">
         <section class="panel setup-panel">

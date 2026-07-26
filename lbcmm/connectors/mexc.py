@@ -192,6 +192,19 @@ def depth_within_pct(book: dict, pct: float = 2.0) -> dict:
     return {"mid": mid, "bid_usd": bid_usd, "ask_usd": ask_usd, "pct": pct, "lo": lo, "hi": hi}
 
 
+# CoinGecko-style ladder for the public depth expander UI
+DEPTH_LADDER_PCTS = (2.0, 5.0, 10.0, 15.0, 30.0, 50.0, 75.0)
+
+
+def depth_ladder(book: dict, pcts: tuple | list | None = None) -> list[dict]:
+    """depth_within_pct for each band (2%, 5%, … 75%)."""
+    out = []
+    for pct in (pcts or DEPTH_LADDER_PCTS):
+        d = depth_within_pct(book, float(pct))
+        out.append(d)
+    return out
+
+
 async def post_order(
     session,
     symbol,
