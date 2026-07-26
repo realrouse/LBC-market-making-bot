@@ -349,9 +349,48 @@ input[type="range"]::-moz-range-thumb {
 }
 .depth-head h3 { margin: 0 0 0.2rem; font-size: 0.95rem; }
 .depth-head p { margin: 0; font-size: 0.82rem; }
+.depth-head-right {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 0.45rem;
+}
 .depth-readout {
   font-family: var(--mono); font-weight: 600; font-size: 1.15rem;
   color: var(--accent); white-space: nowrap;
+}
+.expert-toggle {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  font-size: 0.8rem; font-weight: 700; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--muted);
+  cursor: pointer; user-select: none;
+  padding: 0.28rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(0,0,0,0.2);
+}
+.expert-toggle:has(input:checked) {
+  color: var(--accent);
+  border-color: rgba(61,219,132,0.45);
+  background: rgba(61,219,132,0.1);
+}
+.expert-toggle input { accent-color: var(--accent); margin: 0; }
+.custom-field {
+  margin-top: 0.55rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px dashed rgba(61,219,132,0.35);
+  border-radius: 0.65rem;
+  background: rgba(61,219,132,0.05);
+}
+.custom-field span {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.custom-field input[type="number"] {
+  margin-top: 0.25rem;
+  font-family: var(--mono);
+  font-size: 1.1rem;
+  font-weight: 600;
 }
 .depth-presets { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.65rem; }
 

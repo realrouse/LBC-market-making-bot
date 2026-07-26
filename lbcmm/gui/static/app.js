@@ -40,11 +40,37 @@
     return r.json();
   }
 
-  function marketConfigBody() {
-    const d = Number($("depth").value);
+  function isExpert() {
+    const el = $("expertMode");
+    return !!(el && el.checked);
+  }
+
+  function currentDepth() {
+    if (isExpert() && $("depthCustom")) {
+      let d = Number($("depthCustom").value);
+      if (!Number.isFinite(d)) d = Number($("depth").value) || 2;
+      d = Math.min(50, Math.max(0.1, d));
+      return d;
+    }
+    return Number($("depth").value) || 2;
+  }
+
+  function currentSteps() {
+    if (isExpert() && $("levelsCustom")) {
+      let n = parseInt($("levelsCustom").value, 10);
+      if (!Number.isFinite(n)) n = Number($("levels").value) || 4;
+      n = Math.min(MAX_STEPS, Math.max(1, n));
+      return n;
+    }
     let n = Number($("levels").value) || 4;
     if (n > MAX_STEPS) n = MAX_STEPS;
     if (n < 1) n = 1;
+    return n;
+  }
+
+  function marketConfigBody() {
+    const d = currentDepth();
+    const n = currentSteps();
     return {
       usdt_budget: Number($("usdtNum").value) || 0,
       lbc_budget: Number($("lbcNum").value) || 0,
@@ -273,9 +299,10 @@
     const cap = Math.max(maxBuy, maxSell, 0);
     levels.max = String(MAX_STEPS);
     levels.min = "1";
-    let n = Number(levels.value) || 1;
+    let n = currentSteps();
     if (n > MAX_STEPS) n = MAX_STEPS;
     levels.value = String(n);
+    if ($("levelsCustom") && !isExpert()) $("levelsCustom").value = String(n);
     $("levelsOut").textContent = String(n);
 
     const hint = $("limitsHint");
@@ -359,16 +386,54 @@
     enforceOrderLimits();
     schedulePreview();
   }
-  function syncDepth() {
-    const v = Number(depth.value);
+  function applyDepthValue(v, fromCustom) {
+    v = Number(v);
+    if (!Number.isFinite(v)) v = 2;
+    v = Math.min(50, Math.max(0.1, v));
+    // Slider only goes to 15 — clamp display range, keep full value in custom
+    const sliderV = Math.min(15, Math.max(0.5, v));
+    depth.value = String(sliderV);
+    if ($("depthCustom") && !fromCustom) $("depthCustom").value = String(v);
+    if ($("depthCustom") && fromCustom) $("depthCustom").value = String(v);
     $("depthOut").textContent = "±" + v.toFixed(1) + "%";
     $("bidDepth").value = v;
     $("askDepth").value = v;
     document.querySelectorAll("[data-depth]").forEach((el) => {
-      el.classList.toggle("active", Number(el.dataset.depth) === v);
+      el.classList.toggle("active", Math.abs(Number(el.dataset.depth) - v) < 0.05);
     });
     state.dirty = true;
     schedulePreview();
+  }
+
+  function applyStepsValue(n, fromCustom) {
+    n = parseInt(n, 10);
+    if (!Number.isFinite(n)) n = 1;
+    n = Math.min(MAX_STEPS, Math.max(1, n));
+    levels.value = String(n);
+    if ($("levelsCustom") && !fromCustom) $("levelsCustom").value = String(n);
+    if ($("levelsCustom") && fromCustom) $("levelsCustom").value = String(n);
+    $("levelsOut").textContent = String(n);
+    state.dirty = true;
+    enforceOrderLimits();
+    schedulePreview();
+  }
+
+  function syncDepth() {
+    applyDepthValue(depth.value, false);
+  }
+
+  function setExpertMode(on) {
+    const exp = $("expertMode");
+    if (exp) exp.checked = !!on;
+    const dWrap = $("depthCustomWrap");
+    const lWrap = $("levelsCustomWrap");
+    if (dWrap) dWrap.hidden = !on;
+    if (lWrap) lWrap.hidden = !on;
+    if (on) {
+      // Seed custom fields from current slider values
+      if ($("depthCustom")) $("depthCustom").value = String(currentDepth());
+      if ($("levelsCustom")) $("levelsCustom").value = String(currentSteps());
+    }
   }
 
   // Must be declared before any sync*()/schedulePreview() calls (let TDZ crash → blank page)
@@ -384,16 +449,37 @@
   lbcNum.addEventListener("input", () => syncLbc(false));
   depth.addEventListener("input", syncDepth);
   levels.addEventListener("input", () => {
-    let n = Number(levels.value) || 1;
-    if (n > MAX_STEPS) {
-      n = MAX_STEPS;
-      levels.value = String(MAX_STEPS);
-    }
-    $("levelsOut").textContent = String(n);
-    state.dirty = true;
-    enforceOrderLimits();
-    schedulePreview();
+    applyStepsValue(levels.value, false);
   });
+
+  if ($("expertMode")) {
+    $("expertMode").addEventListener("change", () => {
+      setExpertMode($("expertMode").checked);
+      state.dirty = true;
+      schedulePreview();
+    });
+  }
+  if ($("depthCustom")) {
+    $("depthCustom").addEventListener("input", () => {
+      if (!isExpert()) return;
+      applyDepthValue($("depthCustom").value, true);
+    });
+    $("depthCustom").addEventListener("change", () => {
+      if (!isExpert()) return;
+      applyDepthValue($("depthCustom").value, true);
+    });
+  }
+  if ($("levelsCustom")) {
+    $("levelsCustom").addEventListener("input", () => {
+      if (!isExpert()) return;
+      applyStepsValue($("levelsCustom").value, true);
+    });
+    $("levelsCustom").addEventListener("change", () => {
+      if (!isExpert()) return;
+      applyStepsValue($("levelsCustom").value, true);
+    });
+  }
+
   // Strategy select is locked (disabled) to depth_provider.
 
   document.querySelectorAll("[data-usdt]").forEach((el) => {
@@ -412,12 +498,12 @@
   });
   document.querySelectorAll("[data-depth]").forEach((el) => {
     el.onclick = () => {
-      depth.value = el.dataset.depth;
-      syncDepth();
+      applyDepthValue(el.dataset.depth, false);
     };
   });
 
   levels.max = String(MAX_STEPS);
+  setExpertMode(false);
   syncUsdt(true);
   syncLbc(true);
   syncDepth();
@@ -460,7 +546,7 @@
       return;
     }
 
-    const bidPct = Number(depth.value) / 100;
+    const bidPct = currentDepth() / 100;
     const pad = Math.max(bidPct, 0.02) * 1.35;
     const lo = mid * (1 - pad);
     const hi = mid * (1 + pad);
@@ -507,8 +593,9 @@
 
     ctx.fillStyle = "#8fa89a";
     ctx.font = "500 11px DM Sans, sans-serif";
-    ctx.fillText("BUY  −" + Number(depth.value).toFixed(1) + "%", bandL, h - 14);
-    const askLab = "SELL  +" + Number(depth.value).toFixed(1) + "%";
+    const dShow = currentDepth();
+    ctx.fillText("BUY  −" + dShow.toFixed(1) + "%", bandL, h - 14);
+    const askLab = "SELL  +" + dShow.toFixed(1) + "%";
     ctx.fillText(askLab, bandR - ctx.measureText(askLab).width, h - 14);
 
     const orders =
@@ -689,13 +776,16 @@
         lbc.value = Math.min(cfg.lbc_budget, Number(lbc.max));
       }
       if (cfg.bid_depth_pct != null) {
-        depth.value = cfg.bid_depth_pct;
-        $("depthOut").textContent = "±" + Number(cfg.bid_depth_pct).toFixed(1) + "%";
+        const d = Number(cfg.bid_depth_pct);
+        depth.value = String(Math.min(15, Math.max(0.5, d)));
+        if ($("depthCustom")) $("depthCustom").value = String(d);
+        $("depthOut").textContent = "±" + d.toFixed(1) + "%";
       }
       if (cfg.n_levels != null) {
         levels.max = String(MAX_STEPS);
         const n = Math.min(MAX_STEPS, Math.max(1, Number(cfg.n_levels) || 1));
         levels.value = String(n);
+        if ($("levelsCustom")) $("levelsCustom").value = String(n);
         $("levelsOut").textContent = String(n);
       }
       if ($("strategy")) $("strategy").value = "depth_provider";
