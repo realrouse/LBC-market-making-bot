@@ -1,0 +1,16 @@
+[Unit]
+Description=LBC market-making bot (MEXC LBCUSDT)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/LBC-market-making-bot
+Environment=PYTHONPATH=%h/LBC-market-making-bot
+# EnvironmentFile=%h/.config/lbcmm/mexc.env
+ExecStart=%h/LBC-market-making-bot/.venv/bin/python -m lbcmm run --paper
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

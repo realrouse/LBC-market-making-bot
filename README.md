@@ -4,7 +4,16 @@
   <img src="graphics/logo-dark.svg" alt="tradinebotte" height="56">
 </picture>
 
-# tradinebotte
+# tradinebotte → LBC-market-making-bot
+
+> **LBC community product:** see **[README-LBCMM.md](README-LBCMM.md)** and **[QUICKSTART-LBCMM.md](QUICKSTART-LBCMM.md)**  
+> **Easy install:** `bash install-lbcmm.sh` then `./bin/lbcmm gui` → http://127.0.0.1:8787/  
+> **Website handoff:** [`handoff/`](handoff/README.md) · session prompt: [`handoff/GROK_SESSION_PROMPT.md`](handoff/GROK_SESSION_PROMPT.md)  
+> Attribution: forked **neofutur’s** multibot design to build an **LBC-only** bot (GPL-3.0).
+
+---
+
+# tradinebotte (upstream tree)
 
 > 🇫🇷 [Version française](README.fr.md)
 
