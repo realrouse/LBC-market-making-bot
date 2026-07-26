@@ -29,7 +29,25 @@
     formSeededByBot: {},
     switchSeq: 0,
     switching: false,
+    cancelling: false,
   };
+
+  function showCancellingOrdersUi() {
+    const list = $("orders");
+    if (!list) return;
+    list.innerHTML =
+      '<div class="orders-cancelling" role="status" aria-live="polite">' +
+      '<span class="cancelling-light" aria-hidden="true"></span>' +
+      '<div class="placing-copy">' +
+      '<strong class="cancelling-title">Cancelling orders<span class="cancelling-dots" aria-hidden="true"></span></strong>' +
+      '<span class="cancelling-sub">Removing this bot’s resting orders from the book</span>' +
+      "</div>" +
+      "</div>";
+    if ($("orderCount")) $("orderCount").textContent = "…";
+    if ($("statusLine")) $("statusLine").textContent = "Cancelling orders…";
+    if ($("runLabel")) $("runLabel").textContent = "Stopping";
+    if ($("runBadge")) $("runBadge").className = "run-badge stopped";
+  }
 
   const wizTitles = [
     "Welcome",
@@ -982,12 +1000,22 @@
     }
 
     const orders = state.open_orders || [];
-    $("orderCount").textContent = String(orders.length);
+    $("orderCount").textContent = state.cancelling ? "…" : String(orders.length);
     if ($("btnCancelOrders")) {
-      $("btnCancelOrders").disabled = !orders.length && !running;
+      $("btnCancelOrders").disabled =
+        state.cancelling || (!orders.length && !running);
     }
     const list = $("orders");
-    if (!orders.length) {
+    if (state.cancelling) {
+      list.innerHTML =
+        '<div class="orders-cancelling" role="status" aria-live="polite">' +
+        '<span class="cancelling-light" aria-hidden="true"></span>' +
+        '<div class="placing-copy">' +
+        '<strong class="cancelling-title">Cancelling orders<span class="cancelling-dots" aria-hidden="true"></span></strong>' +
+        '<span class="cancelling-sub">Removing this bot’s resting orders from the book</span>' +
+        "</div>" +
+        "</div>";
+    } else if (!orders.length) {
       if (running) {
         list.innerHTML =
           '<div class="orders-placing" role="status" aria-live="polite">' +
@@ -1212,22 +1240,33 @@
 
   $("btnStop").onclick = async () => {
     $("btnStop").disabled = true;
+    if ($("btnStopKeep")) $("btnStopKeep").disabled = true;
+    state.cancelling = true;
+    showCancellingOrdersUi();
     try {
       await post("/api/stop", { cancel_orders: true });
       await refreshMarket();
     } finally {
+      state.cancelling = false;
       $("btnStop").disabled = false;
+      if ($("btnStopKeep")) $("btnStopKeep").disabled = false;
+      render();
     }
   };
 
   if ($("btnStopKeep")) {
     $("btnStopKeep").onclick = async () => {
       $("btnStopKeep").disabled = true;
+      if ($("btnStop")) $("btnStop").disabled = true;
+      // Leave orders on book — quieter stop status (not red cancel)
+      if ($("statusLine")) $("statusLine").textContent = "Stopping (keeping orders)…";
       try {
         await post("/api/stop", { cancel_orders: false });
         await refreshMarket();
       } finally {
+        if ($("btnStop")) $("btnStop").disabled = false;
         $("btnStopKeep").disabled = false;
+        render();
       }
     };
   }
@@ -1236,6 +1275,8 @@
     $("btnCancelOrders").onclick = async () => {
       const btn = $("btnCancelOrders");
       btn.disabled = true;
+      state.cancelling = true;
+      showCancellingOrdersUi();
       try {
         const res = await post("/api/cancel", {});
         if (res.error) {
@@ -1244,7 +1285,9 @@
         }
         await refreshMarket();
       } finally {
+        state.cancelling = false;
         btn.disabled = false;
+        render();
       }
     };
   }

@@ -698,6 +698,54 @@ input[type="range"]::-moz-range-thumb {
   font-weight: 800;
   animation: placingDots 1.2s steps(4, end) infinite;
 }
+
+/* Cancelling orders — red high-visibility status */
+.orders-cancelling {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1.35rem 1.25rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 107, 107, 0.55);
+  background:
+    linear-gradient(120deg, rgba(255, 107, 107, 0.18), rgba(255, 107, 107, 0.05) 55%, transparent),
+    rgba(0, 0, 0, 0.28);
+  box-shadow:
+    0 0 0 1px rgba(255, 107, 107, 0.15),
+    0 12px 32px rgba(255, 107, 107, 0.14);
+  animation: cancellingPulseBg 2.2s ease-in-out infinite;
+}
+.cancelling-light {
+  flex-shrink: 0;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 50%;
+  background: #ff6b6b;
+  box-shadow:
+    0 0 0 0 rgba(255, 107, 107, 0.65),
+    0 0 18px 4px rgba(255, 107, 107, 0.55);
+  animation: cancellingBlink 1.05s ease-in-out infinite;
+}
+.cancelling-title {
+  font-size: 1.2rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  line-height: 1.2;
+}
+.cancelling-sub {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.cancelling-dots::after {
+  content: "";
+  display: inline-block;
+  min-width: 1.4em;
+  text-align: left;
+  color: #ff6b6b;
+  font-weight: 800;
+  animation: placingDots 1.2s steps(4, end) infinite;
+}
 @keyframes placingDots {
   0%   { content: ""; }
   25%  { content: "."; }
@@ -725,13 +773,37 @@ input[type="range"]::-moz-range-thumb {
   0%, 100% { border-color: rgba(61, 219, 132, 0.35); }
   50% { border-color: rgba(61, 219, 132, 0.75); }
 }
+@keyframes cancellingBlink {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+    box-shadow:
+      0 0 0 0 rgba(255, 107, 107, 0.55),
+      0 0 18px 4px rgba(255, 107, 107, 0.5);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.82);
+    box-shadow:
+      0 0 0 10px rgba(255, 107, 107, 0),
+      0 0 8px 2px rgba(255, 107, 107, 0.25);
+  }
+}
+@keyframes cancellingPulseBg {
+  0%, 100% { border-color: rgba(255, 107, 107, 0.4); }
+  50% { border-color: rgba(255, 107, 107, 0.85); }
+}
 @media (prefers-reduced-motion: reduce) {
   .orders-placing,
   .placing-light,
-  .placing-dots::after {
+  .placing-dots::after,
+  .orders-cancelling,
+  .cancelling-light,
+  .cancelling-dots::after {
     animation: none !important;
   }
-  .placing-dots::after { content: "..."; }
+  .placing-dots::after,
+  .cancelling-dots::after { content: "..."; }
 }
 .order-row {
   display: grid;
