@@ -6,9 +6,10 @@ import asyncio
 import atexit
 import json
 import logging
+import os
 import signal
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
@@ -206,10 +207,9 @@ class Engine:
         self._task = asyncio.create_task(self._run_loop(), name="lbcmm-engine")
 
     async def stop(self) -> None:
-        """Clean stop: halt loop, cancel bot orders (tracked + exchange open), persist clear."""
+        """Clean stop: halt loop, cancel only bot-created orders, clear state."""
         if self._shutting_down:
-            # still wait for cancel path if re-entered
-            pass
+            return
         self._shutting_down = True
         self._stop.set()
         if self._task:
@@ -221,6 +221,8 @@ class Engine:
                     await self._task
                 except (asyncio.CancelledError, Exception):  # pylint: disable=broad-exception-caught
                     pass
+            except asyncio.CancelledError:
+                pass
             self._task = None
         await self.cleanup_orders(reason="shutdown")
         self.state.running = False
@@ -230,26 +232,29 @@ class Engine:
             self._session = None
 
     async def cleanup_orders(self, *, reason: str = "cleanup") -> int:
-        """Cancel all orders this bot is responsible for.
+        """Cancel only orders this bot created (in-memory + persisted IDs).
 
-        1) In-memory tracked orders
-        2) Persisted order IDs from last run
-        3) Live mode: all open orders on the symbol (this bot owns the book)
+        Never cancels arbitrary open orders on the exchange that the user
+        (or another bot) placed manually.
 
-        Returns number of cancel attempts that reported success.
+        Returns number of successful cancels.
         """
         logger.info("cleanup_orders (%s) …", reason)
-        # Merge tracked + disk
         by_id: dict[str, LiveOrder] = {}
         for o in list(self.state.open_orders) + self._load_persisted_orders():
-            if o.order_id and not str(o.order_id).startswith("sim_"):
-                by_id[str(o.order_id)] = o
+            oid = str(o.order_id or "")
+            if not oid:
+                continue
+            # Keep sim IDs for paper bookkeeping; live cancels skip them
+            by_id[oid] = o
         self.state.open_orders = list(by_id.values())
 
-        n = await self._cancel_all(include_exchange_open=True)
+        n = await self._cancel_all(include_exchange_open=False)
         self._clear_persisted_orders()
         self.state.open_orders = []
-        logger.info("cleanup_orders (%s) done — %s cancel ok", reason, n)
+        logger.info(
+            "cleanup_orders (%s) done — %s bot order(s) canceled", reason, n
+        )
         return n
 
     async def _session_get(self) -> aiohttp.ClientSession:
@@ -467,11 +472,18 @@ class Engine:
         self,
         session: Optional[aiohttp.ClientSession] = None,
         *,
-        include_exchange_open: bool = False,
+        include_exchange_open: bool = False,  # kept for API compat; always False path
     ) -> int:
-        """Cancel tracked orders; optionally also every open order on the symbol (live)."""
+        """Cancel only bot-tracked order IDs (never other users' / manual orders)."""
+        del include_exchange_open  # unused — we never wipe the whole book
         paper = self.cfg.effective_paper()
         ok = 0
+        tracked = list(self.state.open_orders)
+        if not tracked:
+            self.state.open_orders = []
+            self._persist_orders()
+            return 0
+
         if session is None:
             try:
                 session = await self._session_get()
@@ -480,61 +492,27 @@ class Engine:
                 self.state.open_orders = []
                 return 0
 
-        # 1) Tracked IDs
-        for o in list(self.state.open_orders):
-            if str(o.order_id).startswith("sim_"):
-                ok += 1
-                continue
-            if paper:
+        for o in tracked:
+            oid = str(o.order_id)
+            if oid.startswith("sim_") or paper:
                 ok += 1
                 continue
             try:
                 if await mexc.cancel_order(
                     session,
                     self.cfg.symbol,
-                    o.order_id,
+                    oid,
                     api_key=self.cfg.api_key(),
                     api_secret=self.cfg.api_secret(),
                 ):
                     ok += 1
-                    logger.info("canceled tracked %s %s @ %s", o.side, o.order_id, o.price)
+                    logger.info(
+                        "canceled bot order %s %s @ %s", o.side, oid, o.price
+                    )
+                else:
+                    logger.warning("cancel returned false for bot order %s", oid)
             except Exception as e:  # pylint: disable=broad-exception-caught
-                logger.warning("cancel tracked %s failed: %s", o.order_id, e)
-
-        # 2) Live: cancel remaining open orders on the pair (this bot owns the book)
-        if include_exchange_open and not paper and self.cfg.api_key() and self.cfg.api_secret():
-            try:
-                open_o = await mexc.get_open_orders(
-                    session,
-                    self.cfg.symbol,
-                    api_key=self.cfg.api_key(),
-                    api_secret=self.cfg.api_secret(),
-                )
-            except Exception as e:  # pylint: disable=broad-exception-caught
-                logger.warning("get_open_orders during cancel: %s", e)
-                open_o = None
-            if open_o:
-                for o in open_o:
-                    oid = str(o.get("order_id") or "")
-                    if not oid:
-                        continue
-                    try:
-                        if await mexc.cancel_order(
-                            session,
-                            self.cfg.symbol,
-                            oid,
-                            api_key=self.cfg.api_key(),
-                            api_secret=self.cfg.api_secret(),
-                        ):
-                            ok += 1
-                            logger.info(
-                                "canceled exchange open %s %s @ %s",
-                                o.get("side"),
-                                oid,
-                                o.get("price"),
-                            )
-                    except Exception as e:  # pylint: disable=broad-exception-caught
-                        logger.warning("cancel exchange %s failed: %s", oid, e)
+                logger.warning("cancel bot order %s failed: %s", oid, e)
 
         self.state.open_orders = []
         self._persist_orders()
@@ -544,6 +522,7 @@ class Engine:
 # Process-wide engine for GUI
 _ENGINE: Optional[Engine] = None
 _SIGNAL_HOOKED = False
+_EXIT_REQUESTED = False
 
 
 def get_engine(cfg: Optional[BotConfig] = None) -> Engine:
@@ -559,48 +538,74 @@ def get_engine(cfg: Optional[BotConfig] = None) -> Engine:
     return _ENGINE
 
 
-def install_shutdown_handlers(loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
-    """Cancel bot orders on SIGINT/SIGTERM (GUI and CLI)."""
+def install_shutdown_handlers(
+    loop: Optional[asyncio.AbstractEventLoop] = None,
+    *,
+    exit_after: bool = True,
+) -> None:
+    """On SIGINT/SIGTERM: cancel *bot-created* orders, then exit the process.
+
+    Important: we must not swallow SIGINT without exiting — that left the GUI
+    hanging after Ctrl+C (cleanup ran, web server kept serving).
+    """
     global _SIGNAL_HOOKED
     if _SIGNAL_HOOKED:
         return
     _SIGNAL_HOOKED = True
 
-    def _schedule_cleanup(signum: int) -> None:
-        eng = _ENGINE
-        if eng is None:
-            return
-        logger.info("signal %s — clean shutdown (cancel orders)", signum)
-        try:
-            running = asyncio.get_event_loop()
-            if running.is_running():
-                running.create_task(eng.stop())
-            else:
-                running.run_until_complete(eng.stop())
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            logger.error("signal cleanup failed: %s", e)
-            # last resort: sync cancel via new loop
+    def _handle(signum: int, _frame=None) -> None:
+        global _EXIT_REQUESTED
+        if _EXIT_REQUESTED:
+            # Second Ctrl+C — hard exit
+            logger.warning("forced exit (signal %s again)", signum)
+            os._exit(1)  # noqa: SLF001
+        _EXIT_REQUESTED = True
+        logger.info("signal %s — cancel bot orders and exit", signum)
+
+        async def _clean_then_exit() -> None:
+            eng = _ENGINE
             try:
-                asyncio.run(eng.cleanup_orders(reason=f"signal-{signum}"))
-            except Exception as e2:  # pylint: disable=broad-exception-caught
-                logger.error("fallback cleanup failed: %s", e2)
+                if eng is not None:
+                    await eng.cleanup_orders(reason=f"signal-{signum}")
+                    # stop loop task without re-entering full stop recursion
+                    eng._stop.set()  # noqa: SLF001
+                    eng.state.running = False
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                logger.error("signal cleanup failed: %s", e)
+            finally:
+                if exit_after:
+                    # Hard exit so aiohttp/run_app cannot keep the process alive
+                    os._exit(0)  # noqa: SLF001
+
+        try:
+            running_loop = asyncio.get_running_loop()
+            running_loop.create_task(_clean_then_exit())
+            # Safety: if the task never runs (loop stuck), hard-exit soon
+            if exit_after:
+                running_loop.call_later(8.0, lambda: os._exit(0))  # noqa: SLF001
+        except RuntimeError:
+            # No running loop
+            try:
+                asyncio.run(_clean_then_exit())
+            except Exception:  # pylint: disable=broad-exception-caught
+                if exit_after:
+                    os._exit(0)  # noqa: SLF001
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             if loop is not None:
-                loop.add_signal_handler(sig, lambda s=sig: _schedule_cleanup(s))
+                loop.add_signal_handler(sig, lambda s=sig: _handle(s))
             else:
-                signal.signal(sig, lambda s, f, sn=sig: _schedule_cleanup(sn))
+                signal.signal(sig, lambda s, f, sn=sig: _handle(sn))
         except (NotImplementedError, RuntimeError, ValueError):
-            # Windows / non-main thread — best-effort
             try:
-                signal.signal(sig, lambda s, f, sn=sig: _schedule_cleanup(sn))
+                signal.signal(sig, lambda s, f, sn=sig: _handle(sn))
             except Exception:  # pylint: disable=broad-exception-caught
                 pass
 
     def _atexit() -> None:
         eng = _ENGINE
-        if eng is None or eng._shutting_down:
+        if eng is None or eng._shutting_down or _EXIT_REQUESTED:  # noqa: SLF001
             return
         try:
             asyncio.run(eng.cleanup_orders(reason="atexit"))

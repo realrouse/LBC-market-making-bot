@@ -83,20 +83,20 @@ def run_gui(cfg: BotConfig) -> int:
     app.router.add_static("/static/", STATIC_DIR, show_index=False)
 
     async def _on_startup(_app: web.Application) -> None:
-        install_shutdown_handlers(asyncio.get_event_loop())
+        # Handles Ctrl+C / SIGTERM: cancel *bot* orders then hard-exit (must exit —
+        # otherwise cleanup can run while aiohttp keeps serving).
+        install_shutdown_handlers(asyncio.get_running_loop(), exit_after=True)
 
     async def _on_cleanup(app_: web.Application) -> None:
-        """aiohttp shutdown / Ctrl+C — cancel open bot orders before exit."""
+        """Graceful aiohttp teardown — cancel only bot-created orders."""
         eng: Engine = app_["engine"]
-        logger.info("GUI cleanup — canceling open orders")
+        logger.info("GUI cleanup — canceling bot-created orders")
         try:
-            await eng.stop()
+            await eng.cleanup_orders(reason="gui-cleanup")
+            eng.state.running = False
+            eng._stop.set()  # noqa: SLF001
         except Exception as e:  # pylint: disable=broad-exception-caught
-            logger.error("GUI cleanup stop failed: %s", e)
-            try:
-                await eng.cleanup_orders(reason="gui-cleanup")
-            except Exception as e2:  # pylint: disable=broad-exception-caught
-                logger.error("GUI cleanup_orders failed: %s", e2)
+            logger.error("GUI cleanup failed: %s", e)
 
     app.on_startup.append(_on_startup)
     app.on_cleanup.append(_on_cleanup)
@@ -104,7 +104,9 @@ def run_gui(cfg: BotConfig) -> int:
     host = cfg.gui_host or "127.0.0.1"
     port = int(cfg.gui_port or 8787)
     _print_gui_banner(host, port)
-    web.run_app(app, host=host, port=port, print=None)
+    # handle_signals=False: our install_shutdown_handlers owns SIGINT/SIGTERM
+    # so we cancel bot orders then exit (aiohttp default left the process alive).
+    web.run_app(app, host=host, port=port, print=None, handle_signals=False)
     return 0
 
 

@@ -184,7 +184,8 @@ async def cmd_run(cfg_path: Path | None, args) -> int:
     from lbcmm.engine import get_engine, install_shutdown_handlers
 
     engine = get_engine(cfg)
-    install_shutdown_handlers()
+    # CLI: cancel bot orders on SIGINT/SIGTERM, then exit
+    install_shutdown_handlers(exit_after=False)
     if args.once:
         await engine.start()
         await asyncio.sleep(cfg.poll_interval_s + 1)
@@ -195,7 +196,7 @@ async def cmd_run(cfg_path: Path | None, args) -> int:
     await engine.start()
     print(
         f"Running ({'PAPER' if engine.state.paper else 'LIVE'}) "
-        f"strategy={cfg.effective_strategy()} — Ctrl+C cancels orders & stops"
+        f"strategy={cfg.effective_strategy()} — Ctrl+C cancels bot orders & stops"
     )
     try:
         while engine.state.running:
@@ -210,10 +211,10 @@ async def cmd_run(cfg_path: Path | None, args) -> int:
                     f"bot±2% bid=${bc.get('bid_usd', 0):.1f} ask=${bc.get('ask_usd', 0):.1f}"
                 )
     except KeyboardInterrupt:
-        print("\nStopping — canceling open orders…")
+        print("\nStopping — canceling bot-created orders…")
     finally:
         await engine.stop()
-        print("Clean shutdown complete (orders canceled).")
+        print("Clean shutdown complete (bot orders canceled).")
     return 0
 
 
