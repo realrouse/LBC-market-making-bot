@@ -604,10 +604,37 @@ input[type="range"]::-moz-range-thumb {
 
 .orders-block { margin-top: 0.25rem; }
 .orders-head {
-  display: flex; justify-content: space-between; align-items: baseline;
-  margin-bottom: 0.5rem;
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 0.75rem; margin-bottom: 0.5rem; flex-wrap: wrap;
 }
 .orders-head h3 { margin: 0; font-size: 0.95rem; }
+.orders-head-right {
+  display: flex; align-items: center; gap: 0.65rem;
+}
+.btn-cancel-orders {
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 0.4rem 0.7rem;
+  border-radius: 0.55rem;
+  border: 1px solid rgba(255, 107, 107, 0.45);
+  background: rgba(255, 107, 107, 0.1);
+  color: var(--danger);
+  cursor: pointer;
+}
+.btn-cancel-orders:hover {
+  background: rgba(255, 107, 107, 0.2);
+  border-color: rgba(255, 107, 107, 0.65);
+}
+.btn-cancel-orders:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.app.tab-loading .setup-panel,
+.app.tab-loading .viz-panel {
+  opacity: 0.55;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
 .orders-list {
   display: grid; gap: 0.4rem;
   max-height: 14rem; overflow: auto;

@@ -348,7 +348,12 @@
           <div class="orders-block">
             <div class="orders-head">
               <h3>Resting orders</h3>
-              <span class="muted small" id="orderCount">0</span>
+              <div class="orders-head-right">
+                <button type="button" class="btn btn-cancel-orders" id="btnCancelOrders" title="Cancel only this bot’s resting orders">
+                  Cancel all orders
+                </button>
+                <span class="muted small" id="orderCount">0</span>
+              </div>
             </div>
             <div class="orders-list" id="orders">
               <div class="orders-empty">No orders yet.</div>

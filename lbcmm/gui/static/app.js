@@ -27,6 +27,8 @@
     public_depth_ladder: [],
     // per-bot UI form seed flags
     formSeededByBot: {},
+    switchSeq: 0,
+    switching: false,
   };
 
   const wizTitles = [
@@ -111,47 +113,103 @@
         });
         if (res.bots) state.bots = res.bots;
         if (state.bot_id === id && state.bots.length) {
-          state.bot_id = state.bots[0].id;
-          state.formSeeded = false;
-          delete state.formSeededByBot[id];
+          await switchBot(state.bots[0].id);
+          return;
         }
         renderBotTabs();
-        await refreshMarket();
+        await refreshMarket(true);
       };
     });
   }
 
+  function clearUiForTabSwitch() {
+    // Wipe bot-specific UI so previous tab data never "hangs" while loading
+    state.running = false;
+    state.open_orders = [];
+    state.desired = [];
+    state.bot_contribution = {};
+    state.last_error = "";
+    state.status_msg = "Loading bot…";
+    state.realized_pnl = 0;
+    if ($("orders")) {
+      $("orders").innerHTML =
+        '<div class="orders-empty">Loading bot…</div>';
+    }
+    if ($("orderCount")) $("orderCount").textContent = "…";
+    if ($("statusLine")) $("statusLine").textContent = "Loading bot…";
+    if ($("runLabel")) $("runLabel").textContent = "…";
+    if ($("runBadge")) $("runBadge").className = "run-badge stopped";
+    if ($("botBid")) $("botBid").textContent = "—";
+    if ($("botAsk")) $("botAsk").textContent = "—";
+    if ($("btnStart")) $("btnStart").classList.remove("hidden");
+    if ($("stopStack")) $("stopStack").classList.add("hidden");
+    $("app").classList.add("tab-loading");
+  }
+
   async function switchBot(id) {
-    // Save current bot config before switch if dirty
+    if (!id || id === state.bot_id || state.switching) return;
+    const seq = ++state.switchSeq;
+    state.switching = true;
+
+    // Save current bot config before switch if dirty (use old bot_id)
     if (state.dirty && state.bot_id) {
       try {
         await post("/api/config", marketConfigBody());
       } catch (_) {}
       state.dirty = false;
     }
+    if (seq !== state.switchSeq) return;
+
     state.bot_id = id;
-    state.formSeeded = !!state.formSeededByBot[id];
+    // Always re-seed form from server for the target bot (no stale capital/depth)
+    state.formSeeded = false;
+    delete state.formSeededByBot[id];
+    clearUiForTabSwitch();
     renderBotTabs();
-    await refreshMarket(true);
+
+    try {
+      await refreshMarket(true, seq);
+    } finally {
+      if (seq === state.switchSeq) {
+        state.switching = false;
+        $("app").classList.remove("tab-loading");
+      }
+    }
   }
 
   if ($("btnNewBot")) {
     $("btnNewBot").onclick = async () => {
+      const seq = ++state.switchSeq;
+      state.switching = true;
       if (state.dirty && state.bot_id) {
         try {
           await post("/api/config", marketConfigBody());
         } catch (_) {}
+        state.dirty = false;
       }
       const res = await post("/api/bots", {
         name: "Bot " + ((state.bots || []).length + 1),
         clone_from: state.bot_id || null,
       });
+      if (seq !== state.switchSeq) return;
       if (res.bot_id) {
         state.bots = res.bots || [];
         state.bot_id = res.bot_id;
         state.formSeeded = false;
+        delete state.formSeededByBot[res.bot_id];
+        clearUiForTabSwitch();
         renderBotTabs();
-        await refreshMarket(true);
+        try {
+          await refreshMarket(true, seq);
+        } finally {
+          if (seq === state.switchSeq) {
+            state.switching = false;
+            $("app").classList.remove("tab-loading");
+          }
+        }
+      } else {
+        state.switching = false;
+        $("app").classList.remove("tab-loading");
       }
     };
   }
@@ -925,6 +983,9 @@
 
     const orders = state.open_orders || [];
     $("orderCount").textContent = String(orders.length);
+    if ($("btnCancelOrders")) {
+      $("btnCancelOrders").disabled = !orders.length && !running;
+    }
     const list = $("orders");
     if (!orders.length) {
       if (running) {
@@ -1053,19 +1114,28 @@
     updateSetupBanner();
   }
 
-  async function refreshMarket(forceForm) {
+  async function refreshMarket(forceForm, seq) {
+    const mySeq = seq != null ? seq : state.switchSeq;
     try {
-      if (state.dirty && state.bot_id) {
+      // Don't save config mid-switch with mismatched bot
+      if (state.dirty && state.bot_id && !state.switching) {
         await post("/api/config", marketConfigBody());
         state.dirty = false;
       }
+      if (mySeq !== state.switchSeq) return;
+
       const r = await fetch(withBot("/api/market"));
       const m = await r.json();
+      if (mySeq !== state.switchSeq) return;
+
       if (m.bots) {
         state.bots = m.bots;
         if (!state.bot_id && m.bots.length) state.bot_id = m.bots[0].id;
         renderBotTabs();
       }
+      // Ignore responses for a different bot (race after tab switch)
+      if (m.bot_id && state.bot_id && m.bot_id !== state.bot_id) return;
+
       if (!m.ok) {
         $("connPill").classList.add("err-conn");
         $("connPill").classList.remove("live-conn");
@@ -1084,11 +1154,13 @@
 
       const sr = await fetch(withBot("/api/state"));
       const s = await sr.json();
+      if (mySeq !== state.switchSeq) return;
+      if (s.bot_id && state.bot_id && s.bot_id !== state.bot_id) return;
+
       if (s.bots) {
         state.bots = s.bots;
         renderBotTabs();
       }
-      if (s.bot_id) state.bot_id = s.bot_id;
       state.running = !!s.running;
       if (s.config) applyConfigFromServer(s.config, !!forceForm);
       state.open_orders = s.open_orders || [];
@@ -1104,12 +1176,17 @@
         state.bot_contribution = s.bot_contribution || state.bot_contribution;
         state.desired = s.desired || state.desired;
       }
-      render();
+      if (mySeq === state.switchSeq) {
+        $("app").classList.remove("tab-loading");
+        render();
+      }
     } catch (e) {
+      if (mySeq !== state.switchSeq) return;
       $("connPill").classList.add("err-conn");
       $("connLabel").textContent = "Connection error";
       $("error").hidden = false;
       $("error").textContent = String(e.message || e);
+      $("app").classList.remove("tab-loading");
     }
   }
 
@@ -1151,6 +1228,23 @@
         await refreshMarket();
       } finally {
         $("btnStopKeep").disabled = false;
+      }
+    };
+  }
+
+  if ($("btnCancelOrders")) {
+    $("btnCancelOrders").onclick = async () => {
+      const btn = $("btnCancelOrders");
+      btn.disabled = true;
+      try {
+        const res = await post("/api/cancel", {});
+        if (res.error) {
+          $("error").hidden = false;
+          $("error").textContent = res.error;
+        }
+        await refreshMarket();
+      } finally {
+        btn.disabled = false;
       }
     };
   }

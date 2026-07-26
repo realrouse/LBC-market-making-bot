@@ -85,6 +85,7 @@ def run_gui(cfg: BotConfig) -> int:
     app.router.add_post("/api/config", handle_config)
     app.router.add_post("/api/start", handle_start)
     app.router.add_post("/api/stop", handle_stop)
+    app.router.add_post("/api/cancel", handle_cancel)
     app.router.add_static("/static/", STATIC_DIR, show_index=False)
 
     async def _on_startup(_app: web.Application) -> None:
@@ -455,5 +456,33 @@ async def handle_stop(request: web.Request) -> web.Response:
         "running": False,
         "bot_id": bid,
         "canceled_orders": cancel,
+        "bots": bots_mod.list_bots(),
+    })
+
+
+async def handle_cancel(request: web.Request) -> web.Response:
+    """Cancel this bot's resting orders without stopping the engine."""
+    from lbcmm import bots as bots_mod
+
+    try:
+        body = await request.json()
+    except Exception:  # pylint: disable=broad-exception-caught
+        body = {}
+    bid = _bot_id_from_request(request, body)
+    try:
+        engine = bots_mod.get_engine(bid)
+    except KeyError:
+        return web.json_response({"ok": False, "error": "unknown bot"}, status=404)
+    n = await engine.cleanup_orders(reason="manual-cancel")
+    # Force reprice so a still-running bot will rebuild the book if desired
+    try:
+        engine._provider.last_mid = 0.0  # noqa: SLF001
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    return web.json_response({
+        "ok": True,
+        "bot_id": bid,
+        "canceled": n,
+        "running": engine.state.running,
         "bots": bots_mod.list_bots(),
     })
