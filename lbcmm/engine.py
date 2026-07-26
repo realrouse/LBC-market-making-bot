@@ -91,7 +91,7 @@ class Engine:
         self.cfg = cfg
         self.state = EngineState(
             paper=cfg.effective_paper(),
-            strategy=cfg.strategy,
+            strategy=cfg.effective_strategy(),
             free_usdt=cfg.usdt_budget,
             free_lbc=cfg.lbc_budget,
         )
@@ -113,7 +113,7 @@ class Engine:
     def update_config(self, cfg: BotConfig) -> None:
         self.cfg = cfg
         self.state.paper = cfg.effective_paper()
-        self.state.strategy = cfg.strategy
+        self.state.strategy = cfg.effective_strategy()
         self._provider = DepthProvider(
             DepthProviderConfig(
                 usdt_budget=cfg.usdt_budget,
@@ -158,10 +158,11 @@ class Engine:
     async def _run_loop(self) -> None:
         paper = self.cfg.effective_paper()
         self.state.paper = paper
+        self.state.strategy = self.cfg.effective_strategy()
         self.state.status_msg = "paper" if paper else "LIVE"
         logger.info(
             "Engine start strategy=%s paper=%s usdt=%.2f lbc=%.4f depth=±%.1f/%.1f",
-            self.cfg.strategy,
+            self.state.strategy,
             paper,
             self.cfg.usdt_budget,
             self.cfg.lbc_budget,
@@ -203,9 +204,10 @@ class Engine:
         self.state.public_depth = mexc.depth_within_pct(book, 2.0)
         self.state.ticks += 1
 
-        if self.cfg.strategy == "bamm":
+        strat = self.cfg.effective_strategy()
+        if strat == "bamm":
             await self._tick_bamm(session, mid)
-        elif self.cfg.strategy == "grid":
+        elif strat == "grid":
             await self._tick_grid(session, mid)
         else:
             await self._tick_depth(session, mid)

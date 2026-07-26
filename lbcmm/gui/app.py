@@ -98,7 +98,8 @@ def _cfg_payload(cfg: BotConfig) -> dict:
         "bid_depth_pct": cfg.bid_depth_pct,
         "ask_depth_pct": cfg.ask_depth_pct,
         "n_levels": cfg.n_levels,
-        "strategy": cfg.strategy,
+        "strategy": cfg.effective_strategy(),
+        "strategies_unlocked": bool(cfg.strategies_unlocked),
         "paper": cfg.effective_paper(),
         "advanced": cfg.advanced,
         "symbol": cfg.symbol,
@@ -163,7 +164,8 @@ async def handle_market(request: web.Request) -> web.Response:
 def _plan_for_cfg(cfg: BotConfig, mid: float):
     if mid <= 0:
         return []
-    if cfg.strategy == "grid":
+    strat = cfg.effective_strategy()
+    if strat == "grid":
         lower = cfg.grid_lower if cfg.grid_lower > 0 else mid * 0.95
         upper = cfg.grid_upper if cfg.grid_upper > 0 else mid * 1.05
         return plan_grid_orders(
@@ -174,7 +176,7 @@ def _plan_for_cfg(cfg: BotConfig, mid: float):
             order_size_usdt=cfg.grid_order_size_usdt,
             min_notional_usdt=cfg.min_notional_usdt,
         )
-    if cfg.strategy == "bamm":
+    if strat == "bamm":
         top = cfg.bamm_top if cfg.bamm_top > 0 else mid * 1.05
         rungs = build_buy_grid(
             top=top,
@@ -218,8 +220,13 @@ def _apply_body(cfg: BotConfig, body: dict) -> None:
         cfg.ask_depth_pct = float(body["ask_depth_pct"])
     if "n_levels" in body:
         cfg.n_levels = max(1, min(30, int(body["n_levels"])))
-    if "strategy" in body and body["strategy"] in ("depth_provider", "bamm", "grid"):
+    # Strategy locked to depth_provider until strategies_unlocked (untested otherwise)
+    if cfg.strategies_unlocked and "strategy" in body and body["strategy"] in (
+        "depth_provider", "bamm", "grid",
+    ):
         cfg.strategy = body["strategy"]
+    else:
+        cfg.strategy = "depth_provider"
     if "advanced" in body:
         cfg.advanced = bool(body["advanced"])
     if "min_notional_usdt" in body:

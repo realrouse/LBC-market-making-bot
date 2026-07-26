@@ -422,6 +422,11 @@ input[type="range"]::-moz-range-thumb {
   border-radius: 0.6rem;
   padding: 0.55rem 0.7rem;
 }
+.field select:disabled {
+  opacity: 0.75;
+  cursor: not-allowed;
+  color: var(--muted);
+}
 .profit-row {
   display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem;
 }

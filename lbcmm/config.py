@@ -17,11 +17,15 @@ CONFIG_ENV = "LBCMM_CONFIG"
 @dataclass
 class BotConfig:
     symbol: str = DEFAULT_SYMBOL
-    strategy: str = "depth_provider"  # depth_provider | bamm | grid
+    # Locked to depth_provider until BAMM/grid are fully tested in this product.
+    strategy: str = "depth_provider"
     paper: bool = True
     live_confirmed: bool = False
     # False until the user finishes first-time setup (CLI wizard or GUI wizard)
     setup_complete: bool = False
+
+    # When False, only depth_provider may run (other strategies ignored).
+    strategies_unlocked: bool = False
 
     # Simple mode — Provide Liquidity
     usdt_budget: float = 10.0
@@ -77,6 +81,12 @@ class BotConfig:
 
     def api_secret(self) -> str:
         return self.mexc_api_secret or os.environ.get("MEXC_API_SECRET", "")
+
+    def effective_strategy(self) -> str:
+        """Strategy actually used at runtime (others locked until tested)."""
+        if self.strategies_unlocked and self.strategy in ("depth_provider", "bamm", "grid"):
+            return self.strategy
+        return "depth_provider"
 
 
 def default_config_path() -> Path:
@@ -142,7 +152,8 @@ def _to_toml(data: dict) -> str:
         "# Keep this file private (mode 600). Prefer env MEXC_API_KEY / MEXC_API_SECRET.",
         "",
         f'symbol = "{data.get("symbol", DEFAULT_SYMBOL)}"',
-        f'strategy = "{data.get("strategy", "depth_provider")}"',
+        f'strategy = "depth_provider"',
+        f"strategies_unlocked = {str(bool(data.get('strategies_unlocked', False))).lower()}",
         f"paper = {str(bool(data.get('paper', True))).lower()}",
         f"live_confirmed = {str(bool(data.get('live_confirmed', False))).lower()}",
         f"setup_complete = {str(bool(data.get('setup_complete', False))).lower()}",

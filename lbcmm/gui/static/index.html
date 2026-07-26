@@ -356,12 +356,11 @@
           <h3>Strategy</h3>
           <label class="field">
             <span>Strategy engine</span>
-            <select id="strategy">
-              <option value="depth_provider">Depth Provider — balanced bands (default)</option>
-              <option value="bamm">BAMM — bullish accumulate (neofutur design)</option>
-              <option value="grid">Symmetric Grid</option>
+            <select id="strategy" disabled title="Locked until other strategies are tested">
+              <option value="depth_provider" selected>Depth Provider — balanced bands (default)</option>
             </select>
           </label>
+          <p class="hint">Locked to <strong>Depth Provider</strong> for now. BAMM and Grid will unlock after testing.</p>
           <label class="field"><span>Min notional USDT (per order)</span><input type="number" id="setMinNotional" min="1" step="0.1" value="1" /></label>
           <label class="field"><span>Reprice threshold %</span><input type="number" id="setReprice" min="0.05" step="0.05" value="0.35" /></label>
           <label class="field"><span>Poll interval (seconds)</span><input type="number" id="setPoll" min="1" step="0.5" value="3" /></label>

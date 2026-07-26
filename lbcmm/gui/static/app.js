@@ -52,7 +52,7 @@
       ask_depth_pct: d,
       n_levels: n,
       min_notional_usdt: MIN_ORDER_USD,
-      strategy: $("strategy").value,
+      strategy: "depth_provider", // locked until other strategies are tested
       paper: state.paper,
     };
   }
@@ -218,7 +218,7 @@
       bid_depth_pct: depth,
       ask_depth_pct: depth,
       n_levels: Number($("wizLevels").value) || 4,
-      strategy: "depth_provider",
+      strategy: "depth_provider", // locked
     };
     if ($("wizAccessKey").value) body.mexc_api_key = $("wizAccessKey").value.trim();
     if ($("wizSecretKey").value) body.mexc_api_secret = $("wizSecretKey").value.trim();
@@ -394,10 +394,7 @@
     enforceOrderLimits();
     schedulePreview();
   });
-  $("strategy").addEventListener("change", () => {
-    state.dirty = true;
-    schedulePreview();
-  });
+  // Strategy select is locked (disabled) to depth_provider.
 
   document.querySelectorAll("[data-usdt]").forEach((el) => {
     el.onclick = () => {
@@ -642,7 +639,7 @@
     $("stConn").textContent = mid ? "Connected (MEXC public)" : "Waiting…";
     $("stMode").textContent = state.paper ? "Paper" : "LIVE";
     $("stRun").textContent = running ? "Running" : "Stopped";
-    $("stStrat").textContent = $("strategy").value;
+    $("stStrat").textContent = "depth_provider (locked)";
     $("stMid").textContent = mid ? mid.toFixed(6) : "—";
     $("stBook").textContent =
       bb && ba ? Number(bb).toFixed(6) + " / " + Number(ba).toFixed(6) : "—";
@@ -701,7 +698,7 @@
         levels.value = String(n);
         $("levelsOut").textContent = String(n);
       }
-      if (cfg.strategy) $("strategy").value = cfg.strategy;
+      if ($("strategy")) $("strategy").value = "depth_provider";
       if (cfg.min_notional_usdt != null) {
         $("setMinNotional").value = Math.max(MIN_ORDER_USD, Number(cfg.min_notional_usdt));
       }
@@ -821,7 +818,7 @@
   $("btnSaveSettings").onclick = async () => {
     const body = {
       ...marketConfigBody(),
-      strategy: $("strategy").value,
+      strategy: "depth_provider",
       min_notional_usdt: Number($("setMinNotional").value),
       reprice_pct: Number($("setReprice").value),
       poll_interval_s: Number($("setPoll").value),
