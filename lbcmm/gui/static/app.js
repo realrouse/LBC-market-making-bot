@@ -4,7 +4,10 @@
   const $ = (id) => document.getElementById(id);
 
   const MIN_ORDER_USD = 1.0; // MEXC-style minimum notional per resting order
-  const MAX_STEPS = 30;
+  const MAX_STEPS_SLIDER = 30; // simple-mode slider only
+  const MAX_STEPS_EXPERT = 100000; // soft UI safety; real cap is $1/order budget
+  const MAX_DEPTH_SLIDER = 15; // simple-mode slider
+  const MAX_DEPTH_EXPERT = 10000; // 10000% ≈ 101× mid on the sell side
 
   const state = {
     running: false,
@@ -50,21 +53,34 @@
     if (isExpert() && $("depthCustom")) {
       let d = Number($("depthCustom").value);
       if (!Number.isFinite(d)) d = Number($("depth").value) || 2;
-      d = Math.min(50, Math.max(0.1, d));
+      d = Math.min(MAX_DEPTH_EXPERT, Math.max(0.1, d));
       return d;
     }
-    return Number($("depth").value) || 2;
+    let d = Number($("depth").value) || 2;
+    return Math.min(MAX_DEPTH_SLIDER, Math.max(0.5, d));
+  }
+
+  /** Max steps funded by ≥$1/order (no hard 30 in expert). */
+  function budgetMaxSteps() {
+    const u = Number(usdtNum.value) || 0;
+    const l = Number(lbcNum.value) || 0;
+    const mid = state.mid || 0;
+    return Math.max(maxStepsForUsdt(u), maxStepsForLbc(l, mid), 0);
   }
 
   function currentSteps() {
     if (isExpert() && $("levelsCustom")) {
       let n = parseInt($("levelsCustom").value, 10);
       if (!Number.isFinite(n)) n = Number($("levels").value) || 4;
-      n = Math.min(MAX_STEPS, Math.max(1, n));
+      n = Math.max(1, n);
+      const cap = budgetMaxSteps();
+      // Only clamp to budget when we know capital; if both sides $0, leave UI value
+      if (cap > 0 && n > cap) n = cap;
+      if (n > MAX_STEPS_EXPERT) n = MAX_STEPS_EXPERT;
       return n;
     }
     let n = Number($("levels").value) || 4;
-    if (n > MAX_STEPS) n = MAX_STEPS;
+    if (n > MAX_STEPS_SLIDER) n = MAX_STEPS_SLIDER;
     if (n < 1) n = 1;
     return n;
   }
@@ -280,13 +296,13 @@
 
   function maxStepsForUsdt(usdtAmt) {
     if (usdtAmt < MIN_ORDER_USD) return 0;
-    return Math.min(MAX_STEPS, Math.floor(usdtAmt / MIN_ORDER_USD));
+    return Math.floor(usdtAmt / MIN_ORDER_USD);
   }
   function maxStepsForLbc(lbcAmt, mid) {
     if (!mid || mid <= 0 || lbcAmt <= 0) return 0;
     const usdtEq = lbcAmt * mid;
     if (usdtEq < MIN_ORDER_USD) return 0;
-    return Math.min(MAX_STEPS, Math.floor(usdtEq / MIN_ORDER_USD));
+    return Math.floor(usdtEq / MIN_ORDER_USD);
   }
 
   /** Cap Steps so each side can fund ≥ $1/order; show a clear hint. */
@@ -296,19 +312,40 @@
     const mid = state.mid || 0;
     const maxBuy = maxStepsForUsdt(u);
     const maxSell = maxStepsForLbc(l, mid);
-    // Overall slider cap: allow up to max of either side (other side auto-thins in planner)
-    const cap = Math.max(maxBuy, maxSell, 0);
-    levels.max = String(MAX_STEPS);
+    const budgetCap = Math.max(maxBuy, maxSell, 0);
+    const expert = isExpert();
+
+    // Simple slider stays 1–30; expert custom steps free of the 30 hard cap
+    levels.max = String(MAX_STEPS_SLIDER);
     levels.min = "1";
+    if ($("levelsCustom")) {
+      $("levelsCustom").min = "1";
+      $("levelsCustom").max = String(
+        expert && budgetCap > 0 ? budgetCap : MAX_STEPS_EXPERT
+      );
+    }
+
     let n = currentSteps();
-    if (n > MAX_STEPS) n = MAX_STEPS;
-    levels.value = String(n);
-    if ($("levelsCustom") && !isExpert()) $("levelsCustom").value = String(n);
+    if (!expert && n > MAX_STEPS_SLIDER) n = MAX_STEPS_SLIDER;
+    if (expert && budgetCap > 0 && n > budgetCap) n = budgetCap;
+    if (n < 1) n = 1;
+
+    // Keep slider display in range even if expert uses higher custom steps
+    levels.value = String(Math.min(MAX_STEPS_SLIDER, n));
+    if ($("levelsCustom") && expert) $("levelsCustom").value = String(n);
+    if ($("levelsCustom") && !expert) $("levelsCustom").value = String(n);
     $("levelsOut").textContent = String(n);
 
     const hint = $("limitsHint");
     if (!hint) return;
     const parts = [];
+    if (expert) {
+      parts.push(
+        "Expert: steps only limited by ≥$" +
+          MIN_ORDER_USD.toFixed(0) +
+          "/order (not 30)."
+      );
+    }
     if (u > 0 && u < MIN_ORDER_USD) {
       parts.push(
         "Buy side: need at least $" +
@@ -323,7 +360,7 @@
           maxBuy +
           " step(s) at ≥$" +
           MIN_ORDER_USD.toFixed(0) +
-          "/order (extra steps are ignored on buys)."
+          "/order (extra steps ignored on buys)."
       );
     } else if (u >= MIN_ORDER_USD) {
       parts.push(
@@ -355,9 +392,23 @@
       parts.push("Sell side off (0 LBC).");
     }
 
+    if (expert) {
+      const d = currentDepth();
+      const sellMult = 1 + d / 100;
+      parts.push(
+        "Depth ±" +
+          d.toFixed(1) +
+          "% → outermost sell ≈ " +
+          sellMult.toFixed(2) +
+          "× mid" +
+          (mid > 0 ? " (~" + (mid * sellMult).toPrecision(4) + ")" : "") +
+          "."
+      );
+    }
+
     hint.textContent = parts.join(" ");
     const noOrders =
-      (u < MIN_ORDER_USD) && (l <= 0 || !mid || l * mid < MIN_ORDER_USD);
+      u < MIN_ORDER_USD && (l <= 0 || !mid || l * mid < MIN_ORDER_USD);
     const waste =
       (u >= MIN_ORDER_USD && n > maxBuy) || (l > 0 && mid > 0 && n > maxSell);
     hint.className = "hint" + (noOrders ? " err" : waste ? " warn" : "");
@@ -390,12 +441,13 @@
   function applyDepthValue(v, fromCustom) {
     v = Number(v);
     if (!Number.isFinite(v)) v = 2;
-    v = Math.min(50, Math.max(0.1, v));
-    // Slider only goes to 15 — clamp display range, keep full value in custom
-    const sliderV = Math.min(15, Math.max(0.5, v));
+    const maxD = isExpert() ? MAX_DEPTH_EXPERT : MAX_DEPTH_SLIDER;
+    const minD = isExpert() ? 0.1 : 0.5;
+    v = Math.min(maxD, Math.max(minD, v));
+    // Slider only goes to 15 — keep full expert value in custom field
+    const sliderV = Math.min(MAX_DEPTH_SLIDER, Math.max(0.5, v));
     depth.value = String(sliderV);
-    if ($("depthCustom") && !fromCustom) $("depthCustom").value = String(v);
-    if ($("depthCustom") && fromCustom) $("depthCustom").value = String(v);
+    if ($("depthCustom")) $("depthCustom").value = String(v);
     $("depthOut").textContent = "±" + v.toFixed(1) + "%";
     $("bidDepth").value = v;
     $("askDepth").value = v;
@@ -403,16 +455,23 @@
       el.classList.toggle("active", Math.abs(Number(el.dataset.depth) - v) < 0.05);
     });
     state.dirty = true;
+    enforceOrderLimits();
     schedulePreview();
   }
 
   function applyStepsValue(n, fromCustom) {
     n = parseInt(n, 10);
     if (!Number.isFinite(n)) n = 1;
-    n = Math.min(MAX_STEPS, Math.max(1, n));
-    levels.value = String(n);
-    if ($("levelsCustom") && !fromCustom) $("levelsCustom").value = String(n);
-    if ($("levelsCustom") && fromCustom) $("levelsCustom").value = String(n);
+    n = Math.max(1, n);
+    if (isExpert()) {
+      const cap = budgetMaxSteps();
+      if (cap > 0 && n > cap) n = cap;
+      if (n > MAX_STEPS_EXPERT) n = MAX_STEPS_EXPERT;
+    } else if (n > MAX_STEPS_SLIDER) {
+      n = MAX_STEPS_SLIDER;
+    }
+    levels.value = String(Math.min(MAX_STEPS_SLIDER, n));
+    if ($("levelsCustom")) $("levelsCustom").value = String(n);
     $("levelsOut").textContent = String(n);
     state.dirty = true;
     enforceOrderLimits();
@@ -570,7 +629,7 @@
     };
   });
 
-  levels.max = String(MAX_STEPS);
+  levels.max = String(MAX_STEPS_SLIDER);
   setExpertMode(false);
   syncUsdt(true);
   syncLbc(true);
@@ -852,15 +911,15 @@
         lbc.value = Math.min(cfg.lbc_budget, Number(lbc.max));
       }
       if (cfg.bid_depth_pct != null) {
-        const d = Number(cfg.bid_depth_pct);
-        depth.value = String(Math.min(15, Math.max(0.5, d)));
+        const d = Math.min(MAX_DEPTH_EXPERT, Math.max(0.1, Number(cfg.bid_depth_pct)));
+        depth.value = String(Math.min(MAX_DEPTH_SLIDER, Math.max(0.5, d)));
         if ($("depthCustom")) $("depthCustom").value = String(d);
         $("depthOut").textContent = "±" + d.toFixed(1) + "%";
       }
       if (cfg.n_levels != null) {
-        levels.max = String(MAX_STEPS);
-        const n = Math.min(MAX_STEPS, Math.max(1, Number(cfg.n_levels) || 1));
-        levels.value = String(n);
+        levels.max = String(MAX_STEPS_SLIDER);
+        const n = Math.max(1, Number(cfg.n_levels) || 1);
+        levels.value = String(Math.min(MAX_STEPS_SLIDER, n));
         if ($("levelsCustom")) $("levelsCustom").value = String(n);
         $("levelsOut").textContent = String(n);
       }

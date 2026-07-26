@@ -242,12 +242,13 @@ def _apply_body(cfg: BotConfig, body: dict) -> None:
     if "lbc_budget" in body:
         cfg.lbc_budget = max(0.0, float(body["lbc_budget"]))
     if "bid_depth_pct" in body:
-        # Expert custom allows up to 50%; slider UI is 0.5–15
-        cfg.bid_depth_pct = max(0.1, min(50.0, float(body["bid_depth_pct"])))
+        # Expert may set very wide bands (sells far above mid). Soft cap 10000% = 100× mid.
+        cfg.bid_depth_pct = max(0.1, min(10000.0, float(body["bid_depth_pct"])))
     if "ask_depth_pct" in body:
-        cfg.ask_depth_pct = max(0.1, min(50.0, float(body["ask_depth_pct"])))
+        cfg.ask_depth_pct = max(0.1, min(10000.0, float(body["ask_depth_pct"])))
     if "n_levels" in body:
-        cfg.n_levels = max(1, min(30, int(body["n_levels"])))
+        # Expert steps limited in-engine by $1/order budget, not a hard 30
+        cfg.n_levels = max(1, min(100_000, int(body["n_levels"])))
     # Strategy locked to depth_provider until strategies_unlocked (untested otherwise)
     if cfg.strategies_unlocked and "strategy" in body and body["strategy"] in (
         "depth_provider", "bamm", "grid",
