@@ -42,6 +42,20 @@ bash install-lbcmm.sh
 Open **http://127.0.0.1:8787/** in your browser.  
 Complete the setup wizard → set USDT / LBC → press **Start bot**.
 
+### Run in the background (optional)
+
+Keep the panel up after closing the terminal (laptop sleep / VPS / SSH):
+
+```bash
+mkdir -p logs
+nohup ./bin/lbcmm gui > logs/gui.log 2>&1 &
+echo $! > logs/gui.pid
+# stop later: kill "$(cat logs/gui.pid)"
+```
+
+Systemd user units are also provided (`systemd/lbcmm-gui.service`). Full steps:  
+[QUICKSTART-LBCMM.md — Run in the background](https://github.com/realrouse/LBC-market-making-bot/blob/main/QUICKSTART-LBCMM.md#run-in-the-background).
+
 ### Optional terminal commands
 
 ```bash

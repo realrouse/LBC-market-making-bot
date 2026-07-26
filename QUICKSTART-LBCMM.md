@@ -38,6 +38,82 @@ If `install-lbcmm.sh` linked into `~/.local/bin`, you can also run `lbcmm gui` f
 
 ---
 
+## Run in the background
+
+Use this when you want the GUI or bot to keep running after you close the terminal (VPS, SSH session, overnight).
+
+### Quick: `nohup` (no root required)
+
+```bash
+cd LBC-market-making-bot
+mkdir -p logs
+
+# Browser control panel (GUI stays up; open http://127.0.0.1:8787/ anytime)
+nohup ./bin/lbcmm gui > logs/gui.log 2>&1 &
+echo $! > logs/gui.pid
+
+# Or headless bot only (paper by default after wizard/config)
+# nohup ./bin/lbcmm run --paper > logs/bot.log 2>&1 &
+# echo $! > logs/bot.pid
+```
+
+Watch logs and stop cleanly:
+
+```bash
+tail -f logs/gui.log          # or logs/bot.log
+kill "$(cat logs/gui.pid)"    # graceful stop; bot cancels its own orders on clean exit
+# kill -9 only if a process is stuck
+```
+
+Tips:
+
+- On a remote server, either open an SSH tunnel (`ssh -L 8787:127.0.0.1:8787 user@host`) or start the GUI bound for remote access:  
+  `nohup ./bin/lbcmm gui --host 0.0.0.0 > logs/gui.log 2>&1 &`  
+  (only on a trusted network / with a firewall; default is `127.0.0.1` only.)
+- `screen` / `tmux` work the same way: start `./bin/lbcmm gui` inside a session, detach with Ctrl+A D (screen) or Ctrl+B D (tmux).
+
+### Durable: systemd user service
+
+Templates live in [`systemd/`](systemd/):
+
+| Unit | What it runs |
+|---|---|
+| `lbcmm.service` | Headless bot (`run --paper`) |
+| `lbcmm-gui.service` | Browser control panel on port 8787 |
+
+```bash
+cd LBC-market-making-bot
+mkdir -p ~/.config/systemd/user
+
+# Point WorkingDirectory / ExecStart at *your* clone path if it is not ~/LBC-market-making-bot
+sed "s|%h/LBC-market-making-bot|$PWD|g" systemd/lbcmm-gui.service \
+  > ~/.config/systemd/user/lbcmm-gui.service
+# same idea for lbcmm.service if you want headless-only
+
+systemctl --user daemon-reload
+systemctl --user enable --now lbcmm-gui.service
+
+systemctl --user status lbcmm-gui.service
+journalctl --user -u lbcmm-gui -f
+```
+
+Survive logout/reboot on a server (one-time, needs admin for linger):
+
+```bash
+loginctl enable-linger "$USER"
+```
+
+Stop / restart:
+
+```bash
+systemctl --user stop lbcmm-gui.service
+systemctl --user restart lbcmm-gui.service
+```
+
+Live mode under systemd: put keys in a mode-`600` env file and uncomment `EnvironmentFile=` in the unit (never commit keys).
+
+---
+
 ## What you do in the GUI
 
 1. Finish the **first-time setup wizard** (paper recommended first).  

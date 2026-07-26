@@ -23,6 +23,19 @@ Open **http://127.0.0.1:8787/** — setup wizard → set capital → **Start bot
 
 Full guide: **[QUICKSTART-LBCMM.md](QUICKSTART-LBCMM.md)**.
 
+### Run in the background
+
+Keep the GUI or bot running after you close the terminal:
+
+```bash
+mkdir -p logs
+nohup ./bin/lbcmm gui > logs/gui.log 2>&1 &
+echo $! > logs/gui.pid
+# stop later: kill "$(cat logs/gui.pid)"
+```
+
+Or install the user systemd units (`systemd/lbcmm-gui.service`, `systemd/lbcmm.service`) — step-by-step in **[QUICKSTART-LBCMM.md § Run in the background](QUICKSTART-LBCMM.md#run-in-the-background)**.
+
 ## Mission
 
 Raise MEXC **LBC/USDT ±2% depth** toward **~$100 per side** so ordinary trades don’t move price much (healthier market, delisting risk down, relisting stories up). Even ~$10 helps.
@@ -43,11 +56,14 @@ Raise MEXC **LBC/USDT ±2% depth** toward **~$100 per side** so ordinary trades 
 ## Commands
 
 ```bash
-./bin/lbcmm gui          # browser control panel
+./bin/lbcmm gui          # browser control panel (foreground)
 ./bin/lbcmm depth        # public ±2% depth + your plan
 ./bin/lbcmm status
 ./bin/lbcmm run --paper
-./bin/lbcmm cancel       # cancel open live orders
+./bin/lbcmm cancel       # cancel open live orders (this bot’s IDs)
+
+# background (example)
+nohup ./bin/lbcmm gui > logs/gui.log 2>&1 &
 ```
 
 ## Website / community editors

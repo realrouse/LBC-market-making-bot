@@ -1,0 +1,21 @@
+[Unit]
+Description=LBC market-making bot GUI (http://127.0.0.1:8787/)
+Documentation=file:%h/LBC-market-making-bot/QUICKSTART-LBCMM.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/LBC-market-making-bot
+Environment=PYTHONPATH=%h/LBC-market-making-bot
+# Optional live keys (mode 600) — see lbcmm.service comments
+# EnvironmentFile=%h/.config/lbcmm/mexc.env
+# Default binds 127.0.0.1 only. For LAN/VPS use: -m lbcmm gui --host 0.0.0.0
+ExecStart=%h/LBC-market-making-bot/.venv/bin/python -m lbcmm gui
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=60
+KillSignal=SIGINT
+
+[Install]
+WantedBy=default.target

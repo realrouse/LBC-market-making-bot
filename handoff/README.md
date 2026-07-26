@@ -49,6 +49,17 @@ bash install-lbcmm.sh
 
 Then open **http://127.0.0.1:8787/**
 
+### Background (VPS / leave running)
+
+```bash
+mkdir -p logs
+nohup ./bin/lbcmm gui > logs/gui.log 2>&1 &
+echo $! > logs/gui.pid
+# stop: kill "$(cat logs/gui.pid)"
+```
+
+Full options (nohup + systemd): **[QUICKSTART-LBCMM.md § Run in the background](../QUICKSTART-LBCMM.md#run-in-the-background)**.
+
 ---
 
 ## Rules

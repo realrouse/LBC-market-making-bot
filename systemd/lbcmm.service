@@ -1,5 +1,6 @@
 [Unit]
-Description=LBC market-making bot (MEXC LBCUSDT)
+Description=LBC market-making bot headless (MEXC LBCUSDT)
+Documentation=file:%h/LBC-market-making-bot/QUICKSTART-LBCMM.md
 After=network-online.target
 Wants=network-online.target
 
@@ -7,10 +8,17 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=%h/LBC-market-making-bot
 Environment=PYTHONPATH=%h/LBC-market-making-bot
+# Optional live keys (mode 600). Example:
+#   mkdir -p ~/.config/lbcmm && chmod 700 ~/.config/lbcmm
+#   printf 'MEXC_API_KEY=...\nMEXC_API_SECRET=...\n' > ~/.config/lbcmm/mexc.env
+#   chmod 600 ~/.config/lbcmm/mexc.env
 # EnvironmentFile=%h/.config/lbcmm/mexc.env
 ExecStart=%h/LBC-market-making-bot/.venv/bin/python -m lbcmm run --paper
 Restart=on-failure
 RestartSec=10
+# Give the bot time to cancel its own orders on stop
+TimeoutStopSec=60
+KillSignal=SIGINT
 
 [Install]
 WantedBy=default.target
