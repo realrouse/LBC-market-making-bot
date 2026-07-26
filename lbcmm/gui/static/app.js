@@ -3,6 +3,9 @@
 
   const $ = (id) => document.getElementById(id);
 
+  const MIN_ORDER_USD = 1.0; // MEXC-style minimum notional per resting order
+  const MAX_STEPS = 30;
+
   const state = {
     running: false,
     paper: true,
@@ -16,6 +19,7 @@
     hasKeys: false,
     wizStep: 0,
     wizMode: "paper", // paper | live
+    formSeeded: false, // after first force-apply, never stomp sliders from poll
   };
 
   const wizTitles = [
@@ -38,12 +42,16 @@
 
   function marketConfigBody() {
     const d = Number($("depth").value);
+    let n = Number($("levels").value) || 4;
+    if (n > MAX_STEPS) n = MAX_STEPS;
+    if (n < 1) n = 1;
     return {
       usdt_budget: Number($("usdtNum").value) || 0,
       lbc_budget: Number($("lbcNum").value) || 0,
       bid_depth_pct: d,
       ask_depth_pct: d,
-      n_levels: Number($("levels").value) || 4,
+      n_levels: n,
+      min_notional_usdt: MIN_ORDER_USD,
       strategy: $("strategy").value,
       paper: state.paper,
     };
@@ -243,6 +251,90 @@
   const depth = $("depth");
   const levels = $("levels");
 
+  function maxStepsForUsdt(usdtAmt) {
+    if (usdtAmt < MIN_ORDER_USD) return 0;
+    return Math.min(MAX_STEPS, Math.floor(usdtAmt / MIN_ORDER_USD));
+  }
+  function maxStepsForLbc(lbcAmt, mid) {
+    if (!mid || mid <= 0 || lbcAmt <= 0) return 0;
+    const usdtEq = lbcAmt * mid;
+    if (usdtEq < MIN_ORDER_USD) return 0;
+    return Math.min(MAX_STEPS, Math.floor(usdtEq / MIN_ORDER_USD));
+  }
+
+  /** Cap Steps so each side can fund ≥ $1/order; show a clear hint. */
+  function enforceOrderLimits() {
+    const u = Number(usdtNum.value) || 0;
+    const l = Number(lbcNum.value) || 0;
+    const mid = state.mid || 0;
+    const maxBuy = maxStepsForUsdt(u);
+    const maxSell = maxStepsForLbc(l, mid);
+    // Overall slider cap: allow up to max of either side (other side auto-thins in planner)
+    const cap = Math.max(maxBuy, maxSell, 0);
+    levels.max = String(MAX_STEPS);
+    levels.min = "1";
+    let n = Number(levels.value) || 1;
+    if (n > MAX_STEPS) n = MAX_STEPS;
+    levels.value = String(n);
+    $("levelsOut").textContent = String(n);
+
+    const hint = $("limitsHint");
+    if (!hint) return;
+    const parts = [];
+    if (u > 0 && u < MIN_ORDER_USD) {
+      parts.push(
+        "Buy side: need at least $" +
+          MIN_ORDER_USD.toFixed(0) +
+          " USDT — $0 / dust places no buy orders."
+      );
+    } else if (u >= MIN_ORDER_USD && n > maxBuy) {
+      parts.push(
+        "Buy side: with $" +
+          u.toFixed(0) +
+          " USDT, max " +
+          maxBuy +
+          " step(s) at ≥$" +
+          MIN_ORDER_USD.toFixed(0) +
+          "/order (extra steps are ignored on buys)."
+      );
+    } else if (u >= MIN_ORDER_USD) {
+      parts.push(
+        "Buy: up to " + maxBuy + " order(s) of ≥$" + MIN_ORDER_USD.toFixed(0) + "."
+      );
+    } else {
+      parts.push("Buy side off ($0 USDT).");
+    }
+
+    if (l > 0 && mid > 0 && l * mid < MIN_ORDER_USD) {
+      parts.push(
+        "Sell side: LBC notional < $" +
+          MIN_ORDER_USD.toFixed(0) +
+          " at mid — no sell orders."
+      );
+    } else if (l > 0 && mid > 0 && n > maxSell) {
+      parts.push(
+        "Sell side: with this LBC, max " +
+          maxSell +
+          " step(s) at ≥$" +
+          MIN_ORDER_USD.toFixed(0) +
+          "/order."
+      );
+    } else if (l > 0 && mid > 0) {
+      parts.push(
+        "Sell: up to " + maxSell + " order(s) of ≥$" + MIN_ORDER_USD.toFixed(0) + "."
+      );
+    } else if (l <= 0) {
+      parts.push("Sell side off (0 LBC).");
+    }
+
+    hint.textContent = parts.join(" ");
+    const noOrders =
+      (u < MIN_ORDER_USD) && (l <= 0 || !mid || l * mid < MIN_ORDER_USD);
+    const waste =
+      (u >= MIN_ORDER_USD && n > maxBuy) || (l > 0 && mid > 0 && n > maxSell);
+    hint.className = "hint" + (noOrders ? " err" : waste ? " warn" : "");
+  }
+
   function syncUsdt(fromRange) {
     if (fromRange) usdtNum.value = usdt.value;
     else {
@@ -252,6 +344,7 @@
       usdt.value = Math.min(v, Number(usdt.max));
     }
     state.dirty = true;
+    enforceOrderLimits();
     schedulePreview();
   }
   function syncLbc(fromRange) {
@@ -263,6 +356,7 @@
       lbc.value = Math.min(v, Number(lbc.max));
     }
     state.dirty = true;
+    enforceOrderLimits();
     schedulePreview();
   }
   function syncDepth() {
@@ -290,8 +384,14 @@
   lbcNum.addEventListener("input", () => syncLbc(false));
   depth.addEventListener("input", syncDepth);
   levels.addEventListener("input", () => {
-    $("levelsOut").textContent = levels.value;
+    let n = Number(levels.value) || 1;
+    if (n > MAX_STEPS) {
+      n = MAX_STEPS;
+      levels.value = String(MAX_STEPS);
+    }
+    $("levelsOut").textContent = String(n);
     state.dirty = true;
+    enforceOrderLimits();
     schedulePreview();
   });
   $("strategy").addEventListener("change", () => {
@@ -320,10 +420,11 @@
     };
   });
 
+  levels.max = String(MAX_STEPS);
   syncUsdt(true);
   syncLbc(true);
   syncDepth();
-  $("levelsOut").textContent = levels.value;
+  enforceOrderLimits();
 
   // ── Format / draw ─────────────────────────────────────────────────────
   function money(v) {
@@ -577,42 +678,38 @@
     state.paper = cfg.paper !== false;
     state.hasKeys = !!cfg.has_keys;
 
-    const editing =
-      document.activeElement === usdtNum ||
-      document.activeElement === lbcNum ||
-      document.activeElement === depth ||
-      document.activeElement === usdt ||
-      document.activeElement === lbc ||
-      document.activeElement === levels;
-    if (!force && (editing || state.dirty)) {
-      updateSetupBanner();
-      return;
+    // Only seed/overwrite capital·depth·steps on explicit force (boot / wizard finish /
+    // settings save). Market poll must NEVER stomp the sliders (was resetting Steps to 20).
+    if (force || !state.formSeeded) {
+      if (cfg.usdt_budget != null) {
+        usdtNum.value = cfg.usdt_budget;
+        if (cfg.usdt_budget > Number(usdt.max)) usdt.max = cfg.usdt_budget;
+        usdt.value = Math.min(cfg.usdt_budget, Number(usdt.max));
+      }
+      if (cfg.lbc_budget != null) {
+        lbcNum.value = cfg.lbc_budget;
+        if (cfg.lbc_budget > Number(lbc.max)) lbc.max = cfg.lbc_budget;
+        lbc.value = Math.min(cfg.lbc_budget, Number(lbc.max));
+      }
+      if (cfg.bid_depth_pct != null) {
+        depth.value = cfg.bid_depth_pct;
+        $("depthOut").textContent = "±" + Number(cfg.bid_depth_pct).toFixed(1) + "%";
+      }
+      if (cfg.n_levels != null) {
+        levels.max = String(MAX_STEPS);
+        const n = Math.min(MAX_STEPS, Math.max(1, Number(cfg.n_levels) || 1));
+        levels.value = String(n);
+        $("levelsOut").textContent = String(n);
+      }
+      if (cfg.strategy) $("strategy").value = cfg.strategy;
+      if (cfg.min_notional_usdt != null) {
+        $("setMinNotional").value = Math.max(MIN_ORDER_USD, Number(cfg.min_notional_usdt));
+      }
+      if (cfg.reprice_pct != null) $("setReprice").value = cfg.reprice_pct;
+      if (cfg.poll_interval_s != null) $("setPoll").value = cfg.poll_interval_s;
+      state.formSeeded = true;
+      enforceOrderLimits();
     }
-    if (cfg.usdt_budget != null) {
-      usdtNum.value = cfg.usdt_budget;
-      if (cfg.usdt_budget > Number(usdt.max)) usdt.max = cfg.usdt_budget;
-      usdt.value = Math.min(cfg.usdt_budget, Number(usdt.max));
-    }
-    if (cfg.lbc_budget != null) {
-      lbcNum.value = cfg.lbc_budget;
-      if (cfg.lbc_budget > Number(lbc.max)) lbc.max = cfg.lbc_budget;
-      lbc.value = Math.min(cfg.lbc_budget, Number(lbc.max));
-    }
-    if (cfg.bid_depth_pct != null) {
-      depth.value = cfg.bid_depth_pct;
-      $("depthOut").textContent = "±" + Number(cfg.bid_depth_pct).toFixed(1) + "%";
-    }
-    if (cfg.n_levels != null) {
-      levels.value = cfg.n_levels;
-      $("levelsOut").textContent = cfg.n_levels;
-    }
-    if (cfg.strategy) $("strategy").value = cfg.strategy;
-    if (cfg.min_notional_usdt != null) $("setMinNotional").value = cfg.min_notional_usdt;
-    if (cfg.reprice_pct != null) $("setReprice").value = cfg.reprice_pct;
-    if (cfg.poll_interval_s != null) $("setPoll").value = cfg.poll_interval_s;
-
-    // Do NOT touch wizard fields here — market poll was resetting them every ~2s.
-    // Wizard is seeded only in openWizard()/seedWizardFromState().
 
     updateSetupBanner();
   }
@@ -637,7 +734,9 @@
         state.public_depth = m.public_depth || {};
         state.bot_contribution = m.bot_contribution || {};
         state.desired = m.desired || [];
+        // Meta only (setup/mode/keys) — never force slider values on poll
         if (m.config) applyConfigFromServer(m.config, false);
+        enforceOrderLimits();
       }
 
       const sr = await fetch("/api/state");

@@ -1,12 +1,19 @@
 """Depth Provider — symmetric band liquidity for CoinGecko-style ±2% depth.
 
 Pure planner: numbers in, desired resting orders out. No I/O.
+
+MEXC (and this bot) require roughly **$1 minimum notional per order**. Budgets
+below that place **no** orders on that side. When budget is tight, the number of
+steps is automatically reduced so each resting order stays ≥ min notional.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Optional
+
+# Exchange-safe default; UI presents this as "$1 minimum per order".
+DEFAULT_MIN_NOTIONAL_USDT = 1.0
 
 
 @dataclass(frozen=True)
@@ -25,9 +32,30 @@ class DepthProviderConfig:
     bid_depth_pct: float = 2.0
     ask_depth_pct: float = 2.0
     n_levels: int = 4
-    min_notional_usdt: float = 1.1
-    # leave a small gap from mid so we stay maker (bps of mid)
+    min_notional_usdt: float = DEFAULT_MIN_NOTIONAL_USDT
     mid_gap_bps: float = 5.0
+
+
+def max_levels_for_budget(budget_usdt: float, min_notional_usdt: float = DEFAULT_MIN_NOTIONAL_USDT) -> int:
+    """How many ≥min-notional orders fit in a USDT budget (0 if none)."""
+    if budget_usdt < min_notional_usdt or min_notional_usdt <= 0:
+        return 0
+    return int(budget_usdt // min_notional_usdt)
+
+
+def effective_levels(
+    n_levels: int,
+    budget_usdt: float,
+    min_notional_usdt: float = DEFAULT_MIN_NOTIONAL_USDT,
+) -> int:
+    """Cap requested steps so each order can be ≥ min_notional."""
+    n = max(0, int(n_levels))
+    if n <= 0:
+        return 0
+    cap = max_levels_for_budget(budget_usdt, min_notional_usdt)
+    if cap <= 0:
+        return 0
+    return max(1, min(n, cap))
 
 
 def plan_depth_orders(
@@ -38,55 +66,61 @@ def plan_depth_orders(
     bid_depth_pct: float = 2.0,
     ask_depth_pct: float = 2.0,
     n_levels: int = 4,
-    min_notional_usdt: float = 1.1,
+    min_notional_usdt: float = DEFAULT_MIN_NOTIONAL_USDT,
     mid_gap_bps: float = 5.0,
 ) -> list[DesiredOrder]:
-    """Place n_levels of bids in [mid*(1-bid%), mid) and asks in (mid, mid*(1+ask%)].
+    """Place bids in [mid*(1-bid%), mid) and asks in (mid, mid*(1+ask%)].
 
-    USDT budget is split across buy levels; LBC budget across sell levels (by coin qty).
-    Levels near mid get equal share of budget (simple equal split for v1).
+    - Buy side: needs usdt_budget ≥ min_notional; steps auto-capped.
+    - Sell side: needs lbc_budget * price ≥ min_notional per level; steps auto-capped.
+    - A side with 0 / dust budget produces **no** orders on that side.
     """
     if mid <= 0:
         return []
-    n = max(1, int(n_levels))
+    min_n = max(0.01, float(min_notional_usdt))
+    n_req = max(1, int(n_levels))
     gap = mid * (mid_gap_bps / 10_000.0)
     orders: list[DesiredOrder] = []
 
     # ── Buys ──────────────────────────────────────────────────────────────
-    if usdt_budget >= min_notional_usdt and bid_depth_pct > 0:
+    buy_n = effective_levels(n_req, usdt_budget, min_n)
+    if buy_n > 0 and usdt_budget >= min_n and bid_depth_pct > 0:
         floor = mid * (1.0 - bid_depth_pct / 100.0)
         top_bid = mid - gap
         if top_bid > floor:
-            # prices from near-mid down to floor
-            if n == 1:
+            if buy_n == 1:
                 prices = [top_bid]
             else:
-                step = (top_bid - floor) / (n - 1)
-                prices = [top_bid - i * step for i in range(n)]
-            per = usdt_budget / n
+                step = (top_bid - floor) / (buy_n - 1)
+                prices = [top_bid - i * step for i in range(buy_n)]
+            # Equal split of the full buy budget across placeable levels
+            per = usdt_budget / buy_n
             for i, px in enumerate(prices):
-                if px <= 0 or per < min_notional_usdt:
+                if px <= 0 or per + 1e-12 < min_n:
                     continue
                 qty = per / px
-                if qty * px >= min_notional_usdt:
+                if qty * px + 1e-12 >= min_n:
                     orders.append(
                         DesiredOrder(side="BUY", price=px, qty=qty, usdt=per, level=i)
                     )
 
     # ── Sells ─────────────────────────────────────────────────────────────
-    if lbc_budget > 0 and ask_depth_pct > 0:
+    # Approximate sell-side USDT capacity at mid for step capping
+    sell_budget_usdt = lbc_budget * mid if lbc_budget > 0 and mid > 0 else 0.0
+    sell_n = effective_levels(n_req, sell_budget_usdt, min_n)
+    if sell_n > 0 and lbc_budget > 0 and ask_depth_pct > 0:
         ceiling = mid * (1.0 + ask_depth_pct / 100.0)
         bot_ask = mid + gap
         if bot_ask < ceiling:
-            if n == 1:
+            if sell_n == 1:
                 prices = [bot_ask]
             else:
-                step = (ceiling - bot_ask) / (n - 1)
-                prices = [bot_ask + i * step for i in range(n)]
-            per_coins = lbc_budget / n
+                step = (ceiling - bot_ask) / (sell_n - 1)
+                prices = [bot_ask + i * step for i in range(sell_n)]
+            per_coins = lbc_budget / sell_n
             for i, px in enumerate(prices):
                 usdt = per_coins * px
-                if usdt < min_notional_usdt:
+                if usdt + 1e-12 < min_n:
                     continue
                 orders.append(
                     DesiredOrder(

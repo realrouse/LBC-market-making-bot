@@ -721,6 +721,20 @@ a { color: var(--accent); }
 
 /* Levels under depth */
 .levels-field { margin-top: 1rem; padding-top: 0.85rem; border-top: 1px solid var(--line); }
+.hint {
+  margin: 0.55rem 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+  line-height: 1.35;
+}
+.hint.warn {
+  color: #f0c14b;
+  font-weight: 600;
+}
+.hint.err {
+  color: var(--danger);
+  font-weight: 600;
+}
 
 /* Status / settings views */
 .view { animation: fadeIn .25s ease; }

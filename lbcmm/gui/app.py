@@ -223,7 +223,8 @@ def _apply_body(cfg: BotConfig, body: dict) -> None:
     if "advanced" in body:
         cfg.advanced = bool(body["advanced"])
     if "min_notional_usdt" in body:
-        cfg.min_notional_usdt = max(0.1, float(body["min_notional_usdt"]))
+        # Floor at $1 — exchange min notional; never allow sub-dollar resting clips
+        cfg.min_notional_usdt = max(1.0, float(body["min_notional_usdt"]))
     if "reprice_pct" in body:
         cfg.reprice_pct = max(0.05, float(body["reprice_pct"]))
     if "poll_interval_s" in body:
@@ -280,6 +281,24 @@ async def handle_start(request: web.Request) -> web.Response:
                 pass
     except Exception:  # pylint: disable=broad-exception-caught
         pass
+
+    # Reject configs that cannot place any ≥$1 order on either side
+    min_n = max(1.0, float(cfg.min_notional_usdt or 1.0))
+    buy_ok = cfg.usdt_budget >= min_n
+    # sell capacity needs mid — approximate with a soft check on coin count only if no USDT
+    sell_ok = cfg.lbc_budget > 0  # planner still drops dust vs mid; allow start if LBC assigned
+    if not buy_ok and not sell_ok:
+        return web.json_response(
+            {
+                "ok": False,
+                "error": (
+                    f"Nothing to place: need at least ${min_n:.0f} USDT for buys "
+                    "and/or enough LBC for sells (≥ $1 notional per order)."
+                ),
+            },
+            status=400,
+        )
+
     if not engine.state.running:
         await engine.start()
     return web.json_response({"ok": True, "running": True})

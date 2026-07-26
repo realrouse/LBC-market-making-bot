@@ -29,7 +29,7 @@ class BotConfig:
     bid_depth_pct: float = 2.0
     ask_depth_pct: float = 2.0
     n_levels: int = 4
-    min_notional_usdt: float = 1.1
+    min_notional_usdt: float = 1.0  # MEXC-style $1 minimum per order
     reprice_pct: float = 0.35
     poll_interval_s: float = 3.0
 
