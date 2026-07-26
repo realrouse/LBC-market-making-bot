@@ -6,8 +6,7 @@
   const MIN_ORDER_USD = 1.0; // MEXC-style minimum notional per resting order
   const MAX_STEPS_SLIDER = 30; // simple-mode slider only
   const MAX_STEPS_EXPERT = 100000; // soft UI safety; real cap is $1/order budget
-  const MAX_DEPTH_SLIDER = 15; // simple-mode slider
-  const MAX_DEPTH_EXPERT = 10000; // 10000% ≈ 101× mid on the sell side
+  const MAX_DEPTH_SLIDER = 15; // simple-mode slider only (expert custom has no upper cap)
 
   const state = {
     bot_id: "",
@@ -165,8 +164,8 @@
   function currentDepth() {
     if (isExpert() && $("depthCustom")) {
       let d = Number($("depthCustom").value);
-      if (!Number.isFinite(d)) d = Number($("depth").value) || 2;
-      d = Math.min(MAX_DEPTH_EXPERT, Math.max(0.1, d));
+      if (!Number.isFinite(d) || d <= 0) d = Number($("depth").value) || 2;
+      // Expert: no upper limit on custom depth %
       return d;
     }
     let d = Number($("depth").value) || 2;
@@ -553,15 +552,16 @@
   }
   function applyDepthValue(v, fromCustom) {
     v = Number(v);
-    if (!Number.isFinite(v)) v = 2;
-    const maxD = isExpert() ? MAX_DEPTH_EXPERT : MAX_DEPTH_SLIDER;
-    const minD = isExpert() ? 0.1 : 0.5;
-    v = Math.min(maxD, Math.max(minD, v));
-    // Slider only goes to 15 — keep full expert value in custom field
+    if (!Number.isFinite(v) || v <= 0) v = 2;
+    if (!isExpert()) {
+      v = Math.min(MAX_DEPTH_SLIDER, Math.max(0.5, v));
+    }
+    // Expert custom: no upper cap. Slider display still clamps to 0.5–15.
     const sliderV = Math.min(MAX_DEPTH_SLIDER, Math.max(0.5, v));
     depth.value = String(sliderV);
     if ($("depthCustom")) $("depthCustom").value = String(v);
-    $("depthOut").textContent = "±" + v.toFixed(1) + "%";
+    $("depthOut").textContent =
+      "±" + (v >= 1000 ? v.toFixed(0) : v.toFixed(1)) + "%";
     $("bidDepth").value = v;
     $("askDepth").value = v;
     document.querySelectorAll("[data-depth]").forEach((el) => {
@@ -1026,10 +1026,11 @@
         lbc.value = Math.min(cfg.lbc_budget, Number(lbc.max));
       }
       if (cfg.bid_depth_pct != null) {
-        const d = Math.min(MAX_DEPTH_EXPERT, Math.max(0.1, Number(cfg.bid_depth_pct)));
+        const d = Math.max(1e-9, Number(cfg.bid_depth_pct));
         depth.value = String(Math.min(MAX_DEPTH_SLIDER, Math.max(0.5, d)));
         if ($("depthCustom")) $("depthCustom").value = String(d);
-        $("depthOut").textContent = "±" + d.toFixed(1) + "%";
+        $("depthOut").textContent =
+          "±" + (d >= 1000 ? d.toFixed(0) : d.toFixed(1)) + "%";
       }
       if (cfg.n_levels != null) {
         levels.max = String(MAX_STEPS_SLIDER);
