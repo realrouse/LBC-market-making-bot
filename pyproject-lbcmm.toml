@@ -1,0 +1,22 @@
+# Optional packaging for the standalone LBC product.
+# Install: pip install -e .  (using this file renamed or via setup below)
+# Prefer:  PYTHONPATH=. python3 -m lbcmm
+
+[project]
+name = "lbc-market-making-bot"
+version = "0.1.0"
+description = "Standalone LBC/USDT market-making bot for MEXC (fork of neofutur tradinebotte)"
+readme = "README-LBCMM.md"
+license = { text = "GPL-3.0-or-later" }
+requires-python = ">=3.10"
+dependencies = [
+  "aiohttp>=3.9",
+  "websockets>=12",
+  "protobuf>=5,<6",
+]
+
+[project.scripts]
+lbcmm = "lbcmm.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["lbcmm*"]

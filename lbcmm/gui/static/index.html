@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LBC Liquidity · Market Making</title>
+  <meta name="description" content="Contribute liquidity to MEXC LBC/USDT — simple, local, paper by default." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <!-- ═══════════ FIRST-TIME SETUP WIZARD ═══════════ -->
+  <!-- Visible by default so a JS error never leaves a blank page; boot() may hide it. -->
+  <div id="wizard" class="wizard">
+    <div class="wizard-card">
+      <div class="wizard-top">
+        <div class="logo-mark" aria-hidden="true">L</div>
+        <div>
+          <div class="welcome-kicker">First-time setup</div>
+          <h1 id="wizTitle">Welcome</h1>
+        </div>
+      </div>
+      <div class="wiz-progress" aria-hidden="true">
+        <div class="wiz-step-dot active" data-wstep="0"></div>
+        <div class="wiz-step-dot" data-wstep="1"></div>
+        <div class="wiz-step-dot" data-wstep="2"></div>
+        <div class="wiz-step-dot" data-wstep="3"></div>
+        <div class="wiz-step-dot" data-wstep="4"></div>
+      </div>
+
+      <!-- Step 0: intro -->
+      <section class="wiz-pane" data-pane="0">
+        <p class="welcome-lede">
+          This app rests maker orders on <strong>MEXC LBC/USDT</strong> so you can help market depth.
+          Everything runs on <em>your</em> machine. Setup takes about a minute.
+        </p>
+        <ul class="welcome-points">
+          <li><span class="wp-icon">①</span><div><strong>Choose paper or live</strong><span>Paper is safe practice with simulated orders.</span></div></li>
+          <li><span class="wp-icon">②</span><div><strong>Set capital &amp; depth</strong><span>How much USDT/LBC and how close to mid price.</span></div></li>
+          <li><span class="wp-icon">③</span><div><strong>Start contributing</strong><span>One button — change settings anytime later.</span></div></li>
+        </ul>
+      </section>
+
+      <!-- Step 1: paper vs live -->
+      <section class="wiz-pane" data-pane="1" hidden>
+        <p class="welcome-lede">How do you want to run the bot?</p>
+        <div class="mode-cards">
+          <button type="button" class="mode-card selected" id="wizPaper" data-mode="paper">
+            <span class="mode-badge safe">Recommended</span>
+            <strong>Paper trading</strong>
+            <span>Simulated orders. No real money. Perfect for learning the UI.</span>
+          </button>
+          <button type="button" class="mode-card" id="wizLive" data-mode="live">
+            <span class="mode-badge risk">Real money</span>
+            <strong>Live trading</strong>
+            <span>Places real maker orders on MEXC with your API keys.</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- Step 2: keys (live only) -->
+      <section class="wiz-pane" data-pane="2" hidden>
+        <p class="welcome-lede">
+          Create a key at
+          <a href="https://www.mexc.com/user/openapi" target="_blank" rel="noopener">mexc.com/user/openapi</a>.
+          Under <strong>Spot</strong> enable only <em>View Order Details</em> and <em>Trade</em>. Never enable Withdraw.
+        </p>
+        <label class="field">
+          <span>Access Key</span>
+          <input type="text" id="wizAccessKey" autocomplete="off" placeholder="MEXC Access Key" />
+        </label>
+        <label class="field">
+          <span>Secret Key</span>
+          <input type="password" id="wizSecretKey" autocomplete="off" placeholder="MEXC Secret Key (shown once)" />
+        </label>
+        <p class="muted small">You can also leave these empty and set <code>MEXC_API_KEY</code> / <code>MEXC_API_SECRET</code> in the environment.</p>
+      </section>
+
+      <!-- Step 3: capital + depth -->
+      <section class="wiz-pane" data-pane="3" hidden>
+        <p class="welcome-lede">How much capital should the bot rest on the book?</p>
+        <div class="capital-grid">
+          <div class="capital-card bid-card">
+            <div class="capital-top"><span class="side-tag bid">Buy side</span></div>
+            <div class="capital-value">
+              <span class="currency">$</span>
+              <input type="number" id="wizUsdt" min="0" step="1" value="10" />
+            </div>
+            <span class="side-hint">USDT for resting bids</span>
+          </div>
+          <div class="capital-card ask-card">
+            <div class="capital-top"><span class="side-tag ask">Sell side</span></div>
+            <div class="capital-value">
+              <input type="number" id="wizLbc" min="0" step="100" value="5000" />
+              <span class="currency tail">LBC</span>
+            </div>
+            <span class="side-hint">LBC for resting asks</span>
+          </div>
+        </div>
+        <label class="field" style="margin-top:1rem">
+          <span>Depth % (How close to the mid?) <output id="wizDepthOut">±2.0%</output></span>
+          <input type="range" id="wizDepth" min="0.5" max="15" step="0.1" value="2" />
+        </label>
+        <label class="field">
+          <span>Steps (order levels per side) <output id="wizLevelsOut">4</output></span>
+          <input type="range" id="wizLevels" min="1" max="30" step="1" value="4" />
+        </label>
+      </section>
+
+      <!-- Step 4: confirm -->
+      <section class="wiz-pane" data-pane="4" hidden>
+        <p class="welcome-lede">Review and finish. You can change everything later under the menu.</p>
+        <dl class="wiz-summary" id="wizSummary"></dl>
+        <label class="check-row" id="wizLiveConfirmRow" hidden>
+          <input type="checkbox" id="wizLiveCheck" />
+          <span>I understand live mode places <strong>real orders</strong> and can lose money.</span>
+        </label>
+      </section>
+
+      <div class="wiz-nav">
+        <button type="button" class="btn" id="wizBack" hidden>Back</button>
+        <div class="wiz-nav-right">
+          <button type="button" class="btn btn-primary" id="wizNext">Continue →</button>
+        </div>
+      </div>
+      <p class="welcome-fine">Forked from neofutur’s multibot design · GPL-3.0</p>
+    </div>
+  </div>
+
+  <!-- ═══════════ MAIN APP ═══════════ -->
+  <div id="app" class="app" hidden>
+    <!-- High-contrast setup required banner -->
+    <div id="setupBanner" class="setup-banner" hidden role="alert">
+      <div class="setup-banner-inner">
+        <strong>First-time setup required</strong>
+        <span>Configure paper/live mode and capital before the bot can start.</span>
+        <button type="button" class="btn btn-banner" id="btnOpenSetup">Start setup wizard</button>
+      </div>
+    </div>
+
+    <header class="shell-top">
+      <div class="brand">
+        <div class="logo-mark sm" aria-hidden="true">L</div>
+        <div>
+          <div class="brand-title">LBC Liquidity</div>
+          <div class="brand-sub">MEXC · LBC/USDT</div>
+        </div>
+      </div>
+      <nav class="menubar" aria-label="Main">
+        <button type="button" class="menu-item active" data-view="market">Market Config</button>
+        <button type="button" class="menu-item" data-view="status">Status</button>
+        <button type="button" class="menu-item" data-view="settings">Settings</button>
+      </nav>
+      <div class="top-meta">
+        <div class="pill" id="connPill"><span class="dot" id="connDot"></span><span id="connLabel">Connecting…</span></div>
+        <div class="pill mode-pill paper" id="modePill"><span id="modeLabel">Paper mode</span></div>
+      </div>
+    </header>
+
+    <!-- ── VIEW: Market Config (default) ── -->
+    <div id="view-market" class="view">
+      <section class="ticker" aria-label="Live market">
+        <div class="tick"><span class="tick-k">Mid price</span><span class="tick-v mono" id="mid">—</span></div>
+        <div class="tick"><span class="tick-k">Spread</span><span class="tick-v mono" id="spread">—</span></div>
+        <div class="tick"><span class="tick-k">Public −2% depth</span><span class="tick-v mono bid" id="pubBid">—</span></div>
+        <div class="tick"><span class="tick-k">Public +2% depth</span><span class="tick-v mono ask" id="pubAsk">—</span></div>
+        <div class="tick goal-tick"><span class="tick-k">Depth goal</span><span class="tick-v">$100 / side</span></div>
+      </section>
+
+      <main class="shell-main">
+        <section class="panel setup-panel">
+          <div class="panel-head">
+            <h2>Your contribution</h2>
+            <p>Capital the bot may rest on the book.</p>
+          </div>
+
+          <div class="capital-grid">
+            <div class="capital-card bid-card">
+              <div class="capital-top">
+                <span class="side-tag bid">Buy side</span>
+                <span class="side-hint">USDT → resting bids</span>
+              </div>
+              <div class="capital-value">
+                <span class="currency">$</span>
+                <input type="number" id="usdtNum" min="0" max="100000" step="1" value="10" />
+              </div>
+              <input type="range" id="usdt" min="0" max="500" step="1" value="10" />
+              <div class="capital-foot">
+                <button type="button" class="chip" data-usdt="10">$10</button>
+                <button type="button" class="chip" data-usdt="25">$25</button>
+                <button type="button" class="chip" data-usdt="50">$50</button>
+                <button type="button" class="chip" data-usdt="100">$100</button>
+              </div>
+            </div>
+            <div class="capital-card ask-card">
+              <div class="capital-top">
+                <span class="side-tag ask">Sell side</span>
+                <span class="side-hint">LBC → resting asks</span>
+              </div>
+              <div class="capital-value">
+                <input type="number" id="lbcNum" min="0" max="10000000" step="100" value="5000" />
+                <span class="currency tail">LBC</span>
+              </div>
+              <input type="range" id="lbc" min="0" max="100000" step="100" value="5000" />
+              <div class="capital-foot">
+                <button type="button" class="chip" data-lbc="0">0</button>
+                <button type="button" class="chip" data-lbc="2500">2.5k</button>
+                <button type="button" class="chip" data-lbc="5000">5k</button>
+                <button type="button" class="chip" data-lbc="20000">20k</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="depth-block">
+            <div class="depth-head">
+              <div>
+                <h3>Depth % (How close to the mid?)</h3>
+                <p class="muted">Orders stay inside this band. <strong>±2%</strong> matches CoinGecko-style depth.</p>
+              </div>
+              <div class="depth-readout"><span id="depthOut">±2.0%</span></div>
+            </div>
+            <input type="range" id="depth" min="0.5" max="15" step="0.1" value="2" />
+            <div class="depth-presets">
+              <button type="button" class="chip active" data-depth="2">±2% ideal</button>
+              <button type="button" class="chip" data-depth="1">±1% tight</button>
+              <button type="button" class="chip" data-depth="3">±3% wider</button>
+              <button type="button" class="chip" data-depth="5">±5%</button>
+            </div>
+            <label class="field levels-field">
+              <span>Steps (order levels per side) <output id="levelsOut">4</output></span>
+              <input type="range" id="levels" min="1" max="30" step="1" value="4" />
+            </label>
+            <input type="hidden" id="bidDepth" value="2" />
+            <input type="hidden" id="askDepth" value="2" />
+          </div>
+
+          <div class="preview-card">
+            <div class="preview-title">Your impact (preview)</div>
+            <div class="preview-rows">
+              <div><span>Planned bids inside ±2%</span><strong class="bid mono" id="botBid">—</strong></div>
+              <div><span>Planned asks inside ±2%</span><strong class="ask mono" id="botAsk">—</strong></div>
+            </div>
+            <div class="goal-bars">
+              <div class="gbar">
+                <div class="gbar-label"><span>Public bid depth</span><span id="goalBidLbl">— / $100</span></div>
+                <div class="gbar-track"><div class="gbar-fill bid" id="goalBidFill"></div></div>
+              </div>
+              <div class="gbar">
+                <div class="gbar-label"><span>Public ask depth</span><span id="goalAskLbl">— / $100</span></div>
+                <div class="gbar-track"><div class="gbar-fill ask" id="goalAskFill"></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="cta-block">
+            <button type="button" class="btn btn-xl btn-primary" id="btnStart">
+              <span class="cta-main" id="ctaMain">Start bot</span>
+            </button>
+            <button type="button" class="btn btn-xl btn-stop hidden" id="btnStop">
+              <span class="cta-main">Stop bot</span>
+            </button>
+            <p class="cta-note" id="ctaNote">Complete setup, then press Start when ready.</p>
+          </div>
+        </section>
+
+        <section class="panel viz-panel">
+          <div class="panel-head row">
+            <div>
+              <h2>Order book band</h2>
+              <p id="statusLine">Waiting for market…</p>
+            </div>
+            <div class="run-badge stopped" id="runBadge">
+              <span class="pulse"></span>
+              <span id="runLabel">Stopped</span>
+            </div>
+          </div>
+          <div class="canvas-wrap">
+            <canvas id="diagram" width="720" height="360"></canvas>
+            <div class="canvas-legend">
+              <span><i class="swatch bid"></i> Your bids</span>
+              <span><i class="swatch mid"></i> Mid</span>
+              <span><i class="swatch ask"></i> Your asks</span>
+            </div>
+          </div>
+          <div class="orders-block">
+            <div class="orders-head">
+              <h3>Resting orders</h3>
+              <span class="muted small" id="orderCount">0</span>
+            </div>
+            <div class="orders-list" id="orders">
+              <div class="orders-empty">No orders yet.</div>
+            </div>
+          </div>
+          <p class="error-line" id="error" hidden></p>
+        </section>
+      </main>
+    </div>
+
+    <!-- ── VIEW: Status ── -->
+    <div id="view-status" class="view" hidden>
+      <section class="panel status-panel">
+        <div class="panel-head"><h2>Market &amp; bot status</h2><p>Live snapshot of MEXC book and this bot.</p></div>
+        <div class="status-grid">
+          <div class="stat"><span class="k">Connection</span><strong id="stConn">—</strong></div>
+          <div class="stat"><span class="k">Trading mode</span><strong id="stMode">—</strong></div>
+          <div class="stat"><span class="k">Bot</span><strong id="stRun">—</strong></div>
+          <div class="stat"><span class="k">Strategy</span><strong id="stStrat">—</strong></div>
+          <div class="stat"><span class="k">Mid</span><strong class="mono" id="stMid">—</strong></div>
+          <div class="stat"><span class="k">Best bid / ask</span><strong class="mono" id="stBook">—</strong></div>
+          <div class="stat"><span class="k">Public ±2% bid</span><strong class="bid mono" id="stPubBid">—</strong></div>
+          <div class="stat"><span class="k">Public ±2% ask</span><strong class="ask mono" id="stPubAsk">—</strong></div>
+          <div class="stat"><span class="k">Bot ±2% bid</span><strong class="bid mono" id="stBotBid">—</strong></div>
+          <div class="stat"><span class="k">Bot ±2% ask</span><strong class="ask mono" id="stBotAsk">—</strong></div>
+          <div class="stat"><span class="k">Open orders</span><strong id="stOrders">—</strong></div>
+          <div class="stat"><span class="k">Uptime</span><strong id="stUp">—</strong></div>
+          <div class="stat"><span class="k">Realized PnL</span><strong id="stPnl">—</strong></div>
+          <div class="stat"><span class="k">Free USDT / LBC</span><strong id="stInv">—</strong></div>
+          <div class="stat wide"><span class="k">Last status</span><strong id="stMsg">—</strong></div>
+          <div class="stat wide"><span class="k">Last error</span><strong id="stErr" class="err-text">—</strong></div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ── VIEW: Settings ── -->
+    <div id="view-settings" class="view" hidden>
+      <section class="panel settings-panel">
+        <div class="panel-head"><h2>Settings</h2><p>Trading mode, API keys, strategy, and engine options.</p></div>
+
+        <div class="settings-block">
+          <h3>Trading mode</h3>
+          <div class="mode-cards compact">
+            <button type="button" class="mode-card" id="setPaper" data-mode="paper">
+              <strong>Paper</strong><span>Simulated orders</span>
+            </button>
+            <button type="button" class="mode-card" id="setLive" data-mode="live">
+              <strong>Live</strong><span>Real MEXC orders</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="settings-block">
+          <h3>MEXC API keys</h3>
+          <p class="muted small">
+            <a href="https://www.mexc.com/user/openapi" target="_blank" rel="noopener">Open MEXC OpenAPI</a>
+            · Spot: View Order Details + Trade only · never Withdraw
+          </p>
+          <label class="field"><span>Access Key</span><input type="text" id="setAccessKey" autocomplete="off" placeholder="Leave blank to keep existing / use env" /></label>
+          <label class="field"><span>Secret Key</span><input type="password" id="setSecretKey" autocomplete="off" placeholder="Leave blank to keep existing / use env" /></label>
+          <p class="muted small" id="keyStatus">Keys: checking…</p>
+        </div>
+
+        <div class="settings-block">
+          <h3>Strategy</h3>
+          <label class="field">
+            <span>Strategy engine</span>
+            <select id="strategy">
+              <option value="depth_provider">Depth Provider — balanced bands (default)</option>
+              <option value="bamm">BAMM — bullish accumulate (neofutur design)</option>
+              <option value="grid">Symmetric Grid</option>
+            </select>
+          </label>
+          <label class="field"><span>Min notional USDT</span><input type="number" id="setMinNotional" min="0.1" step="0.1" value="1.1" /></label>
+          <label class="field"><span>Reprice threshold %</span><input type="number" id="setReprice" min="0.05" step="0.05" value="0.35" /></label>
+          <label class="field"><span>Poll interval (seconds)</span><input type="number" id="setPoll" min="1" step="0.5" value="3" /></label>
+        </div>
+
+        <div class="settings-actions">
+          <button type="button" class="btn btn-primary" id="btnSaveSettings">Save settings</button>
+          <button type="button" class="btn" id="btnRerunSetup">Run setup wizard again</button>
+        </div>
+        <p class="muted small" id="settingsMsg"></p>
+      </section>
+    </div>
+
+    <footer class="shell-foot">
+      <span>Forked from <strong>neofutur</strong>’s multibot design · GPL-3.0</span>
+      <span class="foot-sep">·</span>
+      <span>Keys stay on your machine</span>
+    </footer>
+  </div>
+
+  <!-- Live confirm modal (from Settings) -->
+  <div id="liveModal" class="modal" hidden>
+    <div class="modal-card">
+      <h2>Enable live trading?</h2>
+      <p>This places <strong>real orders</strong> on MEXC. Paper mode is recommended first.</p>
+      <ul class="modal-list">
+        <li>Spot: View Order Details + Trade only</li>
+        <li>Never enable Withdraw</li>
+        <li>Inventory risk if price trends through your orders</li>
+      </ul>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="liveCancel">Stay in paper</button>
+        <button type="button" class="btn btn-danger" id="liveConfirm">I understand — go live</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

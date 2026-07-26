@@ -29,6 +29,13 @@ venv/
 
 # Credentials — never commit
 config.json
+inventory.toml
+**/mexc*.env
+.git-credentials*
+
+# LBCMM local
+.venv/
+*.egg-info/
 
 # Private AI context — contains infrastructure details, keep local only
 docs/CONTEXT_AI.md
@@ -50,6 +57,9 @@ bot_id_*
 # Local notes — may contain infrastructure details (server names, IPs), never commit
 *.txt
 !docs/*.txt
+!requirements.txt
+!requirements-dev.txt
+!requirements-lbcmm.txt
 
 # Claude Code local settings — may contain server addresses and credentials
 .claude/settings.local.json
