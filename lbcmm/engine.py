@@ -119,7 +119,8 @@ class Engine:
 
     @staticmethod
     def _orders_file_path(cfg: BotConfig) -> Path:
-        return cfg.resolve_data_dir() / f"open_orders_{cfg.symbol}.json"
+        bid = (cfg.bot_id or "default").replace("/", "_")
+        return cfg.resolve_data_dir() / f"open_orders_{cfg.symbol}_{bid}.json"
 
     def update_config(self, cfg: BotConfig) -> None:
         self.cfg = cfg
@@ -202,12 +203,17 @@ class Engine:
         self.state.started_at = time.time()
         self.state.status_msg = "starting"
         self.state.last_error = ""
-        # Cancel leftovers from a previous crash/kill before placing new book
+        # Cancel this bot's leftover IDs from a previous crash before placing a new book
         await self.cleanup_orders(reason="startup")
-        self._task = asyncio.create_task(self._run_loop(), name="lbcmm-engine")
+        task_name = f"lbcmm-engine-{self.cfg.bot_id or 'default'}"
+        self._task = asyncio.create_task(self._run_loop(), name=task_name)
 
-    async def stop(self) -> None:
-        """Clean stop: halt loop, cancel only bot-created orders, clear state."""
+    async def stop(self, *, cancel_orders: bool = True) -> None:
+        """Stop the loop. By default cancel only this bot's orders.
+
+        cancel_orders=False — halt management but leave resting orders on the
+        exchange (IDs stay persisted so a later cancel/start can still find them).
+        """
         if self._shutting_down:
             return
         self._shutting_down = True
@@ -224,9 +230,19 @@ class Engine:
             except asyncio.CancelledError:
                 pass
             self._task = None
-        await self.cleanup_orders(reason="shutdown")
+        if cancel_orders:
+            await self.cleanup_orders(reason="shutdown")
+        else:
+            # Keep order IDs on disk; do not cancel on exchange
+            self._persist_orders()
+            logger.info(
+                "stop without cancel — %s bot order(s) left on book",
+                len(self.state.open_orders),
+            )
         self.state.running = False
-        self.state.status_msg = "stopped"
+        self.state.status_msg = (
+            "stopped (orders left open)" if not cancel_orders else "stopped"
+        )
         if self._session and not self._session.closed:
             await self._session.close()
             self._session = None
@@ -291,7 +307,7 @@ class Engine:
                     pass
         finally:
             if not self._shutting_down:
-                # Loop exited unexpectedly — still try to clean the book
+                # Unexpected exit — cancel this bot's orders only
                 await self.cleanup_orders(reason="loop-exit")
             self.state.running = False
 
@@ -543,7 +559,7 @@ def install_shutdown_handlers(
     *,
     exit_after: bool = True,
 ) -> None:
-    """On SIGINT/SIGTERM: cancel *bot-created* orders, then exit the process.
+    """On SIGINT/SIGTERM: cancel each bot's created orders, then exit the process.
 
     Important: we must not swallow SIGINT without exiting — that left the GUI
     hanging after Ctrl+C (cleanup ran, web server kept serving).
@@ -556,35 +572,35 @@ def install_shutdown_handlers(
     def _handle(signum: int, _frame=None) -> None:
         global _EXIT_REQUESTED
         if _EXIT_REQUESTED:
-            # Second Ctrl+C — hard exit
             logger.warning("forced exit (signal %s again)", signum)
             os._exit(1)  # noqa: SLF001
         _EXIT_REQUESTED = True
-        logger.info("signal %s — cancel bot orders and exit", signum)
+        logger.info("signal %s — cancel bot-created orders and exit", signum)
 
         async def _clean_then_exit() -> None:
-            eng = _ENGINE
             try:
-                if eng is not None:
-                    await eng.cleanup_orders(reason=f"signal-{signum}")
-                    # stop loop task without re-entering full stop recursion
-                    eng._stop.set()  # noqa: SLF001
-                    eng.state.running = False
+                try:
+                    from lbcmm import bots as bots_mod
+
+                    await bots_mod.cleanup_all()
+                except Exception:  # pylint: disable=broad-exception-caught
+                    eng = _ENGINE
+                    if eng is not None:
+                        await eng.cleanup_orders(reason=f"signal-{signum}")
+                        eng._stop.set()  # noqa: SLF001
+                        eng.state.running = False
             except Exception as e:  # pylint: disable=broad-exception-caught
                 logger.error("signal cleanup failed: %s", e)
             finally:
                 if exit_after:
-                    # Hard exit so aiohttp/run_app cannot keep the process alive
                     os._exit(0)  # noqa: SLF001
 
         try:
             running_loop = asyncio.get_running_loop()
             running_loop.create_task(_clean_then_exit())
-            # Safety: if the task never runs (loop stuck), hard-exit soon
             if exit_after:
-                running_loop.call_later(8.0, lambda: os._exit(0))  # noqa: SLF001
+                running_loop.call_later(12.0, lambda: os._exit(0))  # noqa: SLF001
         except RuntimeError:
-            # No running loop
             try:
                 asyncio.run(_clean_then_exit())
             except Exception:  # pylint: disable=broad-exception-caught
@@ -604,12 +620,19 @@ def install_shutdown_handlers(
                 pass
 
     def _atexit() -> None:
-        eng = _ENGINE
-        if eng is None or eng._shutting_down or _EXIT_REQUESTED:  # noqa: SLF001
+        if _EXIT_REQUESTED:
             return
         try:
-            asyncio.run(eng.cleanup_orders(reason="atexit"))
+            from lbcmm import bots as bots_mod
+
+            asyncio.run(bots_mod.cleanup_all())
         except Exception:  # pylint: disable=broad-exception-caught
-            pass
+            eng = _ENGINE
+            if eng is None or eng._shutting_down:  # noqa: SLF001
+                return
+            try:
+                asyncio.run(eng.cleanup_orders(reason="atexit"))
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
 
     atexit.register(_atexit)

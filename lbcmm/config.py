@@ -16,6 +16,8 @@ CONFIG_ENV = "LBCMM_CONFIG"
 
 @dataclass
 class BotConfig:
+    # Multi-bot tab id (GUI); empty for single CLI engine
+    bot_id: str = ""
     symbol: str = DEFAULT_SYMBOL
     # Locked to depth_provider until BAMM/grid are fully tested in this product.
     strategy: str = "depth_provider"

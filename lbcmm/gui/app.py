@@ -7,13 +7,13 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 import aiohttp
 from aiohttp import web
 
-from lbcmm.config import BotConfig, save_config
+from lbcmm.config import BotConfig
 from lbcmm.connectors import mexc
-from lbcmm.engine import Engine, get_engine
 from lbcmm.strategies.bamm import build_buy_grid
 from lbcmm.strategies.depth_provider import contribution_usd, plan_depth_orders
 from lbcmm.strategies.grid import plan_grid_orders
@@ -67,14 +67,19 @@ def _print_gui_banner(host: str, port: int) -> None:
 
 
 def run_gui(cfg: BotConfig) -> int:
+    from lbcmm import bots as bots_mod
     from lbcmm.engine import install_shutdown_handlers
 
-    engine = get_engine(cfg)
+    active_id = bots_mod.init_registry(cfg)
     app = web.Application()
-    app["engine"] = engine
-    app["cfg"] = cfg
+    app["base_cfg"] = cfg
+    app["active_id"] = active_id
 
     app.router.add_get("/", handle_index)
+    app.router.add_get("/api/bots", handle_list_bots)
+    app.router.add_post("/api/bots", handle_create_bot)
+    app.router.add_post("/api/bots/rename", handle_rename_bot)
+    app.router.add_post("/api/bots/delete", handle_delete_bot)
     app.router.add_get("/api/state", handle_state)
     app.router.add_get("/api/market", handle_market)
     app.router.add_post("/api/config", handle_config)
@@ -83,18 +88,12 @@ def run_gui(cfg: BotConfig) -> int:
     app.router.add_static("/static/", STATIC_DIR, show_index=False)
 
     async def _on_startup(_app: web.Application) -> None:
-        # Handles Ctrl+C / SIGTERM: cancel *bot* orders then hard-exit (must exit —
-        # otherwise cleanup can run while aiohttp keeps serving).
         install_shutdown_handlers(asyncio.get_running_loop(), exit_after=True)
 
-    async def _on_cleanup(app_: web.Application) -> None:
-        """Graceful aiohttp teardown — cancel only bot-created orders."""
-        eng: Engine = app_["engine"]
-        logger.info("GUI cleanup — canceling bot-created orders")
+    async def _on_cleanup(_app: web.Application) -> None:
+        logger.info("GUI cleanup — canceling bot-created orders for all bots")
         try:
-            await eng.cleanup_orders(reason="gui-cleanup")
-            eng.state.running = False
-            eng._stop.set()  # noqa: SLF001
+            await bots_mod.cleanup_all()
         except Exception as e:  # pylint: disable=broad-exception-caught
             logger.error("GUI cleanup failed: %s", e)
 
@@ -104,10 +103,22 @@ def run_gui(cfg: BotConfig) -> int:
     host = cfg.gui_host or "127.0.0.1"
     port = int(cfg.gui_port or 8787)
     _print_gui_banner(host, port)
-    # handle_signals=False: our install_shutdown_handlers owns SIGINT/SIGTERM
-    # so we cancel bot orders then exit (aiohttp default left the process alive).
     web.run_app(app, host=host, port=port, print=None, handle_signals=False)
     return 0
+
+
+def _bot_id_from_request(request: web.Request, body: Optional[dict] = None) -> str:
+    from lbcmm import bots as bots_mod
+
+    bid = ""
+    if body and body.get("bot_id"):
+        bid = str(body["bot_id"])
+    if not bid:
+        bid = str(request.query.get("bot_id") or "")
+    if not bid:
+        bots = bots_mod.list_bots()
+        bid = bots[0]["id"] if bots else ""
+    return bid
 
 
 async def handle_index(_request: web.Request) -> web.Response:
@@ -115,8 +126,9 @@ async def handle_index(_request: web.Request) -> web.Response:
     return web.Response(text=html, content_type="text/html")
 
 
-def _cfg_payload(cfg: BotConfig) -> dict:
+def _cfg_payload(cfg: BotConfig, bot_id: str = "") -> dict:
     return {
+        "bot_id": bot_id or cfg.bot_id,
         "usdt_budget": cfg.usdt_budget,
         "lbc_budget": cfg.lbc_budget,
         "bid_depth_pct": cfg.bid_depth_pct,
@@ -133,26 +145,91 @@ def _cfg_payload(cfg: BotConfig) -> dict:
         "min_notional_usdt": cfg.min_notional_usdt,
         "reprice_pct": cfg.reprice_pct,
         "poll_interval_s": cfg.poll_interval_s,
-        # never send secrets back — only whether set
         "access_key_set": bool(cfg.api_key()),
         "secret_key_set": bool(cfg.api_secret()),
     }
 
 
+async def handle_list_bots(_request: web.Request) -> web.Response:
+    from lbcmm import bots as bots_mod
+
+    return web.json_response({"ok": True, "bots": bots_mod.list_bots()})
+
+
+async def handle_create_bot(request: web.Request) -> web.Response:
+    from lbcmm import bots as bots_mod
+
+    try:
+        body = await request.json()
+    except Exception:  # pylint: disable=broad-exception-caught
+        body = {}
+    name = (body or {}).get("name")
+    clone = (body or {}).get("clone_from")
+    bid = bots_mod.create_bot(name=name, clone_from=clone)
+    return web.json_response({"ok": True, "bot_id": bid, "bots": bots_mod.list_bots()})
+
+
+async def handle_rename_bot(request: web.Request) -> web.Response:
+    from lbcmm import bots as bots_mod
+
+    try:
+        body = await request.json()
+    except Exception:  # pylint: disable=broad-exception-caught
+        return web.json_response({"error": "invalid json"}, status=400)
+    bid = str(body.get("bot_id") or "")
+    name = str(body.get("name") or "")
+    try:
+        bots_mod.rename_bot(bid, name)
+    except KeyError:
+        return web.json_response({"error": "unknown bot"}, status=404)
+    return web.json_response({"ok": True, "bots": bots_mod.list_bots()})
+
+
+async def handle_delete_bot(request: web.Request) -> web.Response:
+    from lbcmm import bots as bots_mod
+
+    try:
+        body = await request.json()
+    except Exception:  # pylint: disable=broad-exception-caught
+        return web.json_response({"error": "invalid json"}, status=400)
+    bid = str(body.get("bot_id") or "")
+    cancel = body.get("cancel_orders", True)
+    try:
+        await bots_mod.delete_bot(bid, cancel_orders=bool(cancel))
+    except ValueError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    except KeyError:
+        return web.json_response({"error": "unknown bot"}, status=404)
+    return web.json_response({"ok": True, "bots": bots_mod.list_bots()})
+
+
 async def handle_state(request: web.Request) -> web.Response:
-    engine: Engine = request.app["engine"]
-    cfg: BotConfig = request.app["cfg"]
+    from lbcmm import bots as bots_mod
+
+    bid = _bot_id_from_request(request)
+    try:
+        engine = bots_mod.get_engine(bid)
+        cfg = engine.cfg
+    except KeyError:
+        return web.json_response({"error": "unknown bot"}, status=404)
     payload = engine.state.to_dict()
-    payload["config"] = _cfg_payload(cfg)
+    payload["config"] = _cfg_payload(cfg, bid)
+    payload["bot_id"] = bid
+    payload["bots"] = bots_mod.list_bots()
     return web.json_response(payload)
 
 
 async def handle_market(request: web.Request) -> web.Response:
-    """Public book + planned contribution without starting the bot."""
-    cfg: BotConfig = request.app["cfg"]
+    """Public book + planned contribution for the selected bot."""
+    from lbcmm import bots as bots_mod
+
+    bid = _bot_id_from_request(request)
+    try:
+        cfg = bots_mod.get_cfg(bid)
+    except KeyError:
+        return web.json_response({"ok": False, "error": "unknown bot"}, status=404)
     try:
         async with aiohttp.ClientSession() as session:
-            # Deeper book for multi-% ladder (2%…75%)
             book = await mexc.get_depth(session, cfg.symbol, limit=1000)
     except Exception as e:  # pylint: disable=broad-exception-caught
         return web.json_response({"ok": False, "error": str(e)}, status=502)
@@ -166,6 +243,7 @@ async def handle_market(request: web.Request) -> web.Response:
     bot = contribution_usd(desired, mid, 2.0)
     return web.json_response({
         "ok": True,
+        "bot_id": bid,
         "symbol": cfg.symbol,
         "mid": mid,
         "best_bid": book.get("best_bid"),
@@ -184,7 +262,8 @@ async def handle_market(request: web.Request) -> web.Response:
             for o in desired
         ],
         "goal_usd": 100.0,
-        "config": _cfg_payload(cfg),
+        "config": _cfg_payload(cfg, bid),
+        "bots": bots_mod.list_bots(),
     })
 
 
@@ -282,47 +361,58 @@ def _apply_body(cfg: BotConfig, body: dict) -> None:
 
 
 async def handle_config(request: web.Request) -> web.Response:
-    engine: Engine = request.app["engine"]
-    cfg: BotConfig = request.app["cfg"]
+    from lbcmm import bots as bots_mod
+
     try:
         body = await request.json()
     except Exception:  # pylint: disable=broad-exception-caught
         return web.json_response({"error": "invalid json"}, status=400)
 
-    _apply_body(cfg, body)
-    engine.update_config(cfg)
+    bid = _bot_id_from_request(request, body)
     try:
-        save_config(cfg)
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        logger.warning("save config: %s", e)
-    return web.json_response({"ok": True, "paper": cfg.effective_paper(), "config": _cfg_payload(cfg)})
+        cfg = bots_mod.get_cfg(bid)
+    except KeyError:
+        return web.json_response({"error": "unknown bot"}, status=404)
+
+    _apply_body(cfg, body)
+    bots_mod.set_cfg(bid, cfg)
+    return web.json_response({
+        "ok": True,
+        "bot_id": bid,
+        "paper": cfg.effective_paper(),
+        "config": _cfg_payload(cfg, bid),
+        "bots": bots_mod.list_bots(),
+    })
 
 
 async def handle_start(request: web.Request) -> web.Response:
-    engine: Engine = request.app["engine"]
-    cfg: BotConfig = request.app["cfg"]
+    from lbcmm import bots as bots_mod
+
+    try:
+        body = await request.json()
+    except Exception:  # pylint: disable=broad-exception-caught
+        body = {}
+
+    bid = _bot_id_from_request(request, body)
+    try:
+        engine = bots_mod.get_engine(bid)
+        cfg = engine.cfg
+    except KeyError:
+        return web.json_response({"ok": False, "error": "unknown bot"}, status=404)
+
     if not cfg.setup_complete:
         return web.json_response(
             {"ok": False, "error": "Complete first-time setup before starting."},
             status=400,
         )
-    try:
-        body = await request.json()
-        if body:
-            _apply_body(cfg, body)
-            engine.update_config(cfg)
-            try:
-                save_config(cfg)
-            except Exception:  # pylint: disable=broad-exception-caught
-                pass
-    except Exception:  # pylint: disable=broad-exception-caught
-        pass
+    if body:
+        _apply_body(cfg, body)
+        bots_mod.set_cfg(bid, cfg)
+        cfg = engine.cfg
 
-    # Reject configs that cannot place any ≥$1 order on either side
     min_n = max(1.0, float(cfg.min_notional_usdt or 1.0))
     buy_ok = cfg.usdt_budget >= min_n
-    # sell capacity needs mid — approximate with a soft check on coin count only if no USDT
-    sell_ok = cfg.lbc_budget > 0  # planner still drops dust vs mid; allow start if LBC assigned
+    sell_ok = cfg.lbc_budget > 0
     if not buy_ok and not sell_ok:
         return web.json_response(
             {
@@ -337,10 +427,33 @@ async def handle_start(request: web.Request) -> web.Response:
 
     if not engine.state.running:
         await engine.start()
-    return web.json_response({"ok": True, "running": True})
+    return web.json_response({
+        "ok": True,
+        "running": True,
+        "bot_id": bid,
+        "bots": bots_mod.list_bots(),
+    })
 
 
 async def handle_stop(request: web.Request) -> web.Response:
-    engine: Engine = request.app["engine"]
-    await engine.stop()
-    return web.json_response({"ok": True, "running": False})
+    from lbcmm import bots as bots_mod
+
+    try:
+        body = await request.json()
+    except Exception:  # pylint: disable=broad-exception-caught
+        body = {}
+    bid = _bot_id_from_request(request, body)
+    # Default: cancel this bot's orders. cancel_orders=false leaves them on the book.
+    cancel = True if body.get("cancel_orders") is None else bool(body.get("cancel_orders"))
+    try:
+        engine = bots_mod.get_engine(bid)
+    except KeyError:
+        return web.json_response({"ok": False, "error": "unknown bot"}, status=404)
+    await engine.stop(cancel_orders=cancel)
+    return web.json_response({
+        "ok": True,
+        "running": False,
+        "bot_id": bid,
+        "canceled_orders": cancel,
+        "bots": bots_mod.list_bots(),
+    })

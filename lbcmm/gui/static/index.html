@@ -140,6 +140,12 @@
       </div>
     </div>
 
+    <!-- Chrome-like bot tabs -->
+    <div class="bot-tabs" role="tablist" aria-label="Bots">
+      <div class="bot-tabs-scroll" id="botTabs"></div>
+      <button type="button" class="bot-tab-new" id="btnNewBot" title="New bot">＋ New bot</button>
+    </div>
+
     <header class="shell-top">
       <div class="brand">
         <div class="logo-mark sm" aria-hidden="true">L</div>
@@ -307,9 +313,15 @@
             <button type="button" class="btn btn-xl btn-primary" id="btnStart">
               <span class="cta-main" id="ctaMain">Start bot</span>
             </button>
-            <button type="button" class="btn btn-xl btn-stop hidden" id="btnStop">
-              <span class="cta-main">Stop bot</span>
-            </button>
+            <div class="stop-stack hidden" id="stopStack">
+              <button type="button" class="btn btn-xl btn-stop" id="btnStop">
+                <span class="cta-main">Stop bot</span>
+                <span class="cta-sub stop-sub">Cancels this bot’s orders</span>
+              </button>
+              <button type="button" class="btn btn-stop-soft" id="btnStopKeep" title="Stop managing this bot but leave its resting orders on MEXC">
+                Stop without removing orders
+              </button>
+            </div>
             <p class="cta-note" id="ctaNote">Complete setup, then press Start when ready.</p>
           </div>
         </section>

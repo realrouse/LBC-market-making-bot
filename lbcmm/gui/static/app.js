@@ -10,6 +10,8 @@
   const MAX_DEPTH_EXPERT = 10000; // 10000% ≈ 101× mid on the sell side
 
   const state = {
+    bot_id: "",
+    bots: [],
     running: false,
     paper: true,
     setup_complete: false,
@@ -24,6 +26,8 @@
     wizMode: "paper", // paper | live
     formSeeded: false, // after first force-apply, never stomp sliders from poll
     public_depth_ladder: [],
+    // per-bot UI form seed flags
+    formSeededByBot: {},
   };
 
   const wizTitles = [
@@ -36,12 +40,121 @@
 
   // ── API ───────────────────────────────────────────────────────────────
   async function post(url, body) {
+    const payload = Object.assign({ bot_id: state.bot_id }, body || {});
     const r = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body || {}),
+      body: JSON.stringify(payload),
     });
     return r.json();
+  }
+
+  function withBot(url) {
+    if (!state.bot_id) return url;
+    const sep = url.includes("?") ? "&" : "?";
+    return url + sep + "bot_id=" + encodeURIComponent(state.bot_id);
+  }
+
+  function renderBotTabs() {
+    const host = $("botTabs");
+    if (!host) return;
+    const bots = state.bots || [];
+    host.innerHTML = bots
+      .map((b) => {
+        const active = b.id === state.bot_id ? " active" : "";
+        const run = b.running ? " run" : "";
+        const label = (b.name || "Bot").replace(/</g, "&lt;");
+        return (
+          '<div class="bot-tab' +
+          active +
+          '" data-bot="' +
+          b.id +
+          '" role="tab" title="' +
+          label +
+          '">' +
+          '<span class="tab-run' +
+          run +
+          '"></span>' +
+          '<span class="tab-label">' +
+          label +
+          "</span>" +
+          (bots.length > 1
+            ? '<button type="button" class="tab-x" data-close="' +
+              b.id +
+              '" title="Close bot">×</button>'
+            : "") +
+          "</div>"
+        );
+      })
+      .join("");
+
+    host.querySelectorAll(".bot-tab").forEach((el) => {
+      el.onclick = (e) => {
+        if (e.target.closest(".tab-x")) return;
+        const id = el.getAttribute("data-bot");
+        if (id && id !== state.bot_id) switchBot(id);
+      };
+    });
+    host.querySelectorAll(".tab-x").forEach((el) => {
+      el.onclick = async (e) => {
+        e.stopPropagation();
+        const id = el.getAttribute("data-close");
+        if (!id) return;
+        if (
+          !confirm(
+            "Close this bot tab? Its open orders will be canceled. (Cancel the dialog to keep the tab.)"
+          )
+        )
+          return;
+        const res = await post("/api/bots/delete", {
+          bot_id: id,
+          cancel_orders: true,
+        });
+        if (res.bots) state.bots = res.bots;
+        if (state.bot_id === id && state.bots.length) {
+          state.bot_id = state.bots[0].id;
+          state.formSeeded = false;
+          delete state.formSeededByBot[id];
+        }
+        renderBotTabs();
+        await refreshMarket();
+      };
+    });
+  }
+
+  async function switchBot(id) {
+    // Save current bot config before switch if dirty
+    if (state.dirty && state.bot_id) {
+      try {
+        await post("/api/config", marketConfigBody());
+      } catch (_) {}
+      state.dirty = false;
+    }
+    state.bot_id = id;
+    state.formSeeded = !!state.formSeededByBot[id];
+    renderBotTabs();
+    await refreshMarket(true);
+  }
+
+  if ($("btnNewBot")) {
+    $("btnNewBot").onclick = async () => {
+      if (state.dirty && state.bot_id) {
+        try {
+          await post("/api/config", marketConfigBody());
+        } catch (_) {}
+      }
+      const res = await post("/api/bots", {
+        name: "Bot " + ((state.bots || []).length + 1),
+        clone_from: state.bot_id || null,
+      });
+      if (res.bot_id) {
+        state.bots = res.bots || [];
+        state.bot_id = res.bot_id;
+        state.formSeeded = false;
+        renderBotTabs();
+        await refreshMarket(true);
+      }
+    };
   }
 
   function isExpert() {
@@ -788,7 +901,8 @@
     const running = state.running;
     $("app").classList.toggle("is-running", running);
     $("btnStart").classList.toggle("hidden", running);
-    $("btnStop").classList.toggle("hidden", !running);
+    if ($("stopStack")) $("stopStack").classList.toggle("hidden", !running);
+    if ($("btnStop")) $("btnStop").classList.toggle("hidden", !running);
     $("btnStart").disabled = !state.setup_complete || running;
 
     if (running) {
@@ -893,12 +1007,13 @@
 
   function applyConfigFromServer(cfg, force) {
     if (!cfg) return;
+    if (cfg.bot_id) state.bot_id = cfg.bot_id;
     state.setup_complete = !!cfg.setup_complete;
     state.paper = cfg.paper !== false;
     state.hasKeys = !!cfg.has_keys;
 
     // Only seed/overwrite capital·depth·steps on explicit force (boot / wizard finish /
-    // settings save). Market poll must NEVER stomp the sliders (was resetting Steps to 20).
+    // settings save / tab switch). Market poll must NEVER stomp the sliders.
     if (force || !state.formSeeded) {
       if (cfg.usdt_budget != null) {
         usdtNum.value = cfg.usdt_budget;
@@ -930,25 +1045,30 @@
       if (cfg.reprice_pct != null) $("setReprice").value = cfg.reprice_pct;
       if (cfg.poll_interval_s != null) $("setPoll").value = cfg.poll_interval_s;
       state.formSeeded = true;
+      if (state.bot_id) state.formSeededByBot[state.bot_id] = true;
       enforceOrderLimits();
     }
 
     updateSetupBanner();
   }
 
-  async function refreshMarket() {
+  async function refreshMarket(forceForm) {
     try {
-      if (state.dirty) {
+      if (state.dirty && state.bot_id) {
         await post("/api/config", marketConfigBody());
         state.dirty = false;
       }
-      const r = await fetch("/api/market");
+      const r = await fetch(withBot("/api/market"));
       const m = await r.json();
+      if (m.bots) {
+        state.bots = m.bots;
+        if (!state.bot_id && m.bots.length) state.bot_id = m.bots[0].id;
+        renderBotTabs();
+      }
       if (!m.ok) {
         $("connPill").classList.add("err-conn");
         $("connPill").classList.remove("live-conn");
         $("connLabel").textContent = "Market offline";
-        // still try state for setup_complete
       } else {
         state.mid = m.mid;
         state.best_bid = m.best_bid;
@@ -957,15 +1077,19 @@
         state.public_depth_ladder = m.public_depth_ladder || [];
         state.bot_contribution = m.bot_contribution || {};
         state.desired = m.desired || [];
-        // Meta only (setup/mode/keys) — never force slider values on poll
-        if (m.config) applyConfigFromServer(m.config, false);
+        if (m.config) applyConfigFromServer(m.config, !!forceForm);
         enforceOrderLimits();
       }
 
-      const sr = await fetch("/api/state");
+      const sr = await fetch(withBot("/api/state"));
       const s = await sr.json();
+      if (s.bots) {
+        state.bots = s.bots;
+        renderBotTabs();
+      }
+      if (s.bot_id) state.bot_id = s.bot_id;
       state.running = !!s.running;
-      if (s.config) applyConfigFromServer(s.config, false);
+      if (s.config) applyConfigFromServer(s.config, !!forceForm);
       state.open_orders = s.open_orders || [];
       state.status_msg = s.status_msg;
       state.last_error = s.last_error;
@@ -1011,12 +1135,24 @@
   $("btnStop").onclick = async () => {
     $("btnStop").disabled = true;
     try {
-      await post("/api/stop", {});
+      await post("/api/stop", { cancel_orders: true });
       await refreshMarket();
     } finally {
       $("btnStop").disabled = false;
     }
   };
+
+  if ($("btnStopKeep")) {
+    $("btnStopKeep").onclick = async () => {
+      $("btnStopKeep").disabled = true;
+      try {
+        await post("/api/stop", { cancel_orders: false });
+        await refreshMarket();
+      } finally {
+        $("btnStopKeep").disabled = false;
+      }
+    };
+  }
 
   // Settings mode
   $("setPaper").onclick = async () => {
@@ -1064,8 +1200,20 @@
   // ── Boot ──────────────────────────────────────────────────────────────
   async function boot() {
     try {
-      const sr = await fetch("/api/state");
+      const br = await fetch("/api/bots");
+      const bj = await br.json();
+      if (bj.bots && bj.bots.length) {
+        state.bots = bj.bots;
+        state.bot_id = bj.bots[0].id;
+        renderBotTabs();
+      }
+      const sr = await fetch(withBot("/api/state"));
       const s = await sr.json();
+      if (s.bot_id) state.bot_id = s.bot_id;
+      if (s.bots) {
+        state.bots = s.bots;
+        renderBotTabs();
+      }
       if (s.config) applyConfigFromServer(s.config, true);
     } catch (_) {
       /* first paint */
@@ -1078,11 +1226,10 @@
         $("app").hidden = false;
         updateSetupBanner();
       }
-      await refreshMarket();
-      setInterval(refreshMarket, 2000);
+      await refreshMarket(true);
+      setInterval(() => refreshMarket(false), 2000);
     } catch (e) {
       console.error(e);
-      // Last-resort: never leave a blank page
       const w = $("wizard");
       if (w) w.hidden = false;
       const err = document.createElement("pre");
