@@ -617,6 +617,95 @@ input[type="range"]::-moz-range-thumb {
   padding: 1rem; text-align: center;
   border: 1px dashed var(--line); border-radius: var(--radius-sm);
 }
+
+/* Placing orders — high-visibility status */
+.orders-placing {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1.35rem 1.25rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(61, 219, 132, 0.45);
+  background:
+    linear-gradient(120deg, rgba(61, 219, 132, 0.14), rgba(61, 219, 132, 0.04) 55%, transparent),
+    rgba(0, 0, 0, 0.28);
+  box-shadow:
+    0 0 0 1px rgba(61, 219, 132, 0.12),
+    0 12px 32px rgba(61, 219, 132, 0.12);
+  animation: placingPulseBg 2.2s ease-in-out infinite;
+}
+.placing-light {
+  flex-shrink: 0;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 50%;
+  background: #3ddb84;
+  box-shadow:
+    0 0 0 0 rgba(61, 219, 132, 0.65),
+    0 0 18px 4px rgba(61, 219, 132, 0.55);
+  animation: placingBlink 1.05s ease-in-out infinite;
+}
+.placing-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+.placing-title {
+  font-size: 1.2rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  line-height: 1.2;
+}
+.placing-sub {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.placing-dots::after {
+  content: "";
+  display: inline-block;
+  min-width: 1.4em;
+  text-align: left;
+  color: var(--accent);
+  font-weight: 800;
+  animation: placingDots 1.2s steps(4, end) infinite;
+}
+@keyframes placingDots {
+  0%   { content: ""; }
+  25%  { content: "."; }
+  50%  { content: ".."; }
+  75%  { content: "..."; }
+  100% { content: ""; }
+}
+@keyframes placingBlink {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+    box-shadow:
+      0 0 0 0 rgba(61, 219, 132, 0.55),
+      0 0 18px 4px rgba(61, 219, 132, 0.5);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.82);
+    box-shadow:
+      0 0 0 10px rgba(61, 219, 132, 0),
+      0 0 8px 2px rgba(61, 219, 132, 0.25);
+  }
+}
+@keyframes placingPulseBg {
+  0%, 100% { border-color: rgba(61, 219, 132, 0.35); }
+  50% { border-color: rgba(61, 219, 132, 0.75); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .orders-placing,
+  .placing-light,
+  .placing-dots::after {
+    animation: none !important;
+  }
+  .placing-dots::after { content: "..."; }
+}
 .order-row {
   display: grid;
   grid-template-columns: auto 1fr auto;

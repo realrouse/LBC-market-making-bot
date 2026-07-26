@@ -754,12 +754,19 @@
     $("orderCount").textContent = String(orders.length);
     const list = $("orders");
     if (!orders.length) {
-      list.innerHTML =
-        '<div class="orders-empty">' +
-        (running
-          ? "Placing orders…"
-          : "No orders yet. Press Start to place maker orders.") +
-        "</div>";
+      if (running) {
+        list.innerHTML =
+          '<div class="orders-placing" role="status" aria-live="polite">' +
+          '<span class="placing-light" aria-hidden="true"></span>' +
+          '<div class="placing-copy">' +
+          '<strong class="placing-title">Placing orders<span class="placing-dots" aria-hidden="true"></span></strong>' +
+          '<span class="placing-sub">Working the book — maker orders going out</span>' +
+          "</div>" +
+          "</div>";
+      } else {
+        list.innerHTML =
+          '<div class="orders-empty">No orders yet. Press Start to place maker orders.</div>';
+      }
     } else {
       list.innerHTML = orders
         .map((o) => {
